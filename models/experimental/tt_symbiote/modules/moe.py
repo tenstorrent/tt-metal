@@ -14,7 +14,7 @@ from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from ttnn.model_preprocessing import preprocess_linear_weight
 from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after
-from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearSilu
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearSilu, TTNNLinearLLama
 
 
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
@@ -424,6 +424,66 @@ class Glm4MoeMoE(torch.nn.Module):
         return hidden_states
 
 
+class Glm4MoeNaiveMoeHybrid(nn.Module):
+    """Collection of expert weights stored as 3D tensors."""
+
+    def __init__(self, old_layer):
+        super().__init__()
+        self.num_experts = old_layer.num_experts
+        self.hidden_dim = old_layer.hidden_dim
+        self.intermediate_dim = old_layer.intermediate_dim
+        self.gate_layers = {
+            i: TTNNLinearSilu.from_parameters(
+                old_layer.gate_up_proj[i, : self.intermediate_dim, :], linear_class=TTNNLinearLLama
+            )
+            for i in range(self.num_experts)
+        }
+        self.up_layers = {
+            i: TTNNLinearLLama.from_parameters(old_layer.gate_up_proj[i, self.intermediate_dim :, :])
+            for i in range(self.num_experts)
+        }
+        del old_layer.gate_up_proj
+        self.down_layers = {
+            i: TTNNLinearLLama.from_parameters(old_layer.down_proj[i, :, :]) for i in range(self.num_experts)
+        }
+        del old_layer.down_proj
+        assert old_layer.config.hidden_act == "silu", "Only SiLU activation is supported in naive MoE."
+
+    @classmethod
+    def from_torch(cls, moe_module: Glm4MoeNaiveMoe) -> "TTNNGlm4MoeNaiveMoe":
+        """Create TTNNGlm4MoeNaiveMoe from PyTorch Glm4MoeNaiveMoe layer."""
+        new_moe = cls(moe_module)
+        return new_moe
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        top_k_index: torch.Tensor,
+        top_k_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        final_hidden_states = torch.zeros_like(hidden_states)
+        with torch.no_grad():
+            expert_mask = torch.nn.functional.one_hot(top_k_index, num_classes=self.num_experts)
+            expert_mask = expert_mask.permute(2, 1, 0)
+            expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+
+        for expert_idx in expert_hit:
+            expert_idx = expert_idx[0]
+            if expert_idx == self.num_experts:
+                continue
+            top_k_pos, token_idx = torch.where(expert_mask[expert_idx])
+            current_state = hidden_states[token_idx]
+            int_expert = expert_idx.item()
+            gate = self.gate_layers[int_expert](current_state)
+            up = self.up_layers[int_expert](current_state)
+            current_hidden_states = gate * up
+            current_hidden_states = self.down_layers[int_expert](current_hidden_states)
+            current_hidden_states = current_hidden_states * top_k_weights[token_idx, top_k_pos, None]
+            final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
+
+        return final_hidden_states
+
+
 class TTNNGlm4MoeNaiveMoe(TTNNModule):
     def preprocess_weights_impl(self):
         self.tt_gate_up_proj = preprocess_linear_weight(
@@ -458,13 +518,11 @@ class TTNNGlm4MoeNaiveMoe(TTNNModule):
         )
 
     def forward(self, x, topk_experts_indices, topk_experts_weights):
-        if self.device_state is None:
-            return self.torch_layer(
-                TorchTTNNTensor(x),
-                TorchTTNNTensor(topk_experts_indices, dtype=torch.int64),
-                TorchTTNNTensor(topk_experts_weights),
-            ).to_ttnn
-        return self.forward_mesh(x, topk_experts_indices, topk_experts_weights)
+        return self.torch_layer(
+            TorchTTNNTensor(x),
+            TorchTTNNTensor(topk_experts_indices, dtype=torch.int64),
+            TorchTTNNTensor(topk_experts_weights),
+        ).to_ttnn
 
     def forward_mesh(self, x, topk_experts_indices, topk_experts_weights):
         ccl = self.device_state.ccl_manager
@@ -810,7 +868,7 @@ class TTNNGlm4MoeMoE(TTNNModule):
     def from_torch(cls, torch_module: Glm4MoeMoE) -> "TTNNGlm4MoeMoE":
         ttnn_module = cls()
         ttnn_module._fallback_torch_layer = torch_module
-        ttnn_module.experts = TTNNGlm4MoeNaiveMoe.from_torch(torch_module.experts)
+        ttnn_module.experts = Glm4MoeNaiveMoeHybrid.from_torch(torch_module.experts)
         ttnn_module.gate = TTNNGlm4MoeTopkRouter.from_torch(torch_module.gate)
         ttnn_module.shared_experts = TTNNGlm4MoeMLP.from_torch(torch_module.shared_experts)
         ttnn_module.route_tokens_to_experts = TTNNGlm4MoeRouteTokenToExperts.from_torch(
