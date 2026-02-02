@@ -435,16 +435,7 @@ uint64_t BankManager::allocate_buffer(
         }
         allocated_buffers_[allocator_id.get()].insert(address.value());
 
-        // During high water mark tracking, only bottom-up allocations are allowed
-        TT_FATAL(
-            !tracking_high_water_mark_ || bottom_up,
-            "Top-down allocation not allowed during high water mark tracking (e.g., during trace capture). "
-            "Attempted to allocate {} B {} buffer. Only bottom-up allocations are permitted during trace capture.",
-            size,
-            enchantum::to_string(buffer_type_));
-
-        // Track high water mark for bottom-up allocations
-        if (tracking_high_water_mark_ && bottom_up) {
+        if (tracking_high_water_mark_) {
             // Calculate end address in interleaved space: address + size_per_bank
             // Bank offsets don't need to be accounted for here since overlap comparisons
             // are done in interleaved space where both allocations have the same bank offset applied
@@ -508,16 +499,8 @@ uint64_t BankManager::allocate_buffer(
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[allocator_id.get()].insert(address.value());
 
-    // During high water mark tracking, only bottom-up allocations are allowed
-    TT_FATAL(
-        !tracking_high_water_mark_ || bottom_up,
-        "Top-down allocation not allowed during high water mark tracking (e.g., during trace capture). "
-        "Attempted to allocate {} B {} buffer. Only bottom-up allocations are permitted during trace capture.",
-        size,
-        enchantum::to_string(buffer_type_));
-
-    // Track high water mark for bottom-up allocations
-    if (tracking_high_water_mark_ && bottom_up) {
+    // Track high water mark for all allocations (both bottom-up and top-down)
+    if (tracking_high_water_mark_) {
         // Calculate end address in interleaved space: address + size_per_bank
         // Bank offsets don't need to be accounted for here since overlap comparisons
         // are done in interleaved space where both allocations have the same bank offset applied
@@ -533,6 +516,17 @@ uint64_t BankManager::allocate_buffer(
 void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDependencies::AllocatorID allocator_id) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
+    
+    // Track high water mark for deallocations - remember the extent of buffers being freed
+    if (tracking_high_water_mark_) {
+        auto size_opt = alloc->get_allocation_size(address);
+        if (size_opt.has_value()) {
+            // Update high water mark with the end address of the buffer being deallocated
+            DeviceAddr end_address = address + size_opt.value();
+            high_water_mark_ = std::max(high_water_mark_, end_address);
+        }
+    }
+    
     alloc->deallocate(address);
     allocated_buffers_[allocator_id.get()].erase(address);
     // Deallocation in this allocator invalidates caches in allocators that depend on this allocator
@@ -592,9 +586,9 @@ Statistics BankManager::get_statistics(BankManager::AllocatorDependencies::Alloc
     return alloc ? alloc->get_statistics() : Statistics();
 }
 
-void BankManager::begin_high_water_mark_tracking(DeviceAddr initial_high_water_mark) {
+void BankManager::begin_high_water_mark_tracking() {
     tracking_high_water_mark_ = true;
-    high_water_mark_ = initial_high_water_mark;
+    high_water_mark_ = 0;
 }
 
 DeviceAddr BankManager::end_high_water_mark_tracking() {
