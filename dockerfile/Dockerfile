@@ -22,6 +22,8 @@ RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
 
 FROM base AS ci-build
 
+RUN touch /usr/local/trigger-rebuild.txt
+
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
 RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
     tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1 && \
