@@ -927,5 +927,56 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
     }
 }
 
+TEST_F(MeshTraceDynamicAllocationTestSuite, TraceRejectsTopDownAllocations) {
+    // Verify that top-down allocations are rejected during trace capture
+    // This ensures the high water mark tracking correctly prevents allocations that could overlap
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+
+    // Create a workload
+    auto workload = std::make_shared<MeshWorkload>();
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        1, mesh_device_->compute_with_storage_grid_size(), 789);
+    workload->add_program(all_devices, std::move(*programs[0]));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+
+    // Begin trace capture - this starts high water mark tracking
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+
+    // Attempt to allocate a top-down DRAM buffer during trace capture
+    // This should trigger a TT_FATAL error
+    bool fatal_error_caught = false;
+    try {
+        constexpr size_t buffer_size = 1024 * 1024;  // 1MB
+        ReplicatedBufferConfig global_buffer_config{.size = buffer_size};
+        DeviceLocalBufferConfig device_local_config{
+            .page_size = buffer_size,
+            .buffer_type = BufferType::DRAM,
+            .bottom_up = false  // Top-down allocation - should be rejected!
+        };
+        auto top_down_buffer = MeshBuffer::create(global_buffer_config, device_local_config, mesh_device_.get());
+
+        // If we get here, the allocation succeeded when it should have failed
+        FAIL() << "Top-down allocation during trace capture should have been rejected with TT_FATAL";
+    } catch (const std::runtime_error& e) {
+        std::string error_msg = e.what();
+        // Check if this is the expected error about top-down allocation
+        if (error_msg.find("Top-down allocation not allowed") != std::string::npos ||
+            error_msg.find("high water mark tracking") != std::string::npos) {
+            fatal_error_caught = true;
+        } else {
+            // Re-throw unexpected errors
+            throw;
+        }
+    }
+
+    EXPECT_TRUE(fatal_error_caught) << "Expected TT_FATAL for top-down allocation during trace capture";
+
+    // End trace capture normally (the fatal should have been caught above)
+    mesh_device_->end_mesh_trace(0, trace_id);
+    mesh_device_->release_mesh_trace(trace_id);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test

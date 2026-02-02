@@ -435,6 +435,14 @@ uint64_t BankManager::allocate_buffer(
         }
         allocated_buffers_[allocator_id.get()].insert(address.value());
 
+        // During high water mark tracking, only bottom-up allocations are allowed
+        TT_FATAL(
+            !tracking_high_water_mark_ || bottom_up,
+            "Top-down allocation not allowed during high water mark tracking (e.g., during trace capture). "
+            "Attempted to allocate {} B {} buffer. Only bottom-up allocations are permitted during trace capture.",
+            size,
+            enchantum::to_string(buffer_type_));
+
         // Track high water mark for bottom-up allocations
         if (tracking_high_water_mark_ && bottom_up) {
             // Calculate end address in interleaved space: address + size_per_bank
@@ -499,6 +507,14 @@ uint64_t BankManager::allocate_buffer(
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[allocator_id.get()].insert(address.value());
+
+    // During high water mark tracking, only bottom-up allocations are allowed
+    TT_FATAL(
+        !tracking_high_water_mark_ || bottom_up,
+        "Top-down allocation not allowed during high water mark tracking (e.g., during trace capture). "
+        "Attempted to allocate {} B {} buffer. Only bottom-up allocations are permitted during trace capture.",
+        size,
+        enchantum::to_string(buffer_type_));
 
     // Track high water mark for bottom-up allocations
     if (tracking_high_water_mark_ && bottom_up) {
