@@ -44,7 +44,12 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
 from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
-from models.common.tensor_utils import TILE_SIZE
+from models.common.tensor_utils import (
+    TILE_SIZE,
+    get_rot_transformation_mat,
+    zeros_like_kv_cache,
+    zeros_like_paged_cache,
+)
 from models.common.utility_functions import is_blackhole, nearest_32
 
 # =============================================================================
@@ -163,6 +168,10 @@ class Attention1DConfig:
     li_qkv_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
     sdpa_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
     li_o_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+
+    # Transformation matrices for rotary embedding (static, computed once)
+    transformation_mat_decode: ttnn.Tensor | None = None
+    transformation_mat_prefill: ttnn.Tensor | None = None
 
     # Internal: pre-computed bias tensors
     _wqkv_bias_decode: list[ttnn.Tensor] | None = field(default=None, repr=False)
@@ -292,12 +301,12 @@ class Attention1D(LightweightModule):
 
         if cfg.paged_attention_config:
             # Paged attention - external cache
-            cache_k = _zeros_like_paged_cache(
+            cache_k = zeros_like_paged_cache(
                 cfg.paged_attention_config,
                 cfg.n_kv_heads // cfg.mesh_device.get_num_devices(),
                 cfg.head_dim,
             )
-            cache_v = _zeros_like_paged_cache(
+            cache_v = zeros_like_paged_cache(
                 cfg.paged_attention_config,
                 cfg.n_kv_heads // cfg.mesh_device.get_num_devices(),
                 cfg.head_dim,
@@ -305,13 +314,13 @@ class Attention1D(LightweightModule):
         else:
             # Standard cache
             n_local_kv_heads = cfg.n_kv_heads // cfg.mesh_device.get_num_devices()
-            cache_k = _zeros_like_kv_cache(
+            cache_k = zeros_like_kv_cache(
                 cfg.max_batch_size,
                 n_local_kv_heads,
                 cfg.max_seq_len,
                 cfg.head_dim,
             )
-            cache_v = _zeros_like_kv_cache(
+            cache_v = zeros_like_kv_cache(
                 cfg.max_batch_size,
                 n_local_kv_heads,
                 cfg.max_seq_len,
@@ -335,7 +344,6 @@ class Attention1D(LightweightModule):
         x: ttnn.Tensor | LazyWeight,
         current_pos: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
-        transformation_mat: ttnn.Tensor,
         page_table: ttnn.Tensor | None = None,
         kv_cache: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
@@ -346,7 +354,6 @@ class Attention1D(LightweightModule):
             x: Input tensor (seq_len, 1, batch, dim)
             current_pos: Current position tensor (batch_size,)
             rot_mats: Tuple of (cos, sin) rotation matrices for rotary embedding
-            transformation_mat: Transformation matrix for rotary embedding
             page_table: Page table for paged attention (optional)
             kv_cache: External KV cache [keys, values] (optional, uses self.layer_past if None)
 
@@ -413,14 +420,14 @@ class Attention1D(LightweightModule):
         if cfg.use_qk_fused:
             q_heads_pre_rot, k_heads_pre_rot = self._to_qk_fused_memory_config(q_heads_pre_rot, k_heads_pre_rot)
             q_heads, k_heads = ttnn.experimental.rotary_embedding_llama_fused_qk(
-                q_heads_pre_rot, k_heads_pre_rot, rot_mats[0], rot_mats[1], transformation_mat
+                q_heads_pre_rot, k_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_decode
             )
         else:
             q_heads = ttnn.experimental.rotary_embedding_llama(
-                q_heads_pre_rot, rot_mats[0], rot_mats[1], transformation_mat, is_decode_mode=True
+                q_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_decode, is_decode_mode=True
             )
             k_heads = ttnn.experimental.rotary_embedding_llama(
-                k_heads_pre_rot, rot_mats[0], rot_mats[1], transformation_mat, is_decode_mode=True
+                k_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_decode, is_decode_mode=True
             )
 
         ttnn.deallocate(q_heads_pre_rot)
@@ -517,7 +524,6 @@ class Attention1D(LightweightModule):
         self,
         x: ttnn.Tensor | LazyWeight,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
-        transformation_mat: ttnn.Tensor,
         user_id: int = 0,
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
@@ -530,7 +536,6 @@ class Attention1D(LightweightModule):
         Args:
             x: Input tensor (1, 1, seq_len, dim)
             rot_mats: Tuple of (cos, sin) rotation matrices
-            transformation_mat: Transformation matrix for rotary embedding
             user_id: User ID for KV cache fill
             page_table: Page table for paged attention
             chunk_page_table: Page table for chunked prefill
@@ -608,7 +613,7 @@ class Attention1D(LightweightModule):
             q_heads_pre_rot = ttnn.typecast(q_heads_pre_rot, dtype=ttnn.bfloat16)
 
         q_heads = ttnn.experimental.rotary_embedding_llama(
-            q_heads_pre_rot, rot_mats[0], rot_mats[1], transformation_mat, is_decode_mode=False
+            q_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_prefill, is_decode_mode=False
         )
         ttnn.deallocate(q_heads_pre_rot)
 
@@ -616,7 +621,7 @@ class Attention1D(LightweightModule):
             k_heads_pre_rot = ttnn.typecast(k_heads_pre_rot, dtype=ttnn.bfloat16)
 
         k_heads = ttnn.experimental.rotary_embedding_llama(
-            k_heads_pre_rot, rot_mats[0], rot_mats[1], transformation_mat, is_decode_mode=False
+            k_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_prefill, is_decode_mode=False
         )
         ttnn.deallocate(k_heads_pre_rot)
 
@@ -746,7 +751,6 @@ class Attention1D(LightweightModule):
         x: ttnn.Tensor | LazyWeight,
         current_pos: ttnn.Tensor | None,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
-        transformation_mat: ttnn.Tensor,
         user_id: int = 0,
         mode: str = "decode",
         page_table: ttnn.Tensor | None = None,
@@ -759,7 +763,6 @@ class Attention1D(LightweightModule):
             return self.prefill_forward(
                 x,
                 rot_mats,
-                transformation_mat,
                 user_id=user_id,
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
@@ -771,7 +774,6 @@ class Attention1D(LightweightModule):
                 x,
                 current_pos,
                 rot_mats,
-                transformation_mat,
                 page_table=page_table,
                 kv_cache=kv_cache,
             )
@@ -1214,6 +1216,9 @@ class Attention1D(LightweightModule):
             li_qkv_prefill_compute_kernel_cfg=li_qkv_prefill_cfg,
             sdpa_prefill_compute_kernel_cfg=sdpa_prefill_cfg,
             li_o_prefill_compute_kernel_cfg=li_o_prefill_cfg,
+            # Use provided transformation matrices if available; otherwise auto-created in resolve
+            transformation_mat_decode=transformation_mats.get("decode") if transformation_mats else None,
+            transformation_mat_prefill=transformation_mats.get("prefill") if transformation_mats else None,
         )
 
         instance = cls.from_config(config)
@@ -1673,6 +1678,49 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             wqkv_bias_decode.append(bias_tensor)
         to_set["_wqkv_bias_decode"] = wqkv_bias_decode
 
+    # --- Phase 9: Create transformation matrices for rotary embedding ---
+
+    if config.transformation_mat_decode is None:
+        use_qk_fused = config.use_qk_fused
+        max_batch_size = config.max_batch_size
+        doubled_batch_size = max_batch_size * 2 if use_qk_fused else max_batch_size
+
+        # Get core grid for batch distribution
+        core_grid = ttnn.CoreCoord(8, 8) if is_blackhole() else mesh_device.compute_with_storage_grid_size()
+        batch_grid = ttnn.num_cores_to_corerangeset(doubled_batch_size, core_grid, row_wise=True)
+
+        # Create transformation matrix repeated across batch cores
+        trans_mat = get_rot_transformation_mat().repeat(1, 1, doubled_batch_size, 1)
+        trans_mat_mem_config = ttnn.create_sharded_memory_config(
+            shape=(TILE_SIZE, TILE_SIZE),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        transformation_mat_decode = ttnn.from_torch(
+            trans_mat,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=trans_mat_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        to_set["transformation_mat_decode"] = transformation_mat_decode
+
+    if config.transformation_mat_prefill is None:
+        # Prefill uses simpler DRAM config (replicated across devices)
+        prefill_trans_mat = get_rot_transformation_mat()
+        transformation_mat_prefill = ttnn.from_torch(
+            prefill_trans_mat,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        to_set["transformation_mat_prefill"] = transformation_mat_prefill
+
     return replace(config, **to_set)
 
 
@@ -1819,20 +1867,6 @@ def _num_to_corerange(num_cores: int, start_core: ttnn.CoreCoord = None) -> ttnn
     end_x = (total_cores_with_start - 1) % row_size
 
     return ttnn.CoreRange(start_core, ttnn.CoreCoord(end_x, end_y))
-
-
-def _zeros_like_kv_cache(batch_size: int, n_kv_heads: int, max_seq_len: int, head_dim: int) -> "torch.Tensor":
-    """Create zeros tensor for standard KV cache."""
-    import torch
-
-    return torch.zeros((batch_size, n_kv_heads, max_seq_len, head_dim))
-
-
-def _zeros_like_paged_cache(paged_config, n_kv_heads: int, head_dim: int) -> "torch.Tensor":
-    """Create zeros tensor for paged KV cache."""
-    import torch
-
-    return torch.zeros((paged_config.max_num_blocks, n_kv_heads, paged_config.block_size, head_dim))
 
 
 def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: Attention1DConfig, mode: str) -> ttnn.Tensor:

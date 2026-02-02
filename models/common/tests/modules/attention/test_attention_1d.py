@@ -715,7 +715,6 @@ def _run_prefill_test(
                 tt_chunk,
                 None,
                 chunk_rot_mats,
-                transformation_mats.get("prefill"),
                 mode="prefill",
                 page_table=page_table_tt,
                 chunk_page_table=chunk_page_table_tt,
@@ -744,7 +743,6 @@ def _run_prefill_test(
             tt_input,
             None,  # current_pos not used in prefill
             rot_mats,
-            transformation_mats.get("prefill"),  # transformation_mat
             mode="prefill",
             page_table=page_table_tt,
         )
@@ -905,7 +903,6 @@ def _run_decode_test(
         tt_prefill_input,
         None,
         prefill_rot_mats,
-        transformation_mats.get("prefill"),
         user_id=0,
         mode="prefill",
         page_table=page_table_tt,
@@ -960,7 +957,6 @@ def _run_decode_test(
         tt_decode_input,
         current_pos,
         decode_rot_mats,
-        decode_transformation_mats.get("decode"),
         mode="decode",
         page_table=page_table_tt,
     )
@@ -1510,7 +1506,6 @@ def test_attention_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
             tt_input,
             None,  # current_pos not used in prefill
             rot_mats,
-            transformation_mats.get("prefill"),
             mode="prefill",
         )
 
@@ -1564,7 +1559,6 @@ def test_attention_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
             tt_prefill_input,
             None,
             prefill_rot_mats,
-            transformation_mats.get("prefill"),
             user_id=0,
             mode="prefill",
         )
@@ -1600,7 +1594,6 @@ def test_attention_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
             attention_input,
             current_pos_tensor,
             decode_rot_mats,
-            transformation_mats.get("decode"),
             mode="decode",
         )
 
@@ -1762,7 +1755,6 @@ def test_attention_1d_sliding_window(
         tt_input,
         None,  # current_pos not used in prefill
         rot_mats,
-        transformation_mats.get("prefill"),
         mode="prefill",
     )
 
@@ -2182,7 +2174,6 @@ def test_attention_1d_fused_qk_profiling(ttnn_mesh_device: ttnn.MeshDevice):
                     tt_prefill_input,
                     None,
                     prefill_rot_mats,
-                    transformation_mats.get("prefill"),
                     mode="prefill",
                 )
 
@@ -2228,7 +2219,6 @@ def test_attention_1d_fused_qk_profiling(ttnn_mesh_device: ttnn.MeshDevice):
                     tt_decode_input,
                     current_pos,
                     decode_rot_mats,
-                    decode_transformation_mats.get("decode"),
                     mode="decode",
                 )
                 ttnn.synchronize_device(ttnn_mesh_device)
@@ -2260,7 +2250,6 @@ def test_attention_1d_fused_qk_profiling(ttnn_mesh_device: ttnn.MeshDevice):
                         tt_decode_input,
                         current_pos,
                         decode_rot_mats,
-                        decode_transformation_mats.get("decode"),
                         mode="decode",
                     )
                     ttnn.synchronize_device(ttnn_mesh_device)
@@ -2284,7 +2273,6 @@ def test_attention_1d_fused_qk_profiling(ttnn_mesh_device: ttnn.MeshDevice):
                         tt_decode_input,
                         current_pos,
                         decode_rot_mats,
-                        decode_transformation_mats.get("decode"),
                         mode="decode",
                     )
                     ttnn.synchronize_device(ttnn_mesh_device)
