@@ -10,7 +10,6 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_transformerblock import 
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_linear_params,
 )
-import tracy
 
 
 class TtTransformer2DModel(LightweightModule):
@@ -107,7 +106,6 @@ class TtTransformer2DModel(LightweightModule):
         if C == 1280 or C == 1536 or C == 768:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
-        tracy.signpost(f"Transformer2DModel Linear In Start: {self.module_path}")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_in,
@@ -116,10 +114,8 @@ class TtTransformer2DModel(LightweightModule):
             compute_kernel_config=self.compute_config_in,
             memory_config=self.memory_config_in,
         )
-        tracy.signpost("Transformer2DModel Linear In End")
         for i, transformer_block in enumerate(self.transformer_blocks):
             hidden_states = transformer_block(hidden_states, attention_mask, encoder_hidden_states)
-        tracy.signpost(f"Transformer2DModel Linear Out Start: {self.module_path}")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_out,
@@ -128,7 +124,6 @@ class TtTransformer2DModel(LightweightModule):
             compute_kernel_config=self.compute_config_out,
             memory_config=self.memory_config_out,
         )
-        tracy.signpost("Transformer2DModel Linear Out End")
         hidden_states = ttnn.add(hidden_states, input_tensor, use_legacy=False)
 
         return hidden_states

@@ -7,7 +7,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
-import tracy
 
 
 class TtFeedForward(LightweightModule):
@@ -39,7 +38,6 @@ class TtFeedForward(LightweightModule):
     def forward(self, hidden_states):
         hidden_states = self.tt_geglu(hidden_states)
 
-        tracy.signpost(f"FeedForward Linear 1 Start: {self.module_path}")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights,
@@ -48,5 +46,4 @@ class TtFeedForward(LightweightModule):
             memory_config=self.ff2_memory_config,
             compute_kernel_config=self.default_compute_kernel_config,
         )
-        tracy.signpost("FeedForward Linear 1 End")
         return hidden_states

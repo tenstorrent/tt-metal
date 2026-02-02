@@ -6,7 +6,6 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
-import tracy
 from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 
 
@@ -44,7 +43,6 @@ class TtGEGLU(LightweightModule):
         self.output_memory_config_gelu = model_config.get_mm_output_memory_config(f"{module_path}.proj.split.gelu")
 
     def forward(self, input_tensor):
-        tracy.signpost(f"GEGLU Linear 1 Start: {self.module_path}")
         hidden_states = ttnn.linear(
             input_tensor,
             self.tt_weights_1,
@@ -53,9 +51,7 @@ class TtGEGLU(LightweightModule):
             program_config=self.program_config,
             compute_kernel_config=self.compute_config,
         )
-        tracy.signpost("GEGLU Linear 1 End")
 
-        tracy.signpost(f"GEGLU Linear 2 Start: {self.module_path}")
         gate = ttnn.linear(
             input_tensor,
             self.tt_weights_2,
@@ -64,7 +60,6 @@ class TtGEGLU(LightweightModule):
             program_config=self.program_config_gelu,
             compute_kernel_config=self.compute_config,
         )
-        tracy.signpost("GEGLU Linear 2 End")
 
         ttnn.deallocate(input_tensor)
         if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
