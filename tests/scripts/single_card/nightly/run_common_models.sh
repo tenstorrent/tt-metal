@@ -10,7 +10,7 @@ fail=0
 
 echo "Running common models for archs"
 
-env pytest -n auto tests/nightly/single_card/common_models/ ; fail+=$?
+env pytest tests/nightly/single_card/common_models/ ; fail+=$?
 
 if [[ $fail -ne 0 ]]; then
   exit 1
