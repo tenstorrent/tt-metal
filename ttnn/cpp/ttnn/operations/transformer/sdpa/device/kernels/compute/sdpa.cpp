@@ -205,6 +205,8 @@ void MAIN {
                         UNPACK((DPRINT << "reduce_c: k_chunk = " << k_chunk << ENDL()));
                         UNPACK((DPRINT << "Sq_chunk_t: " << Sq_chunk_t << ENDL()));
                         UNPACK((DPRINT << "Sk_chunk_t: " << Sk_chunk_t << ENDL()));
+                        UNPACK((DPRINT << "DHt: " << DHt << ENDL()));
+                        UNPACK((DPRINT << "vDHt: " << vDHt << ENDL()));
                         reduce_c<
                             PoolType::MAX,
                             ReduceDim::REDUCE_ROW,

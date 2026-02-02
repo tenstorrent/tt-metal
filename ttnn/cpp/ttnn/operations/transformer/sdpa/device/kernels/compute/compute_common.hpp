@@ -84,6 +84,9 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     UNPACK((DPRINT << "reduce_c: granularity = " << granularity << ENDL()));
     UNPACK((DPRINT << "reduce_c: dst_tiles = " << dst_tiles << ENDL()));
     UNPACK((DPRINT << "reduce_c: cols = " << cols << ENDL()));
+    UNPACK((DPRINT << "reduce_c: rows = " << rows << ENDL()));
+    UNPACK((DPRINT << "reduce_c: REDUCE_GRANULARITY = " << REDUCE_GRANULARITY << ENDL()));
+    UNPACK((DPRINT << "reduce_c: LOG2_REDUCE_GRANULARITY = " << LOG2_REDUCE_GRANULARITY << ENDL()));
     for (uint32_t g = 0; g < granularity; g++) {
         cb_wait_front(in0_cb, in0_wait_tiles);
         acquire_dst();
@@ -217,9 +220,16 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
         cb_pop_front(in0_cb, rows * cols);
         cb_reserve_back(in0_cb, rows * cols);
     }
-
     constexpr uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
     constexpr uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
+    UNPACK((DPRINT << "sub_exp_block_bcast_cols_inplace: cols = " << cols << ENDL()));
+    UNPACK((DPRINT << "sub_exp_block_bcast_cols_inplace: rows = " << rows << ENDL()));
+    UNPACK((DPRINT << "sub_exp_block_bcast_cols_inplace: dst_tiles = " << dst_tiles << ENDL()));
+    UNPACK((DPRINT << "sub_exp_block_bcast_cols_inplace: granularity = " << granularity << ENDL()));
+    UNPACK((DPRINT << "sub_exp_block_bcast_cols_inplace: SUB_EXP_GRANULARITY = " << SUB_EXP_GRANULARITY << ENDL()));
+    UNPACK(
+        (DPRINT << "sub_exp_block_bcast_cols_inplace: LOG2_SUB_EXP_GRANULARITY = " << LOG2_SUB_EXP_GRANULARITY
+                << ENDL()));
     uint32_t in0_index = 0;
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
