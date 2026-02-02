@@ -280,6 +280,7 @@ test_suite_wh_qb2_unit_tests() {
 
 test_suite_wh_qb2_llama_demo_tests() {
     echo "[upstream-tests] running WH QB2 upstream Llama demo tests with weights"
+    export TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/n300_x2_mesh_graph_descriptor.textproto
     verify_llama_dir_
     pytest models/tt_transformers/demo/simple_text_demo.py -k batch-32
 }
