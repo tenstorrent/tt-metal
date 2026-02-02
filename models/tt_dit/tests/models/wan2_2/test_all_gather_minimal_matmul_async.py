@@ -69,12 +69,11 @@ def run_test_linear_impl(
     logger.info("Creating persistent buffers")
     M = torch_input.shape[2] if use_non_fused else torch_input.shape[0]
     N = torch_input.shape[3] if use_non_fused else torch_input.shape[1]
-    # per_device_M = M/device.shape[sp_axis]
+    per_device_M = M / device.shape[sp_axis]
     if use_persistent_buffers:
         persistent_output_buffers = [
             ttnn.from_torch(
-                #                torch.zeros(1, 1, per_device_M, K) if use_non_fused else torch.zeros(per_device_M,K),
-                torch.zeros_like(torch_input),
+                torch.zeros(1, 1, per_device_M, K) if use_non_fused else torch.zeros(per_device_M, K),
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=input_dtype,
