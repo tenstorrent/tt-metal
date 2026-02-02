@@ -24,7 +24,7 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
-from ttexalens.umd_device import TimeoutDeviceRegisterError
+from ttexalens.device import NocUnavailableError
 from ttexalens.hardware.risc_debug import RiscHaltError
 import os
 
@@ -86,7 +86,7 @@ def dump_risc_debug_signals(
                         for signal_name in sorted(group_sample.keys()):
                             signal_names_str.append(f"{signal_name[len(risc_name)+1:]}")
                             signal_values_hex.append(hex(group_sample[signal_name]))
-                except TimeoutDeviceRegisterError:
+                except NocUnavailableError:
                     raise
                 except Exception as e:
                     log_check_risc(location, risc_name, False, f"Failed to collect all debug bus signals: {e}")

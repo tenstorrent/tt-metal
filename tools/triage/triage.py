@@ -89,7 +89,7 @@ from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemain
 from rich.table import Table
 import sys
 from ttexalens.context import Context
-from ttexalens.device import Device
+from ttexalens.device import Device, NocUnavailableError
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
@@ -226,9 +226,9 @@ class TriageScript:
                 else:
                     raise TTTriageError("Data provider script did not return any data.")
             return result
-        except TimeoutDeviceRegisterError:
+        except NocUnavailableError:
             raise
-        except Exception as e:
+        except Exception:
             if log_error:
                 self.failed = True
                 self.failure_message = traceback.format_exc()

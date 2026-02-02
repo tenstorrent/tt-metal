@@ -63,7 +63,7 @@ from triage import (
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
-from ttexalens.umd_device import TimeoutDeviceRegisterError
+from ttexalens.device import NocUnavailableError
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "operation_runtime_map"],
@@ -196,7 +196,7 @@ def _collect_dispatcher_data(
     """
     try:
         dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
-    except TimeoutDeviceRegisterError:
+    except NocUnavailableError:
         raise
     except Exception as e:
         log_check_risc(

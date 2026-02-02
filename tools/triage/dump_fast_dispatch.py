@@ -29,7 +29,7 @@ from ttexalens.tt_exalens_lib import read_word_from_device
 from inspector_data import run as get_inspector_data, InspectorData
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from typing import Optional, Any
-from ttexalens.umd_device import TimeoutDeviceRegisterError
+from ttexalens.device import NocUnavailableError
 
 
 # Dumping dispatch debug information for triage purposes
@@ -70,7 +70,7 @@ def _read_symbol_value(
     """
     try:
         return int(elf_obj.get_global(symbol, mem_access).read_value())
-    except TimeoutDeviceRegisterError:
+    except NocUnavailableError:
         raise
     except Exception as e:
         if check_value:
@@ -205,7 +205,7 @@ def read_wait_globals(
     )
     try:
         circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence_
-    except TimeoutDeviceRegisterError:
+    except NocUnavailableError:
         raise
     except Exception:
         if dispatcher_core_data.kernel_name == "cq_dispatch":
@@ -218,7 +218,7 @@ def read_wait_globals(
             value = kernel_elf.get_constant(name)
             assert isinstance(value, int)
             return value
-        except TimeoutDeviceRegisterError:
+        except NocUnavailableError:
             raise
         except Exception:
             if check_value:
@@ -262,7 +262,7 @@ def read_wait_globals(
             # Two's-complement 32-bit wrapping difference
             delta = (int(sem_value) - int(local_count)) & 0xFFFFFFFF
             sem_minus_local = delta - 0x100000000 if (delta & 0x80000000) else delta
-    except TimeoutDeviceRegisterError:
+    except NocUnavailableError:
         raise
     except Exception:
         log_check(

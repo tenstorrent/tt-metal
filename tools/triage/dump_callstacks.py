@@ -27,7 +27,7 @@ from callstack_provider import run as get_callstack_provider, CallstackProvider,
 from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
-from ttexalens.umd_device import TimeoutDeviceRegisterError
+from ttexalens.device import NocUnavailableError
 
 script_config = ScriptConfig(
     depends=["run_checks", "callstack_provider"],
@@ -47,7 +47,7 @@ def dump_callstacks(
             if dispatcher_core_data.go_message == "DONE":
                 return None
         return callstack_provider.get_callstacks(location, risc_name)
-    except TimeoutDeviceRegisterError:
+    except NocUnavailableError:
         raise
     except Exception as e:
         log_check_risc(

@@ -35,11 +35,11 @@ from dispatcher_data import run as get_dispatcher_data, DispatcherData, Dispatch
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
+from ttexalens.device import NocUnavailableError
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack
-from ttexalens.umd_device import TimeoutDeviceRegisterError
 from utils import WARN
 
 import socket
@@ -87,7 +87,7 @@ def get_callstack(
                     if location in location._device.active_eth_block_locations:
                         error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
-            except TimeoutDeviceRegisterError:
+            except NocUnavailableError:
                 raise
             except Exception as e:
                 return KernelCallstackWithMessage(callstack=[], message=str(e))
@@ -100,7 +100,7 @@ def get_callstack(
                     if location in location._device.active_eth_block_locations:
                         error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
-            except TimeoutDeviceRegisterError:
+            except NocUnavailableError:
                 raise
             except Exception as e:
                 try:
@@ -118,12 +118,12 @@ def get_callstack(
                             )
                         error_message = "\n".join([error_message, additional_message])
                     return KernelCallstackWithMessage(callstack=cs, message=error_message)
-                except TimeoutDeviceRegisterError:
+                except NocUnavailableError:
                     raise
                 except Exception as e:
                     # If top callstack failed too, print both error messages
                     return KernelCallstackWithMessage(callstack=[], message="\n".join([error_message, str(e)]))
-    except TimeoutDeviceRegisterError:
+    except NocUnavailableError:
         raise
     except Exception as e:
         return KernelCallstackWithMessage(callstack=[], message=str(e))
@@ -301,7 +301,7 @@ class CallstackProvider:
                         callstack_with_message.callstack[0].pc = (
                             location._device.get_block(location).get_risc_debug(risc_name).get_pc()
                         )
-                    except TimeoutDeviceRegisterError:
+                    except NocUnavailableError:
                         raise
                     except:
                         pass
@@ -352,7 +352,7 @@ def start_gdb_server(port: int, context: Context) -> GdbServer:
         server.start()
         gdb_server = GdbServer(context, server, error_stream=io.StringIO())
         gdb_server.start()
-    except TimeoutDeviceRegisterError:
+    except NocUnavailableError:
         raise
     except Exception as e:
         raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
