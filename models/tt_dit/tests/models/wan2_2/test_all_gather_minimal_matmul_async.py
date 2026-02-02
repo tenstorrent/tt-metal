@@ -55,6 +55,7 @@ def run_test_linear_impl(
     force_transpose=True,
     sp_axis=0,
     tp_axis=1,
+    torch_dtype=torch.float32,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -68,12 +69,15 @@ def run_test_linear_impl(
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
     M = torch_input.shape[2] if use_non_fused else torch_input.shape[0]
-    N = torch_input.shape[3] if use_non_fused else torch_input.shape[1]
-    per_device_M = M / device.shape[sp_axis]
+    K = torch_input.shape[3] if use_non_fused else torch_input.shape[1]
+    N = weight_input.shape[3] if use_non_fused else weight_input.shape[1]
+    per_device_M = M // device.shape[sp_axis]
     if use_persistent_buffers:
         persistent_output_buffers = [
             ttnn.from_torch(
-                torch.zeros(1, 1, per_device_M, K) if use_non_fused else torch.zeros(per_device_M, K),
+                torch.zeros((1, 1, per_device_M, K), dtype=torch_dtype)
+                if use_non_fused
+                else torch.zeros((per_device_M, K), dtype=torch_dtype),
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=input_dtype,
@@ -182,6 +186,8 @@ def run_test_linear_impl(
         ),
     )
     check_result = []
+
+    breakpoint()
     for i in range(device.shape[0]):
         for j in range(device.shape[1]):
             if use_non_fused:
@@ -196,7 +202,14 @@ def run_test_linear_impl(
                     i * per_device_M : (i + 1) * per_device_M,
                     j * N : (j + 1) * N,
                 ]
-            check_result.append(assert_quality(torch_output, tt_device_output))
+            check_result.append(
+                assert_quality(
+                    torch_output[:, :, i * per_device_M : (i + 1) * per_device_M, :]
+                    if use_non_fused
+                    else torch_output[i * per_device_M : (i + 1) * per_device_M, :],
+                    tt_device_output,
+                )
+            )
 
     return check_result
 
@@ -288,6 +301,7 @@ def run_test_linear(
         force_transpose=force_transpose,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        torch_dtype=torch_dtype,
     )
 
 
