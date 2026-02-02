@@ -16,6 +16,8 @@ enum class RouterState : uint32_t { INITIALIZING = 0, RUNNING = 1, PAUSED = 2, D
 
 enum class FabricArch : uint8_t { WORMHOLE_B0 = 0, BLACKHOLE = 1, QUASAR = 2, STATIC_ONLY = 3 };
 
+static constexpr uint8_t FABRIC_TELEMETRY_VERSION = 1;
+
 // TODO: this V2 needs to be deleted.
 //       Just for avoiding conflicts.
 struct RiscTimestampV2 {
@@ -68,6 +70,7 @@ struct StaticInfo {
     uint16_t mesh_id;
     uint8_t device_id;
     uint8_t direction;
+    uint8_t version;
     uint32_t fabric_config;
     DynamicStatistics supported_stats;
 };
