@@ -60,6 +60,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
+#include <tt-metalium/experimental/circular_buffer.hpp>
 
 namespace tt::tt_metal {
 enum class FabricConfig : uint32_t;
@@ -1559,6 +1560,10 @@ void UpdateDynamicCircularBufferAddress(
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(circular_buffer->is_global_circular_buffer(), "CircularBuffer must be linked to a GlobalCircularBuffer!");
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
+}
+
+uint32_t GetCircularBufferAddress(Program& program, CBHandle cb_handle) {
+    return program.impl().get_circular_buffer(cb_handle)->address();
 }
 
 namespace quasar {
