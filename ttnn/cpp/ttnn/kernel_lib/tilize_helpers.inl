@@ -46,6 +46,7 @@ constexpr bool can_use_fast_tilize() {
 template <
     uint32_t input_cb,
     uint32_t output_cb,
+    TilizeSpeed tilize_speed,
     InitUninitMode init_uninit_mode,
     WaitMode wait_mode,
     uint32_t reconfig_from_cb>
@@ -68,9 +69,7 @@ ALWI void tilize(
         (init_uninit_mode == InitUninitMode::InitAndUninit || init_uninit_mode == InitUninitMode::UninitOnly);
     constexpr bool use_dt_reconfig = (reconfig_from_cb != INVALID_CB);
     constexpr bool do_wait = (wait_mode == WaitMode::Wait);
-
-    // Auto-detect if fast tilize can be used (compile-time)
-    constexpr bool use_fast = can_use_fast_tilize<output_cb>();
+    constexpr bool use_fast = (tilize_speed == TilizeSpeed::Fast);
 
     // =========================================================================
     // INITIALIZATION

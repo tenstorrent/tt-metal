@@ -74,6 +74,7 @@ void kernel_main() {
                 compute_kernel_lib::tilize<
                     cb_intermed2,
                     out_cb_id,
+                    compute_kernel_lib::TilizeSpeed::Standard,
                     compute_kernel_lib::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::WaitMode::Wait,
                     cb_in1>(onetile, 1);

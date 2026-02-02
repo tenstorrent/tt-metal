@@ -217,6 +217,7 @@ void kernel_main() {
     compute_kernel_lib::tilize<
         cb_in_rm,
         cb_in,
+        compute_kernel_lib::TilizeSpeed::Standard,
         compute_kernel_lib::InitUninitMode::InitAndUninit,
         compute_kernel_lib::WaitMode::NoWait>(per_core_N, per_core_M);
 #endif

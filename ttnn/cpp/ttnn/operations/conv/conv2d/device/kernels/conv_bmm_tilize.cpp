@@ -31,8 +31,13 @@ void tilize_in(uint32_t in_block_w, uint32_t in_num_subblocks) {
                                                   : (uninit_tilize ? compute_kernel_lib::InitUninitMode::UninitOnly
                                                                    : compute_kernel_lib::InitUninitMode::Neither);
     // Pass in_cb_id as previous_dt_cb to ensure DT reconfig (hack for conv)
-    compute_kernel_lib::tilize<in_cb_id, out_cb_id, init_uninit_mode, compute_kernel_lib::WaitMode::Wait, in_cb_id>(
-        in_block_w, in_num_subblocks);
+    compute_kernel_lib::tilize<
+        in_cb_id,
+        out_cb_id,
+        compute_kernel_lib::TilizeSpeed::Fast,
+        init_uninit_mode,
+        compute_kernel_lib::WaitMode::Wait,
+        in_cb_id>(in_block_w, in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>

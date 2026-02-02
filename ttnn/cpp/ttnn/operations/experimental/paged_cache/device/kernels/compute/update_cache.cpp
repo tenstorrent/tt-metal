@@ -49,6 +49,7 @@ void kernel_main() {
         compute_kernel_lib::tilize<
             untilized_cache2_cb,
             out_cb,
+            compute_kernel_lib::TilizeSpeed::Standard,
             compute_kernel_lib::InitUninitMode::InitAndUninit,
             compute_kernel_lib::WaitMode::Wait,
             cache_cb>(Wt, 1);

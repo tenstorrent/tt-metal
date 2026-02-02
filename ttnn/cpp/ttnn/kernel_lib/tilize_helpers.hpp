@@ -51,6 +51,12 @@ namespace compute_kernel_lib {
 
 // INVALID_CB, InitUninitMode, and WaitMode are provided by compute_kernel_lib_common.hpp
 
+// Tilize speed selection
+enum class TilizeSpeed {
+    Standard,  // Standard tilize implementation
+    Fast       // Fast tilize implementation (optimized for specific hardware)
+};
+
 // =============================================================================
 // Main Function (declaration)
 // =============================================================================
@@ -60,15 +66,11 @@ namespace compute_kernel_lib {
  *
  * This single function handles:
  * - Simple loop
- * - Fast variants (automatically selected when requirements are met)
+ * - Fast variants (tilize_speed = TilizeSpeed::Fast)
  * - Datatype reconfiguration (reconfig_from_cb != INVALID_CB)
  * - Page-based waiting (when input CB page size differs from tile size):
  *   - input_pages_per_block: pages to wait for per iteration
  *   - total_input_pages: total pages to wait for, chunked 32 at a time (takes priority over input_pages_per_block)
- *
- * Fast tilize is automatically enabled when:
- * 1. Output CB has 32x32 tile dimensions
- * 2. Half sync mode is enabled
  *
  * IMPORTANT - HARDWARE INITIALIZATION REQUIREMENT:
  * Before calling this function, you MUST initialize the compute kernel hardware by
@@ -81,6 +83,7 @@ namespace compute_kernel_lib {
  *
  * @tparam input_cb Input circular buffer ID (must be compile-time constant)
  * @tparam output_cb Output circular buffer ID (must be compile-time constant)
+ * @tparam tilize_speed Controls tilize implementation speed (default: Standard)
  * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
  * @tparam wait_mode Whether to wait for input (default: Wait)
  * @tparam reconfig_from_cb Previous CB whose data format we're switching from (default: INVALID_CB = disabled)
@@ -121,6 +124,7 @@ namespace compute_kernel_lib {
 template <
     uint32_t input_cb,
     uint32_t output_cb,
+    TilizeSpeed tilize_speed = TilizeSpeed::Standard,
     InitUninitMode init_uninit_mode = InitUninitMode::InitAndUninit,
     WaitMode wait_mode = WaitMode::Wait,
     uint32_t reconfig_from_cb = INVALID_CB>
