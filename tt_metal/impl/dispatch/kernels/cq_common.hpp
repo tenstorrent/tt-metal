@@ -457,7 +457,7 @@ class CBReaderWithReleasePolicy : public CBReader<my_sem_id, cb_log_page_size, c
 public:
     FORCE_INLINE void init() {
         this->CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base>::init();
-        this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
+        this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
     }
 
     // Returns how much data is available. Will block until data is available. May release old pages before cmd_ptr to
@@ -517,14 +517,13 @@ private:
         // order. We should use transaction IDs instead in that case.
         if (released_prev_block_) {
             WAYPOINT("CBRW");
-            while (!wrap_ge(
-                NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT), this->block_noc_writes_to_clear_));
+            while (!noc_nonposted_writes_sent_at_count(noc_index, this->block_noc_writes_to_clear_));
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
             WAYPOINT("CBRD");
         } else {
             released_prev_block_ = true;
         }
-        this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
+        this->block_noc_writes_to_clear_ = noc_get_nonposted_writes_issued(noc_index);
     }
 
     FORCE_INLINE void move_rd_to_next_block_and_release_pages() {

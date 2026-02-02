@@ -164,6 +164,103 @@ inline __attribute__((always_inline)) void noc_clear_outstanding_req_cnt(uint32_
     *ptr = id_mask;
 }
 
+// Save/restore entire command buffer state (e.g. for profiler).
+// Same struct on all arches; ret_addr_mid only used on Blackhole and Quasar (WH keeps it for layout uniformity).
+struct NocCmdBufState {
+    uint32_t ctrl;
+    uint32_t ret_addr_coord;
+    uint32_t targ_addr_lo;
+    uint32_t ret_addr_lo;
+    uint32_t at_len_be;
+    uint32_t targ_addr_coord;
+    uint32_t targ_addr_mid;
+    uint32_t packet_tag;
+    uint32_t at_data;
+    uint32_t ret_addr_mid;
+};
+
+// Saves all cmd_buf registers into state; clears reserved NOC_CTRL bits and NOC_PACKET_TAG.
+inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
+    uint32_t noc, uint32_t cmd_buf, NocCmdBufState* state) {
+    state->ctrl = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CTRL);
+    // Clear reserved bits in NOC_CTRL so they are not restored (WormholeB0 NoC MemoryMap).
+    constexpr uint32_t noc_ctrl_reserved_bit_mask = ((1u << 27) - (1u << 18)) | (1u << 31);
+    state->ctrl &= ~noc_ctrl_reserved_bit_mask;
+    state->ret_addr_coord = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE);
+    state->targ_addr_lo = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_LO);
+    state->ret_addr_lo = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_LO);
+    state->at_len_be = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN_BE);
+    state->targ_addr_coord = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE);
+    state->targ_addr_mid = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_MID);
+    state->packet_tag = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_PACKET_TAG);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, 0);
+    state->at_data = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_DATA);
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
+    state->ret_addr_mid = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_MID);
+#endif
+}
+
+// Restores cmd_buf from state; waits for cmd_buf ready before writing.
+inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
+    uint32_t noc, uint32_t cmd_buf, const NocCmdBufState* state) {
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, state->ctrl);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, state->ret_addr_coord);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, state->targ_addr_lo);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, state->ret_addr_lo);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, state->at_len_be);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, state->targ_addr_coord);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, state->targ_addr_mid);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, state->packet_tag);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, state->at_data);
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, state->ret_addr_mid);
+#endif
+}
+
+// Returns number of read transactions issued on this noc.
+inline __attribute__((always_inline)) uint32_t noc_get_reads_issued(uint32_t noc) { return noc_reads_num_issued[noc]; }
+// Returns number of nonposted write transactions issued on this noc.
+inline __attribute__((always_inline)) uint32_t noc_get_nonposted_writes_issued(uint32_t noc) {
+    return noc_nonposted_writes_num_issued[noc];
+}
+// Returns number of nonposted write acks received on this noc.
+inline __attribute__((always_inline)) uint32_t noc_get_nonposted_writes_acked(uint32_t noc) {
+    return noc_nonposted_writes_acked[noc];
+}
+
+// Adds delta to nonposted-writes-acked (e.g. for multicast write accounting).
+inline __attribute__((always_inline)) void noc_adjust_nonposted_writes_acked(uint32_t noc, uint32_t delta) {
+    noc_nonposted_writes_acked[noc] += delta;
+}
+// Adds delta to nonposted-writes-issued (e.g. for multicast write accounting).
+inline __attribute__((always_inline)) void noc_adjust_nonposted_writes_issued(uint32_t noc, uint32_t delta) {
+    noc_nonposted_writes_num_issued[noc] += delta;
+}
+
+// True if hardware nonposted-writes-sent count has reached expected_count (wrap-around safe).
+inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_at_count(uint32_t noc, uint32_t expected_count) {
+    uint32_t sent = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
+    return (int32_t)(sent - expected_count) >= 0;
+}
+
+// Writes NOC_TARG_ADDR_COORDINATE for cmd_buf (target (x,y) for transactions).
+inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr_coordinate(
+    uint32_t noc, uint32_t cmd_buf, uint32_t coord) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, coord);
+}
+
+// Writes NOC_RET_ADDR_LO and NOC_RET_ADDR_COORDINATE from 64-bit ret_addr (e.g. atomic return).
+inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr(uint32_t noc, uint32_t cmd_buf, uint64_t ret_addr) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(ret_addr & 0xFFFFFFFF));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(ret_addr >> NOC_ADDR_COORD_SHIFT));
+}
+
+// Debug only: returns NOC_AT_LEN_BE for cmd_buf (transaction length). Requires NOC_LOGGING_ENABLED.
+inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t noc, uint32_t cmd_buf) {
+    return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN_BE);
+}
+
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
