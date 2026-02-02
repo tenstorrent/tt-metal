@@ -31,7 +31,6 @@
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
-#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
