@@ -5,11 +5,7 @@
 
 from loguru import logger
 import math
-import pdb
 
-import random
-
-import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
@@ -140,7 +136,6 @@ def gen_dense_input_contribs(
 
     dense_contribs = 0
     for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
-        device_expert_list = get_experts_on_device(experts, expert_mapping, rec_d)
         device_dense_idxs = [0] * num_local_experts
         device_blocked_dense_counts = [0] * num_local_experts
         for dt in range(dense_metadata_len[rec_d]):
@@ -204,7 +199,6 @@ def gen_output_ref(
     batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch)
 
     for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
-        device_expert_list = get_experts_on_device(experts, expert_mapping, rec_d)
         device_dense_idxs = [0] * num_local_experts
         device_blocked_dense_counts = [0] * num_local_experts
         for dt in range(dense_metadata_len[rec_d]):
@@ -500,7 +494,7 @@ def _check_ref(tt_out, output_ref, output_data_map, mesh_device, axis):
 def _run_op_with_trace(num_iters, op_func, mesh_device, profiler):
     # compile run:
     logger.info("Compiling model")
-    tt_out = tt_scores_out_list = op_func(1)
+    tt_out = op_func(1)
     ttnn.synchronize_device(mesh_device)
 
     logger.info("Capturing Warmup")
@@ -563,7 +557,6 @@ def _run_test(
     mesh_shape = tuple(mesh_device.shape)
     devices = math.prod(mesh_shape)
     assert experts % devices == 0
-    experts_per_device = experts // devices
 
     (
         dense_metadata_tensor,
