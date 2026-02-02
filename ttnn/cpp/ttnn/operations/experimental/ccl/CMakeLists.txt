@@ -29,7 +29,7 @@ file(
     slice_reshard_async/device/kernels/*
     deepseek_minimal_broadcast/device/kernels/*
     deepseek_minimal_all_reduce/device/kernels/*
-    moe/device/kernels/*
+    moe_compute/device/kernels/*
 )
 
 target_sources(
