@@ -881,7 +881,6 @@ jobs:
     needs: ttnn-generate-sweeps
     if: |
       always() &&
-      (needs.ttnn-generate-sweeps.result == 'success' || needs.ttnn-generate-sweeps.result == 'failure') &&
       (github.event_name == 'schedule' ||
        github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' ||
        github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' ||
