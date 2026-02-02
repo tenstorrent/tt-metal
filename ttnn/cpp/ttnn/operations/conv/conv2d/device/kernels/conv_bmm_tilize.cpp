@@ -41,7 +41,7 @@ void tilize_in(
     // This uses fast tilize with DT variant (fast_tilize_init_with_dt)
     using namespace compute_kernel_lib::tilize;
     compute_kernel_lib::
-        tilize<in_block_w, in_cb_id, out_cb_id, init_uninit_mode, WaitMode::Wait, TilizeSpeedMode::Fast>(
+        tilize<in_block_w, in_cb_id, out_cb_id, init_uninit_mode, WaitMode::Wait, TilizeSpeedMode::Fast, in_cb_id>(
             in_num_subblocks);
 }  // tilize_in()
 
