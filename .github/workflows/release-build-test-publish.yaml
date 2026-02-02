@@ -81,7 +81,7 @@ jobs:
 
   t3000-demo-tests:
     needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
+    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
@@ -93,7 +93,7 @@ jobs:
 
   galaxy-demos:
     needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
+    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
     uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     secrets: inherit
     with:
@@ -106,7 +106,7 @@ jobs:
 
   blackhole-demo-tests:
     needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
+    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     strategy:
@@ -122,7 +122,7 @@ jobs:
 
   blackhole-multi-card-demo-tests:
     needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
+    if: ${{ inputs.platform == inputs.main-platform && inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
     strategy:
