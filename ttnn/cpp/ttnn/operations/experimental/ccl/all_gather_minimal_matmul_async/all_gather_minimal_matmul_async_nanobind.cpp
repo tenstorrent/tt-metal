@@ -156,8 +156,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
 
         Notes on Implementation
         -----------------------
-        - Data movement reads A in MxK blocks and B in KxN blocks with serpentine ordering and reuse across
-          subblocks to reduce NOC pressure; writes are deferred to reduce congestion.
+        - Data movement reads A in MxK blocks and B in KxN blocks in row-major order with in0 and reuse when
+          striding across N blocks; writes are deferred to reduce congestion.
         - K is processed in blocks of size `K_block_size`, with zero-padding as needed when K is not a multiple.
         - If `fused_activation` is provided, it is applied per tile just before packing to the output buffer.
 
