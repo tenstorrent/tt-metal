@@ -74,8 +74,8 @@ protected:
         }
 
         previous_debug_dump_enabled_ =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_experimental_device_debug_dump_enabled(true);
+            tt::tt_metal::MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_experimental_noc_debug_dump_enabled(true);
 
         MeshDispatchFixture::SetUp();
 
@@ -91,7 +91,7 @@ protected:
             noc_debug_state->reset_state();
         }
 
-        tt::tt_metal::MetalContext::instance().rtoptions().set_experimental_device_debug_dump_enabled(
+        tt::tt_metal::MetalContext::instance().rtoptions().set_experimental_noc_debug_dump_enabled(
             previous_debug_dump_enabled_);
     }
 };
