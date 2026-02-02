@@ -49,7 +49,10 @@ autograd::TensorPtr memory_efficient_runner(
     }
 
     // define grad function and copy generator (in the state before forward pass)
-    autograd::GradFunction grad = [input, mask, out, &forward_impl, generator]() {
+    // Note: forward_impl must be captured by value (not by reference!) because the lambda
+    // passed from the calling code may go out of scope before backward runs.
+    // The lambda is marked mutable because forward_impl may have a non-const operator().
+    autograd::GradFunction grad = [input, mask, out, forward_impl, generator]() mutable {
         // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());
         // run forward pass again

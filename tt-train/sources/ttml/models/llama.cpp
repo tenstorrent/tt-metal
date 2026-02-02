@@ -153,7 +153,9 @@ ttml::autograd::TensorPtr Llama::operator()(
         auto& block = blocks[block_idx];
         if (runner_type == RunnerType::MemoryEfficient) {
             // Memory efficient mode does not support KV cache
-            auto block_impl = [&block, block_idx](
+            // Note: capture block by value (copy shared_ptr), not by reference, because
+            // this lambda is stored for backward and block is a loop-local reference.
+            auto block_impl = [block, block_idx](
                                   const ttml::autograd::TensorPtr& input, const ttml::autograd::TensorPtr& mask_arg) {
                 return (*block)(input, mask_arg, nullptr, static_cast<uint32_t>(block_idx), 0);
             };
