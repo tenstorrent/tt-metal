@@ -459,6 +459,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             (1 - out_h) * stride_h * in_w + (1 - out_w) * stride_w;  // allow overflow for negative values
     }
 
+    // Dummy CB IDs for depthwise convolution - not used in pool, but passed to kernels for interface compatibility
+    const uint32_t mul_cb_id = 0;
+    const uint32_t weight_cb_id = 0;
+
     const bool is_output_tiled = output_layout == Layout::TILE;
     const bool is_output_block_format = is_block_float(outputs[0].dtype());
     const bool zero_pages = is_output_tiled && is_output_block_format;
@@ -622,7 +626,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         up_left_wrap_inc,               // 42
         (uint32_t)zero_pages,           // 43
         out_cb_id,                      // 44
-        out_idx_cb_id};                 // 45
+        out_idx_cb_id,                  // 45
+        weight_cb_id};                  // 46
+
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -630,16 +636,21 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
         "reader_pool_2d.cpp";
 
+    // Add IS_DEPTHWISE=0 define for pool reader kernels
+    std::map<std::string, std::string> reader_defines = {{"IS_DEPTHWISE", "0"}};
+
     auto reader0_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::RISCV_0_default,
-        .compile_args = reader0_ct_args};
+        .compile_args = reader0_ct_args,
+        .defines = reader_defines};
     auto reader0_kernel = CreateKernel(program, reader_kernel_fname, all_cores, reader0_config);
 
     auto reader1_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = tt::tt_metal::NOC::RISCV_1_default,
-        .compile_args = reader1_ct_args};
+        .compile_args = reader1_ct_args,
+        .defines = reader_defines};
     auto reader1_kernel =
         params.split_reader ? CreateKernel(program, reader_kernel_fname, all_cores, reader1_config) : 0;
 
@@ -679,7 +690,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_w_padded,                    // 27
         eff_kernel_h,                   // 28
         eff_kernel_w,                   // 29
-        pad_l};                         // 30
+        pad_l,                          // 30
+        weight_cb_id,                   // 31
+        mul_cb_id,                      // 32
+        // Depthwise-specific args (placeholders for pool, actual values for depthwise)
+        0,   // 33 - has_bias (false for pool)
+        0,   // 34 - bias_cb_id (unused for pool)
+        0,   // 35 - bias_ntiles (unused for pool)
+        0};  // 36 - clear_value_cb_id (unused for pool)
 
     // Get device arch for compute kernel config initialization
     auto device_arch = input.device()->arch();
@@ -695,12 +713,16 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         false                                          // dst_full_sync_en
     );
 
+    // Get pool defines and add IS_DEPTHWISE=0 for pool operations
+    auto compute_defines = get_defines(pool_type);
+    compute_defines["IS_DEPTHWISE"] = "0";
+
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = get_math_fidelity(device_compute_kernel_config),
         .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
-        .defines = get_defines(pool_type)};
+        .defines = compute_defines};
 
     std::string compute_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";

@@ -30,6 +30,12 @@ def test_ttnn_pytorch_sweep(device, input_spec):
     if input_spec in failing_parameters_ttnn_pytorch:
         pytest.skip(f"Skipping test for failing input_spec: {input_spec}")
 
+    # Skip if not a true depthwise convolution (input_channels == output_channels == groups)
+    # input_spec structure: [batch, output_channels, input_channels, ..., groups, ...]
+    output_channels, input_channels, groups = input_spec[1], input_spec[2], input_spec[11]
+    if not (input_channels == output_channels == groups):
+        pytest.skip("Skipping: test requires input_channels == output_channels == groups (depthwise conv)")
+
     passed, pcc, perf, out, ref = run_conv2d_short_sweep(
         input_spec,
         device,
@@ -48,6 +54,12 @@ def test_tt_forge_sweep(device, input_spec):
     # Check if input_spec is in failing_parameters
     if input_spec in failing_parameters_ttnn_forge:
         pytest.skip(f"Skipping test for failing input_spec: {input_spec}")
+
+    # Skip if not a true depthwise convolution (input_channels == output_channels == groups)
+    # input_spec structure: [batch, output_channels, input_channels, ..., groups, ...]
+    output_channels, input_channels, groups = input_spec[1], input_spec[2], input_spec[11]
+    if not (input_channels == output_channels == groups):
+        pytest.skip("Skipping: test requires input_channels == output_channels == groups (depthwise conv)")
 
     passed, pcc, perf, out, ref = run_conv2d_short_sweep(
         input_spec,

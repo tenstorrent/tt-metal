@@ -13,6 +13,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op_depthwise_program_factory.hpp"
 
 #include <string>
 #include <utility>
@@ -30,8 +31,10 @@ struct Conv2dDeviceOperation {
     using tensor_args_t = conv2d::tensor_args_t;
     using spec_return_value_t = conv2d::spec_return_value_t;
     using tensor_return_value_t = conv2d::tensor_return_value_t;
-    using program_factory_t =
-        std::variant<program::Conv2dShardedProgramFactory, program::Conv2dWidthShardedProgramFactory>;
+    using program_factory_t = std::variant<
+        program::Conv2dShardedProgramFactory,
+        program::Conv2dWidthShardedProgramFactory,
+        program::Conv2dDepthwiseProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);

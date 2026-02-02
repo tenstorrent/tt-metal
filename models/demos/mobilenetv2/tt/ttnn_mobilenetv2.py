@@ -234,6 +234,9 @@ class TtMobileNetV2:
         self,
         x,
     ):
+        # Disable program cache to get fresh compilation each time
+        self.device.disable_and_clear_program_cache()
+
         output_tensor, h, w = self.conv1(x)
         output_tensor, h, w = self.conv2(output_tensor)
         output_tensor, h, w = self.conv3(output_tensor)
