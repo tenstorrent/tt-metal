@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
 /*
  * Sharded reader for madd operation.
@@ -20,6 +21,12 @@ void kernel_main() {
     constexpr uint32_t cb_srcC_index = get_compile_time_arg_val(2);
     constexpr uint32_t cb_zero_index = get_compile_time_arg_val(3);
 
+    // Generate zero tile for compute kernel using optimized helper
+    constexpr uint32_t zero = 0;
+    cb_reserve_back(cb_zero_index, 1);
+    generate_reduce_scaler(cb_zero_index, zero);
+    cb_push_back(cb_zero_index, 1);
+
     // Signal that all input tiles are available (data already in L1 from sharding)
     cb_reserve_back(cb_srcA_index, num_tiles);
     cb_push_back(cb_srcA_index, num_tiles);
@@ -29,16 +36,4 @@ void kernel_main() {
 
     cb_reserve_back(cb_srcC_index, num_tiles);
     cb_push_back(cb_srcC_index, num_tiles);
-
-    // Generate zero tile for compute kernel
-    cb_reserve_back(cb_zero_index, 1);
-    const uint32_t zero_tile_addr = get_write_ptr(cb_zero_index);
-    constexpr uint32_t tile_size_bytes = get_tile_size(cb_zero_index);
-
-    // Zero out the tile
-    volatile uint32_t* ptr = reinterpret_cast<volatile uint32_t*>(zero_tile_addr);
-    for (uint32_t i = 0; i < tile_size_bytes / sizeof(uint32_t); ++i) {
-        ptr[i] = 0;  // How fast is this? will it work?
-    }
-    cb_push_back(cb_zero_index, 1);
 }

@@ -20,6 +20,16 @@ def test_madd_interleaved(device, dim1, dim2):
 
     shape = (dim1, dim2)
 
+    memory_config = ttnn.DRAM_MEMORY_CONFIG
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+        dst_full_sync_en=False,
+    )
+
     torch_a = torch.rand(shape, dtype=torch.bfloat16)
     torch_b = torch.rand(shape, dtype=torch.bfloat16)
     torch_c = torch.rand(shape, dtype=torch.bfloat16)
@@ -28,15 +38,15 @@ def test_madd_interleaved(device, dim1, dim2):
     # torch_c = torch.zeros(shape, dtype=torch.bfloat16) + 2
     torch_output_tensor = torch_a * torch_b + torch_c
 
-    ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_c = ttnn.from_torch(torch_c, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    ttnn_c = ttnn.from_torch(torch_c, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
 
     # print(ttnn_a)
     # print(ttnn_b)
     # print(ttnn_c)
 
-    output_tensor = ttnn.madd(ttnn_a, ttnn_b, ttnn_c)
+    output_tensor = ttnn.madd(ttnn_a, ttnn_b, ttnn_c, memory_config=memory_config, compute_kernel_config=compute_config)
     # print(output_tensor)
 
     assert output_tensor.shape == shape
@@ -185,3 +195,118 @@ def test_madd_sharded_block(device, shard_shape, core_grid_shape):
 
     assert output_tensor.shape == shape
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+
+
+# @pytest.mark.parametrize("h", [16*8*32*11*10])
+# @pytest.mark.parametrize("w", [32])
+# @pytest.mark.parametrize("count", [25])
+# def test_perf_interleaved(device, h, w, count):
+#     import time
+
+#     torch.manual_seed(0)
+
+#     shape = (h, w)
+
+#     torch_a = torch.rand(shape, dtype=torch.bfloat16)
+#     torch_b = torch.rand(shape, dtype=torch.bfloat16)
+#     torch_c = torch.rand(shape, dtype=torch.bfloat16)
+
+
+#     memory_config = ttnn.DRAM_MEMORY_CONFIG
+#     compute_config = ttnn.init_device_compute_kernel_config(
+#         device.arch(),
+#         math_fidelity=ttnn.MathFidelity.LoFi,
+#         math_approx_mode=True,
+#         fp32_dest_acc_en=False,
+#         packer_l1_acc=False,
+#         dst_full_sync_en=False
+#     )
+
+#     ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+#     ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+#     ttnn_c = ttnn.from_torch(torch_c, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+
+#     # Warm-up run
+#     start_time = time.time()
+#     output_tensor = ttnn.madd(ttnn_a, ttnn_b, ttnn_c, memory_config=memory_config, compute_kernel_config=compute_config)
+#     end_time = time.time()
+#     total_time = end_time - start_time
+#     print(f"Warmup iteration for shape {shape}: {total_time * 1000:.3f} ms")
+
+#     # Run
+#     start_time = time.time()
+#     for _ in range(count):
+#         output_tensor = ttnn.madd(ttnn_a, ttnn_b, ttnn_c, memory_config=memory_config, compute_kernel_config=compute_config)
+#     end_time = time.time()
+#     total_time = end_time - start_time
+#     avg_time_per_iter = total_time / count
+#     print(f"Average time per madd iteration for shape {shape}: {avg_time_per_iter * 1000:.3f} ms")
+
+
+# @pytest.mark.parametrize("h", [16*8*32*11*10])
+# @pytest.mark.parametrize("w", [32])
+# @pytest.mark.parametrize("core_grid_shape", [(11, 10)])
+# @pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.HEIGHT])
+# @pytest.mark.parametrize("count", [25])
+# def test_perf_sharded(device, h, w, core_grid_shape, strategy, count):
+#     import time
+
+#     torch.manual_seed(0)
+
+#     shape = (h, w)
+#     grid_x, grid_y = core_grid_shape
+#     num_cores = grid_x * grid_y
+
+#     # Calculate shard shape based on strategy
+#     if strategy == ttnn.ShardStrategy.HEIGHT:
+#         shard_shape = (h // num_cores, w)
+#     elif strategy == ttnn.ShardStrategy.WIDTH:
+#         shard_shape = (h, w // num_cores)
+#     elif strategy == ttnn.ShardStrategy.BLOCK:
+#         shard_shape = (h // grid_y, w // grid_x)
+
+#     # Create core grid
+#     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (grid_x - 1, grid_y - 1))})
+
+#     memory_config = ttnn.create_sharded_memory_config(
+#         shape=list(shard_shape),
+#         core_grid=core_grid,
+#         strategy=strategy,
+#         orientation=ttnn.ShardOrientation.ROW_MAJOR,
+#         use_height_and_width_as_shard_shape=True,
+#     )
+#     compute_config = ttnn.init_device_compute_kernel_config(
+#         device.arch(),
+#         math_fidelity=ttnn.MathFidelity.LoFi,  # Match interleaved test for fair comparison
+#         math_approx_mode=True,
+#         fp32_dest_acc_en=False,
+#         packer_l1_acc=False,
+#         dst_full_sync_en=False
+#     )
+
+#     torch_a = torch.rand(shape, dtype=torch.bfloat16)
+#     torch_b = torch.rand(shape, dtype=torch.bfloat16)
+#     torch_c = torch.rand(shape, dtype=torch.bfloat16)
+
+#     ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+#     ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+#     ttnn_c = ttnn.from_torch(torch_c, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+
+#     # Warm-up run
+#     start_time = time.time()
+#     output_tensor = ttnn.madd(ttnn_a, ttnn_b, ttnn_c, memory_config=memory_config, compute_kernel_config=compute_config)
+#     end_time = time.time()
+#     total_time = end_time - start_time
+#     print(f"Warmup iteration for shape {shape} ({strategy.name} sharded): {total_time * 1000:.3f} ms")
+
+#     # Run
+#     start_time = time.time()
+#     for _ in range(count):
+#         output_tensor = ttnn.madd(ttnn_a, ttnn_b, ttnn_c, memory_config=memory_config, compute_kernel_config=compute_config)
+#     end_time = time.time()
+#     total_time = end_time - start_time
+#     avg_time_per_iter = total_time / count
+#     print(f"Average time per madd iteration for shape {shape} ({strategy.name} sharded): {avg_time_per_iter * 1000:.3f} ms")
+
+#     print(device.compute_with_storage_grid_size())
+#     print(f"Architecture: {ttnn.get_arch_name()}")
