@@ -701,4 +701,16 @@ class WanTransformer3DModel(Module):
     @staticmethod
     def device_to_host(tt_tensor: ttnn.Tensor) -> torch.Tensor:
         """Move a ttnn device tensor to a torch host tensor."""
-        return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0])
+
+        mesh_device = tt_tensor.device()
+        view = mesh_device.get_view() if ttnn.using_distributed_env() else None
+        coords = list(tt_tensor.tensor_topology().mesh_coords())
+        device_tensors = ttnn.get_device_tensors(tt_tensor)
+
+        for coord, device_tensor in zip(coords, device_tensors):
+            if view is None or view.is_local(coord):
+                torch_tensor = ttnn.to_torch(device_tensor)
+                break
+
+        assert torch_tensor is not None, "Failed to get tensor"
+        return torch_tensor
