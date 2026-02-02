@@ -106,11 +106,24 @@ def build_context_block(results: dict) -> dict:
     elements = [
         {
             "type": "mrkdwn",
-            "text": f"*Architecture:* {summary.get('card_type', 'unknown')} | *Commit:* {commit_link} | *Branch:* {summary.get('git_branch', 'unknown')}",
+            "text": f"*Branch:* {summary.get('git_branch', 'unknown')} | *Commit:* {commit_link}",
         }
     ]
 
     return {"type": "context", "elements": elements}
+
+
+def build_testing_mode_note_block() -> dict:
+    """Build the testing mode note shown below the context block."""
+    return {
+        "type": "context",
+        "elements": [
+            {
+                "type": "mrkdwn",
+                "text": "_Still in preview/test mode.",
+            }
+        ],
+    }
 
 
 def build_overall_results_block(results: dict) -> dict:
@@ -354,17 +367,20 @@ def build_slack_message(results: dict, conclusion: str) -> dict:
     # Handle infrastructure failure
     if conclusion == "failure" and results["run_summary"]["test_count"] == 0:
         blocks.append(build_context_block(results))
+        blocks.append(build_testing_mode_note_block())
         blocks.extend(build_infrastructure_failure_block())
         return {"blocks": blocks}
 
     # Handle cancellation
     if conclusion == "cancelled":
         blocks.append(build_context_block(results))
+        blocks.append(build_testing_mode_note_block())
         blocks.extend(build_cancelled_block())
         return {"blocks": blocks}
 
     # Normal flow - add context and results
     blocks.append(build_context_block(results))
+    blocks.append(build_testing_mode_note_block())
     blocks.append(build_overall_results_block(results))
 
     # Add divider
