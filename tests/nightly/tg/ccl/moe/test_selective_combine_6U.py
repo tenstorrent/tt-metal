@@ -12,13 +12,10 @@ import torch.nn.functional as F
 import ttnn
 
 from tests.nightly.t3000.ccl.test_all_to_all_combine import (
-    check_results,
     get_batch_cluster_idxr,
     get_experts_on_device,
-    get_expert_indices,
     get_cluster_dims,
     gen_tensors as gen_tensors_combine,
-    get_output_combined_contribs as gen_reference_reference,
 )
 
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import get_mesh_mapper
@@ -385,19 +382,14 @@ def test_gen_tensors(
 
 
 FABRIC_PACKET_SIZE_BYTES = 4096
+ELM_SIZE_BYTES = 2
 
 
 def get_sharded_dense_input(
     dense_contribs_tensor, core_range, token_parallel_core_dim, data_parallel_core_dim, device, cluster_axis
 ):
-    hidden0 = dense_contribs_tensor.shape[-1]
-
-    packet_size = min(FABRIC_PACKET_SIZE_BYTES, hidden0 * 2)
-
-    packet_multiple = packet_size // 2
-    packet_padded_hidden = math.ceil(hidden0 / packet_multiple) * packet_multiple
-    packet_padding = (0, packet_padded_hidden - hidden0)
-    dense_contribs_tensor = F.pad(dense_contribs_tensor, packet_padding)
+    hidden_bytes = dense_contribs_tensor.shape[-1] * ELM_SIZE_BYTES
+    data_parallel_core_dim = min(data_parallel_core_dim, math.ceil(hidden_bytes / FABRIC_PACKET_SIZE_BYTES))
 
     tt_dense_contribs = ttnn.from_torch(
         dense_contribs_tensor,
