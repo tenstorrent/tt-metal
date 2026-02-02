@@ -52,7 +52,7 @@ jobs:
           echo "Using calculated start date: $START_DATE"
 
       - name: Run analyze nd failures
-        uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack_output_analysis@main
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack_output_analysis@ebanerjee/optimizing
         with:
           # TODO: Configure these secrets in repository settings -> Secrets and variables -> Actions
           # github_token: Personal Access Token for creating/updating GitHub issues
@@ -76,11 +76,11 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: python3 .github/scripts/data_analysis/create_job_failure_cluster_json.py
 
-      - name: Upload job failure cluster data
-        if: ${{ !cancelled() }}
-        uses: ./.github/actions/upload-data-via-sftp
-        with:
-          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
-          sftp-batchfile: .github/actions/upload-data-via-sftp/job_failure_cluster_batchfile.txt
-          username: job-failure-cluster-writer
-          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+      # - name: Upload job failure cluster data
+      #   if: ${{ !cancelled() }}
+      #   uses: ./.github/actions/upload-data-via-sftp
+      #   with:
+      #     ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+      #     sftp-batchfile: .github/actions/upload-data-via-sftp/job_failure_cluster_batchfile.txt
+      #     username: job-failure-cluster-writer
+      #     hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
