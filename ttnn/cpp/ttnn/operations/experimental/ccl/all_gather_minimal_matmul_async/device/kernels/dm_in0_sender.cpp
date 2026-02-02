@@ -360,15 +360,11 @@ void kernel_main() {
     uint32_t local_block_core_order_size = 1;
 
     /**
-     * This is a Serpentine (Boustrophedon) output block ordering.
-     * It enables reuse of one of the input blocks for the last output block.
-     * Starting at output block (0,0), go east until the end, then south one block, then west until the end, then south
-     * one block, and repeat. At the same time, alternate between K striding forwards or backwards in order to enable
-     * reuse.
+     * This is a Row-Major output block ordering.
+     * It enables reuse of the last in0 block when striding the output block N dimension.
      */
 
     bool k_forward = true;
-    bool n_forward = true;
     bool reuse_block = false;
 
     uint32_t defer_write_m_tile = 0;
@@ -385,9 +381,9 @@ void kernel_main() {
 
         // When striding M block, in0 gets no reuse
         reuse_block = false;
+        k_forward = true;
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
-                                        : N_start_tile + (N_blocks_per_core - 1 - n_block_iter) * N_block_tiles;
+            uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
@@ -578,7 +574,6 @@ void kernel_main() {
                 }
             }
         }
-        n_forward = !n_forward;
     }
 
     noc_async_write_barrier();
