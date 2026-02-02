@@ -12,8 +12,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_b1.fused_ops.kv_cache_branch.op import KVCacheBranch
+from models.demos.nlp.llms.deepseek_v3.tt.rope import get_rot_transformation_mat
+from models.demos.nlp.llms.deepseek_v3_b1.fused_ops.kv_cache_branch.op import KVCacheBranch
 
 
 @pytest.mark.parametrize("epsilon", [1e-6])
