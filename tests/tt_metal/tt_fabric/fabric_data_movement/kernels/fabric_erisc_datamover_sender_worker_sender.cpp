@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"

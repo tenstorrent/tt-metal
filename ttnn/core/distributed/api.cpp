@@ -71,7 +71,8 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
         distributed_buffer.apply(
             [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.tensor_spec()}); });
         return tensors;
-    } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
+    }
+    if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
         const auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
         if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
             std::vector<ttnn::Tensor> tensors;
@@ -81,12 +82,10 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
                 tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
             }
             return tensors;
-        } else {
-            return {tensor};
         }
-    } else {
         return {tensor};
     }
+    return {tensor};
 }
 
 Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape, int shard_dim) {

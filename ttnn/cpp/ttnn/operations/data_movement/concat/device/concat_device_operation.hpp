@@ -17,19 +17,19 @@
 
 #include "concat_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::concat {
+namespace ttnn::prim {
 
 struct ConcatDeviceOperation {
-    using operation_attributes_t = concat::operation_attributes_t;
-    using tensor_args_t = concat::tensor_args_t;
-    using spec_return_value_t = concat::spec_return_value_t;
-    using tensor_return_value_t = concat::tensor_return_value_t;
+    using operation_attributes_t = ConcatParams;
+    using tensor_args_t = ConcatInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        program::ConcatProgramFactory,
-        program::ConcatS2STiledProgramFactory,
-        program::ConcatS2SRMProgramFactory,
-        program::ConcatS2SMultiProgramFactory,
-        program::ConcatS2IProgramFactory>;
+        ConcatProgramFactory,
+        ConcatS2STiledProgramFactory,
+        ConcatS2SRMProgramFactory,
+        ConcatS2SMultiProgramFactory,
+        ConcatS2IProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -45,19 +45,16 @@ struct ConcatDeviceOperation {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& input_tensors,
-        std::int64_t dim,
-        unsigned int groups,
-        const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 
-}  // namespace ttnn::operations::data_movement::concat
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
-constexpr auto concat =
-    ttnn::register_operation<"ttnn::prim::concat", ttnn::operations::data_movement::concat::ConcatDeviceOperation>();
+ttnn::prim::ConcatDeviceOperation::tensor_return_value_t concat(
+    const std::vector<Tensor>& input_tensors,
+    std::int64_t dim,
+    unsigned int groups,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
 }  // namespace ttnn::prim
 
 namespace ttnn::operations::data_movement {

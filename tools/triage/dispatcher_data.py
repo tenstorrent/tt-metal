@@ -10,6 +10,9 @@ Usage:
 Description:
     Provides dispatcher data noc locations on devices.
     Data include firmware path, kernel path, kernel offset, etc.
+
+Owner:
+    jbaumanTT
 """
 
 from dataclasses import dataclass
@@ -21,7 +24,8 @@ from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDev
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check_location
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.elf import MemoryAccess, ElfVariable
+from ttexalens.elf import ElfVariable
+from ttexalens.memory_access import MemoryAccess
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
@@ -31,6 +35,8 @@ script_config = ScriptConfig(
     data_provider=True,
     depends=["inspector_data", "elfs_cache", "run_checks", "metal_device_id_mapping"],
 )
+
+MAILBOX_CORRUPTED_MESSAGE = "Mailbox is likely corrupted, potentially due to NoC writes to an invalid location."
 
 
 @dataclass
@@ -59,6 +65,9 @@ class DispatcherCoreData:
 
     # Non-triage fields
     mailboxes: ElfVariable | None = None
+    # Host-assigned id from the previous launch message entry (best-effort).
+    # Not serialized by default; used by scripts that need accurate previous-op tracking.
+    previous_host_assigned_id: int | None = None
 
 
 class DispatcherData:
@@ -194,7 +203,7 @@ class DispatcherData:
         if self.use_rpc_kernel_find:
             try:
                 return self.inspector_data.getKernel(watcher_kernel_id).kernel
-            except:
+            except Exception:
                 pass
         if watcher_kernel_id in self.kernels:
             self.use_rpc_kernel_find = False
@@ -211,14 +220,14 @@ class DispatcherData:
                 if value is None:
                     mailboxes = self._mailboxes_cache.get(location)
                     if mailboxes is None:
-                        mailboxes = self.read_mailboxes(location, risc_name)
+                        mailboxes = self.read_mailboxes(location)
                         self._mailboxes_cache[location] = mailboxes
                     value = self.get_core_data(location, risc_name, mailboxes=mailboxes)
                     self._core_data_cache[key] = value
         return value
 
-    def read_mailboxes(self, location: OnChipCoordinate, risc_name: str) -> ElfVariable:
-        loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+    def read_mailboxes(self, location: OnChipCoordinate) -> ElfVariable:
+        l1_mem_access = MemoryAccess.create_l1(location)
         if location.device.get_block_type(location) == "functional_workers":
             # For tensix, use the brisc elf
             fw_elf = self._brisc_elf
@@ -230,7 +239,7 @@ class DispatcherData:
             fw_elf = self._active_erisc_elf
         else:
             raise TTTriageError(f"Unsupported block type: {location.device.get_block_type(location)}")
-        return fw_elf.read_global("mailboxes", loc_mem_access)
+        return fw_elf.read_global("mailboxes", l1_mem_access)
 
     def get_core_data(
         self, location: OnChipCoordinate, risc_name: str, mailboxes: ElfVariable | None = None
@@ -257,7 +266,7 @@ class DispatcherData:
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
         if mailboxes is None:
-            mailboxes = self.read_mailboxes(location, risc_name)
+            mailboxes = self.read_mailboxes(location)
 
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
         launch_msg_rd_ptr = mailboxes.launch_msg_rd_ptr
@@ -265,7 +274,7 @@ class DispatcherData:
         log_check_location(
             location,
             launch_msg_rd_ptr < self._launch_msg_buffer_num_entries,
-            f"launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.",
+            f"launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}. {MAILBOX_CORRUPTED_MESSAGE}",
         )
 
         previous_launch_msg_rd_ptr = (launch_msg_rd_ptr - 1) % self._launch_msg_buffer_num_entries
@@ -281,54 +290,59 @@ class DispatcherData:
         preload = False
         waypoint = ""
         host_assigned_id = None
+        previous_host_assigned_id = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
             kernel_config_base = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[
                 programmable_core_type
             ]
-        except:
+        except Exception:
             pass
         try:
             # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
             kernel_text_offset = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type]
-        except:
+        except Exception:
             pass
         try:
             # enum dispatch_core_processor_classes
             watcher_kernel_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type]
-        except:
+        except Exception:
             pass
         try:
             watcher_previous_kernel_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[
                 proc_type
             ]
-        except:
+        except Exception:
             pass
         try:
             kernel = self.find_kernel(watcher_kernel_id)
-        except:
+        except Exception:
             pass
         try:
             previous_kernel = self.find_kernel(watcher_previous_kernel_id)
-        except:
+        except Exception:
             pass
         try:
             go_message_index = mailboxes.go_message_index
             go_data = mailboxes.go_messages[go_message_index].signal
-        except:
+        except Exception:
             pass
         try:
             preload = mailboxes.launch[launch_msg_rd_ptr].kernel_config.preload != 0
-        except:
+        except Exception:
             pass
         try:
             host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id
+        except Exception:
+            pass
+        try:
+            previous_host_assigned_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.host_assigned_id
         except:
             pass
         try:
             waypoint_bytes = mailboxes.watcher.debug_waypoint[proc_type].waypoint.read_bytes()
             waypoint = waypoint_bytes.rstrip(b"\x00").decode("utf-8", errors="replace")
-        except:
+        except Exception:
             pass
 
         # Construct the firmware path from the build_env instead of relative paths
@@ -412,6 +426,7 @@ class DispatcherData:
             preload=preload,
             waypoint=waypoint,
             mailboxes=mailboxes,
+            previous_host_assigned_id=previous_host_assigned_id,
         )
 
 

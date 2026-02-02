@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// This code is temporarily copied from ttnn/cpp/ttnn/operations/datamovement/binary/device/ to demonstrate
+// This code is temporarily copied from ttnn/operations/datamovement/binary/device/ to demonstrate
 // the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_2 below.
 // When broadcating is properly supported we expect this code to be deleted or refactored substantially.
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat

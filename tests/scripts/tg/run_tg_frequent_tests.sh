@@ -35,7 +35,7 @@ run_tg_tests() {
 
   elif [[ "$1" == "resnet50" ]]; then
     echo "LOG_METAL: running resnet50 run_tg_frequent_tests"
-    pytest -n auto models/demos/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
+    pytest -n auto models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
 
   elif [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"
@@ -70,6 +70,10 @@ run_tg_tests() {
     pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "wh_4x8sp1tp0"; fail+=$?
     pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and wh_4x8sp1tp0 or short_seq-wh_4x8sp1tp0 and not yes_load_cache and not model_caching"; fail+=$?
     pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "test_wan_decoder and 4x8 and real_weights and check_output and _1f"; fail+=$?
+
+  elif [[ "$1" == "qwenimage" ]]; then
+    echo "LOG_METAL: running QwenImage run_tg_frequent_tests"
+    pytest -n auto models/experimental/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k "4x8"; fail+=$?
 
   elif [[ "$1" == "mochi" ]]; then
     echo "LOG_METAL: running mochi run_tg_frequent_tests"

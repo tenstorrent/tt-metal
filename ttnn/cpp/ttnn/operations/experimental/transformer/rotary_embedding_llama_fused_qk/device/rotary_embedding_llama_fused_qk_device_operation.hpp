@@ -10,15 +10,15 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk {
+namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingLlamaFusedQKDeviceOperation {
-    using operation_attributes_t = rotary_embedding_llama_fused_qk::operation_attributes_t;
-    using tensor_args_t = rotary_embedding_llama_fused_qk::tensor_args_t;
-    using spec_return_value_t = rotary_embedding_llama_fused_qk::spec_return_value_t;
-    using tensor_return_value_t = rotary_embedding_llama_fused_qk::tensor_return_value_t;
-    using program_factory_t = std::variant<program::RotaryEmbeddingLlamaFusedQKProgramFactory>;
-    using shared_variables_t = program::RotaryEmbeddingLlamaFusedQKProgramFactory::shared_variables_t;
+    using operation_attributes_t = RotaryEmbeddingLlamaFusedQkParams;
+    using tensor_args_t = RotaryEmbeddingLlamaFusedQkInputs;
+    using spec_return_value_t = RotaryEmbeddingLlamaFusedQkResultSpec;
+    using tensor_return_value_t = RotaryEmbeddingLlamaFusedQkResult;
+    using program_factory_t = std::variant<RotaryEmbeddingLlamaFusedQKProgramFactory>;
+    using shared_variables_t = RotaryEmbeddingLlamaFusedQKProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -29,24 +29,19 @@ struct RotaryEmbeddingLlamaFusedQKDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& q_input_tensor,
-        const Tensor& k_input_tensor,
-        const Tensor& cos_cache,
-        const Tensor& sin_cache,
-        const Tensor& trans_mat,
-        const tt::tt_metal::MemoryConfig& q_output_mem_config,
-        const tt::tt_metal::MemoryConfig& k_output_mem_config,
-        const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-        bool row_major_QK);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-constexpr auto rotary_embedding_llama_fused_qk = ttnn::register_operation<
-    "ttnn::prim::rotary_embedding_llama_fused_qk",
-    ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::
-        RotaryEmbeddingLlamaFusedQKDeviceOperation>();
+ttnn::experimental::prim::RotaryEmbeddingLlamaFusedQkResult rotary_embedding_llama_fused_qk(
+    const Tensor& q_input_tensor,
+    const Tensor& k_input_tensor,
+    const Tensor& cos_cache,
+    const Tensor& sin_cache,
+    const Tensor& trans_mat,
+    const tt::tt_metal::MemoryConfig& q_output_mem_config,
+    const tt::tt_metal::MemoryConfig& k_output_mem_config,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    bool row_major_QK);
 }  // namespace ttnn::prim

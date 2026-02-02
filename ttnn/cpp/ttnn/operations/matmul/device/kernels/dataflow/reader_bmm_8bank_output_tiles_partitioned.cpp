@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
-#include "pad_tile.hpp"
+#include "api/dataflow/dataflow_api.h"
+#include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat

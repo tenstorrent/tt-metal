@@ -53,9 +53,12 @@ target_sources(
         builder/fabric_router_recipe.cpp
         builder/channel_to_pool_mapping.cpp
         builder/multi_pool_channel_allocator.cpp
+        builder/connection_registry.cpp
+        builder/router_connection_mapping.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
+        fabric_switch_manager.cpp
         fabric_telemetry_reader.cpp
         fabric_context.cpp
         fabric_builder_context.cpp
@@ -73,6 +76,7 @@ target_sources(
         physical_system_descriptor.cpp
         topology_mapper.cpp
         topology_mapper_utils.cpp
+        topology_solver.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas

@@ -22,11 +22,13 @@ target_sources(
         core_coord/test_CoreRangeSet_contains.cpp
         core_coord/test_CoreRangeSet_intersects.cpp
         core_coord/test_CoreRangeSet_merge.cpp
+        dataflow_buffer/test_dataflow_buffer_configs.cpp
         distribution_spec/test_buffer_distribution_spec.cpp
         test_banked.cpp
         test_bit_utils.cpp
         test_buffer_region.cpp
         test_compile_time_args.cpp
+        test_compile_defines.cpp
         test_direct.cpp
         test_dram_to_l1_multicast.cpp
         test_dram.cpp

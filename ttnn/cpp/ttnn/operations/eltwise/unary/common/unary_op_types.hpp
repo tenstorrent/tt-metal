@@ -4,7 +4,14 @@
 
 #pragma once
 
+#include <cstdint>
+#include <concepts>
+#include <optional>
+#include <span>
+#include <utility>
 #include <vector>
+#include <variant>
+
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::unary {
@@ -39,6 +46,7 @@ enum class UnaryOpType {
     RELU_MAX,
     RELU_MIN,
     POWER,
+    POWER_ITERATIVE,
     LEAKY_RELU,
     ELU,
     EXP2,
@@ -121,6 +129,7 @@ enum class UnaryOpType {
     RPOW,
     CBRT,
     LOGSIGMOID,
+    LOGIT,
 };
 
 enum class VecMode {

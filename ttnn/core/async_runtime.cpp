@@ -4,7 +4,6 @@
 
 #include "ttnn/async_runtime.hpp"
 
-#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/distributed/api.hpp"
 
 using namespace tt::tt_metal;
@@ -28,7 +27,7 @@ void read_buffer(
     std::vector<std::shared_ptr<void>> dst,
     const std::optional<BufferRegion>& region,
     size_t src_offset,
-    bool blocking) {
+    bool /*blocking*/) {
     TT_ASSERT(src_offset == 0, "src_offset is not supported");
     auto* mesh_device = src.device();
     TT_FATAL(mesh_device, "Tensor must be on device");

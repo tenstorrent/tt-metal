@@ -1,0 +1,252 @@
+## Changelog v0.65.0-dev20251129
+
+## 📦 Uncategorized
+
+- #0: Add noc hop distance calculation api
+   - PR: #32764
+- [skip ci] #0: fix typo from device to mesh_device for test_distributed_layernorm.py
+   - PR: #32925
+- #32474: Topology assertion in all gather nd_test
+   - PR: #32832
+- Add jbaumanTT to tt_metal/distributed CODEOWNERS
+   - PR: #32908
+- #32800: Add sub_core_grids support to ttnn.slice
+   - PR: #32849
+- #30286: Add num_command_queues to ttnn.open_device api similar to ttnn.open_mesh_device api
+   - PR: #32884
+- [skip ci] Update README with tools and instruments section
+   - PR: #32834
+- [TT-Train] Fix nanoGPT C++ example post-YAML update
+   - PR: #32917
+- [tt-train] Removed Wormhole arch restriction from SwiGLU FW
+   - PR: #32822
+- Migrate op to new infra: repeat_and_interleave_eltwise_mul
+   - PR: #32875
+- Migrate op to new infra: conv3d
+   - PR: #32794
+- Migrate op to new infra: padded_slice
+   - PR: #32869
+- #32524 Add sub core grids support to binary ops
+   - PR: #32781
+- Migrate op to new infra: convert_to_chw
+   - PR: #32789
+- Update Caching strategy
+   - PR: #32788
+- Migrate op to new infra: fast_reduce_nc
+   - PR: #32882
+- #32279 Support keepdim=true for ttnn.prod when dim=nullopt
+   - PR: #32919
+- Update Composite RS Algorithm
+   - PR: #32569
+- [Fabric] Cleanup tests
+   - PR: #32890
+- chore: update LLK submodule to 799fb73
+   - PR: #32953
+- DevicePool cleanup
+   - PR: #32926
+- #0: Add functionality to generate cluster descs from fsds
+   - PR: #32904
+- Migrate op to new infra: prefix_scan
+   - PR: #32880
+- Model to trace to sweep automation
+   - PR: #30598
+- Add division operations to Tensor class
+   - PR: #32609
+- Fixing page buffer overflow in ReadFromDeviceInterleavedContiguous
+   - PR: #32227
+- Port Where TTS/TST variants to binary_ng infra
+   - PR: #32918
+- Migrate op to new infra: group_attn_matmul
+   - PR: #32866
+- #32705: Migrate op to new infra: convert_to_hwc
+   - PR: #32940
+- fix typo in binary_dest_reuse_tiles documentation
+   - PR: #32963
+- fix typo in binary_dest_reuse_tiles documentation
+   - PR: #32798
+- Reorganize cpp-post-commit workflow to move tests from APC on l2-nightly
+   - PR: #32576
+- Fix failing test in CI for Llama3.2-90B model
+   - PR: #32930
+- Add unicast parametrization to low latency nightly torus tests
+   - PR: #31977
+- Reshape 2d input tensor before fold to 4d
+   - PR: #32903
+- [tt-train] LayerNorm forward + backward
+   - PR: #30389
+- Fix Qwen2.5-VL demo for 3B and 7B variants
+   - PR: #32838
+- changing from .yaml to .textproto extension
+   - PR: #32924
+- SDXL fix accuracy tests json
+   - PR: #32966
+- #32704: Migrate op to new infra: concatenate_heads
+   - PR: #32911
+- convert unit test to class embedding hf
+   - PR: #32895
+- WH 32x4 Topology Mapper Rank bindings bug
+   - PR: #32642
+- Making QueueId argument optional in record_mesh_event and wait_for_mesh_event
+   - PR: #32075
+- Migrate op to new infra: attn_matmul
+   - PR: #32865
+- [skip ci] Add Pavle to CODEOWNERS list of tt_transformers
+   - PR: #32975
+- Migrate op to new infra: paged_cache
+   - PR: #32874
+- [skip ci] Adding Auto Triage Workflow To CI
+   - PR: #32981
+- Add Motif + TT-DiT Refactor and H100 Eval Scripts
+   - PR: #32301
+- HF unit test for mlp block of Llama models
+   - PR: #32902
+- Metal updates to support active erisc through sim
+   - PR: #32072
+- Revert "Migrate op to new infra: paged_cache (#32874)"
+   - PR: #33007
+- MM - Require Sharded Matmuls to Use Program Config Activation
+   - PR: #32901
+- [Fabric] remove routing type
+   - PR: #32870
+- Delete internal uses of persistent kernel cache.
+   - PR: #32583
+- Change the ttnn.group_norm operator to generate the input_mask parame…
+   - PR: #29408
+- [skip ci] Remove IWYU for now due to build failure
+   - PR: #32989
+- remove _superpod from torus cabling descriptors file names
+   - PR: #32812
+- Update tracing for DeepSeek
+   - PR: #32175
+- [skip ci] add vLLM v1 tests
+   - PR: #32791
+- Refactor state_dict, create only if needed
+   - PR: #32958
+- Delete more internal uses of persistent kernel hash.
+   - PR: #33017
+- #0: Fix Noc hop distance test to only check consistent distances based on harvesting
+   - PR: #33003
+- [skip ci] Skip TT-Sim for Forks
+   - PR: #33000
+- Add BH Galaxy XYZ Link Cluster Validation to Upstream Tests
+   - PR: #32795
+- Initial implementation of L1 memory accessor
+   - PR: #32856
+- Add Watcher functions to sanitize local L1 reads/writes
+   - PR: #32950
+- Migrate op to new infra: paged_cache
+   - PR: #33016
+- Revert "Add Watcher functions to sanitize local L1 reads/writes (#329…
+   - PR: #33018
+- delete old SD35
+   - PR: #32913
+- Update Mochi model perf CI threshold
+   - PR: #32346
+- Remove unused `#include <tt-metalium/constants.hpp>`
+   - PR: #30954
+- [skip ci] Update readme v0.64.4
+   - PR: #33028
+- [GPT-OSS] Superset test integration
+   - PR: #33015
+- #31776: Add sharding support for Ternary operations
+   - PR: #32155
+- [TT-DiT] Apply optimizations to Wan2.2
+   - PR: #32003
+- Add SDXL Combined Pipeline with Base + Refiner Support
+   - PR: #32280
+- Stable diffusion fix pcc error
+   - PR: #33039
+- Fix handling of scalar value shard_to_full
+   - PR: #32048
+- Pjosipovic/conv2d ws prefered noc
+   - PR: #33038
+- Add addrgen overload support for fabric unicast and multicast writes - Part 2
+   - PR: #32415
+- remove irrelevant and long test from upstream test suite
+   - PR: #32971
+- Fixing CI for triage non determistic failures
+   - PR: #33046
+- Fix profiler start messages shown when TT_METAL_DEVICE_PROFILER disabled
+   - PR: #32440
+- Fixed the way model name is extracted
+   - PR: #32967
+- SDXL Remove experimental all_gather op
+   - PR: #33027
+- [DM] Read from host performance test
+   - PR: #30010
+- [skip ci] #0: replace calls in profile docs for no longer existing file
+   - PR: #33049
+- [Llama-3.3-70B galaxy] Apply minimal_matmul to attn
+   - PR: #32914
+- SFPI 7.10.0
+   - PR: #32827
+- [skip ci] #0: Remove deprecation language from profile_this.py
+   - PR: #33045
+- Pjosipovic/fix issue /32944
+   - PR: #33036
+- [UMD Bump] Automated UMD Bump 20.11.2025
+   - PR: #32876
+- [skip ci] Add t3k and single card demo tests to  package and release
+   - PR: #33033
+- [skip ci] #0: Update group norm nightly dram test parameterization
+   - PR: #33031
+- Cleanup Tile class
+   - PR: #32070
+- Fix paged_cache hash
+   - PR: #33079
+- [skip ci] ttnn device operation migration cursor commands
+   - PR: #33088
+- #33089: [skip ci] Do not run Blackhole Galaxy upstream tests in CI as the machine is not available for now
+   - PR: #33090
+- Model testing tools
+   - PR: #32493
+- #32705: Migrate op to new infra: create_qkv_heads
+   - PR: #32939
+- #32706: Migrate op to new infra: create_qkv_heads_from_separate_tensors
+   - PR: #33077
+- Conv2d: Disable act_block_h_override and act_block_w_div minimization in auto shard codepath
+   - PR: #32424
+- [skip ci] Add codeowners to impl file and reduce timeout times
+   - PR: #33097
+- Disabling gemma3 prefill until issue is fixed
+   - PR: #33053
+- [skip ci] Add changelog for release v0.64.4
+   - PR: #33095
+- [TT-Train] Update NanoGPT C++ example to support YAML tokens dataset
+   - PR: #32951
+- [skip ci] Update vLLM integration tech report to distinguish V0/V1 and model registration changes
+   - PR: #33110
+- Increase Fabric init timeout. Check expected value before timeout for…
+   - PR: #33102
+- Move fabric APIs into experimental folder
+   - PR: #32957
+- Refactor Topology Mapper
+   - PR: #32384
+- [Fabric] Update logging
+   - PR: #33034
+- Compute Recv Fabric Node ID based on Recv Coord in recv_async_program
+   - PR: #33119
+- Add pointer validation to CBWriter
+   - PR: #32977
+- Optimised mul_int32 with 8c/32 throughput (BH).
+   - PR: #32634
+- Avoid marking CQs as in-use if hooks throw away reads/writes.
+   - PR: #32847
+- Move TT_METAL_DISABLE_XIP_DUMP to RunTimeOptions
+   - PR: #33098
+- Automatically generate Mochi cache
+   - PR: #32871
+- #32508: Migrate rdiv as a llk op
+   - PR: #32614
+- Optimise mul_int32 for WH even further: 40->31 cycles.
+   - PR: #32938
+- [UMD Bump] Automated UMD Bump 25.11.2025
+   - PR: #33111
+- #33134: Use output cores for throttle on convs.
+   - PR: #33135
+- WH Galaxy 32x4 Mock Tests
+   - PR: #32660
+- Removing Device_pool reference from ttnn
+   - PR: #33006
+- (MINOR) Promote main → stable [v0.64.5]
+   - PR: #33178

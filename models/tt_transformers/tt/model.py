@@ -68,6 +68,7 @@ class Transformer(LightweightModule):
             max_seq_len=args.max_seq_len,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
+            use_qk_fused=args.use_qk_fused,
         )
 
         if args.rope_theta_local:
@@ -77,6 +78,7 @@ class Transformer(LightweightModule):
                 args.head_dim,
                 args.max_seq_len,
                 args.rope_theta_local,
+                use_qk_fused=args.use_qk_fused,
             )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
@@ -157,6 +159,26 @@ class Transformer(LightweightModule):
         logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
+    def process_hidden_states_after_prefill_trace(self, hidden_states, last_token_idx):
+        """
+        Process hidden states after prefill trace, stopping before LM head.
+        Returns hidden states (after norm) instead of logits.
+        Used for embedding models that need hidden states rather than logits.
+        """
+        get_last_token = (last_token_idx // 32) * 32
+        hidden_states = ttnn.slice(
+            hidden_states,
+            (0, 0, get_last_token, 0),
+            (1, 1, get_last_token + 32, hidden_states.shape[-1]),
+        )
+        # Apply norm (this is the final layer norm before LM head)
+        hidden_states = self.norm(hidden_states, mode="prefill")
+        # Convert to row major layout for output (but don't apply LM head)
+        hidden_states = ttnn.to_layout(
+            hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        return hidden_states
+
     def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -172,7 +194,16 @@ class Transformer(LightweightModule):
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, tt_page_table, tt_chunk_page_table
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
+    def prepare_inputs_prefill(
+        self,
+        tokens,
+        start_pos=0,
+        page_table=None,
+        chunk_page_table=None,
+        trace_enabled=False,
+        last_token_idx=None,
+        global_user_id=None,
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device if trace is disabled or on host if trace is enabled.
@@ -200,23 +231,55 @@ class Transformer(LightweightModule):
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
-        assert (
-            self.rope_setup.cos_matrix.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
+        mat_len = self.rope_setup.cos_matrix.shape[2]
+        # Use last_token_idx if provided, otherwise fall back to S (padded sequence length)
+        seq_len = last_token_idx + 1 if last_token_idx is not None else S
+        assert mat_len >= seq_len, f"Seqence length {seq_len} exceeds max seq len {mat_len}"
 
-        # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
-        start_pos = 0 if trace_enabled else start_pos
-        end_pos = self.args.max_seq_len if trace_enabled else start_pos + S
+        # The padding is needed just to make SDPA happy, we will be selecting the token that is within the range of the rot mat.
+        required_end = start_pos + S
+        if required_end > mat_len:
+            pad_len = required_end - mat_len
+        else:
+            pad_len = 0
 
+        # We set slice_end to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
+        slice_start = 0 if trace_enabled else start_pos
+        slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
+        cos_slice = self.rope_setup.cos_matrix[:, :, slice_start:slice_end, :]
+        sin_slice = self.rope_setup.sin_matrix[:, :, slice_start:slice_end, :]
+        if pad_len > 0:
+            # padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
+            padding = [(0, 0)] * 4
+            padding[2] = (0, pad_len)
+            cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
+            sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos:end_pos, :],
-            self.rope_setup.sin_matrix[:, :, start_pos:end_pos, :],
+            cos_slice,
+            sin_slice,
         ]
 
         if hasattr(self, "rope_local_setup"):
+            local_mat_len = self.rope_local_setup.cos_matrix.shape[2]
+            local_required_end = start_pos + S
+            if local_required_end > local_mat_len:
+                local_pad_len = local_required_end - local_mat_len
+            else:
+                local_pad_len = 0
+
+            local_slice_end = self.args.max_seq_len if trace_enabled else min(local_mat_len, local_required_end)
+            local_cos_slice = self.rope_local_setup.cos_matrix[:, :, slice_start:local_slice_end, :]
+            local_sin_slice = self.rope_local_setup.sin_matrix[:, :, slice_start:local_slice_end, :]
+            if local_pad_len > 0:
+                # pad at end of 3rd dim (dim=2) by local_pad_len
+                local_padding = [(0, 0)] * 4
+                local_padding[2] = (0, local_pad_len)
+                local_cos_slice = ttnn.pad(local_cos_slice, padding=local_padding, value=0.0)
+                local_sin_slice = ttnn.pad(local_sin_slice, padding=local_padding, value=0.0)
+
             tt_rot_mats_prefill_local = [
-                self.rope_local_setup.cos_matrix[:, :, start_pos:end_pos, :],
-                self.rope_local_setup.sin_matrix[:, :, start_pos:end_pos, :],
+                local_cos_slice,
+                local_sin_slice,
             ]
         else:
             tt_rot_mats_prefill_local = None
@@ -353,10 +416,33 @@ class Transformer(LightweightModule):
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """
-        Input is ttnn device tensor of logits. Output is torch logits tensor.
+        Input is ttnn host tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
-        return self.concat_host_output(tt_out.cpu())[0, 0, last_token_idx, : self.vocab_size]
+        assert tt_out.storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
+        return self.concat_host_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
+
+    def process_output_prefill_hidden_states(self, tt_out, last_token_idx):
+        """
+        Input is ttnn host tensor of hidden states (after norm, before LM head).
+        Output is torch hidden states tensor of shape [hidden_size].
+        Used for embedding models.
+        """
+        assert tt_out.storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
+        # Extract the last token's hidden state
+        # Shape: [batch=1, head=1, seq, hidden_dim] -> [hidden_dim]
+        # For hidden states, if they're replicated across devices (not sharded),
+        # we should take just the first device's output to avoid incorrect concatenation.
+        # If sharded, concat_host_output will properly concatenate them.
+        concatenated = self.concat_host_output(tt_out)
+        # Check if concatenation resulted in oversized tensor (replicated case)
+        # If so, take only the first device's portion (first self.args.dim elements)
+        if concatenated.shape[-1] > self.args.dim:
+            # Hidden states are replicated, take first device's output
+            return concatenated[0, 0, last_token_idx, : self.args.dim]
+        else:
+            # Hidden states are sharded, concatenation is correct
+            return concatenated[0, 0, last_token_idx, :]
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """
@@ -530,4 +616,5 @@ class Transformer(LightweightModule):
         if mode == "prefill":
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         return x

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 volatile uint64_t global_eight_byte_val = 0xABCD0123ABCD0123;
 

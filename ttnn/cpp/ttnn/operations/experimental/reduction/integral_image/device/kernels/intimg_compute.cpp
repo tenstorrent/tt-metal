@@ -265,9 +265,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
 
 }  // namespace
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr auto ctas{get_ctas()};
 
     constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
@@ -277,5 +275,3 @@ void MAIN {
         perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);
     }
 }
-
-}  // namespace NAMESPACE

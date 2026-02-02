@@ -21,14 +21,15 @@ template <
     bool is_fp32_dest_acc_en,
     int num_rows,
     int ITERATIONS = 8,
-    ckernel::DataLayout layout = ckernel::DataLayout::TILE>
-inline void llk_math_eltwise_binary_sfpu_max_pool_with_indices(
-    uint dst_index, uint32_t idx_index, int vector_mode = (int)VectorMode::RC_custom) {
+    ckernel::DataLayout layout = ckernel::DataLayout::TILE,
+    bool accumulate = false>
+inline void llk_math_eltwise_binary_sfpu_max_pool_with_indices(uint dst_index, uint32_t idx_index, uint32_t chunk) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_max_pool_with_indices<APPROXIMATE, is_fp32_dest_acc_en, num_rows, ITERATIONS, layout>,
+        ckernel::sfpu::
+            calculate_max_pool_with_indices<APPROXIMATE, is_fp32_dest_acc_en, num_rows, ITERATIONS, layout, accumulate>,
         dst_index,
         idx_index,
-        vector_mode);
+        chunk);
 }
 
 }  // namespace ckernel

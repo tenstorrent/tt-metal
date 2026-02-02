@@ -11,37 +11,43 @@ It validates both host-sharded and device-sharded cases.
 """
 
 import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
+from models.common.auto_compose import _infer_mesh_composer_from_topology, to_torch_auto_compose
 
 # ======================================================================================
-# Test Parameters
+# Test Parameters (for device-dependent tests)
 # ======================================================================================
 
 
-# Try a variety of mesh shapes and tensor layouts; tests skip if device can't be opened
-pytestmark = [
-    pytest.mark.parametrize(
+_DEVICE_TEST_MARKS = {
+    "ttnn_mesh_device": pytest.mark.parametrize(
         "ttnn_mesh_device",
         [
             (1, 1),  # single device # [INFO] apply auto_compose on single device would incur error in c++ code
             (1, 2),  # 1D mesh, 2 devices
+            (1, 4),  # 1D mesh, 4 devices
             (1, 8),  # 1D mesh, 8 devices
             (2, 4),  # 2D mesh, 8 devices
+            (4, 8),  # 2D mesh, 32 devices
+            (8, 4),  # 2D mesh, 32 devices
         ],
         ids=[
             "1x1",
             "1x2",
+            "1x4",
             "1x8",
             "2x4",
+            "4x8",
+            "8x4",
         ],
         indirect=True,
     ),
-    pytest.mark.parametrize(
+    "layout_dtype": pytest.mark.parametrize(
         "layout,dtype",
         [
             (ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
@@ -51,7 +57,7 @@ pytestmark = [
         ],
         ids=["row_major_bf16", "tile_bf16", "tile_bf8b", "tile_bf4b"],
     ),
-]
+}
 
 
 # ======================================================================================
@@ -124,11 +130,13 @@ def _build_and_compose_sharded(
 
 
 # ======================================================================================
-# Tests
+# Device-Dependent Tests (require mesh device fixture)
 # ======================================================================================
 
 
 @pytest.mark.parametrize("storage", ["host", "device"])  # where the sharded tensor lives
+@_DEVICE_TEST_MARKS["ttnn_mesh_device"]
+@_DEVICE_TEST_MARKS["layout_dtype"]
 def test_sharded_1d_basic(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, storage: str) -> None:
     """Basic 1D sharding auto-composition for both host and device storage."""
     num_devices = ttnn_mesh_device.get_num_devices()
@@ -151,6 +159,8 @@ def test_sharded_1d_basic(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, stor
 
 
 @pytest.mark.parametrize("storage", ["host", "device"])  # where the replicated tensor lives
+@_DEVICE_TEST_MARKS["ttnn_mesh_device"]
+@_DEVICE_TEST_MARKS["layout_dtype"]
 def test_replicate_1d_basic(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, storage: str) -> None:
     """Replicated 1D distribution should compose to identity for host and device storage."""
     # Any shape works; replication does not change global shape
@@ -184,6 +194,8 @@ def test_replicate_1d_basic(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, st
 
 @pytest.mark.parametrize("dim", [0, 1, 2, -1])
 @pytest.mark.parametrize("storage", ["host", "device"])  # where the sharded tensor lives
+@_DEVICE_TEST_MARKS["ttnn_mesh_device"]
+@_DEVICE_TEST_MARKS["layout_dtype"]
 def test_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dim: int, storage: str) -> None:
     num_devices = ttnn_mesh_device.get_num_devices()
 
@@ -210,6 +222,8 @@ def test_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, 
 
 @pytest.mark.parametrize("dims_pair", [(0, 1), (0, -1), (1, -1)])
 @pytest.mark.parametrize("storage", ["host", "device"])  # where the sharded tensor lives
+@_DEVICE_TEST_MARKS["ttnn_mesh_device"]
+@_DEVICE_TEST_MARKS["layout_dtype"]
 def test_sharded_2d_basic(
     ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, dims_pair: tuple[int, int], storage: str
 ) -> None:
@@ -253,6 +267,8 @@ def test_sharded_2d_basic(
     ],
 )
 @pytest.mark.parametrize("storage", ["host", "device"])  # host vs device sharded tensor
+@_DEVICE_TEST_MARKS["ttnn_mesh_device"]
+@_DEVICE_TEST_MARKS["layout_dtype"]
 def test_sharded_2d_with_replicate(
     ttnn_mesh_device: ttnn.MeshDevice,
     layout,
@@ -297,6 +313,8 @@ def test_sharded_2d_with_replicate(
 
 @pytest.mark.parametrize("category", ["lt", "eq", "gt"])  # per-shard length relative to threshold
 @pytest.mark.parametrize("storage", ["host", "device"])  # where the sharded tensor lives
+@_DEVICE_TEST_MARKS["ttnn_mesh_device"]
+@_DEVICE_TEST_MARKS["layout_dtype"]
 def test_sharded_shape_thresholds(
     ttnn_mesh_device: ttnn.MeshDevice, layout, dtype, category: str, storage: str
 ) -> None:
@@ -328,3 +346,71 @@ def test_sharded_shape_thresholds(
         assert torch.equal(torch_auto, torch_in)
     else:
         assert torch.equal(torch_auto, torch_ref)
+
+
+# --------------------------------------------------------------------------------------
+# Test coverage for auto_compose
+# --------------------------------------------------------------------------------------
+
+
+def test_to_torch_auto_compose_exception_handler():
+    """Test the exception handler in to_torch_auto_compose (lines 38-40)."""
+    mock_tensor = MagicMock(spec=ttnn.Tensor)
+    mock_topology = MagicMock()
+    mock_tensor.tensor_topology.return_value = mock_topology
+    mock_topology.placements.return_value = [ttnn.PlacementShard(0)]
+    mock_topology.distribution_shape.return_value = [2]
+
+    mock_device = MagicMock(spec=ttnn.MeshDevice)
+    mock_tensor.device.return_value = mock_device
+
+    with patch("ttnn.create_mesh_composer", return_value="fake_composer"):
+        with patch("ttnn.to_torch", side_effect=RuntimeError("Mock failure")):
+            with pytest.raises(RuntimeError, match="Mock failure"):
+                to_torch_auto_compose(mock_tensor)
+
+
+def test_to_torch_auto_compose_no_device_error():
+    """Test RuntimeError when tensor is on host and no device is provided/available (lines 102-104)."""
+    mock_tensor = MagicMock(spec=ttnn.Tensor)
+    mock_topology = MagicMock()
+    mock_tensor.tensor_topology.return_value = mock_topology
+    mock_topology.placements.return_value = [ttnn.PlacementShard(0)]
+    mock_topology.distribution_shape.return_value = [2]
+
+    # Tensor on host
+    mock_tensor.device.return_value = None
+
+    with patch("ttnn.GetDefaultDevice", return_value=None):
+        with pytest.raises(RuntimeError, match="Tensor is on host and no mesh_device provided"):
+            to_torch_auto_compose(mock_tensor)
+
+
+def test_infer_composer_1d_sharded_mock():
+    """
+    Use mocking to hit the 1D sharded paths (lines 113, 125-131)
+    if real 1D meshes are hard to come by.
+    """
+    mock_tensor = MagicMock(spec=ttnn.Tensor)
+    mock_topology = MagicMock()
+    mock_tensor.tensor_topology.return_value = mock_topology
+
+    # Case 1: 1D Sharded
+    mock_topology.placements.return_value = [ttnn.PlacementShard(0)]
+    mock_topology.distribution_shape.return_value = [2]
+
+    mock_device = MagicMock(spec=ttnn.MeshDevice)
+    mock_device.shape.dims.return_value = 1
+    mock_tensor.device.return_value = mock_device
+
+    with patch("ttnn.create_mesh_composer") as mock_create:
+        mock_create.return_value = "fake_composer"
+        composer = _infer_mesh_composer_from_topology(mock_tensor)
+        assert composer == "fake_composer"
+        mock_create.assert_called_once()
+
+    # Case 2: 1D Replicated
+    mock_topology.placements.return_value = [ttnn.PlacementReplicate()]
+    mock_topology.distribution_shape.return_value = [2]
+    composer = _infer_mesh_composer_from_topology(mock_tensor)
+    assert composer is None

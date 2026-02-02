@@ -9,6 +9,7 @@ target_sources(
         test_cleanup.cpp
         test_indestructible.cpp
         test_optional_reference.cpp
+        test_reflection.cpp
         test_span.cpp
         test_strong_type.cpp
         test_small_vector.cpp

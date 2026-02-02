@@ -1,0 +1,38 @@
+Tests:
+  # Bidirectional Unicast Write from (0, 0) to (1, 15). This is run on 2 4x4 meshes.
+  - name: "SimpleUnicastWriteLinear"
+    fabric_setup:
+      topology: Mesh
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [1, 15]
+      - device: [1, 15]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: [0, 0]
+
+  # Saturate network with more traffic
+  # Validate all noc send types
+  - name: "UnicastAlltoAll"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [1024, 2048, 4096]
+      num_packets: [10000]
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+
+    patterns:
+      - type: all_to_all
+        iterations: 10

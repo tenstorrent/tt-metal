@@ -5,8 +5,10 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+pytestmark = pytest.mark.use_module_device
 
 
 @pytest.mark.parametrize(
@@ -116,7 +118,7 @@ def test_unary_min_fp32(input_shapes, low, high, scalar, device):
     assert comp_pass
 
 
-@pytest.mark.parametrize("scalar", [-2, 0, 10, 2147483647, -2147483647])
+@pytest.mark.parametrize("scalar", [-2, 0, 10, 2147483647, -2147483648])
 def test_unary_min_int32_test(scalar, device):
     num_elements = torch.prod(torch.tensor(torch.Size([1, 1, 32, 32]))).item()
     torch_input = torch.linspace(-10, 10, num_elements, dtype=torch.int32)
@@ -148,10 +150,10 @@ def test_unary_min_int32_test(scalar, device):
     "low, high",
     [
         (-21474836, 21474836),
-        (-2147483647, 2147483647),
+        (-2147483648, 2147483647),
     ],
 )
-@pytest.mark.parametrize("scalar", [-5, 3, 0, -2147483647, 2147483647])
+@pytest.mark.parametrize("scalar", [-5, 3, 0, -2147483648, 2147483647])
 def test_unary_min_int32(input_shapes, low, high, scalar, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.int32)

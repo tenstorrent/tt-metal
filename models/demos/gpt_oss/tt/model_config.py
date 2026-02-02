@@ -39,6 +39,13 @@ class ModelArgs:
         self.mesh_device = mesh_device
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
+        if self.max_batch_size > 32:
+            assert (
+                self.max_batch_size % self.mesh_device.shape[0] == 0
+            ), "max_batch_size must be divisible by the number of device rows"
+            self.max_local_batch_size = self.max_batch_size // self.mesh_device.shape[0]
+        else:
+            self.max_local_batch_size = self.max_batch_size
         self.max_seq_len = max_seq_len
         if optimizations is not None:
             logger.warning("GPT-OSS doesn't support any performance optimizations - ignoring optimizations argument")
@@ -101,19 +108,22 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
+        self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
-        DEFAULT_VALUE = self.max_prefill_chunk_size
+        DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
         model_specific_ceil_warmup_lengths = {
             # e.g. "gpt-oss-120b": 4096
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
+        if max_seq_len_to_warmup > self.capped_warmup_seq_len:
+            max_seq_len_to_warmup = self.capped_warmup_seq_len
 
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
-            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_prefill_chunk_size
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
@@ -128,13 +138,18 @@ class ModelArgs:
         if self.model_name == "gpt-oss-120b":
             if 6144 in to_warmup_seq_lens:
                 to_warmup_seq_lens.remove(6144)
+
+        for seq_len in to_warmup_seq_lens:
+            if seq_len >= 64 * 1024:
+                to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
+                break
         return to_warmup_seq_lens
 
     @property
     def base_model_name(self):
         return get_base_model_name(self.model_name)
 
-    def can_enable_trace(self, prefill_seq_len):
+    def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
         """
         This function is used to determine if trace should be enabled for the prefill.
         Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
@@ -147,6 +162,7 @@ class ModelArgs:
             prefill_seq_len in allowed_seq_lens
             and prefill_seq_len <= self.max_prefill_chunk_size
             and prefill_seq_len <= self.max_seq_len
+            and num_cached_tokens == 0
         )
 
     def get_trace_prefill_supported_seq_lens(self):
@@ -162,18 +178,15 @@ class ModelArgs:
         model_name = self.model_name
         device_name = determine_device_name(self.mesh_device)
 
-        # Try model-specific sequence lengths first
-        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
-        if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
+        # If there is no entry for a model in model_specific_supported_seq_lens, use the entry in default_supported_seq_lens
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(
+            device_name, default_supported_seq_lens.get(device_name)
+        )
 
-        # Fall back to default sequence lengths
-        result = default_supported_seq_lens.get(device_name)
-        if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.max_prefill_chunk_size)
-
-        # No supported sequence lengths found, return empty list
-        return []
+        if result is not None:
+            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
+        else:
+            return []
 
     def encode_prompt(self, prompt_text, instruct=False, system_prompt_text=None):
         """

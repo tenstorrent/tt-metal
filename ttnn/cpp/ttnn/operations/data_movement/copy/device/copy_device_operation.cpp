@@ -3,24 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "copy_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "copy_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // common_tm_bw_model
+#include "ttnn/tensor/tensor_ops.hpp"
 
-namespace ttnn::operations::data_movement::copy {
-
-using namespace tt::tt_metal;
-
-std::tuple<CopyDeviceOperation::operation_attributes_t, CopyDeviceOperation::tensor_args_t> CopyDeviceOperation::invoke(
-    const Tensor& input,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const tt::tt_metal::DataType& output_dtype,
-    const std::optional<Tensor>& preallocated_output) {
-    return {operation_attributes_t{output_mem_config, output_dtype}, tensor_args_t{input, preallocated_output}};
-}
+namespace ttnn::prim {
 
 CopyDeviceOperation::program_factory_t CopyDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return copy::program::CopyProgramFactory{};
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
+    return CopyProgramFactory{};
 }
 
 void CopyDeviceOperation::validate_on_program_cache_miss(
@@ -92,9 +84,9 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
     const Tensor& input_tensor = tensor_args.input;
     return TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,
-            PageConfig(input_tensor.layout()),
+            tt::tt_metal::PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
@@ -103,11 +95,11 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
 CopyDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<const Tensor>>& /*optional_input_tensors*/,
     std::vector<Tensor>& output_tensors) {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
-    const int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    const int ideal_dev_clock_cycles = ttnn::operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
     tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
         input_tensors, output_tensors, ideal_dev_clock_cycles);
     return result;
@@ -123,4 +115,14 @@ CopyDeviceOperation::tensor_return_value_t CopyDeviceOperation::create_output_te
     return create_device_tensor(spec, input_tensor.device());
 }
 
-}  // namespace ttnn::operations::data_movement::copy
+CopyDeviceOperation::tensor_return_value_t copy(
+    const Tensor& input,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const tt::tt_metal::DataType& output_dtype,
+    const std::optional<Tensor>& preallocated_output,
+    bool backwards) {
+    return ttnn::device_operation::launch<CopyDeviceOperation>(
+        CopyParams{output_mem_config, output_dtype, backwards}, CopyInputs{input, preallocated_output});
+}
+
+}  // namespace ttnn::prim

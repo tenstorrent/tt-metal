@@ -46,8 +46,8 @@ struct ConnectivityValidationConfig {
 
 template <typename T1, typename T2>
 constexpr std::common_type_t<T1, T2> align_down(T1 value, T2 alignment) {
-    static_assert(std::is_integral<T1>::value, "align_down() requires integral types");
-    static_assert(std::is_integral<T2>::value, "align_down() requires integral types");
+    static_assert(std::is_integral_v<T1>, "align_down() requires integral types");
+    static_assert(std::is_integral_v<T2>, "align_down() requires integral types");
     using T = std::common_type_t<T1, T2>;
     return static_cast<T>(value) & ~(static_cast<T>(alignment) - 1);
 }

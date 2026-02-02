@@ -102,15 +102,19 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
 
     topology_json["cluster_type"] = enchantum::to_string(cluster.get_cluster_type());
 
+    topology_json["device_id_to_fabric_node_id"] = nlohmann::ordered_json::object();
+    for (auto physical_chip_id : cluster.get_cluster_desc()->get_all_chips()) {
+        auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+        topology_json["device_id_to_fabric_node_id"][std::to_string(physical_chip_id)] = {
+            fabric_node_id.mesh_id.get(), fabric_node_id.chip_id};
+    }
+
     topology_json["fabric_config"] = enchantum::to_string(tt::tt_metal::MetalContext::instance().get_fabric_config());
     if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
         topology_json["routing_planes"] = nlohmann::ordered_json::array();
-        topology_json["device_id_to_fabric_node_id"] = nlohmann::ordered_json::object();
         for (auto physical_chip_id : cluster.get_cluster_desc()->get_all_chips()) {
             auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(physical_chip_id);
             auto device_routing_planes = nlohmann::ordered_json::array();
-            topology_json["device_id_to_fabric_node_id"][std::to_string(physical_chip_id)] = {
-                fabric_node_id.mesh_id.get(), fabric_node_id.chip_id};
 
             for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
                 auto eth_routing_planes_in_dir =
@@ -148,7 +152,7 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
 
 // determines the implied unicast/multicast start distance and range in tt_fabric::LowLatencyRoutingFields
 inline std::tuple<int, int> get_low_latency_routing_start_distance_and_range(uint32_t llrf_value) {
-    using LLRF = tt::tt_fabric::LowLatencyRoutingFields;
+    using LLRF = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
 
     uint32_t value = llrf_value;
     int start_distance = 1;

@@ -13,6 +13,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
+pytestmark = pytest.mark.use_module_device
+
 TILE_WIDTH = 32
 
 

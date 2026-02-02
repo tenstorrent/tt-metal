@@ -8,15 +8,16 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <algorithm>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused {
+namespace ttnn::experimental::prim {
 
 AllGatherConcatDeviceOperation::program_factory_t AllGatherConcatDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::AllGatherConcatMeshWorkloadFactory{};
+    return AllGatherConcatMeshWorkloadFactory{};
 }
 
 void AllGatherConcatDeviceOperation::validate_on_program_cache_hit(
@@ -90,12 +91,14 @@ AllGatherConcatDeviceOperation::tensor_return_value_t AllGatherConcatDeviceOpera
 
 tt::stl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "compute_program_hash is called");
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
+    log_trace(tt::LogOp, "AllGatherConcatDeviceOperation::compute_program_hash is called");
+
+    auto subdevice_id = args.sub_device_id;
+    auto* mesh_device = tensor_args.input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+
+    auto program_factory = select_program_factory(args, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<AllGatherConcatDeviceOperation>(
         args.dim,
@@ -103,17 +106,15 @@ tt::stl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(
         args.ring_size,
         args.output_mem_config,
         args.topology,
-        args.cluster_axis,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config,
         args.num_heads,
-        args.use_noc1_only);
+        args.use_noc1_only,
+        args.cluster_axis,
+        subdevice_core_range_set,
+        tensor_args,
+        program_factory.index());
 }
 
-std::tuple<AllGatherConcatDeviceOperation::operation_attributes_t, AllGatherConcatDeviceOperation::tensor_args_t>
-AllGatherConcatDeviceOperation::invoke(
+Tensor all_gather_concat(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     int32_t dim,
@@ -126,6 +127,7 @@ AllGatherConcatDeviceOperation::invoke(
     std::optional<uint32_t> num_links,
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    using OperationType = AllGatherConcatDeviceOperation;
     const auto& mesh_view = mesh_device.get_view();
     uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
@@ -138,7 +140,7 @@ AllGatherConcatDeviceOperation::invoke(
         rank - 1,
         dim);
 
-    operation_attributes_t operation_attributes(
+    auto operation_attributes = OperationType::operation_attributes_t(
         static_cast<uint32_t>(gather_dim),
         num_links.value_or(1),
         num_devices,
@@ -150,9 +152,9 @@ AllGatherConcatDeviceOperation::invoke(
         use_noc1_only,
         cluster_axis);
 
-    tensor_args_t tensor_args{.input_tensor = input_tensor, .buffer_tensor = buffer_tensor};
+    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .buffer_tensor = buffer_tensor};
 
-    return {std::move(operation_attributes), std::move(tensor_args)};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused
+}  // namespace ttnn::experimental::prim

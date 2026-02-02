@@ -4,10 +4,10 @@
 
 #include <stdint.h>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     // Compile time args

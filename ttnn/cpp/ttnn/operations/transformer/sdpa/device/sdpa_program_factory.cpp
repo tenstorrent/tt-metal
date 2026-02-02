@@ -16,12 +16,10 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa::program {
+namespace ttnn::prim {
 
 SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SDPAParams& operation_attributes, const SDPAInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const auto& input_tensor_v = operation_attributes.use_mla ? tensor_args.k : tensor_args.v.value_or(tensor_args.k);
@@ -50,7 +48,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     Q: B x NQH x S x DH
     K: B x NKH x DH x S
     V: B x NKH x S x DH
-    attn_mask: B x NQH x S x S
+    attn_mask: B x NQH x S x S  or  B x 1 x S x S
     */
 
     const auto& q_shape = input_tensor_q.logical_shape();
@@ -83,18 +81,20 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t valid_Sqt = std::ceil((float)Sq / TILE_HEIGHT);
     const uint32_t valid_Skt = std::ceil((float)Sk / TILE_HEIGHT);
     /*
-    For non-causal case we must provide a padded mask if the K sequence length has been padded
-    Note that we dont have this issue in non-causal case if Q is padded, since those pad tokens
-    don't affect attention of unpadded tokens.
-    In causal case, the causal mask takes care of masking K pad tokens.
+    For non-causal case with Q/K padding:
+    - If user provides a mask: reader reads unpadded mask and fills padded K positions with -inf
+    - If no mask provided: writer generates a mask with 0 for valid K and -inf for padded K
+    In causal case, the causal mask naturally handles masking of padded K tokens.
     */
-    const bool use_padded_mask = (!is_causal) && (padded_Sk != Sk);
+    const bool use_padded_mask = (!is_causal) && ((padded_Sk != Sk) || (padded_Sq != Sq));
 
     const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
     const uint32_t q_num_chunks = padded_Sq / q_chunk_size;
     const uint32_t k_num_chunks = padded_Sk / k_chunk_size;
     const bool use_provided_mask = attn_mask.has_value();
+    const bool broadcast_provided_mask_batch = use_provided_mask ? (attn_mask.value().logical_shape()[0] == 1) : false;
+    const bool broadcast_provided_mask_heads = use_provided_mask ? (attn_mask.value().logical_shape()[1] == 1) : false;
 
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
@@ -129,6 +129,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat page_table_df = tt::DataFormat::Int32;
 
     if (is_chunked) {
+        // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
         chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
         const auto& page_table_tensor = page_table.value();
         block_size = k_shape[2];  // K's sequence dimension represents block size
@@ -363,6 +364,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       num_cores,
                                                       (std::uint32_t)is_causal,
                                                       (std::uint32_t)use_provided_mask,
+                                                      (std::uint32_t)broadcast_provided_mask_batch,
+                                                      (std::uint32_t)broadcast_provided_mask_heads,
                                                       (std::uint32_t)use_padded_mask,
                                                       (uint32_t)is_chunked,
                                                       block_size_t,
@@ -724,9 +727,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
 void SDPAProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SDPAParams& operation_attributes,
+    const SDPAInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
@@ -754,6 +757,7 @@ void SDPAProgramFactory::override_runtime_arguments(
     uint32_t chunked_q_chunk_offset = 0;
     if (is_chunked) {
         page_table_addr = tensor_args.page_table.value().buffer()->address();
+        // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
         chunked_q_chunk_offset = operation_attributes.chunk_start_idx.value() / q_chunk_size;
     }
 
@@ -786,4 +790,4 @@ void SDPAProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::transformer::sdpa::program
+}  // namespace ttnn::prim

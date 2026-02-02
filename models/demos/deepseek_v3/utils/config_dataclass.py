@@ -141,6 +141,21 @@ class AllToAllAsyncGenericConfig(OpConfigBase):
 
 
 @dataclass
+class SliceConfig(OpConfigBase):
+    """Common parameters for a ttnn.slice op"""
+
+    memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
+class ConcatConfig(OpConfigBase):
+    """Common parameters for a ttnn.concat op"""
+
+    dim: int
+    memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
 class ReduceScatterAsyncMinimalConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.reduce_scatter_minimal_async op"""
 
@@ -203,6 +218,14 @@ class ReshardConfig(OpConfigBase):
 
 
 @dataclass
+class PermuteConfig(OpConfigBase):
+    """Common parameters for a ttnn.permute op"""
+
+    dims: tuple[int, int, int, int]
+    memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
 class RMSNormConfig(OpConfigBase):
     """ttnn.rms_norm config"""
 
@@ -212,7 +235,7 @@ class RMSNormConfig(OpConfigBase):
     residual_input_tensor: ConfigWeight | None = None
     memory_config: ttnn.MemoryConfig | None = None
     program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
-    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
 
 
 @dataclass
@@ -221,7 +244,7 @@ class RMSNormPreAllGatherConfig(OpConfigBase):
 
     dtype: ttnn.DataType = ttnn.bfloat16
     residual_input_tensor: ConfigWeight | None = None
-    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
     program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
     memory_config: ttnn.MemoryConfig | None = None
 
@@ -235,7 +258,7 @@ class RMSNormPostAllGatherConfig(OpConfigBase):
     bias: ConfigWeight | None = None
     memory_config: ttnn.MemoryConfig | None = None
     program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
-    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
     dtype: ttnn.DataType | None = None
 
 
@@ -331,15 +354,12 @@ class TypecastConfig(OpConfigBase):
 
 
 @dataclass
-class SparseMatmulConfig(OpConfigBase):
-    """Common parameters for a ttnn.sparse_matmul op"""
+class KvCacheConfig(OpConfigBase):
+    """Common parameters for a kv cache.
+    Attributes:
+        The expected ordering is:
+        (num_blocks, num_heads = 1, block_size, kvpe_dim)
+    """
 
-    input_tensor_b: ConfigWeight
-    memory_config: ttnn.MemoryConfig | None = None
-    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
-    program_config: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None = None
-    is_input_a_sparse: bool | None = None
-    is_input_b_sparse: bool | None = None
-    output_tile: ttnn.Tile | None = None
-    sparsity: ttnn.Tensor | None = None
-    nnz: int | None = None
+    kv_cache_shape: tuple[int, int, int, int]
+    dtype: ttnn.DataType | None = None

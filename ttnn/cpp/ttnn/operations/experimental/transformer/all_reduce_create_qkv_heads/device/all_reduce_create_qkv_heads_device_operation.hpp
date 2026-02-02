@@ -13,14 +13,14 @@
 #include <optional>
 #include <variant>
 
-namespace ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads {
+namespace ttnn::experimental::prim {
 
 struct AllReduceCreateQkvHeadsDeviceOperation {
-    using operation_attributes_t = all_reduce_create_qkv_heads::operation_attributes_t;
-    using tensor_args_t = all_reduce_create_qkv_heads::tensor_args_t;
-    using spec_return_value_t = all_reduce_create_qkv_heads::spec_return_value_t;
-    using tensor_return_value_t = all_reduce_create_qkv_heads::tensor_return_value_t;
-    using program_factory_t = std::variant<program::AllReduceCreateQkvHeadsMeshWorkloadFactory>;
+    using operation_attributes_t = AllReduceCreateQkvHeadsParams;
+    using tensor_args_t = AllReduceCreateQkvHeadsInputs;
+    using spec_return_value_t = AllReduceCreateQkvHeadsResultSpec;
+    using tensor_return_value_t = AllReduceCreateQkvHeadsResult;
+    using program_factory_t = std::variant<AllReduceCreateQkvHeadsMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -32,32 +32,28 @@ struct AllReduceCreateQkvHeadsDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
-        Tensor& buffer_tensor,
-        const Tensor& batch_offset_tensor,
-        uint32_t num_links,
-        uint32_t ring_size,
-        const MemoryConfig& all_reduce_mem_config,
-        ttnn::ccl::Topology topology,
-        const GlobalSemaphore& semaphore,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-        uint32_t head_dim,
-        bool use_noc1_only,
-        uint32_t num_heads,
-        uint32_t num_kv_heads,
-        bool input_on_subcoregrids,
-        std::optional<uint32_t> slice_size,
-        const MemoryConfig& final_mem_config,
-        DataType dtype,
-        uint32_t cluster_axis);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-constexpr auto all_reduce_create_qkv_heads = ttnn::register_operation<
-    "ttnn::prim::all_reduce_create_qkv_heads",
-    ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads::AllReduceCreateQkvHeadsDeviceOperation>();
+ttnn::experimental::prim::AllReduceCreateQkvHeadsResult all_reduce_create_qkv_heads(
+    const Tensor& input_tensor,
+    Tensor& buffer_tensor,
+    const Tensor& batch_offset_tensor,
+    uint32_t num_links,
+    uint32_t ring_size,
+    const MemoryConfig& all_reduce_mem_config,
+    ttnn::ccl::Topology topology,
+    const GlobalSemaphore& semaphore,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    uint32_t head_dim,
+    bool use_noc1_only,
+    uint32_t num_heads,
+    uint32_t num_kv_heads,
+    bool input_on_subcoregrids,
+    std::optional<uint32_t> slice_size,
+    const MemoryConfig& final_mem_config,
+    DataType dtype,
+    uint32_t cluster_axis);
 }  // namespace ttnn::prim

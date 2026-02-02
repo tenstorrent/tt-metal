@@ -1,8 +1,10 @@
 name: Set "Opened On" in Project
 
+# DISABLED: Workflow is flooding project board with wrong issues
 on:
-  issues:
-    types: [opened]
+  workflow_dispatch:
+#  issues:
+#    types: [opened]
 
 # This job uses a fine-grained PAT secret (DATE_AUTOMATION) via gh CLI.
 # Required token scopes: read:project, project (or write:project)

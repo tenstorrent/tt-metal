@@ -42,13 +42,13 @@ struct MorehClipGradNormStep3Operation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& inputs);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& inputs);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
@@ -59,17 +59,15 @@ struct MorehClipGradNormStep3Operation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& inputs,
-        const Tensor& clip_coef_clamped,
-        const std::optional<MemoryConfig>& memory_config,
-        DeviceComputeKernelConfig compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm_step3
 
 namespace ttnn::prim {
-constexpr auto moreh_clip_grad_norm_step3 = ttnn::register_operation<
-    "ttnn::prim::moreh_clip_grad_norm_step3",
-    ttnn::operations::moreh::moreh_clip_grad_norm_step3::MorehClipGradNormStep3Operation>();
+ttnn::operations::moreh::moreh_clip_grad_norm_step3::MorehClipGradNormStep3Operation::tensor_return_value_t
+moreh_clip_grad_norm_step3(
+    const std::vector<Tensor>& inputs,
+    const Tensor& clip_coef_clamped,
+    const std::optional<MemoryConfig>& memory_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config);
 }  // namespace ttnn::prim

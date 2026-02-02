@@ -6,6 +6,7 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
+#include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/bcast.h"
@@ -17,7 +18,7 @@
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api.h"
 
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 // clang-format off
 // 3 Loops in code
@@ -155,6 +156,9 @@ void MAIN {
         length_left_t = Wt;
         cur_cb_length_t = cb_length_t;
 #endif
+#ifdef NUMERIC_STABLE
+        cb_wait_front(cb_max, 1);
+#endif
 
         /*
          * --------------------------------------------------------
@@ -255,6 +259,9 @@ void MAIN {
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
         }
         cb_pop_front(cb_recip, 1);
+#ifdef NUMERIC_STABLE
+        cb_pop_front(cb_max, 1);
+#endif
     }
     cb_pop_front(cb_mask_padded, 1);
 }  // MAIN
@@ -457,10 +464,10 @@ void reduce_cb(
         copy_tile(cb_prev_out, 0, 1);
         if (reduce_type == PoolType::MAX) {
             // path if we are doing a max redudce
-            max_tile_init();
+            binary_max_tile_init();
             // garbage data will be in data outside the first collumn, but since we broadcast this column it shouldnt
             // matter
-            max_tile(0, 1);
+            binary_max_tile(0, 1, 0);
         } else {
             // path if we are doing a sum redudce
             add_binary_tile_init();

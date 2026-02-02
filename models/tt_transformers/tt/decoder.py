@@ -52,6 +52,7 @@ class TransformerBlock(LightweightModule):
         self.attention = ActualAttentionClass(
             mesh_device=mesh_device,
             tt_ccl=self.tt_ccl,
+            args=args,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
@@ -94,6 +95,10 @@ class TransformerBlock(LightweightModule):
                 model_config=self.model_config,
             )
 
+        # TODO: remove after https://github.com/tenstorrent/tt-metal/issues/35650 is fixed
+        extra_rmsnorm_kwargs = {}
+        if args.base_model_name in ("Qwen2.5-7B", "Qwen2.5-VL-7B"):
+            extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -110,6 +115,7 @@ class TransformerBlock(LightweightModule):
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
+                **extra_rmsnorm_kwargs,
             ),
             args,
             tt_ccl=self.tt_ccl,
@@ -131,6 +137,7 @@ class TransformerBlock(LightweightModule):
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
+                **extra_rmsnorm_kwargs,
             ),
             args,
             tt_ccl=self.tt_ccl,
@@ -228,6 +235,8 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
+        attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
@@ -249,8 +258,6 @@ class TransformerBlock(LightweightModule):
                     tt_ccl=self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
-                    num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-                    num_all_gather_links=self.args.num_all_gather_links,
                     topology=ttnn.Topology.Ring,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,
@@ -284,8 +291,6 @@ class TransformerBlock(LightweightModule):
                     tt_ccl=self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
-                    num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-                    num_all_gather_links=self.args.num_all_gather_links,
                     topology=ttnn.Topology.Ring,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,

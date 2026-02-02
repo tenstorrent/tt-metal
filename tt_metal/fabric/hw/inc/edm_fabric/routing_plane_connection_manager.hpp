@@ -7,7 +7,7 @@
 #include <array>
 #include <cstdint>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "edm_fabric_worker_adapters.hpp"
 
 namespace tt::tt_fabric {
@@ -17,7 +17,7 @@ namespace tt::tt_fabric {
 #if defined(FABRIC_2D)
 #define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
 #else  // 1D
-#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 2
+#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
 // TODO: 3D, dragonfly and custom etc.
 #endif
 #endif

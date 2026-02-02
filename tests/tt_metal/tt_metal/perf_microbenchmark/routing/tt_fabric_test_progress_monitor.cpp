@@ -74,7 +74,8 @@ std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress> TestProgressMoni
     return device_progress;
 }
 
-DeviceProgress TestProgressMonitor::poll_device_senders(const MeshCoordinate& coord, const TestDevice& test_device) {
+DeviceProgress TestProgressMonitor::poll_device_senders(
+    const MeshCoordinate& /*coord*/, const TestDevice& test_device) {
     DeviceProgress progress;
     progress.device_id = test_device.get_node_id();
 
@@ -200,7 +201,8 @@ void TestProgressMonitor::display_progress(
 std::string TestProgressMonitor::format_count(uint64_t count) const {
     if (count >= 1000000) {
         return std::to_string(count / 1000000) + "M";
-    } else if (count >= 1000) {
+    }
+    if (count >= 1000) {
         return std::to_string(count / 1000) + "K";
     }
     return std::to_string(count);
@@ -223,13 +225,13 @@ std::string TestProgressMonitor::format_duration(double seconds) const {
         uint32_t hours = static_cast<uint32_t>(seconds / 3600);
         uint32_t minutes = static_cast<uint32_t>((seconds - (hours * 3600)) / 60);
         return std::to_string(hours) + "h" + std::to_string(minutes) + "m";
-    } else if (seconds >= 60) {
+    }
+    if (seconds >= 60) {
         uint32_t minutes = static_cast<uint32_t>(seconds / 60);
         uint32_t secs = static_cast<uint32_t>(seconds - (minutes * 60));
         return std::to_string(minutes) + "m" + std::to_string(secs) + "s";
-    } else {
-        return std::to_string(static_cast<uint32_t>(seconds)) + "s";
     }
+    return std::to_string(static_cast<uint32_t>(seconds)) + "s";
 }
 
 std::optional<double> TestProgressMonitor::estimate_eta(

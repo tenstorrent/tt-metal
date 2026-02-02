@@ -104,8 +104,9 @@ MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
-        MeshGraphDescriptor mgd(filepath, true);
-        this->initialize_from_mgd(mgd, fabric_config);
+        mesh_graph_desc_file_path_ = filepath;
+        mesh_graph_descriptor_.emplace(filepath, true);
+        this->initialize_from_mgd(mesh_graph_descriptor_.value(), fabric_config);
     } else {
         TT_THROW(
             "Mesh graph descriptor file must use the .textproto format. "
@@ -188,11 +189,11 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
     MeshCoordinate S(src_mesh_coord[0] + 1, src_mesh_coord[1]);
     MeshCoordinate W(src_mesh_coord[0], src_mesh_coord[1] - 1);
 
-    if (has_flag(fabric_type, FabricType::TORUS_X)) {
+    if (has_flag(fabric_type, FabricType::TORUS_X) and mesh_shape[1] > 1) {
         E = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] + 1) % mesh_shape[1]);
         W = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] - 1 + mesh_shape[1]) % mesh_shape[1]);
     }
-    if (has_flag(fabric_type, FabricType::TORUS_Y)) {
+    if (has_flag(fabric_type, FabricType::TORUS_Y) and mesh_shape[0] > 1) {
         N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
         S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
     }
@@ -225,10 +226,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
     chip_spec_ = ChipSpec{
         .arch = proto_arch_to_arch.at(mgd.get_arch()),
         .num_eth_ports_per_direction = mgd.get_num_eth_ports_per_direction(),
-        .num_z_ports = (mgd.get_arch() == proto::Architecture::BLACKHOLE)
-                           ? mgd.get_num_eth_ports_per_direction()
-                           : 0,  // Z set to the same number as xy if in black hole
-    };
+        .num_z_ports = mgd.get_num_eth_ports_per_direction()};
 
     // Count total meshes including switches (switches are treated as meshes internally)
     uint32_t total_mesh_count = mgd.all_meshes().size() + mgd.all_switches().size();
@@ -273,6 +271,12 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
             requested_intermesh_ports_[*src_mesh_id][*dst_mesh_id].push_back(
                 {src_chip_id, dst_chip_id, connection_data.count});
 
+            // Track mesh pairs that should use Z direction
+            if (connection_data.assign_z_direction) {
+                mesh_pairs_assign_z_direction_[*src_mesh_id].insert(*dst_mesh_id);
+                mesh_pairs_assign_z_direction_[*dst_mesh_id].insert(*src_mesh_id);
+            }
+
             // Track switch-to-mesh connections
             if (src_mesh_instance.kind == NodeKind::Switch && dst_mesh_instance.kind == NodeKind::Mesh) {
                 switch_to_connected_meshes_[src_mesh_id].push_back(dst_mesh_id);
@@ -285,6 +289,12 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
             MeshId dst_mesh_id(dst_instance.local_id);
 
             requested_intermesh_connections_[*src_mesh_id][*dst_mesh_id] = connection_data.count;
+
+            // Track mesh pairs that should use Z direction
+            if (connection_data.assign_z_direction) {
+                mesh_pairs_assign_z_direction_[*src_mesh_id].insert(*dst_mesh_id);
+                mesh_pairs_assign_z_direction_[*dst_mesh_id].insert(*src_mesh_id);
+            }
 
             // Track switch-to-mesh connections
             if (src_instance.kind == NodeKind::Switch && dst_instance.kind == NodeKind::Mesh) {
@@ -614,6 +624,14 @@ const RequestedIntermeshConnections& MeshGraph::get_requested_intermesh_connecti
 
 const RequestedIntermeshPorts& MeshGraph::get_requested_intermesh_ports() const { return requested_intermesh_ports_; }
 
+bool MeshGraph::should_assign_z_direction(MeshId src_mesh_id, MeshId dst_mesh_id) const {
+    auto it = mesh_pairs_assign_z_direction_.find(*src_mesh_id);
+    if (it != mesh_pairs_assign_z_direction_.end()) {
+        return it->second.contains(*dst_mesh_id);
+    }
+    return false;
+}
+
 const std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>>& MeshGraph::get_mesh_edge_ports_to_chip_id() const {
     return mesh_edge_ports_to_chip_id_;
 }
@@ -654,10 +672,7 @@ void MeshGraph::print_connectivity() const {
 }
 
 void MeshGraph::validate_mesh_id(MeshId mesh_id) const {
-    TT_FATAL(
-        this->mesh_to_chip_ids_.find(mesh_id) != this->mesh_to_chip_ids_.end(),
-        "MeshGraph: mesh_id {} not found",
-        mesh_id);
+    TT_FATAL(this->mesh_to_chip_ids_.contains(mesh_id), "MeshGraph: mesh_id {} not found", mesh_id);
 }
 
 MeshShape MeshGraph::get_mesh_shape(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
@@ -738,13 +753,28 @@ std::optional<SwitchId> MeshGraph::get_switch_for_mesh(MeshId mesh_id) const {
     return std::nullopt;
 }
 
-std::vector<MeshId> MeshGraph::get_mesh_ids() const {
+std::vector<MeshId> MeshGraph::get_all_mesh_ids() const {
     std::vector<MeshId> mesh_ids;
     mesh_ids.reserve(this->mesh_to_chip_ids_.size());
     for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
         mesh_ids.push_back(mesh_id);
     }
     return mesh_ids;
+}
+
+std::vector<MeshId> MeshGraph::get_mesh_ids() const {
+    std::vector<MeshId> mesh_ids;
+    mesh_ids.reserve(this->mesh_to_chip_ids_.size() - switch_ids_.size());
+    for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
+        if (!this->is_switch_mesh(mesh_id)) {
+            mesh_ids.push_back(mesh_id);
+        }
+    }
+    return mesh_ids;
+}
+
+bool MeshGraph::is_switch_mesh(MeshId mesh_id) const {
+    return std::find(switch_ids_.begin(), switch_ids_.end(), mesh_id) != switch_ids_.end();
 }
 
 MeshContainer<ChipId> MeshGraph::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {

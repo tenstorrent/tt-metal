@@ -9,6 +9,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -18,6 +19,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 
 /** @file */
 
@@ -38,7 +41,6 @@ struct TraceDescriptor;
 class Program;
 class IDevice;
 class Trace;
-class CircularBuffer;
 struct Event;
 class Buffer;
 class GlobalSemaphore;
@@ -190,7 +192,7 @@ KernelHandle CreateKernelFromString(
 //                  HOST API: buffers
 // ==================================================
 /**
- * Creates a Circular Buffer (CB) in L1 memory of all cores within core ranges (inclusive) and adds it to the program. There can be a total of NUM_CIRCULAR_BUFFERS (32) circular buffers per core.
+ * Creates a Circular Buffer (CB) in L1 memory of all cores within core ranges (inclusive) and adds it to the program. The number of CBs is architecture-specific.
  * Circular buffers hold data and have an associated config which indicates usage of the address space.
  * If the config is specified for multiple buffer indices, the circular buffer address space is shared and each buffer index can potentially have a unique view of the shared space.
  *

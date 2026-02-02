@@ -12,7 +12,7 @@
 
 #include "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/gather.hpp"
 
-namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail::test {
+namespace ttnn::experimental::prim::test {
 
 class GatherTransferTest : public ::testing::Test {
 protected:
@@ -50,7 +50,7 @@ protected:
                 auto element = std::make_tuple(transfer.batch, transfer.channel, hw);
 
                 // Check for duplicates
-                if (transferred_elements.count(element) > 0) {
+                if (transferred_elements.contains(element)) {
                     return false;  // Duplicate transfer
                 }
                 transferred_elements.insert(element);
@@ -86,7 +86,7 @@ protected:
 
         for (const auto& group : groups) {
             auto key = std::make_pair(group.dst_shard_idx, group.dst_block_idx);
-            if (seen_blocks.count(key) > 0) {
+            if (seen_blocks.contains(key)) {
                 return false;  // Duplicate block
             }
             seen_blocks.insert(key);
@@ -1240,4 +1240,4 @@ TEST_F(GatherTransferTest, CrossBlockTransferSplitting) {
     verify_all_output_elements(output_shards, B, C, HW, input_cores.size(), output_cores.size());
 }
 
-}  // namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail::test
+}  // namespace ttnn::experimental::prim::test

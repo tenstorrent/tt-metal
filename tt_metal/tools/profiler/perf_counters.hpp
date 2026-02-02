@@ -33,7 +33,7 @@ union PerfCounter {
 #if defined(PROFILE_PERF_COUNTERS) && COMPILE_FOR_TRISC == 1
 
 #include "kernel_profiler.hpp"
-#include "debug/assert.h"
+#include "api/debug/assert.h"
 
 namespace kernel_profiler {
 

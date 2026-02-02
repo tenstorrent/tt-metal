@@ -144,11 +144,11 @@ public:
                     return std::apply(t2, transformed_args);
                 }
                 return transformed_args;
-            } else if (*t2_required) {
-                return t2(args...);
-            } else {
-                return std::make_tuple(args...);
             }
+            if (*t2_required) {
+                return t2(args...);
+            }
+            return std::make_tuple(args...);
         };
 
         auto merged_post_transform =
@@ -159,13 +159,14 @@ public:
                 auto t2_output = t2(output);
                 auto t1_output = t1(t2_output);
                 return t1_output;
-            } else if (*t1_required) {
-                return t1(output);
-            } else if (*t2_required) {
-                return t2(output);
-            } else {
-                return output;
             }
+            if (*t1_required) {
+                return t1(output);
+            }
+            if (*t2_required) {
+                return t2(output);
+            }
+            return output;
         };
 
         return MassagedOperation(MassagedOperationParams<OpOutputType, OpInputTypes...>{

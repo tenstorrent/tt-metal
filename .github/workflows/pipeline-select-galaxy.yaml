@@ -15,16 +15,6 @@ on:
           - nightly
           - hw-self-test
         default: "manual"
-      build-type:
-        required: false
-        type: choice
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        default: "Release"
       extra-tag:
         required: true
         type: string
@@ -42,6 +32,7 @@ on:
           - all
           - unit
           - fabric
+          - multiprocess
           - llama3-70b
           - prefetcher
           - distributed-ops
@@ -105,6 +96,29 @@ on:
           - wan2-2
           - mochi
         default: 'disabled'
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        default: "Release"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 run-name: ${{ inputs.description }}
 jobs:
   # Centralized logic to determine what should run
@@ -179,11 +193,12 @@ jobs:
     secrets: inherit
     needs: determine-tests
     with:
-      build-type: ${{ inputs.build-type }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
       build-wheel: true
       build-umd-tests: true
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
   galaxy-quick:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
     needs: [build-artifact, determine-tests]

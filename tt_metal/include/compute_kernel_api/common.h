@@ -10,9 +10,25 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/cb_api.h"
 #include "compute_kernel_api/compute_kernel_hw_startup.h"
+#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
+#include "api/debug/assert.h"
 
+#ifdef ARCH_QUASAR
+extern thread_local uint32_t tt_l1_ptr* rta_l1_base;
+extern thread_local uint32_t tt_l1_ptr* crta_l1_base;
+#else
 extern uint32_t tt_l1_ptr* rta_l1_base;
 extern uint32_t tt_l1_ptr* crta_l1_base;
+#endif
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+#ifdef ARCH_QUASAR
+extern thread_local uint32_t rta_count;
+extern thread_local uint32_t crta_count;
+#else
+extern uint32_t rta_count;
+extern uint32_t crta_count;
+#endif
+#endif
 
 // clang-format off
 /**
@@ -26,7 +42,12 @@ extern uint32_t tt_l1_ptr* crta_l1_base;
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
+static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) {
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+    ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < rta_count, DebugAssertRtaOutOfBounds);
+#endif
+    return (uint32_t)&rta_l1_base[arg_idx];
+}
 
 // clang-format off
 /**
@@ -40,7 +61,12 @@ static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l
  * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t)&crta_l1_base[arg_idx]; }
+static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) {
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+    ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < crta_count, DebugAssertCrtaOutOfBounds);
+#endif
+    return (uint32_t)&crta_l1_base[arg_idx];
+}
 
 // clang-format off
 /**

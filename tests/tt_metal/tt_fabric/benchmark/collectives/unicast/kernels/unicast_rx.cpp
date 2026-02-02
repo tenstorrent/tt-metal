@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 
 // Receiver-side completion wait.
