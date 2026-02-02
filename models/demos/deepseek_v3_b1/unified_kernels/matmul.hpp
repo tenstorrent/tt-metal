@@ -14,7 +14,19 @@
 #include "compute_kernel_api/matmul.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#ifdef TRISC_PACK
+#include "ckernel_sfpu_exp.h"
+#include "llk_math_eltwise_unary_sfpu_sigmoid.h"
+#include "llk_math_eltwise_unary_sfpu_silu.h"
 #endif
+#endif
+
+// Fused activation types for matmul
+enum class FusedActivation : uint32_t {
+    NONE = 0,
+    SIGMOID = 1,
+    SILU = 2,
+};
 
 namespace deepseek_b1_ops {
 
@@ -43,10 +55,13 @@ struct Matmul {
     // Writer CTArgs (BRISC): none
     struct WriterCTArgs {};
 
-    // Compute CTArgs (TRISC): out_w (output width in tiles)
-    template <uint32_t out_w_>
+    // Compute CTArgs (TRISC): out_w (output width in tiles), fused_activation
+    template <uint32_t out_w_, uint32_t fused_activation_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t out_w = out_w_;
+        static constexpr FusedActivation fused_activation = static_cast<FusedActivation>(fused_activation_);
+        static constexpr bool fuse_sigmoid = fused_activation == FusedActivation::SIGMOID;
+        static constexpr bool fuse_silu = fused_activation == FusedActivation::SILU;
     };
 
     // ========================================================================
@@ -106,7 +121,44 @@ struct Matmul {
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            if constexpr (out_w <= 8) {
+            if constexpr (CTArgs::fuse_sigmoid || CTArgs::fuse_silu) {
+                // Initialize activation on PACK thread
+                if constexpr (CTArgs::fuse_sigmoid) {
+                    PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid_init<true>()));
+                } else {
+                    PACK((ckernel::llk_math_eltwise_unary_sfpu_silu_init<true>()));
+                }
+
+                // Per-tile: matmul -> activation on PACK -> pack
+                custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
+
+                for (uint32_t w = 0; w < out_w; w++) {
+                    tile_regs_acquire();
+
+                    custom_mm_block(args.in0, args.in1, 0, w, 0, transpose, args.k_num_tiles, out_w);
+
+                    tile_regs_commit();
+
+                    // Run activation on PACK thread
+                    TTI_SEMWAIT(
+                        p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                        semaphore::t6_sem(semaphore::MATH_PACK),
+                        p_stall::STALL_ON_ZERO);
+                    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
+                    // Use 2 iterations for 1x32 tiny tiles
+                    if constexpr (CTArgs::fuse_sigmoid) {
+                        PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid<true, false, 2>(0, (int)VectorMode::R)));
+                    } else {
+                        PACK((ckernel::llk_math_eltwise_unary_sfpu_silu<true, false, 2>(0, (int)VectorMode::R)));
+                    }
+
+                    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+
+                    pack_tile(0, args.out, w);
+                    tile_regs_release();
+                }
+            } else if constexpr (out_w <= 8) {
                 // Use optimized custom_mm API for up to 8 output tiles (half-DST)
                 custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
 
