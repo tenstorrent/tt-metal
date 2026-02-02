@@ -796,7 +796,6 @@ class ModelArgs:
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
-            # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
             prefill_rows = 8  # TODO if BH = 10, if wh = 8
             mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
@@ -2641,8 +2640,6 @@ class ModelArgs:
     def reference_vision_rms_norm(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector.mm_soft_emb_norm
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_rms_norm(self):
