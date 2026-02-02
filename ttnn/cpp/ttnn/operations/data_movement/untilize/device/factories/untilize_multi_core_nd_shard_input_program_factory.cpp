@@ -80,10 +80,11 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
 
     // Input CB
     uint32_t input_cb_num_tiles;
-    if (num_input_blocks_per_full_core ==
-        1) {  // No need to double buffer if the core is only processing a single block
+    if (num_input_blocks_per_full_core == 1) {
+        // No need to double buffer if the core is only processing a single block
         input_cb_num_tiles = num_tiles_per_input_block;
     } else {
+        // Double buffer if the core is processing 2+ blocks
         input_cb_num_tiles = num_tiles_per_input_block * 2;
     }
     auto [src0_cb_index, cb_src0] = create_cb(
