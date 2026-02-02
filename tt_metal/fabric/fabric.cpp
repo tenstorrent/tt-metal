@@ -260,12 +260,26 @@ void append_fabric_connection_rt_args(
     }
 }
 
+std::vector<eth_chan_directions> get_neighbour_eth_directions(
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    std::vector<eth_chan_directions> directions;
+    for (const auto& direction : FabricContext::routing_directions) {
+        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
+        if (std::find(neighbors.begin(), neighbors.end(), dst_fabric_node_id.chip_id) != neighbors.end()) {
+            directions.push_back(control_plane.routing_direction_to_eth_direction(direction));
+        }
+    }
+    return directions;
+}
+
 // append runtime parameter for RoutingPlaneConnectionManager
 // convenience function using RoutingDirection's
 template <typename ProgramOrDescriptor>
 uint32_t append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
-    const std::vector<RoutingDirection>& attempted_directionss,
+    const std::vector<eth_chan_directions>& attempted_directionss,
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,
@@ -278,20 +292,21 @@ uint32_t append_routing_plane_connection_manager_rt_args(
     std::vector<FabricNodeId> dst_nodes;
     std::unordered_set<RoutingDirection> used_directions;
     for (auto dir : attempted_directionss) {
+        auto routing_direction = control_plane.eth_direction_to_routing_direction(dir);
         TT_FATAL(
-            !used_directions.contains(dir),
+            !used_directions.contains(routing_direction),
             "Multiple ethernet cores in the same direction ({}) are not currently supported. "
             "This restriction will be removed in a future update when proper multi-core routing is implemented.",
-            dir);
+            routing_direction);
 
-        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, dir);
+        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, routing_direction);
 
         if (!neighbors.empty()) {
             dst_nodes.push_back(FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]));
         }
     }
 
-    append_routing_plane_connection_manager_rt_args(
+    append_routing_plane_connection_manager_rt_args<ProgramOrDescriptor>(
         src_fabric_node_id,
         dst_nodes,
         connection_link_indices,
@@ -353,6 +368,11 @@ void append_routing_plane_connection_manager_rt_args(
             dst_node);
         // Use direction as tag for ConnectionSlot
         worker_args.push_back(static_cast<uint32_t>(dir_opt.value()));
+        log_info(tt::LogTest, "Src fabric node id: {}", src_fabric_node_id.chip_id);
+        log_info(tt::LogTest, "Src chip id: {}", control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id));
+        log_info(tt::LogTest, "Dst fabric node id: {}", dst_node.chip_id);
+        log_info(tt::LogTest, "Dst chip id: {}", control_plane.get_physical_chip_id_from_fabric_node_id(dst_node));
+        log_info(tt::LogTest, "Adding connection for tag {}", static_cast<uint32_t>(dir_opt.value())); 
 
         uint32_t link_idx = 0;
         if (!connection_link_indices.empty()) {
@@ -534,7 +554,7 @@ template void append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
 
 template uint32_t append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
     const FabricNodeId&,
-    const std::vector<RoutingDirection>&,
+    const std::vector<eth_chan_directions>&,
     const std::vector<uint32_t>&,
     tt::tt_metal::ProgramDescriptor&,
     tt::tt_metal::KernelHandle&,
@@ -545,7 +565,7 @@ template uint32_t append_routing_plane_connection_manager_rt_args<tt::tt_metal::
 
 template uint32_t append_routing_plane_connection_manager_rt_args<tt::tt_metal::Program>(
     const FabricNodeId&,
-    const std::vector<RoutingDirection>&,
+    const std::vector<eth_chan_directions>&,
     const std::vector<uint32_t>&,
     tt::tt_metal::Program&,
     tt::tt_metal::KernelHandle&,

@@ -16,6 +16,7 @@
 #include <tt-metalium/hal.hpp>
 
 #include <tt-logger/tt-logger.hpp>
+#include "hostdevcommon/fabric_common.h"
 #include "ttnn_test_fixtures.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -1445,7 +1446,7 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
     tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(0);
     tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
         sender_fabric_node_id,
-        {tt::tt_fabric::RoutingDirection::E},
+        {tt::tt_fabric::eth_chan_directions::EAST},
         {},
         sender_program_descriptor,
         kernel_id,
