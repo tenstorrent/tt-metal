@@ -4,8 +4,6 @@
 
 import ttnn
 
-__all__ = []
-
 Topology = ttnn._ttnn.operations.ccl.Topology
 
 # Experimental CCL enums for all_to_all_dispatch_metadata operation
@@ -14,5 +12,4 @@ WorkerMode = ttnn._ttnn.operations.experimental.ccl_experimental.WorkerMode
 
 # TODO: Add golden functions (#12747)
 
-
-__all__ = []
+__all__ = ["Topology", "DispatchAlgorithm", "WorkerMode"]
