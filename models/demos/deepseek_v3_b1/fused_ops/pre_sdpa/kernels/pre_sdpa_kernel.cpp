@@ -5,16 +5,19 @@
 // Single kernel file, compiles correctly for all RISC cores
 // Each RISC has its own CTArgs struct with different compile-time arg layout
 //
-// Implements: RMSNorm + Mcast + Matmul + Gather + RMSNorm2 + Mcast2 + Matmul2
-// - NCRISC: RMSNorm reader + Mcast receiver (on matmul cores), Matmul reader + Gather sender (on matmul cores),
+// Implements: CCL Broadcast + RMSNorm + Mcast + Matmul + Gather + RMSNorm2 + Mcast2 + Matmul2
+// - NCRISC: CCL Broadcast reader + RMSNorm reader + Mcast receiver (on matmul cores), Matmul reader + Gather sender (on
+// matmul cores),
 //           RMSNorm2 reader + Mcast2 receiver (on matmul2 cores), Matmul2 reader (on matmul2 cores)
-// - BRISC: RMSNorm writer + Mcast sender (on input core), Matmul writer (on matmul cores), Gather receiver (on
+// - BRISC: CCL Broadcast writer + RMSNorm writer + Mcast sender (on input core), Matmul writer (on matmul cores),
+// Gather receiver (on
 //          input core), Mcast2 sender (on input core), Matmul2 writer (on matmul2 cores)
 // - TRISC: RMSNorm compute (on input core), Matmul compute (on matmul cores), RMSNorm2 compute (on input core),
 //          Matmul2 compute (on matmul2 cores)
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
+#include "../../../unified_kernels/broadcast.hpp"
 #include "../../../unified_kernels/rmsnorm.hpp"
 #include "../../../unified_kernels/mcast.hpp"
 #include "../../../unified_kernels/matmul.hpp"
@@ -26,15 +29,37 @@ struct Core {
     static constexpr bool is_input_core = get_named_compile_time_arg_val("is_input_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
     static constexpr bool is_matmul2_core = get_named_compile_time_arg_val("is_matmul2_core") == 1;
+    static constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
 };
 
 void kernel_main() {
 // ============================================================================
 // NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
-// Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
-// Runtime args: []
+// Named compile-time args: bcast reader, rmsnorm reader, mcast receiver, matmul reader, gather sender
+// Runtime args: [tensor_address0, tile_id_start, tile_id_end] for CCL broadcast
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
+    // CCL Broadcast CTArgs type alias
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_core_noc_x"),
+        get_named_compile_time_arg_val("bcast_core_noc_y"),
+        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+        get_named_compile_time_arg_val("bcast_is_active_broadcaster")>;
+
+    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+    if constexpr (!Core::skip_ccl) {
+        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
+            get_arg_val<uint32_t>(0),  // tensor_address0
+            get_arg_val<uint32_t>(1),  // tile_id_start
+            get_arg_val<uint32_t>(2),  // tile_id_end
+        };
+    }
+
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
@@ -90,9 +115,51 @@ void kernel_main() {
 
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
-// Named compile-time args: rmsnorm writer, mcast sender, matmul writer, gather receiver
+// Named compile-time args: bcast writer, rmsnorm writer, mcast sender, matmul writer, gather receiver
+// Runtime args: CCL broadcast writer args (when not skip_ccl)
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
+    // CCL Broadcast CTArgs type alias
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
+        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
+        get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
+        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_core_noc_x"),
+        get_named_compile_time_arg_val("bcast_core_noc_y"),
+        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+        get_named_compile_time_arg_val("bcast_has_secondary_target"),
+        get_named_compile_time_arg_val("bcast_has_reverse_secondary_connection"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
+        get_named_compile_time_arg_val("bcast_range_hops_forward"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
+        get_named_compile_time_arg_val("bcast_range_hops_backward"),
+        get_named_compile_time_arg_val("bcast_using_persistent_buffers")>;
+
+    // CCL Broadcast writer runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+    if constexpr (!Core::skip_ccl) {
+        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
+            get_arg_val<uint32_t>(0),   // tensor_address0
+            get_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
+            get_arg_val<uint32_t>(2),   // tile_id_start
+            get_arg_val<uint32_t>(3),   // tile_id_end
+            get_arg_val<uint32_t>(4),   // wait_output_semaphore
+            get_arg_val<uint32_t>(5),   // reset_global_semaphore
+            get_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
+            get_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
+            get_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
+            get_arg_val<uint32_t>(9),   // barrier_sem
+            get_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
+            get_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
+            get_arg_val<uint32_t>(12),  // ring_index
+            get_arg_val<uint32_t>(13),  // secondary_sync_sem
+            get_arg_val<uint32_t>(14),  // num_connections
+        };
+    }
+
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
@@ -169,9 +236,13 @@ void kernel_main() {
 
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
-// Named compile-time args: rmsnorm compute, matmul compute
+// Named compile-time args: bcast (skip_ccl only), rmsnorm compute, matmul compute
 // ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
+    // CCL Broadcast CTArgs (no-op for TRISC)
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
+    deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
+
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
@@ -183,13 +254,13 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
 
-    // RMSNorm compute runtime args
+    // RMSNorm compute runtime args (use get_common_arg_val for common runtime args)
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
         get_named_compile_time_arg_val("rmsnorm_output_cb"),
-        get_arg_val<uint32_t>(0),  // epsilon
-        get_arg_val<float>(1),     // scalar (1/sqrt(7168))
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(1),     // scalar (1/sqrt(7168))
     };
 
     // Mcast compute args (no-op for TRISC)
@@ -215,8 +286,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm2_input_cb"),   // separate input CB (3 tiles of 16x32)
         get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),   // new gamma for 1536 elements
         get_named_compile_time_arg_val("rmsnorm2_output_cb"),  // separate output CB (3 tiles of 16x32)
-        get_arg_val<uint32_t>(0),                              // epsilon (same as rmsnorm1)
-        get_arg_val<float>(2),                                 // scalar (1/sqrt(1536))
+        get_common_arg_val<uint32_t>(0),                       // epsilon (same as rmsnorm1)
+        get_common_arg_val<float>(2),                          // scalar (1/sqrt(1536))
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -237,12 +308,11 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers
-    if constexpr (Core::is_input_core) {
-        // RMSNorm input and gamma buffers
-        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+    if constexpr (Core::is_input_core && !Core::skip_ccl) {
+        // Multi-device mode: NCRISC sets up gamma buffers while BRISC handles CCL
+        // RMSNorm gamma buffer
         constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
         unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
 
         // RMSNorm2 gamma buffer (3 tiles of 16x32)
@@ -268,6 +338,73 @@ void kernel_main() {
     }
 #endif
 
+    DPRINT << "is input core: " << (uint32_t)Core::is_input_core << "\n";
+    DPRINT << "is matmul core: " << (uint32_t)Core::is_matmul_core << "\n";
+    DPRINT << "is matmul2 core: " << (uint32_t)Core::is_matmul2_core << "\n";
+    DPRINT << "skip ccl: " << (uint32_t)Core::skip_ccl << "\n";
+
+#if defined(COMPILE_FOR_TRISC)
+    // Debug: Print key CB IDs and params before any operations
+    if constexpr (Core::is_input_core) {
+        DPRINT << "=== TRISC DEBUG (input core) ===\n";
+        DPRINT << "rmsnorm_input_cb: " << rmsnorm_args.input_cb << "\n";
+        DPRINT << "rmsnorm_gamma_cb: " << rmsnorm_args.gamma_cb << "\n";
+        DPRINT << "rmsnorm_output_cb: " << rmsnorm_args.output_cb << "\n";
+        DPRINT << "rmsnorm_num_tiles: " << (uint32_t)RMSNormCTArgs::num_tiles << "\n";
+        DPRINT << "rmsnorm_epsilon: " << rmsnorm_args.epsilon << "\n";
+        DPRINT << "rmsnorm_scalar: " << rmsnorm_args.scalar << "\n";
+        DPRINT << "rmsnorm2_input_cb: " << rmsnorm2_args.input_cb << "\n";
+        DPRINT << "rmsnorm2_gamma_cb: " << rmsnorm2_args.gamma_cb << "\n";
+        DPRINT << "rmsnorm2_output_cb: " << rmsnorm2_args.output_cb << "\n";
+        DPRINT << "rmsnorm2_num_tiles: " << (uint32_t)RMSNorm2CTArgs::num_tiles << "\n";
+        DPRINT << "rmsnorm2_scalar: " << rmsnorm2_args.scalar << "\n";
+    }
+#endif
+
+    // ========================================================================
+    // CCL Broadcast (optional, skip if single-device mode)
+    // ========================================================================
+    if constexpr (!Core::skip_ccl) {
+        DeviceZoneScopedN("CCL_BROADCAST");
+        deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
+        bcast(bcast_args);
+        if (Core::is_input_core) {
+            DPRINT << "CCL Broadcast completed\n";
+        }
+    }
+
+#if defined(COMPILE_FOR_NCRISC)
+    if constexpr (Core::is_input_core && Core::skip_ccl) {
+        // Single-device mode: NCRISC sets up ALL sharded buffers (input + gamma + gamma2)
+        // This matches the reference kernel behavior
+        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
+        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+        constexpr uint32_t rmsnorm2_gamma_cb = get_named_compile_time_arg_val("rmsnorm2_gamma_cb");
+        constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
+
+        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
+        unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
+        DPRINT << "Single-device: All sharded buffers set up by NCRISC\n";
+    }
+#endif
+
+#if defined(COMPILE_FOR_BRISC)
+    if constexpr (Core::is_input_core && !Core::skip_ccl) {
+        // Multi-device mode only: BRISC sets up intermediate (broadcast output) buffer
+        // Gamma CBs are already set up by NCRISC via setup_sharded_buffer
+        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+
+        DPRINT << "before rmsnorm cb setup\n";
+        cb_reserve_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+        DPRINT << "after rmsnorm input cb reserve\n";
+        cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+        DPRINT << "RMSNorm input CB set up: " << (uint32_t)rmsnorm_input_cb << "\n";
+    }
+#endif
+
     // ========================================================================
     // Input core: RMSNorm + Mcast send
     // ========================================================================
@@ -277,6 +414,7 @@ void kernel_main() {
         deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
         rmsnorm(rmsnorm_args);
     }
+    DPRINT << "RMSNorm completed\n";
 
     // pop_src = true (rmsnorm output is consumed after mcast)
     deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul_core, true>
@@ -289,6 +427,7 @@ void kernel_main() {
         mcast(mcast_args);
     }
 
+    DPRINT << "Mcast completed\n";
     // ========================================================================
     // Matmul operation
     // ========================================================================
@@ -298,6 +437,7 @@ void kernel_main() {
         deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, false> matmul;
         matmul(matmul_args);
     }
+    DPRINT << "Matmul completed\n";
 
     // ========================================================================
     // Gather: matmul cores (senders) -> input core (receiver)
@@ -309,6 +449,7 @@ void kernel_main() {
         deepseek_b1_ops::Gather::Op<Core::is_matmul_core, Core::is_input_core, true> gather;
         gather(gather_args);
     }
+    DPRINT << "Gather completed\n";
 
     // ========================================================================
     // RMSNorm2: Apply RMSNorm to the gathered data (1536 elements = 3 tiles of 16x32)
@@ -324,6 +465,7 @@ void kernel_main() {
         deepseek_b1_ops::RMSNorm::Op<RMSNorm2CTArgs, Core::is_input_core, true> rmsnorm2;
         rmsnorm2(rmsnorm2_args);
     }
+    DPRINT << "RMSNorm2 completed\n";
 
     // ========================================================================
     // Mcast2: Broadcast rmsnorm2 output from input core to all matmul2 cores
@@ -339,6 +481,7 @@ void kernel_main() {
         mcast2(mcast2_args);
     }
     mcast.teardown();
+    DPRINT << "Mcast2 completed\n";
 
     // ========================================================================
     // Matmul2: matmul2_input[1, 1536] @ matmul2_weights[1536, N]
@@ -351,4 +494,6 @@ void kernel_main() {
         deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
         matmul2(matmul2_args);
     }
+    DPRINT << "Matmul2 completed\n";
+    DPRINT << "END OF KERNEL\n";
 }
