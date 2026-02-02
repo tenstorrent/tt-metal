@@ -167,14 +167,18 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                     auto mesh_list = host_node["mesh"];
                     uint32_t current_mesh_id = 0;
 
-                    // Iterate through mesh list - entries are either mesh maps or chips maps
+                    // Iterate through mesh list - entries can have both mesh and chips keys
+                    // Format: - mesh: 0
+                    //           chips: [...]
                     for (const auto& entry : mesh_list) {
                         if (entry.IsMap()) {
+                            // Update current_mesh_id if mesh key exists
                             if (entry["mesh"]) {
-                                // This is a mesh entry
                                 current_mesh_id = entry["mesh"].as<uint32_t>();
-                            } else if (entry["chips"]) {
-                                // This is a chips entry - collect chips for the current mesh
+                            }
+
+                            // Process chips if chips key exists (can be in same entry as mesh)
+                            if (entry["chips"]) {
                                 auto chips_list = entry["chips"];
                                 for (const auto& chip_entry : chips_list) {
                                     if (chip_entry["umd_chip_id"]) {
@@ -274,54 +278,56 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         // Compare the collected chip_id mappings
         std::vector<std::string> mismatch_details;
 
+        // First, check that we have the same number of entries
         if (gen_map_by_chip_id.size() != gold_map_by_chip_id.size()) {
             std::ostringstream oss;
             oss << "Mismatch in total number of unique UMD chip IDs: generated=" << gen_map_by_chip_id.size()
                 << ", golden=" << gold_map_by_chip_id.size();
             mismatch_details.push_back(oss.str());
-
-            // Find missing UMD chip IDs
-            std::vector<std::string> missing_in_golden;
-            std::vector<std::string> missing_in_generated;
-            for (const auto& [chip_key, _] : gen_map_by_chip_id) {
-                if (gold_map_by_chip_id.find(chip_key) == gold_map_by_chip_id.end()) {
-                    missing_in_golden.push_back(chip_key);
-                }
-            }
-            for (const auto& [chip_key, _] : gold_map_by_chip_id) {
-                if (gen_map_by_chip_id.find(chip_key) == gen_map_by_chip_id.end()) {
-                    missing_in_generated.push_back(chip_key);
-                }
-            }
-            if (!missing_in_golden.empty()) {
-                std::ostringstream oss2;
-                oss2 << "UMD chip IDs (mesh_id:umd_chip_id) present in generated but missing in golden: ";
-                for (size_t i = 0; i < missing_in_golden.size(); ++i) {
-                    if (i > 0) {
-                        oss2 << ", ";
-                    }
-                    oss2 << missing_in_golden[i];
-                }
-                mismatch_details.push_back(oss2.str());
-            }
-            if (!missing_in_generated.empty()) {
-                std::ostringstream oss2;
-                oss2 << "UMD chip IDs (mesh_id:umd_chip_id) present in golden but missing in generated: ";
-                for (size_t i = 0; i < missing_in_generated.size(); ++i) {
-                    if (i > 0) {
-                        oss2 << ", ";
-                    }
-                    oss2 << missing_in_generated[i];
-                }
-                mismatch_details.push_back(oss2.str());
-            }
         }
 
+        // Find missing UMD chip IDs (entries in generated but not in golden)
+        std::vector<std::string> missing_in_golden;
+        for (const auto& [chip_key, _] : gen_map_by_chip_id) {
+            if (gold_map_by_chip_id.find(chip_key) == gold_map_by_chip_id.end()) {
+                missing_in_golden.push_back(chip_key);
+            }
+        }
+        if (!missing_in_golden.empty()) {
+            std::ostringstream oss2;
+            oss2 << "UMD chip IDs (mesh_id:umd_chip_id) present in generated but missing in golden: ";
+            for (size_t i = 0; i < missing_in_golden.size(); ++i) {
+                if (i > 0) {
+                    oss2 << ", ";
+                }
+                oss2 << missing_in_golden[i];
+            }
+            mismatch_details.push_back(oss2.str());
+        }
+
+        // Find missing UMD chip IDs (entries in golden but not in generated)
+        std::vector<std::string> missing_in_generated;
+        for (const auto& [chip_key, _] : gold_map_by_chip_id) {
+            if (gen_map_by_chip_id.find(chip_key) == gen_map_by_chip_id.end()) {
+                missing_in_generated.push_back(chip_key);
+            }
+        }
+        if (!missing_in_generated.empty()) {
+            std::ostringstream oss2;
+            oss2 << "UMD chip IDs (mesh_id:umd_chip_id) present in golden but missing in generated: ";
+            for (size_t i = 0; i < missing_in_generated.size(); ++i) {
+                if (i > 0) {
+                    oss2 << ", ";
+                }
+                oss2 << missing_in_generated[i];
+            }
+            mismatch_details.push_back(oss2.str());
+        }
+
+        // Compare all entries that exist in both files
         for (const auto& [chip_key, gen_mapping_node] : gen_map_by_chip_id) {
             if (gold_map_by_chip_id.find(chip_key) == gold_map_by_chip_id.end()) {
-                std::ostringstream oss;
-                oss << "UMD chip ID " << chip_key << ": not found in golden file";
-                mismatch_details.push_back(oss.str());
+                // Already reported as missing above, skip detailed comparison
                 continue;
             }
 
