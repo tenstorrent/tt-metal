@@ -203,11 +203,11 @@ void MeshTrace::populate_mesh_buffer(
         DeviceAddr trace_buffer_address = trace_buffer->mesh_buffer->address();
         if (trace_buffer_address < dram_high_water_mark) {
             // Determine which high water mark caused the overlap for a more specific error message
-            bool allocation_overlap = dram_allocation_high_water_mark > 0 && 
-                                      trace_buffer_address < dram_allocation_high_water_mark;
-            bool deletion_overlap = dram_deletion_high_water_mark > 0 && 
-                                    trace_buffer_address < dram_deletion_high_water_mark;
-            
+            bool allocation_overlap =
+                dram_allocation_high_water_mark > 0 && trace_buffer_address < dram_allocation_high_water_mark;
+            bool deletion_overlap =
+                dram_deletion_high_water_mark > 0 && trace_buffer_address < dram_deletion_high_water_mark;
+
             if (allocation_overlap && deletion_overlap) {
                 TT_FATAL(
                     false,

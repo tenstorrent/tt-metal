@@ -915,7 +915,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
         }
     }
     ASSERT_TRUE(overlap_detected) << "Overlap detected - trace buffer conflicted with allocations made during trace";
-    #if 0
+#if 0
     if (overlap_detected) {
         SUCCEED() << "Successfully detected trace buffer overlap";
     } else {
@@ -926,7 +926,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
             tt::LogTest, "No overlap detected with {} bytes allocated - trace fit in remaining space", total_allocated);
         SUCCEED() << "No overlap detected (trace fit in available space)";
     }
-    #endif
+#endif
 }
 
 TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithTopDownAllocationsDetectsOverlap) {
@@ -952,14 +952,14 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithTopDownAllocationsDetectsOv
     // Allocate a large top-down DRAM buffer during trace capture
     // This will be tracked in the high water mark
     constexpr size_t buffer_size = 512 * 1024 * 1024;  // 512MB - large enough to likely cause overlap
-    
+
     ReplicatedBufferConfig global_buffer_config{.size = buffer_size};
     DeviceLocalBufferConfig top_down_config{
         .page_size = buffer_size,
         .buffer_type = BufferType::DRAM,
         .bottom_up = false  // Top-down allocation
     };
-    
+
     std::shared_ptr<MeshBuffer> top_down_buffer;
     try {
         top_down_buffer = MeshBuffer::create(global_buffer_config, top_down_config, mesh_device_.get());
@@ -992,7 +992,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithTopDownAllocationsDetectsOv
     }
     ASSERT_TRUE(overlap_detected) << "Overlap detected - trace buffer conflicted with top-down allocation";
 
-    #if 0
+#if 0
     if (overlap_detected) {
         SUCCEED() << "Successfully detected trace buffer overlap with top-down allocation";
     } else {
@@ -1001,7 +1001,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithTopDownAllocationsDetectsOv
         log_info(tt::LogTest, "No overlap detected - trace buffer did not conflict with top-down allocation");
         SUCCEED() << "No overlap detected (trace fit in available space)";
     }
-    #endif
+#endif
 }
 
 TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocationsBeforeAndDuring) {
@@ -1055,7 +1055,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
     // Begin trace capture - this starts tracking at 0
     auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
 
-    #if 0
+#if 0
     // Allocate more buffers DURING trace capture to increase the high water mark
     std::vector<std::shared_ptr<MeshBuffer>> during_trace_buffers;
     size_t during_trace_allocated = 0;
@@ -1081,7 +1081,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
         "Allocated {} bytes DURING trace capture (pre-existing: {} bytes)",
         during_trace_allocated,
         total_allocated);
-    #endif
+#endif
 
     // Record many command iterations to make the trace buffer larger
     for (uint32_t i = 0; i < 1000; i++) {
@@ -1091,9 +1091,9 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
     // Deallocate all buffers (both pre-existing and during-trace) BEFORE ending trace
     // The high water mark should remember the during-trace allocations
     pre_existing_buffers.clear();
-    #if 0
+#if 0
     during_trace_buffers.clear();
-    #endif
+#endif
 
     log_info(tt::LogTest, "Deallocated all buffers before ending trace");
 
@@ -1113,7 +1113,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
         }
     }
     ASSERT_TRUE(overlap_detected) << "Overlap detected - trace buffer conflicted with allocations made during trace";
-    #if 0
+#if 0
     if (overlap_detected) {
         SUCCEED() << "Successfully detected trace buffer overlap with allocations made during trace";
     } else {
@@ -1126,7 +1126,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
             during_trace_allocated);
         SUCCEED() << "No overlap detected (trace fit in available space)";
     }
-    #endif
+#endif
 }
 
 }  // namespace

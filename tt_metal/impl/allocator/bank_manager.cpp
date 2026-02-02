@@ -517,7 +517,7 @@ uint64_t BankManager::allocate_buffer(
 void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDependencies::AllocatorID allocator_id) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
-    
+
     // Track deletion high water mark - remember the extent of buffers being freed
     if (tracking_high_water_mark_) {
         auto size_opt = alloc->get_allocation_size(address);
@@ -527,7 +527,7 @@ void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDe
             deletion_high_water_mark_ = std::max(deletion_high_water_mark_, end_address);
         }
     }
-    
+
     alloc->deallocate(address);
     allocated_buffers_[allocator_id.get()].erase(address);
     // Deallocation in this allocator invalidates caches in allocators that depend on this allocator
