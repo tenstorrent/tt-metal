@@ -132,8 +132,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
         get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
         get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
-        get_arg_val<uint32_t>(0),  // epsilon
-        get_arg_val<float>(1),     // scalar (1/sqrt(512))
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(1),     // scalar (1/sqrt(512))
     };
 
     using K_RopeCTArgs = deepseek_b1_ops::Rope::ComputeCTArgs<get_named_compile_time_arg_val("Wt")>;
@@ -232,8 +232,8 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
     DeviceZoneScopedN("KV_CACHE_UPDATE");
     // Get runtime args: buffer address and starting tile ID
-    uint32_t kv_cache_buffer_addr = get_arg_val<uint32_t>(0);
-    uint32_t kv_cache_start_tile_id = get_arg_val<uint32_t>(1);
+    uint32_t kv_cache_buffer_addr = get_common_arg_val<uint32_t>(0);
+    uint32_t kv_cache_start_tile_id = get_common_arg_val<uint32_t>(1);
 
     // Create address generator for
     const InterleavedAddrGenFast<true> kv_cache_addr_gen = {
