@@ -40,6 +40,11 @@ def assert_outputs_are_close(torch_inputs, torch_weights, ttnn_outputs, rtol=1e-
 
 
 def test_deepseek_v3_q_kv_rms_norm(device):
+    """
+    Tests the parallel Q/KV RMS norms in
+    the DeepSeek V3 MLA block
+    """
+
     def create_q_norm_tensors(device):
         """
         Create q_norm tensors:
@@ -239,7 +244,6 @@ def test_composite_rms_heavy(device):
 
         # Right half: cores (4,0) to (7,7) = 4 columns x 8 rows = 32 cores
         right_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 7))])
-        num_right_cores = 32
 
         # Make it compute-heavy: larger shard width and multiple tile rows
         # Each core processes a shard of [num_rows, shard_width]
@@ -263,7 +267,6 @@ def test_composite_rms_heavy(device):
         torch_right_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
 
         # Create sharded memory configs
-        # Width sharded: each core gets [shard_height, shard_width]
         left_shard_spec = ttnn.ShardSpec(left_cores, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
         left_mem_config = ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -327,7 +330,6 @@ def test_composite_rms_heavy(device):
             "config": {
                 "shape": shape,
                 "shard_shape": [shard_height, shard_width],
-                "num_cores_per_half": num_left_cores,
             },
         }
 
@@ -337,11 +339,13 @@ def test_composite_rms_heavy(device):
     # Create programs
     left_branch = ttnn.experimental.programs.rms_norm(
         tensors["left"]["input"],
+        core_range_set=tensors["left"]["cores"],
         epsilon=1e-5,
         weight=tensors["left"]["weight"],
     )
     right_branch = ttnn.experimental.programs.rms_norm(
         tensors["right"]["input"],
+        core_range_set=tensors["right"]["cores"],
         epsilon=1e-5,
         weight=tensors["right"]["weight"],
     )
