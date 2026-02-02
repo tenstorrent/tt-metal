@@ -101,14 +101,19 @@ void test_h2d_socket(
 }
 
 TEST_F(MeshDevice1x2Fixture, H2DSocket) {
+    // Skip if mapping to NOC isn't supported on this system
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
     for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
         for (const auto& recv_coord : MeshCoordinateRange(mesh_device_->shape())) {
             // No wrap
-            test_h2d_socket(mesh_device_, 1024, 64, 1024, h2d_mode, 10, MeshCoreCoord(recv_coord, CoreCoord(0, 0)));
+            test_h2d_socket(mesh_device_, 1024, 64, 1024, h2d_mode, 50, MeshCoreCoord(recv_coord, CoreCoord(0, 0)));
             // Even wrap
-            test_h2d_socket(mesh_device_, 1024, 64, 32768, h2d_mode, 10, MeshCoreCoord(recv_coord, CoreCoord(1, 1)));
+            test_h2d_socket(mesh_device_, 1024, 64, 32768, h2d_mode, 50, MeshCoreCoord(recv_coord, CoreCoord(1, 1)));
             // Uneven wrap
-            test_h2d_socket(mesh_device_, 4096, 1088, 78336, h2d_mode, 10, MeshCoreCoord(recv_coord, CoreCoord(0, 1)));
+            test_h2d_socket(mesh_device_, 4096, 1088, 78336, h2d_mode, 50, MeshCoreCoord(recv_coord, CoreCoord(0, 1)));
         }
     }
 }
