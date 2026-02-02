@@ -162,9 +162,9 @@ def build_pass_rate_regressions_block(regressions: list[dict]) -> list[dict]:
     lines.append(f"{'Module':<35} {'Prev':>8} {'Now':>8} {'Delta':>8}")
     for reg in regressions[:10]:  # Limit to top 10
         module = reg["module"][:35]
-        prev = f"{float(reg['prev']):.1f}%" if reg.get("prev") else "N/A"
-        current = f"{float(reg['current']):.1f}%"
-        delta = f"{float(reg['delta']):+.1f}%"
+        prev = f"{float(reg['prev']):.1f}%" if reg.get("prev") is not None else "N/A"
+        current = f"{float(reg['current']):.1f}%" if reg.get("current") is not None else "N/A"
+        delta = f"{float(reg['delta']):+.1f}%" if reg.get("delta") is not None else "N/A"
         lines.append(f"{module:<35} {prev:>8} {current:>8} {delta:>8}")
     lines.append("```")
 
@@ -198,7 +198,7 @@ def build_perf_regressions_block(op_regressions: list[dict], test_regressions: l
             op_name = reg["op_name"][:30] if reg.get("op_name") else "unknown"
             prev = format_duration(reg.get("prev_ns"))
             current = format_duration(reg.get("current_ns"))
-            change = f"+{float(reg['pct_change']):.1f}%"
+            change = f"+{float(reg['pct_change']):.1f}%" if reg.get("pct_change") is not None else "N/A"
             lines.append(f"{op_name:<30} {prev:>12} {current:>12} {change:>10}")
         lines.append("```")
 
@@ -223,7 +223,7 @@ def build_perf_regressions_block(op_regressions: list[dict], test_regressions: l
                 display_name = test_name[:50]
             prev = format_duration(reg.get("prev_ns"))
             current = format_duration(reg.get("current_ns"))
-            change = f"+{float(reg['pct_change']):.1f}%"
+            change = f"+{float(reg['pct_change']):.1f}%" if reg.get("pct_change") is not None else "N/A"
             lines.append(f"{display_name:<50} {prev:>10} {current:>10} {change:>8}")
         lines.append("```")
 
