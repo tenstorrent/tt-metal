@@ -803,7 +803,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, BasicTraceWithZeroTraceRegion) {
 TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithSmallAllocationsDuringCapture) {
     // Verify trace works when small allocations during capture don't overlap
     MeshCoordinateRange all_devices(mesh_device_->shape());
-    
+
     // Create a workload
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
@@ -813,24 +813,23 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithSmallAllocationsDuringCaptu
 
     // Begin trace capture
     auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
-    
+
     // Allocate a small DRAM buffer during trace (simulating tensor allocation)
     // Use a small size to ensure no overlap
     constexpr size_t small_buffer_size = 1024 * 1024;  // 1MB
-    auto small_buffer = Buffer::create(
-        mesh_device_->get_devices()[0],
-        small_buffer_size,
-        small_buffer_size,
-        BufferType::DRAM,
-        std::nullopt,
-        true  // bottom_up = true (like tensor allocations)
-    );
-    
+    ReplicatedBufferConfig global_buffer_config{.size = small_buffer_size};
+    DeviceLocalBufferConfig device_local_config{
+        .page_size = small_buffer_size,
+        .buffer_type = BufferType::DRAM,
+        .bottom_up = true  // bottom_up = true (like tensor allocations)
+    };
+    auto small_buffer = MeshBuffer::create(global_buffer_config, device_local_config, mesh_device_.get());
+
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-    
+
     // End trace capture (should succeed - no overlap)
     mesh_device_->end_mesh_trace(0, trace_id);
-    
+
     // Deallocate buffer and replay trace
     small_buffer.reset();
     mesh_device_->replay_mesh_trace(0, trace_id, false);
