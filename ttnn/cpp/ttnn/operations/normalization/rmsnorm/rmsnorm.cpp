@@ -15,6 +15,12 @@ namespace ttnn::operations::normalization {}  // namespace ttnn::operations::nor
 
 namespace ttnn {
 
+DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch) {
+    bool approx_mode = true;
+    bool fp32_acc = false;
+    return init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc);
+}
+
 Tensor rms_norm(
     const Tensor& input_tensor,
     float epsilon,
@@ -48,8 +54,7 @@ Tensor rms_norm(
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+    auto kernel_config_val = compute_kernel_config.value_or(rmsnorm_default_compute_config(arch));
     return ttnn::prim::layer_norm(
         input_tensor,
         epsilon,

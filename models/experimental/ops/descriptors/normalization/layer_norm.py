@@ -46,12 +46,7 @@ def layer_norm(
 
     # Initialize compute kernel config if not provided
     if compute_kernel_config is None:
-        compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            arch,
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-        )
+        compute_kernel_config = ttnn.layernorm_default_compute_config(arch)
 
     return _create_layernorm_op_descriptor(
         input_tensor,
@@ -66,4 +61,4 @@ def layer_norm(
     )
 
 
-__all__ = ["rms_norm", "layer_norm"]
+__all__ = ["layer_norm"]
