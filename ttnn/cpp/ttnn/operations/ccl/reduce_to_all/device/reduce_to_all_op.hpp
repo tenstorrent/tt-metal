@@ -16,19 +16,13 @@ namespace operations::ccl {
 
 struct ReduceToAllOp {
     struct operation_attributes_t {
-        const MeshCoordinate& root_coord;
         const float scale_fp32;
         const tt::tt_fabric::Topology topology;
         const std::optional<std::vector<ttnn::CoreCoord>> input_mux_cores;
-        const std::optional<std::vector<ttnn::CoreCoord>> extra_worker_cores;
-
         const std::vector<ttnn::TensorSpec> _input_tensor_spec;
 
-        static constexpr auto attribute_names =
-            std::forward_as_tuple("root_coord", "scale_fp32", "topology", "input_mux_cores", "extra_worker_cores");
-        auto attribute_values() const {
-            return std::forward_as_tuple(root_coord, scale_fp32, topology, input_mux_cores, extra_worker_cores);
-        };
+        static constexpr auto attribute_names = std::forward_as_tuple("scale_fp32", "topology", "input_mux_cores");
+        auto attribute_values() const { return std::forward_as_tuple(scale_fp32, topology, input_mux_cores); };
     };
 
     struct tensor_args_t {
@@ -46,17 +40,12 @@ struct ReduceToAllOp {
 
     struct ReduceToAll {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel1;
-            tt::tt_metal::KernelHandle reader_kernel2;
-            std::vector<CoreCoord> cores1;
-            std::vector<CoreCoord> cores2;
+            tt::tt_metal::KernelHandle reader_kernel;
+            std::vector<CoreCoord> worker_cores;
 
-            tt::tt_metal::KernelHandle writer_kernel1;
-            tt::tt_metal::KernelHandle writer_kernel2;
+            tt::tt_metal::KernelHandle writer_kernel;
 
             std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
-            bool is_device_0_2;
-            bool is_simplified = false;  // True for simplified 2-kernel design
 
             // CB handles for aliased buffers (needed for UpdateDynamicCircularBufferAddressAndTotalSize in trace)
             std::optional<tt::tt_metal::CBHandle> cb_local_l_handle;
@@ -122,7 +111,6 @@ private:
 device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variables_t> reduce_to_all_program_factory(
     const ReduceToAllOp::tensor_args_t& tensor_args,
     const ReduceToAllOp::operation_attributes_t& operation_attributes,
-    const MeshCoordinate& root_coord,
     float scale_fp32,
     const MeshCoordinate& device_coordinate,
     std::optional<MeshCoordinate>& forward_coord,
@@ -130,18 +118,6 @@ device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variables_t> 
     ReduceToAllOp::tensor_return_value_t& output_tensor,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
 
-// Simplified version: 2 kernels on shard cores only, full zero-copy
-device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variables_t>
-reduce_to_all_simplified_program_factory(
-    const ReduceToAllOp::tensor_args_t& tensor_args,
-    const ReduceToAllOp::operation_attributes_t& operation_attributes,
-    const MeshCoordinate& root_coord,
-    float scale_fp32,
-    const MeshCoordinate& device_coordinate,
-    std::optional<MeshCoordinate>& forward_coord,
-    std::optional<MeshCoordinate>& backward_coord,
-    ReduceToAllOp::tensor_return_value_t& output_tensor,
-    std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
 }  // namespace operations::ccl
 
 namespace prim {
@@ -149,14 +125,12 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const Tensor& input_tensor_l,
     const Tensor& input_tensor_ms,  // Combined: col 0 = max, col 1 = sum
     const tt::tt_fabric::Topology& topology,
-    const MeshCoordinate& root_coord,
     float scale_fp32,
     const std::optional<Tensor>& optional_output_tensor_l = std::nullopt,
     const std::optional<Tensor>& optional_fw_intermediate_tensor = std::nullopt,
     const std::optional<Tensor>& optional_bw_intermediate_tensor = std::nullopt,
     const std::optional<Tensor>& optional_coord_intermediate_tensor = std::nullopt,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt,
-    const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores = std::nullopt,
     const std::optional<Tensor>& optional_aggregator_scratch_tensor = std::nullopt);
 }  // namespace prim
 }  // namespace ttnn

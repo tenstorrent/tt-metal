@@ -36,11 +36,9 @@
 
 namespace ttnn::operations::ccl {
 
-ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variables_t>
-reduce_to_all_simplified_program_factory(
+ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variables_t> reduce_to_all_program_factory(
     const ReduceToAllOp::tensor_args_t& tensor_args,
     const ReduceToAllOp::operation_attributes_t& operation_attributes,
-    [[maybe_unused]] const MeshCoordinate& root_coord,
     const float scale_fp32,
     const MeshCoordinate& device_coordinate,
     std::optional<ttnn::MeshCoordinate>& forward_coord,
@@ -58,22 +56,7 @@ reduce_to_all_simplified_program_factory(
     const auto forward_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
     const auto backward_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
 
-    // Determine which mux direction to use for R1 and R2 based on device position.
-    // Ring topology: D0 ↔ D1 ↔ D2 ↔ D3 ↔ (back to D0)
-    //
-    // Round 1 pairs: (D0,D1) and (D2,D3) exchange
-    // Round 2 pairs: (D1,D2) and (D3,D0) exchange
-    //
-    // Direction mapping:
-    //   D0: R1 sends FWD→D1,  R2 sends BWD→D3
-    //   D1: R1 sends BWD→D0,  R2 sends FWD→D2
-    //   D2: R1 sends FWD→D3,  R2 sends BWD→D1
-    //   D3: R1 sends BWD→D2,  R2 sends FWD→D0
-    //
-    // Pattern: Even devices (0,2): R1=FWD, R2=BWD
-    //          Odd devices (1,3):  R1=BWD, R2=FWD
     const uint32_t device_index = device_coordinate[0];  // Assuming 1D ring on first dimension
-    const bool is_even_device = (device_index % 2) == 0;
 
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_ms = tensor_args.input_tensor_ms;
@@ -643,15 +626,10 @@ reduce_to_all_simplified_program_factory(
     return {
         std::move(program),
         ReduceToAllOp::ReduceToAll::shared_variables_t{
-            .reader_kernel1 = reader_kernel,
-            .reader_kernel2 = 0,  // Not used in simplified design
-            .cores1 = all_cores,
-            .cores2 = {},
-            .writer_kernel1 = writer_kernel,
-            .writer_kernel2 = 0,  // Not used in simplified design
+            .reader_kernel = reader_kernel,
+            .worker_cores = all_cores,
+            .writer_kernel = writer_kernel,
             .semaphores = semaphores,
-            .is_device_0_2 = is_even_device,
-            .is_simplified = true,
             // CB handles for trace replay (UpdateDynamicCircularBufferAddressAndTotalSize)
             .cb_local_l_handle = cb_local_l_handle,
             .cb_local_ms_handle = cb_local_ms_handle,
@@ -662,5 +640,91 @@ reduce_to_all_simplified_program_factory(
             .ms_tile_size = aligned_page_size,
             .out_tiles = out_tiles}};
 }
+
+void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& /* operation_attributes */,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& shared_variables = cached_workload.shared_variables.at(range);
+
+        // Get the input tensors (combined MS format)
+        const auto& input_tensor_l = tensor_args.input_tensor_l;
+        const auto& input_tensor_ms = tensor_args.input_tensor_ms;
+
+        // Get output tensors
+        const auto& output_tensors_l = tensor_return_value[1];
+        const auto& intermediate_tensors = tensor_return_value[0];
+
+        for (const auto& core : shared_variables.worker_cores) {
+            // Simplified reader runtime args:
+            // 0: R1 neighbor semaphore, 1: R2 neighbor semaphore
+            // 2: R1 receive buffer, 3: R2 receive buffer
+            auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel);
+            auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
+            reader_runtime_args[0] = shared_variables.semaphores[0].address();     // R1 recv sem
+            reader_runtime_args[1] = shared_variables.semaphores[1].address();     // R2 recv sem
+            reader_runtime_args[2] = intermediate_tensors[0].buffer()->address();  // R1 recv buffer
+            reader_runtime_args[3] = intermediate_tensors[1].buffer()->address();  // R2 recv buffer
+
+            // Simplified writer runtime args layout (combined MS format):
+            // 0: input L, 1: input MS
+            // 2: R1 mesh_id (static), 3: R1 chip_id (static)
+            // 4: R1 dest addr, 5: R1 sem addr
+            // 6: R2 mesh_id (static), 7: R2 chip_id (static)
+            // 8: R2 dest addr, 9: R2 sem addr
+            // 10-19: aggregator args (static)
+            auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel);
+            auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+            writer_runtime_args[0] = input_tensor_l.buffer()->address();
+            writer_runtime_args[1] = input_tensor_ms.buffer()->address();
+            // Indices 2-3 (mesh_id, chip_id) are static - don't update
+            writer_runtime_args[4] = intermediate_tensors[0].buffer()->address();  // R1 dest
+            writer_runtime_args[5] = shared_variables.semaphores[0].address();     // R1 sem
+            // Indices 6-7 (mesh_id, chip_id) are static - don't update
+            writer_runtime_args[8] = intermediate_tensors[1].buffer()->address();  // R2 dest
+            writer_runtime_args[9] = shared_variables.semaphores[1].address();     // R2 sem
+        }
+
+        // Update CB addresses for aliased buffers (critical for trace replay)
+        // When trace replays, the CBs still point to old buffer addresses unless updated
+        if (shared_variables.cb_local_l_handle.has_value()) {
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                program,
+                shared_variables.cb_local_l_handle.value(),
+                *input_tensor_l.buffer(),
+                shared_variables.l_tile_size);
+        }
+        if (shared_variables.cb_local_ms_handle.has_value()) {
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                program,
+                shared_variables.cb_local_ms_handle.value(),
+                *input_tensor_ms.buffer(),
+                shared_variables.ms_tile_size);
+        }
+        if (shared_variables.cb_r1_neighbor_l_handle.has_value()) {
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                program,
+                shared_variables.cb_r1_neighbor_l_handle.value(),
+                *intermediate_tensors[0].buffer(),
+                shared_variables.l_tile_size);
+        }
+        if (shared_variables.cb_r2_neighbor_l_handle.has_value()) {
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                program,
+                shared_variables.cb_r2_neighbor_l_handle.value(),
+                *intermediate_tensors[1].buffer(),
+                shared_variables.l_tile_size);
+        }
+        if (shared_variables.cb_l_out_handle.has_value()) {
+            UpdateDynamicCircularBufferAddressAndTotalSize(
+                program,
+                shared_variables.cb_l_out_handle.value(),
+                *output_tensors_l[0].buffer(),
+                shared_variables.l_tile_size);
+        }
+    }
+};
 
 }  // namespace ttnn::operations::ccl

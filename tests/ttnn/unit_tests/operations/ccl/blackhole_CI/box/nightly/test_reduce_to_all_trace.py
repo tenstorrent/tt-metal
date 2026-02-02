@@ -32,7 +32,6 @@ def compute_reference_reduce_to_all(
     l_data_per_device,
     s_data_per_device,
     m_data_per_device,
-    root_device_idx=1,
     num_cores=8,
     scale_value=1.0,
     l_width=128,
@@ -124,8 +123,6 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
 
     # Setup
     num_devices = 4
-    root_coord = (1, 0)
-    root_device_idx = root_coord[0]
     num_cores = 8
     l_width = 128
     ms_width = 32  # Combined MS tile: col 0 = max, col 1 = sum
@@ -151,18 +148,6 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
 
     # mux cores (aggregator uses only 2 cores - 1 per link)
     mux_cores = [ttnn.CoreCoord(6, 8), ttnn.CoreCoord(6, 9)]
-
-    # results in better perf compared to automating the generation of worker cores (other than data cores)
-    extra_worker_cores = [
-        ttnn.CoreCoord(0, 4),
-        ttnn.CoreCoord(0, 5),
-        ttnn.CoreCoord(0, 6),
-        ttnn.CoreCoord(0, 7),
-        ttnn.CoreCoord(1, 4),
-        ttnn.CoreCoord(1, 5),
-        ttnn.CoreCoord(1, 6),
-        ttnn.CoreCoord(1, 7),
-    ]
 
     # Shard config
     shard_grid = ttnn.CoreRangeSet(
@@ -226,7 +211,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     m_data_f32 = [t.float() for t in m_data_per_device]
 
     ref_l, ref_s, ref_m = compute_reference_reduce_to_all(
-        l_data_f32, s_data_f32, m_data_f32, root_device_idx, num_cores, scale_value, l_width
+        l_data_f32, s_data_f32, m_data_f32, num_cores, scale_value, l_width
     )
     ref_l = ref_l.to(torch.bfloat16)
 
@@ -354,14 +339,12 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     out_l_compile = ttnn.reduce_to_all(
         l_tensor,
         ms_tensor,
-        root_coord=ttnn.MeshCoordinate(root_coord),
         scale_fp32=scale_value,
         fw_intermediate_tensor=fw_intermediate,
         bw_intermediate_tensor=bw_intermediate,
         coord_intermediate_tensor=coord_intermediate,
         topology=topology,
         input_mux_cores=mux_cores,
-        extra_worker_cores=extra_worker_cores,
         aggregator_scratch_tensor=aggregator_scratch_tensor,
     )
     ttnn.synchronize_device(submesh_device)
@@ -394,14 +377,12 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
         out_l_trace = ttnn.reduce_to_all(
             l_tensor,
             ms_tensor,
-            root_coord=ttnn.MeshCoordinate(root_coord),
             scale_fp32=scale_value,
             fw_intermediate_tensor=fw_intermediate,
             bw_intermediate_tensor=bw_intermediate,
             coord_intermediate_tensor=coord_intermediate,
             topology=topology,
             input_mux_cores=mux_cores,
-            extra_worker_cores=extra_worker_cores,
             aggregator_scratch_tensor=aggregator_scratch_tensor,
         )
         if use_barrier:
@@ -430,14 +411,12 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
         out_l_trace = ttnn.reduce_to_all(
             l_tensor,
             ms_tensor,
-            root_coord=ttnn.MeshCoordinate(root_coord),
             scale_fp32=scale_value,
             fw_intermediate_tensor=fw_intermediate,
             bw_intermediate_tensor=bw_intermediate,
             coord_intermediate_tensor=coord_intermediate,
             topology=topology,
             input_mux_cores=mux_cores,
-            extra_worker_cores=extra_worker_cores,
             aggregator_scratch_tensor=aggregator_scratch_tensor,
         )
         if use_barrier:
@@ -474,8 +453,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     print("\nVerifying trace output...")
     output_l_torch = ttnn.to_torch(out_l_trace, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
 
-    # Get root device output
-    out_l_root = output_l_torch[root_device_idx]
+    # Retrieve output from any device (same on all devices)
+    out_l_root = output_l_torch[0]
 
     # Compare with reference
     out_flat = out_l_root.flatten().float()

@@ -55,14 +55,6 @@ void ReduceToAllOp::validate(const operation_attributes_t& operation_attributes,
             "Input mux/aggregator cores size must be at least 2, got {}",
             operation_attributes.input_mux_cores.value().size());
     }
-
-    // extra worker cores should be 8
-    if (operation_attributes.extra_worker_cores.has_value()) {
-        TT_FATAL(
-            operation_attributes.extra_worker_cores.value().size() == 8,
-            "Extra worker cores size must be 8, got {}",
-            operation_attributes.extra_worker_cores.value().size());
-    }
 };
 
 ReduceToAllOp::spec_return_value_t ReduceToAllOp::compute_output_specs(
@@ -183,14 +175,11 @@ cached_workload_t ReduceToAllOp::ReduceToAll::create_at(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
-    const auto& root_coordinate = operation_attributes.root_coord;
     const float scale_fp32 = operation_attributes.scale_fp32;
 
-    // TODO: Switch back to reduce_to_all_program_factory after testing
-    return reduce_to_all_simplified_program_factory(
+    return reduce_to_all_program_factory(
         tensor_args,
         operation_attributes,
-        root_coordinate,
         scale_fp32,
         mesh_coordinate,
         forward_coord,
@@ -206,24 +195,17 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const Tensor& input_tensor_l,
     const Tensor& input_tensor_ms,  // Combined: col 0 = max, col 1 = sum
     const tt::tt_fabric::Topology& topology,
-    const MeshCoordinate& root_coord,
     float scale_fp32,
     const std::optional<Tensor>& optional_output_tensor_l,
     const std::optional<Tensor>& optional_fw_intermediate_tensor,
     const std::optional<Tensor>& optional_bw_intermediate_tensor,
     const std::optional<Tensor>& optional_coord_intermediate_tensor,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
-    const std::optional<std::vector<ttnn::CoreCoord>>& extra_worker_cores,
     const std::optional<Tensor>& optional_aggregator_scratch_tensor) {
     using OperationType = ttnn::operations::ccl::ReduceToAllOp;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            root_coord,
-            scale_fp32,
-            topology,
-            input_mux_cores,
-            extra_worker_cores,
-            {input_tensor_l.tensor_spec(), input_tensor_ms.tensor_spec()}},
+            scale_fp32, topology, input_mux_cores, {input_tensor_l.tensor_spec(), input_tensor_ms.tensor_spec()}},
         OperationType::tensor_args_t{
             input_tensor_l,
             input_tensor_ms,
