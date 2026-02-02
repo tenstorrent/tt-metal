@@ -21,9 +21,12 @@ namespace detail {
 std::vector<uint32_t> data_parallel_split(
     uint32_t token_size_bytes, const uint32_t max_packet_size_bytes, const uint32_t num_data_parallel_cores) {
     std::vector<uint32_t> data_parallel_sizes_bytes;
-    data_parallel_sizes_bytes.reserve(num_data_parallel_cores);
 
-    const uint32_t max_segment_size_bytes = std::max(max_packet_size_bytes, token_size_bytes / num_data_parallel_cores);
+    const uint32_t need_data_parallel_cores =
+        std::max(num_data_parallel_cores, token_size_bytes / max_packet_size_bytes);
+    data_parallel_sizes_bytes.reserve(need_data_parallel_cores);
+
+    const uint32_t max_segment_size_bytes = token_size_bytes / need_data_parallel_cores;
 
     for (uint32_t c = 0; c < num_data_parallel_cores; ++c) {
         const uint32_t token_increment = std::min(token_size_bytes, max_segment_size_bytes);
