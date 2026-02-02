@@ -164,6 +164,7 @@ private:
     std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> bytes_acked_buffer_ = nullptr;
     std::shared_ptr<uint32_t[]> host_data_buffer_ = nullptr;
     size_t host_data_buffer_size_ = 0;
+    std::function<void(void*, uint32_t, uint64_t)> pcie_writer = nullptr;
     H2DMode h2d_mode_ = H2DMode::HOST_PUSH;
 };
 
