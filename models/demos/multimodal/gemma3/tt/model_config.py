@@ -66,7 +66,9 @@ class ModelArgs(TTModelArgs):
             optimizations=optimizations,
             cache_hf=cache_hf,
         )
+
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
+        self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
 
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
