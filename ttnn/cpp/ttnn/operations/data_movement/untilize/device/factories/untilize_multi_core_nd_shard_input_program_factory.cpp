@@ -80,7 +80,8 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
 
     // Input CB
     uint32_t input_cb_num_tiles;
-    if (num_input_blocks_per_full_core == 1) {
+    if (num_input_blocks_per_full_core ==
+        1) {  // No need to double buffer if the core is only processing a single block
         input_cb_num_tiles = num_tiles_per_input_block;
     } else {
         input_cb_num_tiles = num_tiles_per_input_block * 2;
@@ -236,13 +237,14 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
             const size_t core_idx = std::distance(mapped_cores.begin(), core_it);
             const auto& host_page_indices = page_mapping.core_host_page_indices[core_idx];
 
-            // Iterate through device pages in blocks of num_tiles_per_input_block,
+            // Iterate through device pages in blocks of num_tiles_per_input_block.
             uint32_t page_offset = 0;
             const uint32_t total_pages = host_page_indices.size();
 
             // Find first non-padding page
             if (host_page_indices[page_offset] !=
-                UncompressedBufferPageMapping::PADDING) {  // This core has at least one shard on it
+                UncompressedBufferPageMapping::PADDING) {  // First page is non-padding, so this core has at least one
+                                                           // shard on it
 
                 while (page_offset < total_pages) {
                     // This page is valid (non-padding), count this block
@@ -289,20 +291,24 @@ void UntilizeMultiCoreNDShardInputProgramFactory::override_runtime_arguments(
     const UntilizeTensorArgs& tensor_args,
     const UntilizeTensorReturnValue& tensor_return_value) {
     auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& cb_src0 = cached_program.shared_variables.cb_src0;
     auto& cores_with_runtime_args = cached_program.shared_variables.cores_with_runtime_args;
 
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
 
     // Reader
-    UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+    auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
+    for (const CoreCoord& core : cores_with_runtime_args) {
+        auto& runtime_args = runtime_args_by_core_reader[core.x][core.y];
+        runtime_args[0] = src_buffer->address();
+    }
 
     // Writer
-    auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+    auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
     for (const CoreCoord& core : cores_with_runtime_args) {
-        auto& runtime_args = runtime_args_by_core[core.x][core.y];
+        auto& runtime_args = runtime_args_by_core_writer[core.x][core.y];
         runtime_args[0] = dst_buffer->address();
         runtime_args[1] = src_buffer->address();
     }
