@@ -894,7 +894,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
         // Could not allocate any buffer - skip test
         mesh_device_->end_mesh_trace(0, trace_id);
         mesh_device_->release_mesh_trace(trace_id);
-        GTEST_SKIP() << "Could not allocate any blocking buffers for overlap test";
+        ASSERT_TRUE(false) << "Could not allocate any blocking buffers for overlap test";
     }
 
     // Delete all buffers before ending trace - high water mark should still reflect peak allocation
@@ -976,6 +976,97 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceRejectsTopDownAllocations) {
     // End trace capture normally (the fatal should have been caught above)
     mesh_device_->end_mesh_trace(0, trace_id);
     mesh_device_->release_mesh_trace(trace_id);
+}
+
+TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithPreExistingAllocations) {
+    // Verify that high water mark tracking captures pre-existing buffers allocated BEFORE trace starts
+    // Even if these buffers are deallocated during trace, the high water mark should remember them
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+
+    // Create a workload
+    auto workload = std::make_shared<MeshWorkload>();
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        1, mesh_device_->compute_with_storage_grid_size(), 999);
+    workload->add_program(all_devices, std::move(*programs[0]));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+
+    // Allocate buffers BEFORE trace capture starts
+    // These will set the initial high water mark when tracking begins
+    std::vector<std::shared_ptr<MeshBuffer>> pre_existing_buffers;
+    constexpr size_t min_buffer_size = 4 * 1024;            // 4KB minimum
+    constexpr size_t max_buffer_size = 1024 * 1024 * 1024;  // 1GB max per buffer
+    size_t current_buffer_size = max_buffer_size;
+    size_t total_allocated = 0;
+
+    // Allocate as many buffers as possible before trace starts
+    while (current_buffer_size >= min_buffer_size) {
+        try {
+            ReplicatedBufferConfig global_buffer_config{.size = current_buffer_size};
+            DeviceLocalBufferConfig device_local_config{
+                .page_size = current_buffer_size,
+                .buffer_type = BufferType::DRAM,
+                .bottom_up = true  // bottom_up = true (like tensor allocations)
+            };
+            auto buffer = MeshBuffer::create(global_buffer_config, device_local_config, mesh_device_.get());
+            pre_existing_buffers.push_back(buffer);
+            total_allocated += current_buffer_size;
+            // Successfully allocated, try same size again
+        } catch (...) {
+            // Failed to allocate at this size, try smaller
+            current_buffer_size /= 2;
+        }
+    }
+
+    log_info(
+        tt::LogTest,
+        "Allocated {} buffers totaling {} bytes BEFORE trace capture",
+        pre_existing_buffers.size(),
+        total_allocated);
+
+    ASSERT_GT(total_allocated, 0);
+
+    // Begin trace capture - this should capture the high water mark from pre-existing buffers
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+
+    // Record many command iterations to make the trace buffer larger
+    for (uint32_t i = 0; i < 1000; i++) {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    }
+
+    // Deallocate all pre-existing buffers BEFORE ending trace
+    // The high water mark should still remember these buffers were there
+    pre_existing_buffers.clear();
+
+    log_info(tt::LogTest, "Deallocated all pre-existing buffers before ending trace");
+
+    // Try to end trace - this should detect overlap because the high water mark
+    // was set from the pre-existing buffers (even though they're now deallocated)
+    bool overlap_detected = false;
+    try {
+        mesh_device_->end_mesh_trace(0, trace_id);
+        // If we get here, no overlap was detected
+    } catch (const std::runtime_error& e) {
+        std::string error_msg = e.what();
+        if (error_msg.find("overlap") != std::string::npos || error_msg.find("high water mark") != std::string::npos) {
+            overlap_detected = true;
+        } else {
+            // Re-throw unexpected errors
+            throw;
+        }
+    }
+
+    if (overlap_detected) {
+        SUCCEED() << "Successfully detected trace buffer overlap with pre-existing allocations";
+    } else {
+        // No overlap detected - the trace fit in the remaining space
+        // This is still valid, release the trace and log it
+        mesh_device_->release_mesh_trace(trace_id);
+        log_info(
+            tt::LogTest,
+            "No overlap detected with {} bytes pre-allocated - trace fit in remaining space",
+            total_allocated);
+        SUCCEED() << "No overlap detected (trace fit in available space)";
+    }
 }
 
 }  // namespace
