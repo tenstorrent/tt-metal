@@ -86,7 +86,6 @@ def test_bernoulli(device):
     # Initialize with ttnn.full to create probability values (0.5 = 50% chance of 1)
     input = ttnn.full([3, 3], fill_value=0.5, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.bernoulli(input)
-    print(output)
     logger.info("TT-NN bernoulli tensor:", output)
 
 
