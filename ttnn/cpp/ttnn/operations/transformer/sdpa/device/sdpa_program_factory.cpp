@@ -422,6 +422,31 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
+    // Create semaphores for KV chain forwarding BEFORE kernel compilation (non-causal only)
+    // This must happen before CreateKernel so the actual semaphore IDs are in the compile-time args
+    uint32_t sender_semaphore_id = 0;
+    uint32_t receiver_semaphore_id = 0;
+    uint32_t valid_semaphore_id = 0;
+
+    if (!is_causal && enable_kv_chain_forwarding) {
+        sender_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
+        receiver_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
+        valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
+
+        // Update the placeholder compile-time args with actual semaphore IDs
+        // The semaphore IDs are at indices 23, 24, 25 (after the initial 23 args, before TensorAccessorArgs)
+        reader_compile_time_args[23] = sender_semaphore_id;
+        reader_compile_time_args[24] = receiver_semaphore_id;
+        reader_compile_time_args[25] = valid_semaphore_id;
+
+        log_debug(
+            tt::LogOp,
+            "KV chain forwarding enabled - created semaphores: sender={}, receiver={}, valid={}",
+            sender_semaphore_id,
+            receiver_semaphore_id,
+            valid_semaphore_id);
+    }
+
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
         B,
@@ -660,29 +685,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     CreateCircularBuffer(program, core_grid, c_out0_config);
 
-    // Create semaphores for KV chain forwarding (non-causal only)
-    uint32_t sender_semaphore_id = 0;
-    uint32_t receiver_semaphore_id = 0;
-    uint32_t valid_semaphore_id = 0;
-
-    if (!is_causal && enable_kv_chain_forwarding) {
-        sender_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
-        receiver_semaphore_id = CreateSemaphore(program, core_grid, INVALID);
-        valid_semaphore_id = CreateSemaphore(program, core_grid, VALID);
-
-        // Update the placeholder compile-time args with actual semaphore IDs
-        // The semaphore IDs are at indices 23, 24, 25 (after the initial 23 args, before TensorAccessorArgs)
-        reader_compile_time_args[23] = sender_semaphore_id;
-        reader_compile_time_args[24] = receiver_semaphore_id;
-        reader_compile_time_args[25] = valid_semaphore_id;
-
-        log_debug(
-            tt::LogOp,
-            "KV chain forwarding enabled - created semaphores: sender={}, receiver={}, valid={}",
-            sender_semaphore_id,
-            receiver_semaphore_id,
-            valid_semaphore_id);
-    }
+    // Note: Semaphores for KV chain forwarding are now created earlier (before kernel compilation)
+    // to ensure the actual semaphore IDs are available in the compile-time args
 
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
