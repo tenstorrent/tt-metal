@@ -276,8 +276,8 @@ def make_1d_mcast_prog_config_for_height_sharded(
 
     per_core_M = shard_rows_elems // TILE_SIZE  # tiles along M per core
     K_tiles = shard_cols_elems // TILE_SIZE  # tiles along K per core
-    out_k_pad = _to_tiles(out_k) * TILE_SIZE
-    per_core_N = out_k
+    out_k_tiles = _to_tiles(out_k)
+    per_core_N = out_k_tiles
     # Wormhole grid is [x,y] in the constants, but TTNN CoreGrid often takes x,y separately.
     # We already use num_cores_to_corerangeset(row_wise=True), so compute grid is essentially 1D.
     # We'll use a 1D-ish compute_with_storage_grid_size = (1, nc) or (nc, 1) depending on row_wise.
