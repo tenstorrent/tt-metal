@@ -86,8 +86,7 @@ void AdamWFused::step() {
             m_beta2_pow,
             m_config.epsilon,
             m_config.weight_decay,
-            m_config.stochastic_rounding ? ttml::metal::StochasticRounding::Enabled
-                                         : ttml::metal::StochasticRounding::Disabled);
+            static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding));
     }
 }
 
