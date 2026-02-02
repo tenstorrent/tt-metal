@@ -31,6 +31,21 @@ void kernel_main() {
     constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(21);
     constexpr uint32_t use_attention_sink = get_compile_time_arg_val(22) == 1;
 
+    // DPRINT << "=== Reader Kernel Compile Time Arguments ===" << ENDL();
+    // DPRINT << "B=" << B << " NQH=" << NQH << " NKH=" << NKH << ENDL();
+    // DPRINT << "Sqt=" << Sqt << " Skt=" << Skt << ENDL();
+    // DPRINT << "valid_Sqt=" << valid_Sqt << " valid_Skt=" << valid_Skt << ENDL();
+    // DPRINT << "DHt=" << DHt << " vDHt=" << vDHt << ENDL();
+    // DPRINT << "Sq_chunk_t=" << Sq_chunk_t << " Sk_chunk_t=" << Sk_chunk_t << ENDL();
+    // DPRINT << "q_num_chunks=" << q_num_chunks << " k_num_chunks=" << k_num_chunks << ENDL();
+    // DPRINT << "num_cores=" << num_cores << ENDL();
+    // DPRINT << "is_causal=" << is_causal << " use_provided_mask=" << use_provided_mask << ENDL();
+    // DPRINT << "broadcast_provided_mask_batch=" << broadcast_provided_mask_batch << " broadcast_provided_mask_heads=" << broadcast_provided_mask_heads << ENDL();
+    // DPRINT << "use_padded_mask=" << use_padded_mask << " is_chunked=" << is_chunked << ENDL();
+    // DPRINT << "block_size_t=" << block_size_t << " page_table_stick_size=" << page_table_stick_size << ENDL();
+    // DPRINT << "use_attention_sink=" << use_attention_sink << ENDL();
+    // DPRINT << "===========================================" << ENDL();
+
     constexpr auto q_args = TensorAccessorArgs<23>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
