@@ -84,7 +84,7 @@ void kernel_main() {
             mul_unary_tile(0, 0xBF800000);  // multiply by -1.0
 
             where_tile_init();
-            where_tile(1, 0, 2, 0);
+            WHERE(1, 0, 2, 0);
 #endif
 
             tile_regs_commit();

@@ -15,7 +15,6 @@
 #include "compute_kernel_api/add_int_sfpu.h"
 #include "compute_kernel_api/sub_int_sfpu.h"
 #include "compute_kernel_api/mul_int_sfpu.h"
-#include "compute_kernel_api/mul_int32_sfpu.h"
 #include "compute_kernel_api/div_int32_floor.h"
 #include "compute_kernel_api/div_int32_sfpu.h"
 #include "compute_kernel_api/remainder_int32.h"
@@ -129,9 +128,6 @@ void kernel_main() {
 #endif
 #ifdef MUL_INT_INIT
             MUL_INT_INIT
-#endif
-#ifdef MUL_INT32_INIT
-            MUL_INT32_INIT
 #endif
 #ifdef LT_INT32_INIT
             LT_INT32_INIT
