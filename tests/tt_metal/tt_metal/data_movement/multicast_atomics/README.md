@@ -23,12 +23,14 @@ This test suite uses the TT-Metal Mesh Device API, which provides a unified inte
 
 ## Test Cases
 
-| Test Name                        | ID  | Description |
-| -------------------------------- | --- | ----------- |
-| MulticastAtomicSingleSource      | 321 | Single sender core multicasts atomic increment to 12 destinations (NOC_0) |
-| MulticastAtomicMultiSource       | 322 | 4 sender cores multicast atomic increment to 12 destinations (NOC_0)      |
-| MulticastAtomicSingleSourceNOC1  | 323 | Single sender core multicasts atomic increment to 12 destinations (NOC_1) |
-| MulticastAtomicMultiSourceNOC1   | 324 | 4 sender cores multicast atomic increment to 12 destinations (NOC_1)      |
+| Test Name                          | ID  | Description |
+| ---------------------------------- | --- | ----------- |
+| MulticastAtomicSingleSource        | 321 | Single sender core multicasts atomic increment to 12 destinations (NOC_0) |
+| MulticastAtomicMultiSource         | 322 | 4 sender cores multicast atomic increment to 12 destinations (NOC_0)      |
+| MulticastAtomicSingleSourceNOC1    | 323 | Single sender core multicasts atomic increment to 12 destinations (NOC_1) |
+| MulticastAtomicMultiSourceNOC1     | 324 | 4 sender cores multicast atomic increment to 12 destinations (NOC_1)      |
+| MulticastAtomicLargerIncrement     | 325 | 4 senders, 3 transactions each, increment value 5 (NOC_0)                 |
+| MulticastAtomicLargerIncrementNOC1 | 326 | 4 senders, 3 transactions each, increment value 5 (NOC_1)                 |
 
 ### SingleSourceMulticastAtomic (IDs 321, 323)
 - **Description**: Single sender core multicasts atomic increment to a 3x4 grid of 12 destination cores
@@ -37,6 +39,10 @@ This test suite uses the TT-Metal Mesh Device API, which provides a unified inte
 ### MultiSourceMulticastAtomic (IDs 322, 324)
 - **Description**: 4 sender cores each multicast atomic increment to the same 3x4 grid of 12 destination cores
 - **Expected Result**: All 12 destination cores have semaphore value = 4 (one increment from each sender)
+
+### LargerIncrementMulticastAtomic (IDs 325, 326)
+- **Description**: 4 sender cores each perform 3 multicast atomic increments with value 5 to a 3x4 grid of 12 destination cores
+- **Expected Result**: All 12 destination cores have semaphore value = 60 (4 senders × 3 transactions × 5 increment)
 
 ## Configuration Parameters
 

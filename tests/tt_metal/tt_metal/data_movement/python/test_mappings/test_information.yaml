@@ -576,6 +576,12 @@ tests:
   324:
     name: "Multi source Multicast Atomic Increment - NOC 1"
 
+  325:
+    name: "Multicast Atomic Larger Increment"
+
+  326:
+    name: "Multicast Atomic Larger Increment - NOC 1"
+
   400:
     name: "I2S - DRAM Sharded Row Major Writer"
     comment: |

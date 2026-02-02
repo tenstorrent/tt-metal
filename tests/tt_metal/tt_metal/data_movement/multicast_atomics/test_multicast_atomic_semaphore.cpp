@@ -30,9 +30,21 @@ struct MulticastAtomicConfig {
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test
 /// @return true if test passes, false otherwise
-bool run_multicast_atomic_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, const MulticastAtomicConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MulticastAtomicConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
+
+    uint32_t num_senders = test_config.sender_cores.size();
+    uint32_t num_dests = test_config.dst_grid_size.x * test_config.dst_grid_size.y;
+    uint32_t expected_value = num_senders * test_config.num_of_transactions * test_config.atomic_inc_value;
+
+    log_info(
+        LogTest,
+        "num senders: {}, num destinations: {}, transactions: {}, inc value: {}, expected final: {}",
+        num_senders,
+        num_dests,
+        test_config.num_of_transactions,
+        test_config.atomic_inc_value,
+        expected_value);
 
     /* ================ SETUP ================ */
 
@@ -46,9 +58,6 @@ bool run_multicast_atomic_test(
     // Get physical coordinates for destination grid
     CoreCoord physical_dst_start = device->worker_core_from_logical_core(test_config.dst_grid_start);
     CoreCoord physical_dst_end = device->worker_core_from_logical_core(dst_grid_end);
-
-    // Calculate number of destination cores
-    uint32_t num_dests = test_config.dst_grid_size.x * test_config.dst_grid_size.y;
 
     vector<CoreCoord> dst_cores;
     for (uint32_t y = test_config.dst_grid_start.y; y <= dst_grid_end.y; y++) {
@@ -75,18 +84,6 @@ bool run_multicast_atomic_test(
     // Get L1 info from first destination core
     L1AddressInfo l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, dst_cores[0]);
     uint32_t semaphore_addr = l1_info.base_address;
-
-    // Expected value: each sender increments by atomic_inc_value * num_of_transactions
-    // Total expected = num_senders * num_of_transactions * atomic_inc_value
-    uint32_t num_senders = test_config.sender_cores.size();
-    uint32_t expected_value = num_senders * test_config.num_of_transactions * test_config.atomic_inc_value;
-
-    log_info(
-        LogTest,
-        "Running test with {} sender(s), {} destinations, expected final value: {}",
-        num_senders,
-        num_dests,
-        expected_value);
 
     // Create sender kernels
     string sender_kernel_path =
@@ -184,48 +181,6 @@ bool run_multicast_atomic_test(
     return all_passed;
 }
 
-/// @brief Test single source multicast atomic increment to a grid
-void single_source_multicast_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id, NOC noc_id = NOC::NOC_0) {
-    MulticastAtomicConfig config = {
-        .test_id = test_id,
-        .sender_cores = {{4, 0}},
-        .dst_grid_start = {0, 0},
-        .dst_grid_size = {3, 4},  // 12 destination cores
-        .num_of_transactions = 1,
-        .atomic_inc_value = 1,
-        .noc_id = noc_id};
-
-    log_info(
-        LogTest,
-        "Single source multicast atomic test: 1 sender -> {} destinations",
-        config.dst_grid_size.x * config.dst_grid_size.y);
-
-    EXPECT_TRUE(run_multicast_atomic_test(mesh_device, config));
-}
-
-/// @brief Test multiple sources multicast atomic increment to same grid
-void multi_source_multicast_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id, NOC noc_id = NOC::NOC_0) {
-    MulticastAtomicConfig config = {
-        .test_id = test_id,
-        .sender_cores = {{4, 0}, {4, 1}, {4, 2}, {4, 3}},  // 4 senders in column 4
-        .dst_grid_start = {0, 0},
-        .dst_grid_size = {3, 4},  // 12 destination cores
-        .num_of_transactions = 1,
-        .atomic_inc_value = 1,
-        .noc_id = noc_id};
-
-    log_info(
-        LogTest,
-        "Multi source multicast atomic test: {} senders -> {} destinations, expected value: {}",
-        config.sender_cores.size(),
-        config.dst_grid_size.x * config.dst_grid_size.y,
-        config.sender_cores.size() * config.num_of_transactions * config.atomic_inc_value);
-
-    EXPECT_TRUE(run_multicast_atomic_test(mesh_device, config));
-}
-
 }  // namespace unit_tests::dm::multicast_atomics
 
 /* ========== TEST CASES ========== */
@@ -241,7 +196,16 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSource) {
         GTEST_SKIP() << "Grid size too small for this test (need at least 5x4)";
     }
 
-    unit_tests::dm::multicast_atomics::single_source_multicast_test(mesh_device, test_id, NOC::NOC_0);
+    unit_tests::dm::multicast_atomics::MulticastAtomicConfig config = {
+        .test_id = test_id,
+        .sender_cores = {{4, 0}},
+        .dst_grid_start = {0, 0},
+        .dst_grid_size = {3, 4},
+        .num_of_transactions = 1,
+        .atomic_inc_value = 1,
+        .noc_id = NOC::NOC_0};
+
+    EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource) {
@@ -255,7 +219,16 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSource) {
         GTEST_SKIP() << "Grid size too small for this test (need at least 5x4)";
     }
 
-    unit_tests::dm::multicast_atomics::multi_source_multicast_test(mesh_device, test_id, NOC::NOC_0);
+    unit_tests::dm::multicast_atomics::MulticastAtomicConfig config = {
+        .test_id = test_id,
+        .sender_cores = {{4, 0}, {4, 1}, {4, 2}, {4, 3}},
+        .dst_grid_start = {0, 0},
+        .dst_grid_size = {3, 4},
+        .num_of_transactions = 1,
+        .atomic_inc_value = 1,
+        .noc_id = NOC::NOC_0};
+
+    EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1) {
@@ -269,7 +242,16 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicSingleSourceNOC1) {
         GTEST_SKIP() << "Grid size too small for this test (need at least 5x4)";
     }
 
-    unit_tests::dm::multicast_atomics::single_source_multicast_test(mesh_device, test_id, NOC::NOC_1);
+    unit_tests::dm::multicast_atomics::MulticastAtomicConfig config = {
+        .test_id = test_id,
+        .sender_cores = {{4, 0}},
+        .dst_grid_start = {0, 0},
+        .dst_grid_size = {3, 4},
+        .num_of_transactions = 1,
+        .atomic_inc_value = 1,
+        .noc_id = NOC::NOC_1};
+
+    EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
 TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1) {
@@ -283,7 +265,66 @@ TEST_F(GenericMeshDeviceFixture, MulticastAtomicMultiSourceNOC1) {
         GTEST_SKIP() << "Grid size too small for this test (need at least 5x4)";
     }
 
-    unit_tests::dm::multicast_atomics::multi_source_multicast_test(mesh_device, test_id, NOC::NOC_1);
+    unit_tests::dm::multicast_atomics::MulticastAtomicConfig config = {
+        .test_id = test_id,
+        .sender_cores = {{4, 0}, {4, 1}, {4, 2}, {4, 3}},
+        .dst_grid_start = {0, 0},
+        .dst_grid_size = {3, 4},
+        .num_of_transactions = 1,
+        .atomic_inc_value = 1,
+        .noc_id = NOC::NOC_1};
+
+    EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
+}
+
+TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrement) {
+    uint32_t test_id = 325;
+
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->get_device(0);
+
+    auto grid_size = device->compute_with_storage_grid_size();
+    if (grid_size.x < 5 || grid_size.y < 4) {
+        GTEST_SKIP() << "Grid size too small for this test (need at least 5x4)";
+    }
+
+    // Test with increment value of 5 and multiple transactions
+    // 4 senders * 3 transactions * 5 increment = 60 expected final value
+    unit_tests::dm::multicast_atomics::MulticastAtomicConfig config = {
+        .test_id = test_id,
+        .sender_cores = {{4, 0}, {4, 1}, {4, 2}, {4, 3}},
+        .dst_grid_start = {0, 0},
+        .dst_grid_size = {3, 4},
+        .num_of_transactions = 3,
+        .atomic_inc_value = 5,
+        .noc_id = NOC::NOC_0};
+
+    EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
+}
+
+TEST_F(GenericMeshDeviceFixture, MulticastAtomicLargerIncrementNOC1) {
+    uint32_t test_id = 326;
+
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->get_device(0);
+
+    auto grid_size = device->compute_with_storage_grid_size();
+    if (grid_size.x < 5 || grid_size.y < 4) {
+        GTEST_SKIP() << "Grid size too small for this test (need at least 5x4)";
+    }
+
+    // Test with increment value of 5 and multiple transactions on NOC1
+    // 4 senders * 3 transactions * 5 increment = 60 expected final value
+    unit_tests::dm::multicast_atomics::MulticastAtomicConfig config = {
+        .test_id = test_id,
+        .sender_cores = {{4, 0}, {4, 1}, {4, 2}, {4, 3}},
+        .dst_grid_start = {0, 0},
+        .dst_grid_size = {3, 4},
+        .num_of_transactions = 3,
+        .atomic_inc_value = 5,
+        .noc_id = NOC::NOC_1};
+
+    EXPECT_TRUE(unit_tests::dm::multicast_atomics::run_dm(mesh_device, config));
 }
 
 }  // namespace tt::tt_metal
