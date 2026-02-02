@@ -47,6 +47,7 @@ class RMSNorm(LightweightModule):
         is_distributed=None,
         eps: float = 1e-05,
         add_unit_offset=False,
+        force_weight_tile: bool = False,
         sharded_program_config=None,
         sharded_output_config=None,
         output_mem_config=None,
@@ -55,8 +56,9 @@ class RMSNorm(LightweightModule):
     ):
         super().__init__()
         self.device = device
-        self.eps = eps
+        self.eps = 1e-5 if eps is None else float(eps)
         self.is_distributed = is_distributed
+        self.force_weight_tile = bool(force_weight_tile)
         self.ccl_topology = ccl_topology
         self.tt_ccl = tt_ccl
 
@@ -121,6 +123,7 @@ class RMSNorm(LightweightModule):
         # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = self.sharded_program_config if in_sharded else None
         memory_config = self.sharded_output_config if out_sharded else None
+
         distributed = self.is_distributed and self.is_distributed(mode)
         norm = self._distributed_rmsnorm if distributed else ttnn.rms_norm
         weight = self.weight_distributed if distributed else self.weight
@@ -130,19 +133,83 @@ class RMSNorm(LightweightModule):
         else:
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
 
-        x = norm(
-            x,
-            epsilon=self.eps,
-            weight=weight,
-            program_config=program_config,
-            memory_config=memory_config,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
+        # ------------------------------------------------------------
+        # Helpers
+        # ------------------------------------------------------------
+        def get_shards(t):
+            if t is None:
+                return None
+            if hasattr(ttnn, "get_device_tensors"):
+                return ttnn.get_device_tensors(t)
+            return None
+
+        def ensure_gamma_layout(w_local: ttnn.Tensor) -> ttnn.Tensor:
+            if w_local is None:
+                return None
+            if w_local.layout != ttnn.ROW_MAJOR_LAYOUT:
+                w_local = ttnn.to_layout(w_local, ttnn.ROW_MAJOR_LAYOUT)
+            return w_local
+
+    
+
+        if norm is ttnn.rms_norm:
+            x_shards = get_shards(x)
+            w_shards = get_shards(weight)
+
+            x_is_mesh_tensor = hasattr(x, "distributed_tensor_config")
+            x_is_md = isinstance(x_shards, (list, tuple)) and len(x_shards) > 1
+            w_is_md = isinstance(w_shards, (list, tuple)) and len(w_shards) > 1
+
+            if x_is_mesh_tensor and x_is_md:
+                out_shards = []
+                for i, x_i in enumerate(x_shards):
+                    # If weights are replicated, w_shards may be len==1; use w_shards[0] in that case
+                    w_i = w_shards[i] if (w_is_md and i < len(w_shards)) else (w_shards[0] if w_shards else weight)
+                    w_i = ensure_gamma_layout(w_i)
+
+                    out_i = ttnn.rms_norm(
+                        x_i,
+                        epsilon=self.eps,
+                        weight=w_i,
+                        program_config=program_config,
+                        memory_config=memory_config,
+                        compute_kernel_config=self.compute_kernel_config_hifi2,
+                    )
+                    out_shards.append(out_i)
+
+                if hasattr(ttnn, "aggregate_as_tensor"):
+                    x = ttnn.aggregate_as_tensor(out_shards, x.distributed_tensor_config())
+                else:
+                    x = ttnn.combine_device_tensors(out_shards)
+
+            else:
+                w = ensure_gamma_layout(w_shards[0] if w_is_md else weight)
+                x = ttnn.rms_norm(
+                    x,
+                    epsilon=self.eps,
+                    weight=w,
+                    program_config=program_config,
+                    memory_config=memory_config,
+                    compute_kernel_config=self.compute_kernel_config_hifi2,
+                )
+
+        else:
+            x = norm(
+                x,
+                epsilon=self.eps,
+                weight=weight,
+                program_config=program_config,
+                memory_config=memory_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
+
+
 
         if in_sharded and not out_sharded:
             return ttnn.sharded_to_interleaved(x)
         else:
             return x
+
 
     def _distributed_rmsnorm(
         self, inp, epsilon=None, weight=None, program_config=None, memory_config=None, compute_kernel_config=None

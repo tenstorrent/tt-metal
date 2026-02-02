@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
+import os
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
@@ -46,6 +47,11 @@ class TransformerBlock(LightweightModule):
         self.model_config = args.get_model_config()
         self.is_mixture_of_experts = False
         self.layer_num = layer_num
+        # Check the HF_MODEL environment variable
+        hf_model = os.getenv("HF_MODEL", "").strip()
+        # If the model explicitly matches Phi-1 or Phi-1.5, set flag
+        is_phi1 = hf_model in {"microsoft/Phi-1"}
+        self.is_phi1 = is_phi1
 
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
 
@@ -104,7 +110,8 @@ class TransformerBlock(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="attention_norm",
-                is_distributed=self.args.is_distributed_norm,
+                force_weight_tile=is_phi1,
+                is_distributed=(False if is_phi1 else self.args.is_distributed_norm),
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
@@ -115,7 +122,14 @@ class TransformerBlock(LightweightModule):
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
             ag_config_key="ATTN_LN_AG_CONFIG",
+            force_local_norm=is_phi1,
         )
+        # Phi-1 does not have post_attention_layernorm / ffn_norm; it only has input_layernorm,
+        # which we map to attention_norm. In that case, reuse attention_norm for the FFN path.
+        ffn_norm_key = "ffn_norm"
+        if f"layers.{layer_num}.ffn_norm.weight" not in state_dict:
+            ffn_norm_key = "attention_norm"
+
         self.ff_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -125,8 +139,9 @@ class TransformerBlock(LightweightModule):
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
-                weight_key="ffn_norm",
-                is_distributed=self.args.is_distributed_norm,
+                weight_key=ffn_norm_key,
+                force_weight_tile=is_phi1,
+                is_distributed=(False if is_phi1 else self.args.is_distributed_norm),
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
@@ -137,6 +152,7 @@ class TransformerBlock(LightweightModule):
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
             ag_config_key="FFN_LN_AG_CONFIG",
+            force_local_norm=is_phi1,
         )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
@@ -150,6 +166,7 @@ class TransformerBlock(LightweightModule):
                     weight_cache_path=None if args.dummy_weights else weight_cache_path,
                     weight_dtype=ttnn.bfloat16,
                     weight_key="pre_feedforward_layernorm",
+                    force_weight_tile=is_phi1,
                     is_distributed=self.args.is_distributed_norm,
                     sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                     sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
@@ -176,6 +193,7 @@ class TransformerBlock(LightweightModule):
                     weight_cache_path=None if args.dummy_weights else weight_cache_path,
                     weight_dtype=ttnn.bfloat16,
                     weight_key="post_feedforward_layernorm",
+                    force_weight_tile=is_phi1,
                     is_distributed=self.args.is_distributed_norm,
                     sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                     sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
@@ -203,6 +221,23 @@ class TransformerBlock(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ) -> ttnn.Tensor:
+
+        def _phi1_safe_add(a, b, mem_cfg, dtype):
+            # Only needed for multi-device mesh tensors
+            if self.num_devices <= 1:
+                return ttnn.add(a, b, memory_config=mem_cfg, dtype=dtype)
+
+            if hasattr(ttnn, "get_device_tensors") and hasattr(a, "distributed_tensor_config"):
+                a_shards = ttnn.get_device_tensors(a)
+                b_shards = ttnn.get_device_tensors(b)
+                if isinstance(a_shards, (list, tuple)) and isinstance(b_shards, (list, tuple)) and len(a_shards) == len(b_shards):
+                    out_shards = [ttnn.add(ai, bi, memory_config=mem_cfg, dtype=dtype) for ai, bi in zip(a_shards, b_shards)]
+                    if hasattr(ttnn, "aggregate_as_tensor"):
+                        return ttnn.aggregate_as_tensor(out_shards, a.distributed_tensor_config())
+                    return ttnn.combine_device_tensors(out_shards)
+
+            return ttnn.add(a, b, memory_config=mem_cfg, dtype=dtype)
+
         TG = self.args.is_galaxy
         residual = x
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
@@ -234,9 +269,10 @@ class TransformerBlock(LightweightModule):
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         if self.pre_ff_norm is None:
-            hidden_states = ttnn.add(
-                residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
-            )
+            if getattr(self, "is_phi1", False) and mode == "prefill":
+                hidden_states = _phi1_safe_add(residual, attn_out, skip_mem_cfg, ttnn.bfloat16 if TG else None)
+            else:
+                hidden_states = ttnn.add(residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
             residual = hidden_states
             if mode == "prefill":
                 x.deallocate(True)

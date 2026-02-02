@@ -362,6 +362,27 @@ def fuse_qkv_meta(state_dict):
 def _is_hf_llama_vision(config):
     return hasattr(config, "text_config") and hasattr(config.text_config, "cross_attention_layers")
 
+def dump_keys(keys, path, title):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(title + "\n")
+        f.write(f"Total keys: {len(keys)}\n\n")
+
+        # show likely output-projection keys
+        for p in ["c_proj", "o_proj", "out_proj", "wo", "attn", "attention"]:
+            hits = [k for k in keys if p in k]
+            f.write(f"-- contains '{p}' ({len(hits)} hits) --\n")
+            for k in hits[:200]:
+                f.write(k + "\n")
+            f.write("\n")
+
+        # show first-layer-ish sample
+        layer0 = [k for k in keys if re.search(r"(\.0\.|h\.0|layers\.0)", k)]
+        f.write(f"-- layer0-ish sample ({len(layer0)} hits) --\n")
+        for k in layer0[:300]:
+            f.write(k + "\n")
+        f.write("\n")    
+
 
 def reindex_layers(state_dict, config):
     """Only for Llama-Vision models
@@ -651,11 +672,71 @@ def map_hf_to_meta_keys(loaded_weights):
     
     if is_phi1:
         replacements.extend([
-            ("attn.c_proj", "attention.wo"),
+            ("model.layers.", "layers."),
+            ("self_attn.", "attention."),
+            ("dense", "wo"),
+            ("mlp.fc1", "feed_forward.w1"),
+            ("mlp.fc2", "feed_forward.w2"),
+            ("input_layernorm", "attention_norm"),
+            ("post_attention_layernorm", "ffn_norm"),
             ("fc1", "w1"),
             ("fc2", "w2"),
         ])
-    return replace_keys(loaded_weights, replacements)
+    dump_keys(list(loaded_weights.keys()),
+          "/tmp/phi_keys_before.txt",
+          "BEFORE mapping (raw checkpoint keys)")
+    dump_keys(list(replace_keys(loaded_weights, replacements).keys()),
+          "/tmp/phi_keys_after.txt",
+          "AFTER mapping (meta-format keys)")
+
+    state_dict = replace_keys(loaded_weights, replacements)
+
+    if is_phi1:
+        # 1) final layernorm -> norm (TT expects norm.*)
+        if "final_layernorm.weight" in state_dict and "norm.weight" not in state_dict:
+            state_dict["norm.weight"] = state_dict["final_layernorm.weight"]
+            del state_dict["final_layernorm.weight"]
+        if "final_layernorm.bias" in state_dict and "norm.bias" not in state_dict:
+            state_dict["norm.bias"] = state_dict["final_layernorm.bias"]
+            del state_dict["final_layernorm.bias"]
+
+        # 2) attention output projection: dense -> wo
+        # (replace_keys won't hit dotted segments like "attention.dense.weight")
+        for k in list(state_dict.keys()):
+            if ".attention.dense." in k:
+                nk = k.replace(".attention.dense.", ".attention.wo.")
+                state_dict[nk] = state_dict.pop(k)
+
+        # 3) Phi-1: if ffn_norm is absent, mirror attention_norm
+        # TT block expects both attention_norm and ffn_norm keys.
+        layer_ids = set()
+        for k in state_dict.keys():
+            if k.startswith("layers."):
+                parts = k.split(".")
+                if len(parts) > 1 and parts[1].isdigit():
+                    layer_ids.add(int(parts[1]))
+
+        for i in layer_ids:
+            an_w = f"layers.{i}.attention_norm.weight"
+            an_b = f"layers.{i}.attention_norm.bias"
+            fn_w = f"layers.{i}.ffn_norm.weight"
+            fn_b = f"layers.{i}.ffn_norm.bias"
+
+            if fn_w not in state_dict and an_w in state_dict:
+                state_dict[fn_w] = state_dict[an_w]
+            if fn_b not in state_dict and an_b in state_dict:
+                state_dict[fn_b] = state_dict[an_b]
+
+                
+
+    w = state_dict.get("final_layernorm.weight", None)
+    print("final_layernorm.weight:", "MISSING" if w is None else (w.shape, w.numel(), w.dtype))
+
+    n = state_dict.get("norm.weight", None)
+    print("norm.weight:", "MISSING" if n is None else (n.shape, n.numel(), n.dtype))       
+
+    return state_dict
+                    
 
 
 def map_meta_to_hf_keys(state_dict):

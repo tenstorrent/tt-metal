@@ -74,11 +74,15 @@ class MLP(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.FF2
         )
 
+        # Phi-1 uses a *2-layer* MLP (fc1 -> act -> fc2) i.e. it does NOT have the gated-SiLU "w3/up_proj" path.
+        # In our meta-style state_dict mapping, that shows up as feed_forward.w1 + feed_forward.w2 without feed_forward.w3.
+        self.is_two_layer_mlp = f"{state_dict_prefix}.w3.weight" not in state_dict
+
         self.w1 = as_sharded_tensor(
             "w1_sharded", ff1_3_dtype, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        self.w3 = None if self.is_two_layer_mlp else as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
         # Default activation is SILU
         self.activation_type = (
@@ -87,10 +91,16 @@ class MLP(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
-        w1 -> gate_proj
-        w2 -> down_proj
-        w3 -> up_proj
-        HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        Default (gated) path:
+            w1 -> gate_proj
+            w2 -> down_proj
+            w3 -> up_proj
+            HF reference: down_proj(act(gate_proj(x)) * up_proj(x))
+
+        Phi-1 2-layer path (no w3):
+            w1 -> fc1
+            w2 -> fc2
+            HF reference: fc2(act(fc1(x)))
         """
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
@@ -132,15 +142,18 @@ class MLP(LightweightModule):
             memory_config=memory_config,
         )
 
-        w3_out = ttnn.linear(
-            x,
-            self.w3,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_3,
-            memory_config=memory_config,
-        )
+        if not self.is_two_layer_mlp:
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                core_grid=None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_3,
+                memory_config=memory_config,
+            )
+        else:
+            w3_out = None
         ttnn.deallocate(x)
 
         if TG:
@@ -204,19 +217,33 @@ class MLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
 
-        w2_in = ttnn.mul(
-            w1_out,
-            w3_out,
-            input_tensor_a_activations=[self.activation_type],
-            dtype=activation_dtype or ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
-        )
+        # Build input to w2:
+        # - gated MLP: act(w1_out) * w3_out
+        # - Phi-1 2-layer MLP: act(w1_out)
+        if w3_out is None:
+            # NOTE: we use mul-by-1 to reuse the existing fused activation hook.
+            w2_in = ttnn.mul(
+                w1_out,
+                1.0,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=w1_out.memory_config(),
+            )
+        else:
+            w2_in = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=w1_out.memory_config(),
+            )
 
         if mode == "decode" and not TG:
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
 
-        ttnn.deallocate(w3_out)
+        if w3_out is not None:
+            ttnn.deallocate(w3_out)
         ttnn.deallocate(w1_out)
 
         if TG and (self.dim == 8192 or mode == "prefill"):

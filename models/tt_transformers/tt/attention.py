@@ -173,6 +173,9 @@ class Attention(LightweightModule):
                 ],
                 dim=-1,
             )
+            if self.is_phi1:
+               # Keep CPU copy so we can expand per seq_len during traced prefill
+               self._qkv_bias_cpu = qkv_bias
             # Prefill can use broadcasting on the bias add so wants a 1d tensor
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
@@ -208,6 +211,14 @@ class Attention(LightweightModule):
                     layout=ttnn.TILE_LAYOUT,
                     cache_file_name=cache_name(f"wqkv_bias_decode_sharded_{batch_size}"),
                 )
+                # Phi-1 only: avoid 2D->4D broadcast during `x + bias` in decode.
+                # Make bias rank match the 4D tensor coming out of `ttnn.linear`.
+                if self.is_phi1:
+                    bias_tensor = ttnn.reshape(
+                        bias_tensor,
+                        (1, 1, batch_size, bias_tensor.shape[-1]),
+                        (1, 1, bias_tensor.shape[-2], bias_tensor.shape[-1]),
+                    )
                 self.wqkv_bias_decode.append(bias_tensor)
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
@@ -388,6 +399,95 @@ class Attention(LightweightModule):
             )
             for k_or_v in [cache_k, cache_v]
         ]
+
+    def _apply_partial_rope(
+        self,
+        x: ttnn.Tensor,
+        rot_mats,
+        transformation_mat,
+        is_decode_mode: bool,
+    ):
+        """
+        Apply rotary embeddings only on the first `rotary_dim` features.
+        Used ONLY for Phi-1.
+
+        IMPORTANT:
+          On some tt-metal versions, ttnn.slice/ttnn.concat on a multi-device tensor can
+          break the distributed tensor config (collapse to single device / change mapping),
+          which later causes failures (e.g., residual ttnn.add).
+          So if x is multi-device, we do the operation per-device shard and re-aggregate.
+        """
+
+        def _get_device_tensors(t: ttnn.Tensor):
+            if hasattr(ttnn, "get_device_tensors"):
+                return ttnn.get_device_tensors(t)
+            if hasattr(ttnn, "distributed") and hasattr(ttnn.distributed, "get_device_tensors"):
+                return ttnn.distributed.get_device_tensors(t)
+            return None
+
+        def _aggregate_as_tensor(device_tensors, like_tensor: ttnn.Tensor):
+            # Different tt-metal versions expose this either as ttnn.aggregate_as_tensor
+            # or under ttnn.distributed.aggregate_as_tensor
+            cfg = like_tensor.distributed_tensor_config()
+            if hasattr(ttnn, "aggregate_as_tensor"):
+                return ttnn.aggregate_as_tensor(device_tensors, cfg)
+            if hasattr(ttnn, "distributed") and hasattr(ttnn.distributed, "aggregate_as_tensor"):
+                return ttnn.distributed.aggregate_as_tensor(device_tensors, cfg)
+            raise RuntimeError("No aggregate_as_tensor found in this tt-metal/ttnn version")
+
+        x_shards = _get_device_tensors(x)
+
+        # Single-device path: keep your original logic
+        if not x_shards or not isinstance(x_shards, (list, tuple)) or len(x_shards) == 1:
+            x_rope = ttnn.slice(x, (0, 0, 0, 0), (x.shape[0], x.shape[1], x.shape[2], self.rotary_dim))
+            x_pass = ttnn.slice(x, (0, 0, 0, self.rotary_dim), (x.shape[0], x.shape[1], x.shape[2], self.head_dim))
+
+            x_rope = ttnn.experimental.rotary_embedding_llama(
+                x_rope,
+                rot_mats[0],
+                rot_mats[1],
+                transformation_mat,
+                is_decode_mode=is_decode_mode,
+            )
+
+            out = ttnn.concat([x_rope, x_pass], dim=3)
+            ttnn.deallocate(x_rope)
+            ttnn.deallocate(x_pass)
+            return out
+
+        # Multi-device path: do per-device work and re-aggregate
+        out_shards = []
+        for shard in x_shards:
+            shard_rope = ttnn.slice(
+                shard,
+                (0, 0, 0, 0),
+                (shard.shape[0], shard.shape[1], shard.shape[2], self.rotary_dim),
+            )
+            shard_pass = ttnn.slice(
+                shard,
+                (0, 0, 0, self.rotary_dim),
+                (shard.shape[0], shard.shape[1], shard.shape[2], self.head_dim),
+            )
+
+            shard_rope = ttnn.experimental.rotary_embedding_llama(
+                shard_rope,
+                rot_mats[0],
+                rot_mats[1],
+                transformation_mat,
+                is_decode_mode=is_decode_mode,
+            )
+
+            shard_out = ttnn.concat([shard_rope, shard_pass], dim=3)
+
+            ttnn.deallocate(shard_rope)
+            ttnn.deallocate(shard_pass)
+
+            out_shards.append(shard_out)
+
+        out = _aggregate_as_tensor(out_shards, x)
+        return out
+
+    
 
     def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
@@ -706,7 +806,25 @@ class Attention(LightweightModule):
 
         # FIXME: surely ttnn.linear bias should work?
         if self.wqkv_bias_prefill is not None:
-            xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
+            if self.is_phi1:
+                # Phi-1 + tracing: avoid 1->seq_len broadcast (can trip BinaryNg subtile broadcast)
+                if not hasattr(self, "_wqkv_bias_prefill_by_seqlen"):
+                    self._wqkv_bias_prefill_by_seqlen = {}
+                if seq_len not in self._wqkv_bias_prefill_by_seqlen:
+                    # Create [1,1,seq_len,qkv] bias and shard over -1 like the others
+                    qkv_bias_prefill = self._qkv_bias_cpu.unsqueeze(0).unsqueeze(0).expand(1, 1, seq_len, -1)
+                    self._wqkv_bias_prefill_by_seqlen[seq_len] = ttnn.as_tensor(
+                        qkv_bias_prefill,
+                        device=self.mesh_device,
+                        mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                        dtype=ttnn.bfloat16,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        layout=ttnn.TILE_LAYOUT,
+                        cache_file_name=None,  # optional: you can add a cache_name() here
+                    )
+                xqkv_fused = xqkv_fused + self._wqkv_bias_prefill_by_seqlen[seq_len]
+            else:
+                xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
 
         xqkv_fused = tt_all_reduce(
             xqkv_fused,

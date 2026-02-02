@@ -49,19 +49,19 @@ class TT_CCL:
                 )
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
-        semaphore_index = 2 if not cluster_axis else cluster_axis
+        semaphore_index = 2 if cluster_axis is None else cluster_axis
         current_idx = self.barrier_semaphore_idx[semaphore_index]
         self.barrier_semaphore_idx[semaphore_index] = (current_idx + 1) % 2
         return self.barrier_semaphore_handles[semaphore_index][current_idx]
 
     def get_and_cycle_ag_semaphore_handles(self, cluster_axis=None):
-        semaphore_index = 2 if not cluster_axis else cluster_axis
+        semaphore_index = 2 if cluster_axis is None else cluster_axis
         current_idx = self.ag_semaphores_idx[semaphore_index]
         self.ag_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
         return self.ag_semaphore_handles[semaphore_index][current_idx]
 
     def get_and_cycle_rs_semaphore_handles(self, cluster_axis=None):
-        semaphore_index = 2 if not cluster_axis else cluster_axis
+        semaphore_index = 2 if cluster_axis is None else cluster_axis
         current_idx = self.rs_semaphores_idx[semaphore_index]
         self.rs_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
         return self.rs_semaphore_handles[semaphore_index][current_idx]
@@ -95,19 +95,39 @@ def tt_all_reduce(
             input_tensor, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
 
-    # N300 and T3K: reduce_scatter
+    
+    # N300 and T3K: reduce_scatter (mesh is 1xN or Nx1)
     if 1 in list(mesh_device.shape):
+        shards = None
+        if hasattr(ttnn, "get_device_tensors"):
+            try:
+                shards = ttnn.get_device_tensors(input_tensor)
+            except Exception:
+                shards = None
+
+        # If not actually multi-device, do NOT reduce_scatter.
+        # Also: restore the original shape before returning.
+        if not isinstance(shards, (list, tuple)) or len(shards) <= 1:
+            if original_shape[0] != 1 or original_shape[1] != 1:
+                input_tensor = ttnn.reshape(input_tensor, original_shape)
+            return input_tensor
+
         if input_tensor.is_sharded() and not sharded:
             input_tensor_sharded = input_tensor
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
             input_tensor_sharded.deallocate(True)
 
+        # Pick the non-1 axis as the cluster axis
+        mesh_shape = list(mesh_device.shape)  # (rows, cols)
+        inferred_cluster_axis = 0 if mesh_shape[0] > 1 else 1
+
         reduced = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor,
             persistent_output_buffers=None,
             dim=dim,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            cluster_axis=inferred_cluster_axis,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(inferred_cluster_axis),
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(inferred_cluster_axis),
             num_links=num_reduce_scatter_links,
             memory_config=memory_config,
             intermediate_memory_config=rs_memory_config,
@@ -117,7 +137,16 @@ def tt_all_reduce(
             num_buffers_per_channel=2,
         )
         input_tensor.deallocate(True)
+
+        # IMPORTANT: restore original shape before returning
+        if original_shape[0] != 1 or original_shape[1] != 1:
+            reduced = ttnn.reshape(reduced, original_shape)
+
         return reduced
+
+
+
+
 
     # TG: all_reduce
     # Cast to CCL dtype

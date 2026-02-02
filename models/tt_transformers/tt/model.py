@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
+import os
 import torch
 from tqdm import tqdm
 
@@ -43,7 +43,10 @@ class Transformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
-
+        # Check the HF_MODEL environment variable
+        hf_model = os.getenv("HF_MODEL", "").strip()
+        # If the model explicitly matches Phi-1 or Phi-1.5, set flag
+        is_phi1 = hf_model in {"microsoft/Phi-1"}
         self.tt_ccl = TT_CCL(self.mesh_device)
 
         embd_kwargs = {
@@ -108,7 +111,8 @@ class Transformer(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="norm",
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
-                is_distributed=self.args.is_distributed_norm,
+                force_weight_tile=is_phi1,
+                is_distributed=(False if is_phi1 else self.args.is_distributed_norm),
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
