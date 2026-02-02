@@ -151,10 +151,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     constexpr auto cb_packet_slot = tt::CBIndex::c_10;
 
     // Sync CBs for coordination between Compute and Writer
-    // cb_sync: Compute -> Writer (R1 results ready)
-    // cb_sync_writer_done: Writer -> Compute (Writer finished reading R1 results)
-    constexpr auto cb_sync = tt::CBIndex::c_11;
-    constexpr auto cb_sync_writer_done = tt::CBIndex::c_12;
+    // cb_compute_to_writer_sync: Compute -> Writer (R1 results ready)
+    // cb_writer_to_compute_sync: Writer -> Compute (Writer finished reading R1 results)
+    constexpr auto cb_compute_to_writer_sync = tt::CBIndex::c_11;
+    constexpr auto cb_writer_to_compute_sync = tt::CBIndex::c_12;
 
     // =========================================================================
     // Create Circular Buffers
@@ -253,20 +253,20 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     CreateCircularBuffer(program, shard_grid, cb_packet_slot_config);
 
     // Sync CBs (tiny, 1 tile size each)
-    // cb_sync: Compute signals Writer that R1 results are ready
-    tt::tt_metal::CircularBufferConfig cb_sync_config =
-        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_sync, tt::DataFormat::RawUInt32}})
-            .set_page_size(cb_sync, aligned_page_size)
-            .set_tile_dims(cb_sync, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_sync_config);
+    // cb_compute_to_writer_sync: Compute signals Writer that R1 results are ready
+    tt::tt_metal::CircularBufferConfig cb_compute_to_writer_sync_config =
+        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_compute_to_writer_sync, tt::DataFormat::RawUInt32}})
+            .set_page_size(cb_compute_to_writer_sync, aligned_page_size)
+            .set_tile_dims(cb_compute_to_writer_sync, stats_tile);
+    CreateCircularBuffer(program, shard_grid, cb_compute_to_writer_sync_config);
 
-    // cb_sync_writer_done: Writer signals Compute that it finished reading R1 results
+    // cb_writer_to_compute_sync: Writer signals Compute that it finished reading R1 results
     // This prevents race where Compute pops R1 results while Writer still reading
-    tt::tt_metal::CircularBufferConfig cb_sync_writer_done_config =
-        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_sync_writer_done, tt::DataFormat::RawUInt32}})
-            .set_page_size(cb_sync_writer_done, aligned_page_size)
-            .set_tile_dims(cb_sync_writer_done, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_sync_writer_done_config);
+    tt::tt_metal::CircularBufferConfig cb_writer_to_compute_sync_config =
+        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_writer_to_compute_sync, tt::DataFormat::RawUInt32}})
+            .set_page_size(cb_writer_to_compute_sync, aligned_page_size)
+            .set_tile_dims(cb_writer_to_compute_sync, stats_tile);
+    CreateCircularBuffer(program, shard_grid, cb_writer_to_compute_sync_config);
 
     // =========================================================================
     // Setup forwarder cores and config
@@ -359,18 +359,18 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // The writer builds packets and writes them to forwarder slots via NoC,
     // then increments forwarder semaphore.
     std::vector<uint32_t> writer_ct_args = {
-        Sq_chunk_t,             // 0
-        vDHt,                   // 1
-        cb_local_l,             // 2
-        cb_local_ms,            // 3
-        cb_r1_result_l,         // 4
-        cb_r1_result_ms,        // 5
-        cb_packet_slot,         // 6: Unified packet slot CB (header + payload)
-        l1_alignment,           // 7
-        input_page_size_bytes,  // 8
-        cb_sync,                // 9: Compute -> Writer (R1 ready)
-        slot_size,              // 10: forwarder slot size (L1-aligned)
-        cb_sync_writer_done,    // 11: Writer -> Compute (done reading R1 results)
+        cb_local_l,                 // 0
+        cb_local_ms,                // 1
+        cb_r1_result_l,             // 2
+        cb_r1_result_ms,            // 3
+        cb_packet_slot,             // 4: Unified packet slot CB (header + payload)
+        cb_compute_to_writer_sync,  // 5: Compute -> Writer (R1 ready)
+        cb_writer_to_compute_sync,  // 6: Writer -> Compute (done reading R1 results)
+        Sq_chunk_t,                 // 7
+        vDHt,                       // 8
+        l1_alignment,               // 9
+        input_page_size_bytes,      // 10
+        slot_size,                  // 11: forwarder slot size (L1-aligned)
     };
 
     // Compute compile-time args (15 total for optimized compute)
@@ -380,23 +380,23 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // - 4-5: R1 result CBs
     // - 6-7: R2 neighbor CBs
     // - 8-9: Output CBs (L, MS intermediate)
-    // - 10-14: scale, block_size, num_blocks, cb_sync, cb_sync_writer_done
+    // - 10-14: scale, block_size, num_blocks, cb_compute_to_writer_sync, cb_writer_to_compute_sync
     std::vector<uint32_t> compute_ct_args = {
-        cb_local_l,           // 0
-        cb_local_ms,          // 1
-        cb_r1_neighbor_l,     // 2
-        cb_r1_neighbor_ms,    // 3
-        cb_r1_result_l,       // 4
-        cb_r1_result_ms,      // 5
-        cb_r2_neighbor_l,     // 6
-        cb_r2_neighbor_ms,    // 7
-        cb_l_out,             // 8 - ALIASED to output_l
-        cb_ms_out,            // 9 - intermediate MS
-        scale_val,            // 10
-        vDHt,                 // 11 - block_size (tiles per row)
-        Sq_chunk_t,           // 12 - num_blocks (number of rows)
-        cb_sync,              // 13 - Compute -> Writer (R1 ready)
-        cb_sync_writer_done,  // 14 - Writer -> Compute (done reading R1 results)
+        cb_local_l,                 // 0
+        cb_local_ms,                // 1
+        cb_r1_neighbor_l,           // 2
+        cb_r1_neighbor_ms,          // 3
+        cb_r1_result_l,             // 4
+        cb_r1_result_ms,            // 5
+        cb_r2_neighbor_l,           // 6
+        cb_r2_neighbor_ms,          // 7
+        cb_l_out,                   // 8 - ALIASED to output_l
+        cb_ms_out,                  // 9 - intermediate MS
+        cb_compute_to_writer_sync,  // 10 - Compute -> Writer (R1 ready)
+        cb_writer_to_compute_sync,  // 11 - Writer -> Compute (done reading R1 results)
+        scale_val,                  // 12
+        vDHt,                       // 13 - block_size (tiles per row)
+        Sq_chunk_t,                 // 14 - num_blocks (number of rows)
     };
 
     // =========================================================================
@@ -570,27 +570,25 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
             // Writer runtime args (with slot indices for bit-packed semaphore signaling)
             std::vector<uint32_t> writer_rt_args = {
-                input_tensor_l.buffer()->address(),   // 0: Local L source address
-                input_tensor_ms.buffer()->address(),  // 1: Local MS source address
-                *r1_dst_node_id.mesh_id,              // 2: R1 neighbor destination mesh ID
-                r1_dst_node_id.chip_id,               // 3: R1 neighbor destination chip ID
-                r1_recv_tensor.buffer()->address(),   // 4: R1 neighbor destination
-                r1_recv_sem.address(),                // 5: R1 neighbor semaphore
-                *r2_dst_node_id.mesh_id,              // 6: R2 neighbor destination mesh ID
-                r2_dst_node_id.chip_id,               // 7: R2 neighbor destination chip ID
-                r2_recv_tensor.buffer()->address(),   // 8: R2 neighbor destination
-                r2_recv_sem.address(),                // 9: R2 neighbor semaphore
-                core_noc.x,                           // 10: current_core_x
-                core_noc.y,                           // 11: current_core_y
+                *r1_dst_node_id.mesh_id,             // 0: R1 neighbor destination mesh ID
+                r1_dst_node_id.chip_id,              // 1: R1 neighbor destination chip ID
+                r1_recv_tensor.buffer()->address(),  // 2: R1 neighbor destination
+                r1_recv_sem.address(),               // 3: R1 neighbor semaphore
+                *r2_dst_node_id.mesh_id,             // 4: R2 neighbor destination mesh ID
+                r2_dst_node_id.chip_id,              // 5: R2 neighbor destination chip ID
+                r2_recv_tensor.buffer()->address(),  // 6: R2 neighbor destination
+                r2_recv_sem.address(),               // 7: R2 neighbor semaphore
+                core_noc.x,                          // 8: current_core_x
+                core_noc.y,                          // 9: current_core_y
                 // forwarder-specific args
-                agg_core_noc.x,  // 12: forwarder_core_x
-                agg_core_noc.y,  // 13: forwarder_core_y
-                r1_slot_addr,    // 14: R1 forwarder slot address
-                r1_agg_sem,      // 15: R1 forwarder semaphore
-                r1_slot_idx,     // 16: R1 slot index (for bit-packed signaling: 1 << r1_slot_idx)
-                r2_slot_addr,    // 17: R2 forwarder slot address
-                r2_agg_sem,      // 18: R2 forwarder semaphore
-                r2_slot_idx,     // 19: R2 slot index (for bit-packed signaling: 1 << r2_slot_idx)
+                agg_core_noc.x,  // 10: forwarder_core_x
+                agg_core_noc.y,  // 11: forwarder_core_y
+                r1_slot_addr,    // 12: R1 forwarder slot address
+                r1_agg_sem,      // 13: R1 forwarder semaphore
+                r1_slot_idx,     // 14: R1 slot index (for bit-packed signaling: 1 << r1_slot_idx)
+                r2_slot_addr,    // 15: R2 forwarder slot address
+                r2_agg_sem,      // 16: R2 forwarder semaphore
+                r2_slot_idx,     // 17: R2 slot index (for bit-packed signaling: 1 << r2_slot_idx)
             };
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
@@ -648,22 +646,18 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
             reader_runtime_args[3] = intermediate_tensors[1].buffer()->address();  // R2 recv buffer
 
             // writer runtime args layout:
-            // 0: input L, 1: input MS
-            // 2: R1 mesh_id (static), 3: R1 chip_id (static)
-            // 4: R1 dest addr, 5: R1 sem addr
-            // 6: R2 mesh_id (static), 7: R2 chip_id (static)
-            // 8: R2 dest addr, 9: R2 sem addr
-            // 10-19: forwarder args (static)
+            // 0: R1 mesh_id (static), 1: R1 chip_id (static)
+            // 2: R1 dest addr, 3: R1 sem addr
+            // 4: R2 mesh_id (static), 5: R2 chip_id (static)
+            // 6: R2 dest addr, 7: R2 sem addr
+            // 8-17: forwarder args (static)
             auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel);
             auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-            writer_runtime_args[0] = input_tensor_l.buffer()->address();
-            writer_runtime_args[1] = input_tensor_ms.buffer()->address();
-            // Indices 2-3 (mesh_id, chip_id) are static - don't update
-            writer_runtime_args[4] = intermediate_tensors[0].buffer()->address();  // R1 dest
-            writer_runtime_args[5] = shared_variables.semaphores[0].address();     // R1 sem
-            // Indices 6-7 (mesh_id, chip_id) are static - don't update
-            writer_runtime_args[8] = intermediate_tensors[1].buffer()->address();  // R2 dest
-            writer_runtime_args[9] = shared_variables.semaphores[1].address();     // R2 sem
+            writer_runtime_args[2] = intermediate_tensors[0].buffer()->address();  // R1 dest
+            writer_runtime_args[3] = shared_variables.semaphores[0].address();     // R1 sem
+            // Indices 4-5 (mesh_id, chip_id) are static - don't update
+            writer_runtime_args[6] = intermediate_tensors[1].buffer()->address();  // R2 dest
+            writer_runtime_args[7] = shared_variables.semaphores[1].address();     // R2 sem
         }
 
         // Update CB addresses for aliased buffers (critical for trace replay)

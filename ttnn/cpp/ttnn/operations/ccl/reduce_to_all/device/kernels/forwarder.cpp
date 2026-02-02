@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// forwarder kernel for reduce_to_all operation
-// Replaces mux with lightweight packet forwarding.
+// Forwarder kernel replaces mux with lightweight packet forwarding.
 //
 // Design:
 // - Single direction-agnostic kernel, same code for BRISC (FWD) and NCRISC (BWD)
@@ -21,7 +20,7 @@
 // - Maximum 32 clients per direction (limited by 32-bit semaphore width)
 //
 // Workflow:
-// 1. Poll semaphore (with L1 invalidate for coherency)
+// 1. Poll semaphore for ready slots
 // 2. For each ready bit not yet sent, forward packet via fabric
 // 3. Repeat until all slots sent
 
@@ -35,38 +34,26 @@
 #include <cstdint>
 
 // Compile-time args
-static constexpr uint32_t ct_total_slots = get_compile_time_arg_val(0);  // Total slots (R1 + R2 combined)
-static constexpr uint32_t ct_slot_size = get_compile_time_arg_val(1);    // Bytes per slot (header + L + S + M)
+constexpr uint32_t total_slots = get_compile_time_arg_val(0);  // Total slots (R1 + R2 combined)
+constexpr uint32_t slot_size = get_compile_time_arg_val(1);    // Bytes per slot (header + L + S + M)
 
-// Derived constants
-static constexpr uint32_t ct_all_sent_mask = (1u << ct_total_slots) - 1;
+constexpr uint32_t all_sent_mask = (1u << total_slots) - 1;
 
 // Maximum clients is 32 (one bit per client in 32-bit semaphore)
-static_assert(ct_total_slots <= 32, "forwarder supports at most 32 slots (limited by 32-bit semaphore)");
+static_assert(total_slots <= 32, "forwarder supports at most 32 slots (limited by 32-bit semaphore)");
 
 void kernel_main() {
-    // =========================================================================
-    // Parse runtime args
-    // =========================================================================
     size_t arg_idx = 0;
 
-    // Buffer base address for this direction's slots
     const uint32_t buffer_base = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t buffer_offset = get_arg_val<uint32_t>(arg_idx++);
-
-    // Single semaphore for all slots (bit-packed: bit i set when slot i ready)
     const uint32_t sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
-    // Build fabric connection from remaining args
+    const uint32_t my_buffer_base = buffer_base + buffer_offset;
+
     auto fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-
     fabric_connection.open();
-
-    // =========================================================================
-    // Compute base address for this RISC's region
-    // =========================================================================
-    const uint32_t my_buffer_base = buffer_base + buffer_offset;
 
     // =========================================================================
     // Non-blocking forwarding loop
@@ -78,39 +65,25 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
     uint32_t sent_mask = 0;
 
-    DPRINT << "forwarder started: buffer_base=" << buffer_base << ", offset=" << buffer_offset << ", sem=" << sem_addr
-           << ", total_slots=" << ct_total_slots << ", all_sent_mask=" << ct_all_sent_mask << ENDL();
+    do {
+        invalidate_l1_cache();
 
-    {
-        DeviceZoneScopedN("AGG-FORWARD-LOOP");
+        uint32_t sem_value = *sem_ptr;
+        uint32_t pending = sem_value & ~sent_mask;
 
-        do {
-            invalidate_l1_cache();
+        // Drain all ready slots before polling again
+        while (pending != 0) {
+            uint32_t slot = __builtin_ctz(pending);
+            uint32_t slot_addr = my_buffer_base + (slot * slot_size);
 
-            uint32_t sem_value = *sem_ptr;
-            uint32_t pending = sem_value & ~sent_mask;
+            fabric_connection.wait_for_empty_write_slot();
+            fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, slot_size);
 
-            // Drain all ready slots before polling again
-            while (pending != 0) {
-                uint32_t slot = __builtin_ctz(pending);
-                uint32_t slot_addr = my_buffer_base + (slot * ct_slot_size);
+            sent_mask |= (1u << slot);
+            pending &= ~(1u << slot);
+        }
+    } while (sent_mask != all_sent_mask);
 
-                DPRINT << "forwarder forwarding slot " << slot << " at addr " << slot_addr << ENDL();
-
-                fabric_connection.wait_for_empty_write_slot();
-                fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, ct_slot_size);
-
-                sent_mask |= (1u << slot);
-                pending &= ~(1u << slot);
-            }
-        } while (sent_mask != ct_all_sent_mask);
-    }
-
-    DPRINT << "forwarder complete: sent_mask=" << sent_mask << ENDL();
-
-    // =========================================================================
-    // Cleanup
-    // =========================================================================
     fabric_connection.close();
     noc_async_full_barrier();
 }
