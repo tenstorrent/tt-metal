@@ -22,7 +22,7 @@ on:
         description: 'Run Blackhole multi card nightly unit tests'
         required: false
         type: boolean
-        default: false
+        default: true
       run_bh_ttnn_stress_tests:
         description: 'Run Blackhole nightly ttnn stress tests'
         required: false
