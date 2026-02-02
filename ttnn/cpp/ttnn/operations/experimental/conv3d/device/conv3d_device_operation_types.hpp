@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::conv3d {
+namespace ttnn::experimental::prim {
 
 struct Conv3dConfig {
     Conv3dConfig(
@@ -63,7 +63,7 @@ struct Conv3dConfig {
     }
 };
 
-struct operation_attributes_t {
+struct Conv3dParams {
     Conv3dConfig config;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -77,15 +77,11 @@ struct operation_attributes_t {
     uint32_t groups;
 };
 
-struct tensor_args_t {
+struct Conv3dInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<const Tensor> bias_tensor;
 };
-
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
 
 namespace detail {
 std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
@@ -97,4 +93,4 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     const std::array<uint32_t, 3>& kernel_size);
 }  // namespace detail
 
-}  // namespace ttnn::operations::experimental::conv3d
+}  // namespace ttnn::experimental::prim

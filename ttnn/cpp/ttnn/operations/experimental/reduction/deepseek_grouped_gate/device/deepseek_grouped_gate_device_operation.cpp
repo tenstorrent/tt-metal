@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "deepseek_grouped_gate_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 

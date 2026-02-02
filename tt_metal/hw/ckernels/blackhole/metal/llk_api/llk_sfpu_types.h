@@ -84,6 +84,8 @@ enum class SfpuType {
     div_int32,
     div_int32_floor,
     div_int32_trunc,
+    remainder_int32,
+    fmod_int32,
     lt,
     gt,
     ge,
@@ -138,4 +140,5 @@ enum class SfpuType {
     add_top_row,
     rdiv,
     typecast,
+    addcmul,
 };

@@ -18,17 +18,15 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
+namespace ttnn::prim {
 
 TilizeWithValPaddingMultiCoreBlockInterleavedFactory::cached_program_t
 TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const Tensor& input_tensor, const Tensor& output_tensor) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const Tensor& a = tensor_args.input_tensor;
-    const Tensor& output = tensor_return_value;
+    const Tensor& a = input_tensor;
+    const Tensor& output = output_tensor;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -294,14 +292,14 @@ TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create(
 void TilizeWithValPaddingMultiCoreBlockInterleavedFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& output) {
+    const Tensor& input_tensor,
+    const Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
     const auto& ncores = shared_variables.ncores;
     const auto& cores = shared_variables.cores;
-    auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = output.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     auto& reader_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.reader_kernel_id);
     auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.writer_kernel_id);
@@ -318,4 +316,4 @@ void TilizeWithValPaddingMultiCoreBlockInterleavedFactory::override_runtime_argu
     }
 }
 
-}  // namespace ttnn::operations::data_movement::tilize_with_val_padding::program
+}  // namespace ttnn::prim

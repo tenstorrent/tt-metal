@@ -6,6 +6,11 @@ on:
     - cron: "0 0 * * *"
 
   workflow_dispatch:
+    inputs:
+      enable-lto:
+        default: false
+        type: boolean
+        description: "Enable Link Time Optimization (LTO)"
 
 permissions:
   actions: read
@@ -18,12 +23,13 @@ permissions:
 
 jobs:
   nightly-debug:
-    name: apc nightly debug run (${{ matrix.version }})
+    name: apc nightly debug run (${{ matrix.platform }})
     strategy:
       matrix:
-        version: ["22.04", "24.04"]
+        platform: ["Ubuntu 22.04", "Ubuntu 24.04"]
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
-      version: ${{ matrix.version }}
+      platform: ${{ matrix.platform }}
+      enable-lto: ${{ inputs.enable-lto || false }}

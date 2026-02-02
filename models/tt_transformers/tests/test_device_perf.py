@@ -29,7 +29,7 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
 @pytest.mark.parametrize("data_parallel", [1, 2, 4, 8])
 @pytest.mark.parametrize("num_layers", [2, 10])
 @pytest.mark.parametrize("num_runs", [2])
-@pytest.mark.parametrize("max_seq_len", [1024, 40960, 131072])
+@pytest.mark.parametrize("max_seq_len", [1024, 32768, 131072])
 @pytest.mark.parametrize("max_generated_tokens", [2])
 @pytest.mark.parametrize("model_name", ["llama3_70b", "llama3_8b", "qwen3_32b"])  # Add more models here as needed
 @pytest.mark.parametrize("mode", ["prefill", "decode"])

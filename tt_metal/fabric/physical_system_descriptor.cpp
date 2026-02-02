@@ -838,6 +838,10 @@ LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() co
         hal_->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
     auto uncorr_addr = hal_->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
+    bool arch_blackhole = cluster_->get_cluster_description()->get_arch(0) == tt::ARCH::BLACKHOLE;
+    // Memory layout for 64B metrics is different on WH vs BH systems/
+    uint64_t hi_offset = arch_blackhole ? sizeof(uint32_t) : 0;
+    uint64_t lo_offset = arch_blackhole ? 0 : sizeof(uint32_t);
 
     for (const auto& asic : local_asics) {
         const auto& asic_connections = local_asic_graph.at(asic);
@@ -855,13 +859,14 @@ LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() co
                 cluster.read_from_device(
                     &retrain_count_val, src_chip_id, translated_eth_core, retrain_count_addr, sizeof(uint32_t));
                 cluster.read_from_device(&crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(uint32_t));
-                cluster.read_from_device(&corr_val_hi, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
                 cluster.read_from_device(
-                    &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + 4, sizeof(uint32_t));
+                    &corr_val_hi, src_chip_id, translated_eth_core, corr_addr + hi_offset, sizeof(uint32_t));
                 cluster.read_from_device(
-                    &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr, sizeof(uint32_t));
+                    &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + lo_offset, sizeof(uint32_t));
                 cluster.read_from_device(
-                    &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + 4, sizeof(uint32_t));
+                    &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr + hi_offset, sizeof(uint32_t));
+                cluster.read_from_device(
+                    &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + lo_offset, sizeof(uint32_t));
 
                 local_ethernet_metrics[asic][src_eth_chan] = {
                     .retrain_count = retrain_count_val,

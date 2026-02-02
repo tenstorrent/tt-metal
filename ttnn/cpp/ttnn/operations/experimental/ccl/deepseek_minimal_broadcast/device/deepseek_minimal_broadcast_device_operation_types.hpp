@@ -8,23 +8,23 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct DeepseekMinimalBroadcastParams {
     MeshCoordinate sender_coord = MeshCoordinate{0, 0};
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
     MemoryConfig output_mem_config;
     tt::tt_fabric::Topology topology{};
     std::optional<uint32_t> cluster_axis;
+    std::optional<uint32_t> secondary_cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    bool using_persistent_buffers = false;
 };
 
-struct tensor_args_t {
+struct DeepseekMinimalBroadcastInputs {
     Tensor input_tensor;
+    std::optional<Tensor> persistent_output_buffer;
 };
 
-using spec_return_value_t = TensorSpec;
-using tensor_return_value_t = Tensor;
-
-}  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast
+}  // namespace ttnn::experimental::prim

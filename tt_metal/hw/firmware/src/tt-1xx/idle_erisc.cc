@@ -20,7 +20,6 @@
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
-#include "api/dataflow/dataflow_api.h"
 
 #include "internal/debug/watcher_common.h"
 #include "api/debug/waypoint.h"
@@ -37,6 +36,11 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -58,6 +62,16 @@ tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_IERISC_MAI
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+
+inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
+    // Posting heartbeat at this address is only needed for Wormhole
+#if !defined(ARCH_BLACKHOLE)
+    invalidate_l1_cache();
+    volatile uint32_t* ptr = (volatile uint32_t*)(0x1C);
+    heartbeat++;
+    ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
+#endif
+}
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {

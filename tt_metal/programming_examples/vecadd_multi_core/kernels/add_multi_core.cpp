@@ -8,8 +8,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include <cstdint>
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t n_tiles = get_arg_val<uint32_t>(0);
     uint32_t start_tile_id = get_arg_val<uint32_t>(1);
 
@@ -67,4 +66,3 @@ void MAIN {
         release_dst();
     }
 }
-}  // namespace NAMESPACE

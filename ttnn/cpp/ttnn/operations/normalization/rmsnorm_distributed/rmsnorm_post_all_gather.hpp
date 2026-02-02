@@ -22,7 +22,7 @@ struct ExecuteRMSNormPostAllGather {
         const std::optional<const ttnn::Tensor>& bias = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt,
+        const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config = std::nullopt,
         const std::optional<const DataType>& dtype = std::nullopt,
         const std::optional<bool>& use_2d_core_grid = std::nullopt);
 };

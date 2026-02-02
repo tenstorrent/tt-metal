@@ -9,9 +9,9 @@
 #include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_distributed_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn::prim {
 
-struct LayerNormPreAllGatherOperationAttributes {
+struct LayerNormPreAllGatherParams {
     LayerNormDistributedType norm_type = LayerNormDistributedType::LAYERNORM;
     std::optional<tt::tt_metal::DataType> dtype = std::nullopt;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -19,8 +19,4 @@ struct LayerNormPreAllGatherOperationAttributes {
     std::optional<bool> use_2d_core_grid;
 };
 
-struct LayerNormPreAllGatherTensorArgs {
-    const Tensor& input;
-};
-
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim

@@ -45,9 +45,15 @@ def test_with_ops(device):
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}], indirect=True
+    "device_params,capture_count,replay_count",
+    [
+        ({"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}, 100, 5),
+        ({"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}, 5, 600),
+    ],
+    indirect=["device_params"],
+    ids=["100-5", "5-600"],
 )
-def test_with_ops_single_core(device):
+def test_with_ops_single_core(device, capture_count, replay_count):
     torch.manual_seed(0)
     m = 1024
     k = 1024
@@ -68,11 +74,11 @@ def test_with_ops_single_core(device):
     # Ensure all binaries are compiled/loaded before starting trace capture.
     ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    for i in range(100):
+    for i in range(capture_count):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
-    for i in range(5):
+    for i in range(replay_count):
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     ttnn.release_trace(device, tid)
 

@@ -1,9 +1,12 @@
 set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/common/utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/fabric_worker_kernel_helpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/fabric_command_interface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_mesh_graph_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_solver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_custom_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_multi_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_connection_registry.cpp
@@ -20,6 +23,7 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_1d_fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_mux.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_fabric_traffic_generator_kernel.cpp
 )
 
 add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})

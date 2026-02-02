@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-namespace ttnn::operations::experimental::minimal_matmul::program {
+namespace ttnn::experimental::prim {
 
 struct MinimalMatmulProgramFactory {
     struct shared_variables_t {
@@ -24,15 +24,15 @@ struct MinimalMatmulProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const MinimalMatmulParams& operation_attributes,
+        const MinimalMatmulInputs& tensor_args,
+        Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const MinimalMatmulParams& operation_attributes,
+        const MinimalMatmulInputs& tensor_args,
+        Tensor& tensor_return_value);
 };
 
 MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
@@ -40,10 +40,35 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,
-    const std::optional<unary::UnaryWithParam>& fused_activation,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     const std::optional<const MinimalMatmulConfig>& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler);
 
-}  // namespace ttnn::operations::experimental::minimal_matmul::program
+
+// Shared implementation for variable number of output tensors (used by both minimal_matmul and minimal_matmul_split)
+// Unlike minimal_matmul_factory_helper, this function takes a number of output tensors as an argument (N_chunks) and
+// a vector of output tensors.
+MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_common(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<const Tensor>& bias_tensor,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    const std::optional<const MinimalMatmulConfig>& config,
+    const std::vector<Tensor>& output_tensors,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
+    uint32_t N_chunks);
+
+// Common helper for override_runtime_arguments - used by both minimal_matmul and minimal_matmul_split
+void override_runtime_arguments_common(
+    MinimalMatmulProgramFactory::cached_program_t& cached_program,
+    uint32_t in0_addr,
+    uint32_t in1_addr,
+    uint32_t in2_addr,
+    uint32_t in3_addr,
+    const std::vector<uint32_t>& output_addrs);
+
+}  // namespace ttnn::experimental::prim

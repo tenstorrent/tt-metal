@@ -248,26 +248,6 @@ size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::LineDirection direct
 
 ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
 
-tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::vector<Tensor>& /*input_tensors*/,
-    std::vector<Tensor>& /*output_tensors*/,
-    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program) {
-    tt::tt_metal::operation::MeshWorkloadWithCallbacks workload_with_callbacks;
-    for (const auto& range : tensor_coords.ranges()) {
-        for (const auto& coord : range) {
-            const ttnn::MeshCoordinateRange program_range(coord, coord);
-            auto program_with_callbacks = create_program(coord);
-            workload_with_callbacks.workload.add_program(program_range, std::move(program_with_callbacks.program));
-            if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
-                workload_with_callbacks.per_program_callbacks.emplace(
-                    program_range, std::move(*program_with_callbacks.override_runtime_arguments_callback));
-            }
-        }
-    }
-    return workload_with_callbacks;
-}
-
 SenderReceiverConfig get_device_sender_receiver_config(
     const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology) {
     uint32_t num_devices = devices.size();

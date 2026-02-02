@@ -82,11 +82,13 @@ void PrefetchKernel::GenerateStaticConfigs() {
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
+        bool is_mock =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
+        uint32_t cq_size = is_mock ? 0x10000 : device_->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = is_mock ? 0x10000 : device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());

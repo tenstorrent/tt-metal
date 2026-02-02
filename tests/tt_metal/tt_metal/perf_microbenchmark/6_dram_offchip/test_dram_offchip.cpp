@@ -155,9 +155,9 @@ int main(int argc, char** argv) {
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
-            TT_ASSERT(false);
+            TT_FATAL(false, "Command line arguments found exception: {}", e.what());
         }
-        TT_ASSERT(input_size != 0, "--input-size should not be zero");
+        TT_FATAL(input_size != 0, "--input-size should not be zero");
 
         if (use_device_profiler) {
             bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
@@ -256,7 +256,7 @@ int main(int argc, char** argv) {
                 } else if (core_group_2.contains(core)) {
                     num_tiles_per_core = num_tiles_per_core_group_2;
                 } else {
-                    TT_ASSERT(false, "Core not in specified core ranges");
+                    TT_FATAL(false, "Core not in specified core ranges");
                 }
                 auto write_size = num_reqs_at_a_time * 512;
                 auto sliced_input = slice_vec(input_vec, input_offset, input_offset + write_size - 1);
@@ -443,7 +443,7 @@ bool assign_runtime_args_to_program(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_FATAL(false, "Core not in specified core ranges");
         }
         uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
         const std::array kernel_args = {
@@ -483,7 +483,7 @@ bool validation(
             } else if (core_group_2.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_2;
             } else {
-                TT_ASSERT(false, "Core not in specified core ranges");
+                TT_FATAL(false, "Core not in specified core ranges");
             }
 
             std::vector<uint32_t> result_vec;
@@ -516,7 +516,7 @@ bool validation(
             } else if (core_group_2.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_2;
             } else {
-                TT_ASSERT(false, "Core not in specified core ranges");
+                TT_FATAL(false, "Core not in specified core ranges");
             }
 
             uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;

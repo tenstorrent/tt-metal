@@ -2,35 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <chrono>
-#include <cerrno>
-#include <fmt/base.h>
 #include <cstdint>
-#include <cstdlib>
+#include <vector>
+
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
-#include <cstring>
-#include <exception>
-#include <map>
-#include <memory>
-#include <variant>
-#include <vector>
-
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
+using namespace tt;
+using namespace tt::tt_metal;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // 1. Host writes data to buffer in DRAM
@@ -38,100 +23,47 @@ class IDevice;
 //      in step 1. to buffer in L1 and back to another buffer in DRAM
 // 4. Host reads from buffer written to in step 2.
 //////////////////////////////////////////////////////////////////////////////////////////
-using namespace tt;
+TEST_F(MeshDeviceSingleCardFixture, DramLoopbackSingleCore) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    Program program = CreateProgram();
 
-int main() {
-    bool pass = true;
+    CoreCoord core = {0, 0};
 
-    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    uint32_t single_tile_size = 2 * 1024;
+    uint32_t num_tiles = 50;
+    uint32_t dram_buffer_size = single_tile_size * num_tiles;
+    uint32_t l1_buffer_addr = 400 * 1024;
 
-    try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    InterleavedBufferConfig dram_config{
+        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    auto input_dram_buffer = CreateBuffer(dram_config);
+    uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+    auto output_dram_buffer = CreateBuffer(dram_config);
+    uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
-        CoreCoord core = {0, 0};
+    auto dram_copy_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-        uint32_t single_tile_size = 2 * 1024;
-        uint32_t num_tiles = 50;
-        uint32_t dram_buffer_size = single_tile_size * num_tiles;
-        uint32_t l1_buffer_addr = 400 * 1024;
+    // Execute
+    std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
+        dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    detail::WriteToBuffer(input_dram_buffer, input_vec);
 
-        tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
-            .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
-        auto input_dram_buffer = CreateBuffer(dram_config);
-        uint32_t input_dram_buffer_addr = input_dram_buffer->address();
+    SetRuntimeArgs(
+        program,
+        dram_copy_kernel,
+        core,
+        {l1_buffer_addr, input_dram_buffer_addr, 0, output_dram_buffer_addr, 0, dram_buffer_size});
 
-        auto output_dram_buffer = CreateBuffer(dram_config);
-        uint32_t output_dram_buffer_addr = output_dram_buffer->address();
+    detail::LaunchProgram(dev, program);
 
-        auto dram_copy_kernel = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    std::vector<uint32_t> result_vec;
+    detail::ReadFromBuffer(output_dram_buffer, result_vec);
 
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Compile Application
-        ////////////////////////////////////////////////////////////////////////////
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Execute Application
-        ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
-            dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt_metal::detail::WriteToBuffer(input_dram_buffer, input_vec);
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            dram_copy_kernel,
-            core,
-            {l1_buffer_addr,
-            input_dram_buffer_addr,
-            0,
-            output_dram_buffer_addr,
-            0,
-            dram_buffer_size});
-
-        tt_metal::detail::LaunchProgram(device, program);
-
-        std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(output_dram_buffer, result_vec);
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Validation & Teardown
-        ////////////////////////////////////////////////////////////////////////////
-        pass = (input_vec == result_vec);
-
-        pass &= tt_metal::CloseDevice(device);
-
-    } catch (const std::exception& e) {
-        pass = false;
-        // Capture the exception error message
-        log_error(LogTest, "{}", e.what());
-        // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
-    }
-
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass, "Error");
-
-    return 0;
+    // Validation
+    EXPECT_EQ(input_vec, result_vec);
 }

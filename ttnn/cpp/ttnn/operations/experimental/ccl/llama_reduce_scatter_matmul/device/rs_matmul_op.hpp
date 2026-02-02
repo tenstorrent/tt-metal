@@ -13,7 +13,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 #include <optional>
 #include <vector>
@@ -43,14 +43,14 @@ struct Matmul_RS {
     struct operation_attributes_t {
         LlamaReduceScatterDeviceOperation rs;
         LlamaReduceScatterDeviceOperation::operation_attributes_t rs_op;
-        matmul::MatmulDeviceOperation::operation_attributes_t matmul;
-        using matmul_device_t = matmul::MatmulDeviceOperation;
+        ttnn::prim::MatmulDeviceOperation::operation_attributes_t matmul;
+        using matmul_device_t = ttnn::prim::MatmulDeviceOperation;
     };
     struct Matmul_RS_PF {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::shared_variables_t rs_shared_vars;
-            matmul::program::matmul_mcast_1d_common_override_variables_t matmul_shared_vars;
+            ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_shared_vars;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

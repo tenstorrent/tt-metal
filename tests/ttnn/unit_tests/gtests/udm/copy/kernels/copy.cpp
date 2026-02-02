@@ -20,9 +20,6 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 
 void kernel_main() {
-    // TODO(#34735): move fabric counter init to fw kernel init
-    tt::tt_fabric::udm::fabric_local_state_init();
-
     // ==================== Create MeshTensorAccessor from Compile-Time Args ====================
     // MeshTensorAccessorArgs extracts all mesh/grid/dspec config from compile-time args
     // Input tensor accessor: starts at offset 0
@@ -80,7 +77,4 @@ void kernel_main() {
             page_id -= iter_args.dim_pages[d] * iter_args.dim_strides[d];
         }
     }
-
-    // TODO(#34736): remove once we have persistent connection across programs
-    tt::tt_fabric::udm::close_fabric_connection();
 }

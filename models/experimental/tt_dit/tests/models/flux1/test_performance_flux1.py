@@ -24,13 +24,15 @@ from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
         [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
         [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
         [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+        [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 2],
         [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
         [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 2],
     ],
     ids=[
         "1x2sp0tp1",
         "2x2sp0tp1",
-        "2x4sp0tp1",
+        "wh_2x4sp0tp1",
+        "bh_2x4sp0tp1",
         "wh_4x8sp0tp1",
         "bh_4x8sp0tp1",
     ],
@@ -243,7 +245,16 @@ def test_flux1_pipeline_performance(
         "vae_decoding_time": statistics.mean(vae_times),
         "total_time": statistics.mean(total_times),
     }
-    if tuple(mesh_device.shape) == (2, 4):
+    if tuple(mesh_device.shape) == (2, 4) and is_blackhole():
+        expected_metrics = {
+            "clip_encoding_time": 0.05,
+            "t5_encoding_time": 0.25,
+            "total_encoding_time": 0.3,
+            "denoising_steps_time": 0.38 * num_inference_steps,
+            "vae_decoding_time": 1.2,
+            "total_time": 12.5,
+        }
+    elif tuple(mesh_device.shape) == (2, 4):  # WH.
         expected_metrics = {
             "clip_encoding_time": 0.1,
             "t5_encoding_time": 0.25,
@@ -308,7 +319,7 @@ def test_flux1_pipeline_performance(
         device_name_map = {
             (1, 2): "BH_P300",
             (2, 2): "BH_QB",
-            (2, 4): "WH_T3K",
+            (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
         benchmark_data.save_partial_run_json(

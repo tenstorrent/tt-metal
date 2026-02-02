@@ -6,6 +6,7 @@
 #include <vector>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
@@ -253,11 +254,12 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_rela
     return ct_args;
 }
 
+template <typename ProgramOrDescriptor>
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
-    tt::tt_metal::Program& mux_program,
+    ProgramOrDescriptor& mux_program_or_desc,
     const CoreCoord& mux_logical_core) const {
     std::vector<uint32_t> args;
 
@@ -270,11 +272,17 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
         args.push_back(static_cast<uint32_t>(size));
     }
 
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program, mux_logical_core, args, core_type_);
+    tt::tt_fabric::append_fabric_connection_rt_args<ProgramOrDescriptor>(
+        src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program_or_desc, mux_logical_core, args, core_type_);
 
     return args;
 }
+
+template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::Program>(
+    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::Program&, const CoreCoord&) const;
+
+template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
+    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::ProgramDescriptor&, const CoreCoord&) const;
 
 uint8_t FabricMuxConfig::get_num_buffers(FabricMuxChannelType channel_type) const {
     return channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL ? num_buffers_full_size_channel_

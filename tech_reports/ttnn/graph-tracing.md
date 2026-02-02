@@ -422,10 +422,8 @@ def process_allocations(graph):
                        i += 1
                    else:
                        break
-           name = v.params['name']
-           if name == "ttnn::prim::old_infra_device_operation":
-               name = "ttnn::prim::old_infra_op"
-           cur_op.append(name)
+          name = v.params['name']
+          cur_op.append(name)
        if v.node_type == 'circular_buffer_allocate':
            total_cb += int(v.params['size'])
        if v.node_type == 'circular_buffer_deallocate_all':
@@ -456,7 +454,7 @@ High level call stack here is:
 ```
 ttnn::add
 ttnn::repeat
-ttnn::prim::old_infra_device_operation (calling ttnn primitive operation)
+ttnn::prim::repeat (calling ttnn primitive operation)
 Device Operation (dispatching device operation)
 create_device_tensor (creates intermediate output for ttnn::repeat)
 ttnn::prim::binary (calling ttnn primitive operation)
@@ -629,7 +627,7 @@ Deallocate Device Buffer
         "name": "function_start",
         "params": {
             "inputs": "5",
-            "name": "ttnn::prim::old_infra_device_operation"
+            "name": "ttnn::prim::repeat"
         }
     },
     {
@@ -735,7 +733,7 @@ Deallocate Device Buffer
         "counter": 16,
         "name": "function_end",
         "params": {
-            "name": "ttnn::prim::old_infra_device_operation"
+            "name": "ttnn::prim::repeat"
         }
     },
     {

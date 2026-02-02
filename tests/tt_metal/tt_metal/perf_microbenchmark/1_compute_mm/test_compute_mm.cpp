@@ -307,15 +307,15 @@ int main(int argc, char** argv) {
         }
 
         if (not single_core) {
-            TT_ASSERT(dtype == 0, "multi core test only supports bfp8_b");
-            TT_ASSERT(packer_l1 == 0, "multi core test does not support packer_l1 arg");
+            TT_FATAL(dtype == 0, "multi core test only supports bfp8_b");
+            TT_FATAL(packer_l1 == 0, "multi core test does not support packer_l1 arg");
         }
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Env and Device Setup
         ////////////////////////////////////////////////////////////////////////////
         if (single_core) {
-            TT_ASSERT(fast_dispatch_mode, "single core test only supports in fast dispatch mode");
+            TT_FATAL(fast_dispatch_mode, "single core test only supports in fast dispatch mode");
         } else if (!fast_dispatch_mode) {
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
 
@@ -350,7 +350,7 @@ int main(int argc, char** argv) {
             data_format = dtype == 0 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
         }
         uint32_t single_tile_size = tt::tile_size(data_format);
-        TT_ASSERT(single_tile_size == (dtype == 0 ? (256 * 4) + (16 * 4) : 2048));
+        TT_FATAL(single_tile_size == (dtype == 0 ? (256 * 4) + (16 * 4) : 2048), "Unexpected tile size");
 
         auto grid_size = device->compute_with_storage_grid_size();
         if (single_core) {
@@ -372,13 +372,17 @@ int main(int argc, char** argv) {
                 M,
                 N,
                 K);
-            TT_ASSERT(false);
+            TT_FATAL(false, "Multi core matmul not supported with L1 memory constraints");
         }
 
         uint32_t num_blocks_y = ((Mt - 1) / per_core_Mt) + 1;
         uint32_t num_blocks_x = ((Nt - 1) / per_core_Nt) + 1;
         uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
-        TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
+        TT_FATAL(
+            num_blocks_total <= num_cores_x * num_cores_y,
+            "num_blocks_total {} exceeds available cores {}",
+            num_blocks_total,
+            num_cores_x * num_cores_y);
         CoreCoord core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
         if (core_range.y != num_cores_y || core_range.x != num_cores_x) {
             log_warning(
@@ -772,7 +776,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> get_aligned_input_tile_num(uint32_t M, 
         return ((value + (constants::TILE_WIDTH - 1)) / constants::TILE_WIDTH) * constants::TILE_WIDTH;
     };
 
-    TT_ASSERT(M != 0 && N != 0 && K != 0, "Matmul input size should not be zero");
+    TT_FATAL(M != 0 && N != 0 && K != 0, "Matmul input size should not be zero");
 
     uint32_t M_aligned = align_to_tile(M);
     uint32_t N_aligned = align_to_tile(N);
@@ -1470,11 +1474,11 @@ void prepare_inputs(
             CoreCoord core = {(std::size_t)c, (std::size_t)r};
             auto* target_device = device->get_devices()[0];
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in0_addr, in0);
-            TT_ASSERT(pass);
+            TT_FATAL(pass, "Failed to write in0 to device L1");
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in1_addr, in1);
-            TT_ASSERT(pass);
+            TT_FATAL(pass, "Failed to write in1 to device L1");
             pass &= tt_metal::detail::WriteToDeviceL1(target_device, core, in2_cb_addr, in2);
-            TT_ASSERT(pass);
+            TT_FATAL(pass, "Failed to write in2 to device L1");
         }
     }
 }

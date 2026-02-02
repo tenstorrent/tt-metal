@@ -16,12 +16,10 @@
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_bilinear_program_factory.hpp"
 
-namespace ttnn::operations::pool::grid_sample::program {
+namespace ttnn::prim {
 
 GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const GridSampleParams& operation_attributes, const GridSampleInputs& tensor_args, Tensor& output_tensor) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& grid_tensor = tensor_args.grid;
     bool use_precomputed_grid = operation_attributes.use_precomputed_grid;
@@ -258,7 +256,7 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
                 .compile_args = compute_compile_time_args,
-                .defines = get_defines(pool::Pool2DType::AVG_POOL2D)});
+                .defines = ttnn::operations::pool::get_defines(ttnn::operations::pool::Pool2DType::AVG_POOL2D)});
     };
 
     if (is_sharded || core_group_1.num_cores() > 0) {
@@ -354,9 +352,9 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
 
 void GridSampleBilinearProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const GridSampleParams& /*operation_attributes*/,
+    const GridSampleInputs& tensor_args,
+    Tensor& output_tensor) {
     auto& prog = cached_program.program;
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& grid_tensor = tensor_args.grid;
@@ -393,4 +391,4 @@ void GridSampleBilinearProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::pool::grid_sample::program
+}  // namespace ttnn::prim

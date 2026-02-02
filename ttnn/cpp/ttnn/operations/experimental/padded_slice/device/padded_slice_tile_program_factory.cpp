@@ -28,7 +28,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::padded_slice::program {
+namespace ttnn::experimental::prim {
 
 // Circular buffer indices
 const uint32_t cb_buffer_size = 4;
@@ -57,7 +57,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
+    uint32_t num_cores_channels =
+        ttnn::operations::experimental::detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
     const uint32_t input_num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
 
     uint32_t num_tiles_per_channel = tt::div_up(input_num_tiles_per_channel, num_cores_channels);
@@ -346,9 +347,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
 }
 
 PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const PaddedSliceParams& operation_attributes, const PaddedSliceInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& output_tensor_start = operation_attributes.padded_slice_start;
     const auto& output_tensor_end = operation_attributes.padded_slice_end;
@@ -391,7 +390,8 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
 
     std::vector<CoreCoord> iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
 
-    uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output);
+    uint32_t num_cores_channels =
+        ttnn::operations::experimental::detail::get_num_cores_channels_from_sharded_tensor(output);
     uint32_t max_num_tiles_per_row = 0;
     for (uint32_t channel_index = 0; channel_index < num_cores_channels; channel_index++) {
         const uint32_t width_offset_elems = channel_index * output_row_size_elems;
@@ -542,9 +542,9 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
 
 void PaddedSliceTileProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const PaddedSliceParams& /*operation_attributes*/,
+    const PaddedSliceInputs& tensor_args,
+    Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     const auto& src_tensor = tensor_args.input;
     auto& dst_tensor = output;
@@ -575,4 +575,4 @@ void PaddedSliceTileProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::padded_slice::program
+}  // namespace ttnn::experimental::prim

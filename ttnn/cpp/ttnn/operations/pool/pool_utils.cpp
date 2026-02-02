@@ -4,6 +4,7 @@
 #include "pool_utils.hpp"
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "tt-metalium/constants.hpp"
@@ -147,9 +148,7 @@ FactoryParameters get_factory_parameters(
         !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     if (return_indices) {
-        TT_FATAL(
-            !is_avg_pool && !is_large_kernel,
-            "Currently only small full width max pool is supported with return_indices");
+        TT_FATAL(!is_avg_pool, "return_indices only applies for MaxPool");
     }
     const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
@@ -192,7 +191,8 @@ uint32_t calculate_L1_usage(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     const Layout& output_layout,
-    const DataType& output_dtype) {
+    const DataType& output_dtype,
+    bool config_tensor_in_dram) {
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -232,14 +232,11 @@ uint32_t calculate_L1_usage(
     uint32_t clear_value_cb_size = tt::constants::TILE_HW * params.nbytes;
 
     uint32_t in_cb_sz = 0;
-    if (return_indices) {
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+    if (return_indices || params.is_wide_reduction) {
+        uint32_t height_multiplier = return_indices ? tt::constants::TILE_HEIGHT : params.num_tilized_rows;
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * height_multiplier;
     } else {
-        if (params.is_wide_reduction) {
-            in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
-        } else {
-            in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
-        }
+        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
     }
 
     uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
@@ -258,9 +255,13 @@ uint32_t calculate_L1_usage(
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         uint32_t idx_tile_size = params.index_nbytes * tile_elems * 1;  // 1 page
         uint32_t data_tile_size = params.nbytes * tile_elems * 1;       // 1 page
-        // 1 data sized tile (pack_tmp_cb) and 5 index sized tiles (in_idx, pack_idx_tmp, right_inc, down_left_wrap_inc,
-        // up_left_wrap_inc)
-        total_mpwi_cb_size = (5 * idx_tile_size) + data_tile_size;
+        // 1 data sized tile (pack_tmp_cb) and 6 index sized tiles (in_idx, pack_idx_tmp, right_inc, down_left_wrap_inc,
+        // up_left_wrap_inc, compute_idx_tmp)
+        total_mpwi_cb_size = (6 * idx_tile_size) + data_tile_size;
+        if (params.is_large_kernel) {
+            // additional temp data tile for large kernel (intra_kernel_right_inc, intra_kernel_down_left_wrap_inc)
+            total_mpwi_cb_size += 2 * idx_tile_size;
+        }
     }
 
     uint32_t out_cb_pagesize;
@@ -294,10 +295,36 @@ uint32_t calculate_L1_usage(
             params.index_nbytes;
         out_idx_cb_config_size = out_cb_npages * out_cb_pagesize;
     }
+    uint32_t config_tensor_l1_CB_size = 0;
+    if (config_tensor_in_dram) {
+        auto output_shard_shape = output_memory.shard_spec().value().shape;
+        config_tensor_l1_CB_size =
+            (output_shard_shape[0] * 6) + 2;  // Worst case of 6 Bytes per output elem for reader indices
+        if (!one_scalar_per_core) {
+            config_tensor_l1_CB_size +=
+                output_shard_shape[0] * 6;  // Additional 6 Bytes per output elem for avg pool scalar config tensor
+        }
+    }
+    log_trace(
+        tt::LogOp,
+        "L1 Usage Breakdown: in_scalar_cb_size_0 = {}, in_scalar_cb_size_1 = {}, clear_value_cb_size = {}, "
+        "in_cb_config_0_size = {}, in_cb_config_1_size = {}, total_mpwi_cb_size = {}, pre_tilize_cb_size = {}, "
+        "config_tensor_l1_CB_size = {} "
+        "out_cb_config_size = {}, out_idx_cb_config_size = {}",
+        in_scalar_cb_size_0,
+        in_scalar_cb_size_1,
+        clear_value_cb_size,
+        in_cb_config_0_size,
+        in_cb_config_1_size,
+        total_mpwi_cb_size,
+        pre_tilize_cb_size,
+        config_tensor_l1_CB_size,
+        sliding_window::align_buffer(out_cb_config_size),
+        sliding_window::align_buffer(out_idx_cb_config_size));
 
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           total_mpwi_cb_size + pre_tilize_cb_size + sliding_window::align_buffer(out_cb_config_size) +
-           sliding_window::align_buffer(out_idx_cb_config_size);
+           total_mpwi_cb_size + pre_tilize_cb_size + config_tensor_l1_CB_size +
+           sliding_window::align_buffer(out_cb_config_size) + sliding_window::align_buffer(out_idx_cb_config_size);
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
@@ -311,7 +338,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     std::optional<int32_t> divisor_override,
     bool return_indices,
     const Layout& output_layout,
-    const DataType& output_dtype) {
+    const DataType& output_dtype,
+    bool config_tensor_in_dram) {
     uint32_t batch_size = sliding_window_config.batch_size;
     auto output_shape = sliding_window_config.get_output_shape();
 
@@ -367,7 +395,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             count_include_pad,
             divisor_override,
             output_layout,
-            output_dtype);
+            output_dtype,
+            config_tensor_in_dram);
 
         return {.l1_usage = l1_usage, .config = input_parallel_config};
     };
@@ -479,6 +508,14 @@ void validate_input_params(
         effective_kernel_w,
         padded_input_h,
         padded_input_w);
+}
+
+uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& tensor) {
+    const uint32_t stick_nbytes = shape[-1] * tensor.element_size();
+    const uint32_t alignment = tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                   ? tt::tt_metal::hal::get_dram_alignment()
+                                   : tt::tt_metal::hal::get_l1_alignment();
+    return tt::round_up(stick_nbytes, alignment);
 }
 
 }  // namespace ttnn::operations::pool

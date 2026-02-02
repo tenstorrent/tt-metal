@@ -156,7 +156,9 @@ public:
 
     void TearDown() {
         device_open_ = false;
-        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(
+            control_plane, false);
         for (auto& device : this->devices) {
             device->close();
         }
@@ -517,7 +519,7 @@ void dump_eth_link_stats(
         auto& s_stats_per_iter = sender_stats[link.sender];
         auto& r_stats_per_iter = receiver_stats[link.receiver];
         if (s_stats_per_iter.empty()) {
-            TT_ASSERT(r_stats_per_iter.empty());
+            TT_FATAL(r_stats_per_iter.empty(), "Receiver stats should be empty when sender stats are empty");
             s_stats_per_iter.resize(total_iterations);
             r_stats_per_iter.resize(total_iterations);
         }

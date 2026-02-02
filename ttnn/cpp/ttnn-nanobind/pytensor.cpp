@@ -37,10 +37,12 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/py_to_tt_tensor.hpp"
+
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/graph_tracking.hpp>
@@ -48,6 +50,9 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include <ttnn/tensor/to_string.hpp>
+
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -110,94 +115,6 @@ std::vector<size_t> ttnn_shape_to_ndarray(const T& arr) {
     return shp;
 }
 
-template <typename T>
-Tensor create_typed_tt_tensor_from_py_data(
-    const nb::ndarray<nb::array_api>& py_ndarray,
-    const Shape& py_data_shape,
-    const TensorLayout& tensor_layout,
-    MeshDevice* device,
-    const tt::tt_metal::MemoryPin& pydata_pin,
-    std::optional<ttnn::QueueId> cq_id,
-    float pad_value,
-    const distributed::TensorToMesh* mesh_mapper) {
-    TT_FATAL(
-        !tensor_layout.get_memory_config().is_sharded() || tensor_layout.get_memory_config().shard_spec().has_value() ||
-            tensor_layout.get_memory_config().nd_shard_spec().has_value(),
-        "Sharded tensors must have a shard spec when converting to tt tensors!");
-
-    tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_ndarray.data()), py_data_shape.volume());
-
-    TT_FATAL(py_ndarray.is_valid(), "create_typed_tt_tensor_from_py_data: py_ndarray is invalid!");
-    TT_FATAL(
-        py_ndarray.size() == py_data_shape.volume(),
-        "create_typed_tt_tensor_from_py_data: array size ({}) shape volume ({}) mismatch!",
-        py_ndarray.size(),
-        py_data_shape.volume());
-
-    // Shard pydata across mesh and apply `tensor_layout` at each shard.
-    // Shapes of multi device shards will be derived automatically.
-    if (mesh_mapper != nullptr) {
-        return ttnn::distributed::create_distributed_tensor(
-            pydata_span,
-            py_data_shape,
-            pydata_pin,
-            tensor_layout,
-            *mesh_mapper,
-            device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
-            cq_id,
-            static_cast<T>(pad_value));
-    }
-
-    // Otherwise, create a single tt tensor from the pydata.
-    const TensorSpec tensor_spec(py_data_shape, tensor_layout);
-    if (const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
-                                       tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
-                                       tensor_spec.data_type() == convert_to_data_type<T>();
-        pydata_borrowable) {
-        auto output =
-            Tensor::from_borrowed_data(pydata_span, tensor_spec.logical_shape(), pydata_pin, tensor_spec.tile());
-        if (device != nullptr) {
-            output = output.to_device(device, tensor_spec.memory_config(), cq_id);
-        }
-        return output;
-    }
-    return Tensor::from_span(
-        tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
-}
-
-Tensor create_tt_tensor_from_py_data(
-    nb::ndarray<nb::array_api> py_data,
-    const Shape& py_data_shape,
-    const TensorLayout& tensor_layout,
-    MeshDevice* device,
-    const tt::tt_metal::MemoryPin& pydata_pin,
-    std::optional<ttnn::QueueId> cq_id,
-    float pad_value,
-    const distributed::TensorToMesh* mesh_mapper) {
-    auto create_concrete = [&]<typename T>() {
-        return create_typed_tt_tensor_from_py_data<T>(
-            py_data, py_data_shape, tensor_layout, device, pydata_pin, cq_id, pad_value, mesh_mapper);
-    };
-
-    switch (tensor_layout.get_data_type()) {
-        case DataType::UINT8: return create_concrete.template operator()<uint8_t>();
-        case DataType::UINT16: return create_concrete.template operator()<uint16_t>();
-        case DataType::INT32: return create_concrete.template operator()<int32_t>();
-        case DataType::UINT32: return create_concrete.template operator()<uint32_t>();
-        case DataType::FLOAT32: return create_concrete.template operator()<float>();
-        case DataType::BFLOAT16: return create_concrete.template operator()<bfloat16>();
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: {
-            return create_concrete.template operator()<float>();
-        }
-        case DataType::INVALID: {
-            TT_THROW("Unsupported DataType: {}", tensor_layout.get_data_type());
-        }
-    }
-
-    TT_THROW("Unsupported DataType: {}", tensor_layout.get_data_type());
-}
-
 // Preprocess the python tensor, optionally performing dtype conversion.
 // May need to create a handle and hold onto it here?
 struct PreprocessedPyTensor {
@@ -241,84 +158,6 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     return {.contiguous_py_tensor = nb::ndarray<nb::array_api>(converted_tensor_handle), .data_type = data_type};
 }
 
-Tensor convert_python_tensor_to_tt_tensor(
-    nb::ndarray<nb::array_api> py_tensor,
-    std::optional<DataType> optional_data_type,
-    std::optional<Layout> optional_layout,
-    const std::optional<Tile>& optional_tile,
-    const MemoryConfig& memory_config,
-    MeshDevice* device,
-    std::optional<ttnn::QueueId> cq_id,
-    float pad_value,
-    const distributed::TensorToMesh* mesh_mapper) {
-    GraphTracker::instance().track_function_start(
-        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
-        py_tensor,
-        optional_data_type,
-        optional_layout,
-        optional_tile,
-        memory_config,
-        device,
-        cq_id,
-        pad_value,
-        mesh_mapper);
-
-    auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
-    const ttnn::Shape shape = ndarray_shape_to_ttnn(py_tensor);
-
-    TT_FATAL(
-        preprocessed_py_tensor.contiguous_py_tensor.size() == shape.volume(),
-        "Number of elements from python tensor {} must match volume of shape {}!\n\t"
-        "is_valid: {}, itemsize: {}, deviceid: {}, nbytes: {}, ndim: {}\n\t"
-        "dtype.code: {}, dtype.bits: {}",
-        preprocessed_py_tensor.contiguous_py_tensor.size(),
-        shape.volume(),
-        preprocessed_py_tensor.contiguous_py_tensor.is_valid(),
-        preprocessed_py_tensor.contiguous_py_tensor.itemsize(),
-        preprocessed_py_tensor.contiguous_py_tensor.device_id(),
-        preprocessed_py_tensor.contiguous_py_tensor.nbytes(),
-        preprocessed_py_tensor.contiguous_py_tensor.ndim(),
-        preprocessed_py_tensor.contiguous_py_tensor.dtype().code,
-        preprocessed_py_tensor.contiguous_py_tensor.dtype().bits);
-
-    const Layout layout = [&]() {
-        // Block float types require tile layout.
-        // Choose tile by default and disallow overriding to anything else.
-        if (preprocessed_py_tensor.data_type == DataType::BFLOAT8_B ||
-            preprocessed_py_tensor.data_type == DataType::BFLOAT4_B) {
-            TT_FATAL(
-                !optional_layout.has_value() or optional_layout.value() == Layout::TILE,
-                "Tile layout is required for tensor of type bfloat8_b or bfloat4_b; got {}.",
-                optional_layout.value());
-            return Layout::TILE;
-        }
-        return optional_layout.value_or(Layout::ROW_MAJOR);
-    }();
-
-    // Important: `nb::object` copying and destruction must be done while holding GIL, which nanobind ensures for a
-    // thread that calls the C++ APIs. We wrap `nb::object` in `MemoryPin` so that multi-threaded C++ code only
-    // increments / decrements the reference count on the memory pin; the last decrement to the pin should be triggered
-    // from the nanobind caller thread, which will correctly decrement the `nb::object` reference count while hodling
-    // GIL.
-    tt::tt_metal::MemoryPin pydata_pin(
-        std::make_shared<nb::ndarray<nb::array_api>>(preprocessed_py_tensor.contiguous_py_tensor));
-
-    auto output = create_tt_tensor_from_py_data(
-        preprocessed_py_tensor.contiguous_py_tensor,
-        shape,
-        TensorLayout(preprocessed_py_tensor.data_type, PageConfig(layout, optional_tile), memory_config),
-        device,
-        pydata_pin,
-        cq_id,
-        pad_value,
-        mesh_mapper);
-
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
-
-}  // Tensor convert_python_tensor_to_tt_tensor
-
 // Wrapper around HostBuffer that provides a row-major view of the data, handles padding / logical view, and provides
 // `shape` and `data_type` information.
 struct RowMajorHostBuffer {
@@ -350,6 +189,12 @@ struct RowMajorHostBuffer {
 // If `padded_output` is true, the returned buffer will be padded to the tile size.
 // If `padded_output` is false, the returned buffer will be in logical view.
 RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, const bool padded_output) {
+    // conversion to Host storage after
+    // issue #31136: to_torch with mesh_composer=None on device-sharded tensor
+    if (std::holds_alternative<DeviceStorage>(tt_tensor.storage())) {
+        return convert_to_row_major_host_buffer(tt_tensor.cpu(), padded_output);
+    }
+
     const auto& tensor_spec = tt_tensor.tensor_spec();
 
     // Performs logical data conversion on the concrete data type.
@@ -503,6 +348,36 @@ auto parse_external_operation(
 
     auto operation = tt::tt_metal::operation::ExternalOperation{function_name, attributes};
     return std::make_tuple(operation, input_tensors);
+}
+
+HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py_tensor, DataType target_dtype) {
+    auto to_host_buffer_impl = []<typename T>(const nb::ndarray<nb::array_api>& contiguous_py_tensor) -> HostBuffer {
+        // Important: `nb::object` copying and destruction must be done while holding GIL, which nanobind ensures for a
+        // thread that calls the C++ APIs. We wrap `nb::object` in `MemoryPin` so that multi-threaded C++ code only
+        // increments / decrements the reference count on the memory pin; the last decrement to the pin should be
+        // triggered from the nanobind caller thread, which will correctly decrement the `nb::object` reference count
+        // while holding GIL.
+        tt::tt_metal::MemoryPin pydata_pin(std::make_shared<nb::ndarray<nb::array_api>>(contiguous_py_tensor));
+        T* typed_py_ptr = const_cast<T*>(static_cast<const T*>(contiguous_py_tensor.data()));
+        return HostBuffer(tt::stl::Span<T>(typed_py_ptr, contiguous_py_tensor.size()), pydata_pin);
+    };
+
+    auto to_host_buffer = [&to_host_buffer_impl,
+                           &target_dtype](const nb::ndarray<nb::array_api>& contiguous_py_tensor) {
+        switch (target_dtype) {
+            case DataType::BFLOAT16: return to_host_buffer_impl.operator()<bfloat16>(contiguous_py_tensor);
+            case DataType::FLOAT32: return to_host_buffer_impl.operator()<float>(contiguous_py_tensor);
+            case DataType::UINT32: return to_host_buffer_impl.operator()<uint32_t>(contiguous_py_tensor);
+            case DataType::UINT8: return to_host_buffer_impl.operator()<uint8_t>(contiguous_py_tensor);
+            case DataType::UINT16: return to_host_buffer_impl.operator()<uint16_t>(contiguous_py_tensor);
+            case DataType::INT32: return to_host_buffer_impl.operator()<int32_t>(contiguous_py_tensor);
+            default: TT_THROW("Unsupported target DataType: {}", target_dtype);
+        }
+    };
+
+    // pytensor can return invalid data type, so we need to parse the tensor to get the data type.
+    auto preprocessed_py_tensor = parse_py_tensor(py_tensor, target_dtype);
+    return to_host_buffer(preprocessed_py_tensor.contiguous_py_tensor);
 }
 
 }  // namespace
@@ -768,7 +643,7 @@ void pytensor_module(nb::module_& mod) {
             "__init__",
             [](Tensor* t,
                nb::ndarray<nb::array_api> dlpack_tensor,
-               std::optional<DataType> data_type,
+               std::optional<DataType> optional_data_type,
                std::optional<MeshDevice*> device,
                std::optional<Layout> layout,
                const std::optional<MemoryConfig>& mem_config,
@@ -776,16 +651,37 @@ void pytensor_module(nb::module_& mod) {
                std::optional<ttnn::QueueId> cq_id,
                std::optional<float> pad_value,
                const distributed::TensorToMesh* mesh_mapper) {
-                new (t) Tensor(CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
-                    std::move(dlpack_tensor),
-                    data_type,
-                    layout,
+                auto py_tensor_dtype = dlpack_tensor.dtype();
+
+                // handle bool types by changing them to uint8
+                // TODO: add proper handling for bool types as a DataType
+                if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Bool)) {
+                    py_tensor_dtype.code = static_cast<uint8_t>(nb::dlpack::dtype_code::UInt);
+                    py_tensor_dtype.bits = 8;
+                    py_tensor_dtype.lanes = 1;
+                }
+
+                auto src_dtype = get_PyDType_from_dtype(py_tensor_dtype);
+                auto dst_dtype = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
+
+                const bool tile_layout_by_default =
+                    (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B);
+                auto layout_ = layout.value_or(tile_layout_by_default ? Layout::TILE : Layout::ROW_MAJOR);
+
+                new (t) Tensor(ttnn::convert_python_tensor_to_tt_tensor(
+                    CMAKE_UNIQUE_NAMESPACE::ndarray_shape_to_ttnn(dlpack_tensor),
+                    dst_dtype,
+                    layout_,
                     tile,
-                    mem_config.value_or(MemoryConfig{}),
-                    device.value_or(nullptr),
+                    mem_config.value_or(MemoryConfig()),
+                    src_dtype,
+                    [&](DataType dtype) -> HostBuffer {
+                        return CMAKE_UNIQUE_NAMESPACE::convert_py_tensor_to_host_buffer(dlpack_tensor, dtype);
+                    },
+                    device,
                     cq_id,
-                    pad_value.value_or(0.0f),
-                    mesh_mapper));
+                    mesh_mapper,
+                    pad_value));
             },
             nb::arg("tensor").noconvert(false),
             nb::arg("data_type") = nb::none(),
@@ -976,7 +872,7 @@ void pytensor_module(nb::module_& mod) {
              )doc")
         .def(
             "to",
-            nb::overload_cast<Layout>(&Tensor::to_layout, nb::const_),
+            [](const Tensor& self, Layout target_layout) { return ttnn::to_layout(self, target_layout); },
             nb::arg("target_layout").noconvert(),
             R"doc(
             Convert TT Tensor to provided memory layout. Available layouts conversions are:

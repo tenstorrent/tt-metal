@@ -7,8 +7,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // do nothing
 }
-}  // namespace NAMESPACE

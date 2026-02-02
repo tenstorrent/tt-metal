@@ -7,7 +7,6 @@
 #include "internal/firmware_common.h"
 #include "noc_parameters.h"
 #include "internal/risc_attribs.h"
-#include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/watcher_common.h"
 
@@ -39,6 +38,11 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.

@@ -49,6 +49,16 @@ public:
      */
     bool has_kernel(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
+    /**
+     * @brief Register a data movement kernel on a specific global core
+     */
+    void register_dm_kernel_on_gcore(uint32_t gcore_id);
+
+    /**
+     * @brief Check if a global core already has a data movement kernel
+     */
+    bool has_dm_kernel_on_gcore(uint32_t gcore_id) const;
+
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;

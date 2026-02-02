@@ -39,24 +39,16 @@ def test_rmsnorm(device, width, epsilon, use_fp32):
     logger.info(f"Testing rmsnorm with shape {shape}, epsilon={epsilon}")
     logger.info(f"Tile size: {tile.tile_shape}")
 
-    tile_size = 1024
-    # TODO: This is because we don't support tiny tiles yet
-    padded_width = ((width + tile_size - 1) // tile_size) * tile_size
-    # padded_width = width
-
     # Create input and gamma PyTorch tensors
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
 
-    torch_input_padded = torch.nn.functional.pad(torch_input, (0, padded_width - width), value=0.0)
-    torch_gamma_padded = torch.nn.functional.pad(torch_gamma, (0, padded_width - width), value=0.0)
-
     # Compute reference output using PyTorch
     torch_expected = RMSNormSingleCore.golden(torch_input, torch_gamma, epsilon=epsilon)
 
     # Shard spec: single core
-    shard_shape = (shape[0], padded_width)
+    shard_shape = (shape[0], width)
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         shard_shape,
@@ -66,7 +58,7 @@ def test_rmsnorm(device, width, epsilon, use_fp32):
 
     # Create input tensor sharded on single core
     ttnn_input = ttnn.from_torch(
-        torch_input_padded,
+        torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -76,7 +68,7 @@ def test_rmsnorm(device, width, epsilon, use_fp32):
 
     # Create gamma tensor sharded on same core
     ttnn_gamma = ttnn.from_torch(
-        torch_gamma_padded,
+        torch_gamma,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -85,7 +77,7 @@ def test_rmsnorm(device, width, epsilon, use_fp32):
     )
 
     # Create output tensor sharded on same core
-    torch_output = torch.zeros((shape[0], padded_width), dtype=torch.bfloat16)
+    torch_output = torch.zeros((shape[0], width), dtype=torch.bfloat16)
     ttnn_output = ttnn.from_torch(
         torch_output,
         dtype=ttnn.bfloat16,
@@ -126,7 +118,7 @@ def test_rmsnorm(device, width, epsilon, use_fp32):
     logger.info(f"Max absolute difference: {max_diff}")
     logger.info(f"Mean absolute difference: {mean_diff}")
 
-    passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)
+    passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.999)
     logger.info(pcc_message)
 
     assert passing, pcc_message

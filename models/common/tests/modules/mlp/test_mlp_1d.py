@@ -25,7 +25,7 @@ import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _matmul_config
-from models.common.modules.tensor_utils import TILE_SIZE
+from models.common.tensor_utils import TILE_SIZE
 from models.common.utility_functions import comp_allclose, comp_pcc
 
 
@@ -188,7 +188,6 @@ def test_mlp_1d_config_defaults():
     # Check defaults
     assert config.max_batch_size == 32
     assert config.mlp_activation_type == ttnn.UnaryOpType.SILU
-    assert config.num_reduce_scatter_links == 1
 
     # Optional fields default to None
     assert config.mesh_device is None
@@ -766,6 +765,8 @@ def test_mlp_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
         state_dict=state_dict,
         weight_cache_path=topology_aware_cache_path(dtype),
         layer_num=0,
+        dtype=dtype,
+        model_config=model_config,
     )
 
     # Create input

@@ -7,7 +7,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/device/deepseek_minimal_broadcast_program_factory.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -32,14 +32,14 @@
 
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
-namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::program {
+namespace ttnn::experimental::prim {
 
 DeepseekMinimalBroadcastProgramFactory::cached_mesh_workload_t
 DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const DeepseekMinimalBroadcastParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const DeepseekMinimalBroadcastInputs& tensor_args,
+    Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
@@ -50,9 +50,9 @@ DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
 
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
+    auto secondary_sync_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
-    log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = DeepseekMinimalBroadcastProgramFactory::create_at(
@@ -61,7 +61,8 @@ DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
             tensor_args,
             tensor_return_value,
             final_barrier_semaphore,
-            init_barrier_semaphore);
+            init_barrier_semaphore,
+            secondary_sync_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -70,12 +71,13 @@ DeepseekMinimalBroadcastProgramFactory::create_mesh_workload(
 }
 
 DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcastProgramFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const DeepseekMinimalBroadcastParams& operation_attributes,
     const MeshCoordinate& self_coord,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor,
+    const DeepseekMinimalBroadcastInputs& tensor_args,
+    Tensor& output_tensor,
     const tt::tt_metal::GlobalSemaphore& semaphore,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
+    const tt::tt_metal::GlobalSemaphore& barrier_semaphore,
+    const tt::tt_metal::GlobalSemaphore& secondary_sync_semaphore) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program{};
 
@@ -86,23 +88,61 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
     MeshCoordinate sender_coord = operation_attributes.sender_coord;
     auto topology = operation_attributes.topology;
     auto cluster_axis = operation_attributes.cluster_axis;
+    auto secondary_cluster_axis = operation_attributes.secondary_cluster_axis;
 
+    // Dual-axis broadcast logic:
+    // For a mesh like 4x2 with sender at (1,0) and secondary_cluster_axis=1, cluster_axis=0:
+    //   1. Sender (1,0) sends to secondary sender (1,1) across secondary_cluster_axis (axis 1)
+    //   2. Both (1,0) and (1,1) broadcast along cluster_axis (axis 0) to their respective columns
+    //
+    // Device roles:
+    //   - is_sender: true for device at sender_coord (1,0)
+    //   - is_secondary_sender: true for device that receives from sender across secondary axis (1,1)
+    //   - is_active_broadcaster: true for both sender and secondary sender (they broadcast along primary axis)
+
+    bool is_sender = self_coord == sender_coord;
+    bool is_secondary_sender = false;
+    bool is_active_broadcaster = is_sender;
+
+    // Compute secondary sender coordinate if dual-axis broadcast is enabled
+    std::optional<MeshCoordinate> secondary_sender_coord_opt;
+    if (secondary_cluster_axis.has_value()) {
+        // Get the neighbor of sender along secondary axis
+        secondary_sender_coord_opt = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            input_tensor, sender_coord, 1, topology, secondary_cluster_axis);
+
+        if (secondary_sender_coord_opt.has_value()) {
+            is_secondary_sender = (self_coord == secondary_sender_coord_opt.value());
+            is_active_broadcaster = is_sender || is_secondary_sender;
+        }
+    }
+
+    // Get neighbors along the primary cluster axis (for broadcasting)
     std::optional<MeshCoordinate> forward_coord =
         ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, self_coord, 1, topology, cluster_axis);
 
     std::optional<MeshCoordinate> backward_coord =
         ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, self_coord, -1, topology, cluster_axis);
-    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
+
+    // Get neighbor along secondary axis (for initial sender->secondary_sender transfer)
+    std::optional<MeshCoordinate> secondary_axis_neighbor;
+    if (secondary_cluster_axis.has_value() && is_sender) {
+        secondary_axis_neighbor = secondary_sender_coord_opt;
+    }
+
+    // Get reverse neighbor along secondary axis (for secondary_sender->sender sync)
+    std::optional<MeshCoordinate> reverse_secondary_axis_neighbor;
+    if (secondary_cluster_axis.has_value() && is_secondary_sender) {
+        // Secondary sender needs a connection back to the primary sender for bidirectional sync
+        reverse_secondary_axis_neighbor = sender_coord;
+    }
+
+    TT_FATAL(
+        forward_coord.has_value() || backward_coord.has_value() || secondary_axis_neighbor.has_value(),
+        "DEBUG: No valid neighbors found for device at coord {}",
+        self_coord);
 
     auto* mesh_device = input_tensor.device();
-    [[maybe_unused]] bool is_first_chip = ring_index == 0;
-    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
-    log_trace(
-        tt::LogOp,
-        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
-        self_coord,
-        is_first_chip,
-        is_last_chip);
 
     // Fatal if input is not tilized with tiny tiles (1, 32)
     bool tilized = input_tensor.layout() == ttnn::TILE_LAYOUT;
@@ -172,12 +212,19 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
             .set_tile_dims(src0_cb_index, tiny_tile);
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
-    // Sender info
-    bool is_sender = self_coord == sender_coord;
-
     auto data_core_coord = mesh_device->worker_core_from_logical_core(sender_worker_cores[0]);
     auto core_noc_x = data_core_coord.x;
     auto core_noc_y = data_core_coord.y;
+
+    uint32_t has_secondary_target = 0;
+    if (secondary_cluster_axis.has_value() && is_sender && secondary_axis_neighbor.has_value()) {
+        has_secondary_target = 1;
+    }
+
+    uint32_t has_reverse_secondary_connection = 0;
+    if (secondary_cluster_axis.has_value() && is_secondary_sender && reverse_secondary_axis_neighbor.has_value()) {
+        has_reverse_secondary_connection = 1;
+    }
 
     // KERNEL CREATION
     // Reader
@@ -185,22 +232,29 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
         src0_cb_index,                               // cb0_id
         num_pages_per_packet,                        // packet_size_in_pages
         input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
-        is_sender,
+        is_sender,                                   // is_sender (only original sender reads from input)
         core_noc_x,
-        core_noc_y};
+        core_noc_y,
+        is_secondary_sender,               // is_secondary_sender (receives from sender first, then broadcasts)
+        is_active_broadcaster ? 1u : 0u};  // is_active_broadcaster
 
     std::vector<uint32_t> writer_compile_args = {
         src0_cb_index,                               // cb0_id
         num_pages_per_packet,                        // packet_size_in_pages
         input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
-        num_targets_forward,                         // num_targets_forward_direction
-        num_targets_backward,                        // num_targets_backward_direction
-        is_sender,
+        num_targets_forward,                         // num_targets_forward_direction (for barrier)
+        num_targets_backward,                        // num_targets_backward_direction (for barrier)
+        is_sender,                                   // is_sender
         core_noc_x,
-        core_noc_y};
+        core_noc_y,
+        is_secondary_sender,               // is_secondary_sender
+        has_secondary_target,              // has_secondary_target
+        has_reverse_secondary_connection,  // has_reverse_secondary_connection
+    };
 
     std::vector<uint32_t> mcast_forward_args(2, 0);
     std::vector<uint32_t> mcast_backward_args(2, 0);
+    // ALL devices need mcast args for barrier synchronization
     if (forward_coord.has_value()) {
         mcast_forward_args[0] = 1;
         mcast_forward_args[1] = num_targets_forward;
@@ -211,6 +265,9 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
     }
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
+
+    // Add using_persistent_buffers flag
+    writer_compile_args.push_back(operation_attributes.using_persistent_buffers ? 1 : 0);
 
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -255,15 +312,29 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
-        bool wait_output_semaphore = (link == 0) && !is_sender;
-        bool reset_global_semaphore = (link == 0) && !is_sender;
+        bool wait_output_semaphore = false;
+        bool reset_global_semaphore = false;
+
+        if (secondary_cluster_axis.has_value()) {
+            // Dual-axis mode
+            if (is_secondary_sender || !is_sender) {
+                // Secondary sender and receivers wait for data
+                wait_output_semaphore = (link == 0);
+                reset_global_semaphore = (link == 0);
+            }
+        } else {
+            // Single-axis mode
+            wait_output_semaphore = (link == 0) && !is_sender;
+            reset_global_semaphore = (link == 0) && !is_sender;
+        }
+
         uint32_t out_ready_sem_wait_value = 1 * num_links;
         uint32_t output_tile_id_start = input_tile_id_start;
         uint32_t output_tile_id_end = input_tile_id_end;
 
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),  // tensor_address0  //HERE
-            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
+            output_tensor.buffer()->address(),  // tensor_address0
+            semaphore.address(),                // out_ready_sem_bank_addr
             output_tile_id_start,               // tile_id_start
             output_tile_id_end,                 // tile_id_end
             wait_output_semaphore,              // wait_output_semaphore
@@ -273,14 +344,24 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
             out_ready_sem_wait_value,           // out_ready_sem_wait_value
             barrier_semaphore.address(),        // barrier_sem
             barrier_core.x,                     // barrier_sem_noc0_x
-            barrier_core.y                      // barrier_sem_noc0_y
+            barrier_core.y,                     // barrier_sem_noc0_y
+            ring_index,
+            secondary_sync_semaphore.address(),  // secondary_sync_sem
         };
+
         auto num_connections = (int)forward_coord.has_value() + (int)backward_coord.has_value();
+        if (secondary_cluster_axis.has_value() && is_sender && secondary_axis_neighbor.has_value()) {
+            num_connections += 1;
+        }
+        if (secondary_cluster_axis.has_value() && is_secondary_sender && reverse_secondary_axis_neighbor.has_value()) {
+            num_connections += 1;
+        }
         writer_rt_args.push_back(num_connections);
 
         const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(self_coord);
         std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
         dst_nodes.reserve(num_connections);
+
         if (forward_coord.has_value()) {
             const auto forward_coord_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
             dst_nodes.push_back(forward_coord_fabric_node_id);
@@ -288,6 +369,19 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
         if (backward_coord.has_value()) {
             const auto backward_coord_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
             dst_nodes.push_back(backward_coord_fabric_node_id);
+        }
+
+        // Add secondary axis connection (for sender in dual-axis mode)
+        if (secondary_cluster_axis.has_value() && is_sender && secondary_axis_neighbor.has_value()) {
+            const auto secondary_fabric_node_id = mesh_device->get_fabric_node_id(secondary_axis_neighbor.value());
+            dst_nodes.push_back(secondary_fabric_node_id);
+        }
+
+        // Add reverse secondary axis connection (for secondary sender to sync back to primary sender)
+        if (secondary_cluster_axis.has_value() && is_secondary_sender && reverse_secondary_axis_neighbor.has_value()) {
+            const auto reverse_secondary_fabric_node_id =
+                mesh_device->get_fabric_node_id(reverse_secondary_axis_neighbor.value());
+            dst_nodes.push_back(reverse_secondary_fabric_node_id);
         }
 
         append_routing_plane_connection_manager_rt_args(
@@ -301,16 +395,18 @@ DeepseekMinimalBroadcastProgramFactory::cached_program_t DeepseekMinimalBroadcas
         .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
         .semaphore = semaphore,
         .barrier_semaphore = barrier_semaphore,
+        .secondary_sync_semaphore = secondary_sync_semaphore,
         .ring_index = ring_index,
+        .is_secondary_sender = is_secondary_sender,
     };
     return {std::move(program), std::move(shared_variables)};
 }
 
 void DeepseekMinimalBroadcastProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const DeepseekMinimalBroadcastParams& /*operation_attributes*/,
+    const DeepseekMinimalBroadcastInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const auto& output = tensor_return_value;
 
@@ -336,7 +432,8 @@ void DeepseekMinimalBroadcastProgramFactory::override_runtime_arguments(
             worker_writer_sender_runtime_args[0] = output.buffer()->address();
             worker_writer_sender_runtime_args[1] = shared_vars.semaphore.address();
             worker_writer_sender_runtime_args[9] = shared_vars.barrier_semaphore.address();
+            worker_writer_sender_runtime_args[13] = shared_vars.secondary_sync_semaphore.address();
         }
     }
 }
-}  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_broadcast::program
+}  // namespace ttnn::experimental::prim

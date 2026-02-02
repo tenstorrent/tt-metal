@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
 #include "ttnn/operation.hpp"
@@ -12,29 +13,16 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa {
+namespace ttnn::prim {
 
-namespace {
-
-std::uint32_t get_q_chunk_size(const operation_attributes_t& attrs) {
-    return attrs.program_config ? attrs.program_config->q_chunk_size : 32;
+SDPAOperation::program_factory_t SDPAOperation::select_program_factory(const SDPAParams&, const SDPAInputs&) {
+    return SDPAProgramFactory{};
 }
-
-std::uint32_t get_k_chunk_size(const operation_attributes_t& attrs) {
-    return attrs.program_config ? attrs.program_config->k_chunk_size : 32;
-}
-
-}  // namespace
-
-SDPAOperation::program_factory_t SDPAOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return program::SDPAProgramFactory{};
-}
-void SDPAOperation::validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensors) {
+void SDPAOperation::validate_on_program_cache_hit(const SDPAParams& attrs, const SDPAInputs& tensors) {
     validate_on_program_cache_miss(attrs, tensors);
 }
 
-void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensors) {
+void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, const SDPAInputs& tensors) {
     const bool use_mla = attrs.use_mla;
 
     // Common validations for both modes
@@ -101,29 +89,15 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
             const auto q_shape = q.logical_shape();
             const auto k_shape = k.logical_shape();
 
-            TT_FATAL(mask_shape[0] == q_shape[0], "Mask batch dim must match Q batch dim");
+            TT_FATAL(
+                mask_shape[0] == 1 || mask_shape[0] == q_shape[0],
+                "Mask batch dim must either be 1 (to be broadcasted across all batches) or must match Q batch "
+                "dimension");
             TT_FATAL(
                 mask_shape[1] == 1 || mask_shape[1] == q_shape[1],
                 "Mask num_heads must either be 1 (to be broadcasted across all heads) or must match Q heads dimension");
             TT_FATAL(mask_shape[2] == q_shape[2], "Mask sequence length must match Q sequence length");
             TT_FATAL(mask_shape[3] == k_shape[2], "Mask sequence length must match K sequence length");
-
-            // When given a mask, we must check that the mask can be divided by chunk size. Otherwise we'd need to pad
-            // the mask.
-            const auto q_chunk_size = get_q_chunk_size(attrs);
-            const auto k_chunk_size = get_k_chunk_size(attrs);
-            TT_FATAL(
-                q_shape[2] % q_chunk_size == 0,
-                "If mask is provided, Q sequence length must be divisible by q_chunk_size. Got q_seq_len: {}, "
-                "q_chunk_size: {}",
-                q_shape[2],
-                q_chunk_size);
-            TT_FATAL(
-                k_shape[2] % k_chunk_size == 0,
-                "If mask is provided, K sequence length must be divisible by k_chunk_size. Got k_seq_len: {}, "
-                "k_chunk_size: {}",
-                k_shape[2],
-                k_chunk_size);
         }
 
         // Shape checks
@@ -269,6 +243,14 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
                 "chunk_start_idx must be a multiple of q_chunk_size. Got chunk_start_idx: {}, q_chunk_size: {}",
                 attrs.chunk_start_idx.value(),
                 q_chunk_size);
+
+            // Validate that chunk_start_idx is a multiple of k_chunk_size
+            // Workaround for https://github.com/tenstorrent/tt-metal/issues/35225
+            TT_FATAL(
+                attrs.chunk_start_idx.value() % k_chunk_size == 0,
+                "chunk_start_idx must be a multiple of k_chunk_size. Got chunk_start_idx: {}, k_chunk_size: {}",
+                attrs.chunk_start_idx.value(),
+                k_chunk_size);
         }
 
         // In chunked mode, K's sequence dimension should be >= Q's sequence dimension + chunk_start_idx
@@ -342,8 +324,8 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     }
 }
 
-spec_return_value_t SDPAOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t& tensors) {
+SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
+    const SDPAParams& attrs, const SDPAInputs& tensors) {
     auto shape = tensors.q.logical_shape();
     if (attrs.use_mla) {
         shape[3] = attrs.head_dim_v.value_or(shape[3]);
@@ -351,13 +333,12 @@ spec_return_value_t SDPAOperation::compute_output_specs(
     return TensorSpec(shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
 }
 
-tensor_return_value_t SDPAOperation::create_output_tensors(
-    const operation_attributes_t& attrs, const tensor_args_t& tensors) {
+SDPAOperation::tensor_return_value_t SDPAOperation::create_output_tensors(
+    const SDPAParams& attrs, const SDPAInputs& tensors) {
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
 
-tt::stl::hash::hash_t SDPAOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensors) {
+tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, const SDPAInputs& tensors) {
     bool is_chunked_prefill = attrs.chunk_start_idx.has_value();
 
     const Tensor& q = tensors.q;
@@ -367,6 +348,7 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
         attrs.scale,
+        attrs.sliding_window_size,
         attrs.output_mem_config,
         attrs.program_config,
         attrs.is_causal,
@@ -381,8 +363,9 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(
     return hash;
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> SDPAOperation::create_op_performance_model(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+tt::tt_metal::operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t>
+SDPAOperation::create_op_performance_model(
+    const SDPAParams& args, const SDPAInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const auto& input_tensor_v = args.use_mla ? tensor_args.k : tensor_args.v.value();
@@ -401,7 +384,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> SDPAOp
     }
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
         log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", enchantum::to_string(arch));
-        return operation::OpPerformanceModelGeneral<tensor_return_value_t>(input_tensors, output_tensor, 0);
+        return operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t>(
+            input_tensors, output_tensor, 0);
     }
 
     // Get main dimensions for Q*K and softmax(QK^T/sqrt) * V matmuls
@@ -463,15 +447,15 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> SDPAOp
 
     // TODO: somehow account for overhead of fused masking and softmax?
 
-    operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+    operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t> result(
         input_tensors, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
 
-}  // namespace ttnn::operations::transformer::sdpa
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
-ttnn::operations::transformer::sdpa::SDPAOperation::tensor_return_value_t sdpa(
+Tensor sdpa(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const std::optional<Tensor>& input_tensor_v,
@@ -487,7 +471,7 @@ ttnn::operations::transformer::sdpa::SDPAOperation::tensor_return_value_t sdpa(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    using OperationType = ttnn::operations::transformer::sdpa::SDPAOperation;
+    using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .scale = scale,

@@ -32,7 +32,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -472,7 +472,24 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("end"))
         .def_ro("start", &CoreRange::start_coord)
         .def_ro("end", &CoreRange::end_coord)
-        .def("grid_size", &CoreRange::grid_size);
+        .def("grid_size", &CoreRange::grid_size)
+        .def(
+            "contains",
+            nb::overload_cast<const CoreCoord&>(&CoreRange::contains, nb::const_),
+            nb::arg("core"),
+            "Check if a core coordinate is contained in this CoreRange")
+        .def(
+            "contains",
+            nb::overload_cast<const CoreRange&>(&CoreRange::contains, nb::const_),
+            nb::arg("core_range"),
+            "Check if a core range is contained in this CoreRange")
+        .def(
+            "contains",
+            nb::overload_cast<const CoreRangeSet&>(&CoreRange::contains, nb::const_),
+            nb::arg("core_range_set"),
+            "Check if a core range set is contained in this CoreRange")
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self);
 
     auto pyCoreRangeSet = static_cast<nb::class_<CoreRangeSet>>(m_tensor.attr("CoreRangeSet"));
     pyCoreRangeSet
@@ -501,10 +518,22 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("core"),
             "Check if a core coordinate is contained in this CoreRangeSet")
         .def(
+            "contains",
+            nb::overload_cast<const CoreRange&>(&CoreRangeSet::contains, nb::const_),
+            nb::arg("core_range"),
+            "Check if a core range is contained in this CoreRangeSet")
+        .def(
+            "contains",
+            nb::overload_cast<const CoreRangeSet&>(&CoreRangeSet::contains, nb::const_),
+            nb::arg("core_range_set"),
+            "Check if a core range set is contained in this CoreRangeSet")
+        .def(
             "merge",
             &CoreRangeSet::merge<CoreRangeSet>,
             nb::arg("other"),
-            "Merge this CoreRangeSet with another CoreRangeSet and return the result");
+            "Merge this CoreRangeSet with another CoreRangeSet and return the result")
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self);
 
     m_tensor.def(
         "corerange_to_cores",

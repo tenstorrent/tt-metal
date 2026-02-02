@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include <tt-metalium/math.hpp>
@@ -45,13 +46,6 @@ void validate_pool2d(
             "Input HW {} will overflow uint16 indices max {}",
             input_h * input_w,
             std::numeric_limits<uint16_t>::max());
-        auto kernel_h = sliding_window_config.window_hw.first;
-        auto kernel_w = sliding_window_config.window_hw.second;
-        TT_FATAL(
-            kernel_h * kernel_w <= 32,
-            "only kernel sizes less than or equal to 32 are supported, got {}x{}",
-            kernel_h,
-            kernel_w);
 
         TT_FATAL(output_layout == Layout::ROW_MAJOR, "Only ROW_MAJOR supported when return_indices is true");
     }
@@ -224,7 +218,8 @@ std::vector<ttnn::Tensor> pool2d(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     bool return_indices,
-    uint32_t memory_used) {
+    uint32_t memory_used,
+    bool config_tensor_in_dram) {
     using OperationType = ttnn::operations::pool::Pool2D;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -237,7 +232,8 @@ std::vector<ttnn::Tensor> pool2d(
             .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override,
             .return_indices_ = return_indices,
-            .memory_used = memory_used},
+            .memory_used = memory_used,
+            .config_tensor_in_dram = config_tensor_in_dram},
         OperationType::tensor_args_t{input_tensor});
 }
 }  // namespace ttnn::prim

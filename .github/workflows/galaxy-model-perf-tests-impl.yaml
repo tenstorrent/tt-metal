@@ -43,7 +43,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": false,
               "timeout": 50,
-              "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest -n auto models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
+              "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest -n auto models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
             }, # Pavle Josipovic
             {
               "name": "Galaxy Llama 70B model perf tests",
@@ -137,7 +137,17 @@ jobs:
               "timeout": 50,
               "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && export NO_PROMPT=1 && pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 \"",
               "owner_id": "U09ELB03XRU"
-            } # Stephen Osborne
+            }, # Stephen Osborne
+            {
+              "name": "Galaxy DiT Qwen-Image model perf tests",
+              "model-type": "QwenImage",
+              "model-name": "qwenimage",
+              "arch": "wormhole_b0",
+              "save-perf-data": true,
+              "timeout": 20,
+              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && pytest models/experimental/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k \"4x8\"",
+              "owner_id": "U08TED0JM9D"
+            } # Samuel Adesoye
           ]' --compact-output)
 
           # Combine both arrays into full matrix

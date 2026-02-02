@@ -709,6 +709,36 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteSouth) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::S, 1));
 }
 
+// Nightly UDM Mode Dual RISC Tests - test both BRISC and NCRISC accessing fabric simultaneously
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteDualRisc) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Dual RISC test does not support wormhole";
+    }
+    UDMFabricUnicastCommon(
+        this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 1), std::nullopt, std::nullopt, true);
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteDualRisc) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Dual RISC test does not support wormhole";
+    }
+    UDMFabricUnicastCommon(
+        this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::E, 1), std::nullopt, std::nullopt, true);
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncDualRisc) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Dual RISC test does not support wormhole";
+    }
+    UDMFabricUnicastCommon(
+        this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::E, 1), std::nullopt, std::nullopt, true);
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricReadDualRisc) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Dual RISC test does not support wormhole";
+    }
+    UDMFabricUnicastCommon(
+        this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 1), std::nullopt, std::nullopt, true);
+}
+
 // Nightly UDM Mode Tests - test udm inline write api changes for 2D
 TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteEast) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::E, 2));
@@ -883,6 +913,32 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllWorkerCoords) {
     }
 }
 
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteAllWorkerCoordsDualRisc) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Dual RISC test does not support wormhole";
+    }
+    auto grid_size = get_devices()[0]->get_devices()[0]->compute_with_storage_grid_size();
+    auto all_worker_pairs = GetAllWorkerCoordPairs(grid_size);
+    log_info(tt::LogTest, "Testing {} worker pairs for write operations", all_worker_pairs.size());
+    for (uint32_t dst : {5u, 6u, 7u}) {
+        log_info(tt::LogTest, "  Sender at fabric node 0 and receiver at fabric node {}", dst);
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(0u, dst), std::nullopt, all_worker_pairs);
+    }
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllWorkerCoordsDualRisc) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Dual RISC test does not support wormhole";
+    }
+    auto grid_size = get_devices()[0]->get_devices()[0]->compute_with_storage_grid_size();
+    auto all_worker_pairs = GetAllWorkerCoordPairs(grid_size);
+    log_info(tt::LogTest, "Testing {} worker pairs for read operations", all_worker_pairs.size());
+    for (uint32_t dst : {5u, 6u, 7u}) {
+        log_info(tt::LogTest, "  Sender at fabric node 0 and receiver at fabric node {}", dst);
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(0u, dst), std::nullopt, all_worker_pairs);
+    }
+}
+
 // UDM Mode All-to-All Tests - all devices send to all other devices simultaneously
 // Senders are on top half of compute grid, receivers are on bottom half
 // Each receiver receives from N-1 senders at different L1 locations
@@ -900,6 +956,34 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncAllToAll) {
 
 TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllToAll) {
     UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_READ);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteAllToAllDualRisc) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Dual RISC test does not support wormhole";
+    }
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_WRITE, true);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteAllToAllDualRisc) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Dual RISC test does not support wormhole";
+    }
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_INLINE_WRITE, true);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncAllToAllDualRisc) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Dual RISC test does not support wormhole";
+    }
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_ATOMIC_INC, true);
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllToAllDualRisc) {
+    if (arch_ == tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "Dual RISC test does not support wormhole";
+    }
+    UDMFabricUnicastAllToAllCommon(this, NOC_UNICAST_READ, true);
 }
 
 // Mux-to-Mux Forwarding Tests - test the mux's ability to forward packets to the correct downstream mux
@@ -1794,4 +1878,5 @@ TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) {
     RunSetUnicastRouteTest(this, false, HalProgrammableCoreType::IDLE_ETH);
 }
 
+// Test for std::atomic_exchange on kernels using BRISC and NCRISC
 }  // namespace tt::tt_fabric::fabric_router_tests

@@ -154,7 +154,7 @@ static void run_multi_txq_rxq_test(
     }
 
     // Verify we found a connection
-    TT_ASSERT(
+    TT_FATAL(
         sender_core_0.has_value() && receiver_core_0.has_value(),
         "No ethernet connection found between device_0 and device_1");
 

@@ -24,7 +24,6 @@ from diffusers import WanTransformer3DModel
     [
         [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
         [(2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear],
-        # [(1, 8), 1, 0, 1],
         [(4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring],
         [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
         [(4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear],
@@ -33,7 +32,6 @@ from diffusers import WanTransformer3DModel
     ids=[
         "2x4sp0tp1",
         "2x4sp1tp0",
-        # "1x8sp1tp0",
         "wh_4x8sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp0tp1",

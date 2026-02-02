@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_post_all_gather_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -11,7 +12,7 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::normalization {
+namespace ttnn::prim {
 
 LayerNormPostAllGatherDeviceOperation::program_factory_t LayerNormPostAllGatherDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
@@ -19,12 +20,12 @@ LayerNormPostAllGatherDeviceOperation::program_factory_t LayerNormPostAllGatherD
     if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
         const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
         if (program_config.use_welford) {
-            return program::LayerNormPostAllGatherWelfordProgramFactory{};
+            return LayerNormPostAllGatherWelfordProgramFactory{};
         }
     }
 
     // Default to normal program factory
-    return program::LayerNormPostAllGatherProgramFactory{};
+    return LayerNormPostAllGatherProgramFactory{};
 }
 
 void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_hit(
@@ -183,14 +184,14 @@ LayerNormPostAllGatherDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
 
 Tensor layer_norm_post_all_gather(
     const Tensor& input,
     const Tensor& stats,
-    ttnn::operations::normalization::LayerNormDistributedType norm_type,
+    LayerNormDistributedType norm_type,
     float eps,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -198,8 +199,8 @@ Tensor layer_norm_post_all_gather(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config) {
-    using OperationType = ttnn::operations::normalization::LayerNormPostAllGatherDeviceOperation;
+    const LayerNormProgramConfig& program_config) {
+    using OperationType = LayerNormPostAllGatherDeviceOperation;
     return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,

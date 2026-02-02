@@ -187,7 +187,8 @@ run_t3000_qwen3_perplexity_tests() {
   qwen32b=Qwen/Qwen3-32B
   tt_cache_qwen32b=$TT_CACHE_HOME/$qwen32b
 
-  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout 3600; fail+=$?
+# Run Qwen3.32B with max_seq_len 32k
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --max_seq_len 32768 --timeout 3600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -206,7 +207,7 @@ run_t3000_gemma3_accuracy_tests() {
   gemma3_27b=google/gemma-3-27b-it
   tt_cache_gemma3_27b=$TT_CACHE_HOME/$gemma3_27b
 
-  HF_MODEL=$gemma3_27b TT_CACHE_PATH=$tt_cache_gemma3_27b pytest models/demos/gemma3/demo/text_demo.py -k "ci-token-matching"
+  HF_MODEL=$gemma3_27b TT_CACHE_PATH=$tt_cache_gemma3_27b pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "ci-token-matching"
 
   # Record the end time
   end_time=$(date +%s)

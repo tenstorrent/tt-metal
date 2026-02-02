@@ -275,6 +275,8 @@ class Generator:
         enable_trace=True,
         model_id_warmup=None,
         start_pos: list[int] = None,  # Cached prefixes lengths
+        return_hidden_states=False,
+        warmup_prefill=True,
         **kwargs,
     ):
         self.mode = "prefill"
@@ -285,23 +287,34 @@ class Generator:
             enable_trace = False
 
         # we need this here becuase of tt-metal tests
-        self.warmup_model_prefill(kv_cache, enable_trace)
+        if warmup_prefill:
+            self.warmup_model_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
-        # Each model expected to run the same model, safe to use 1st vocab size
-        output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
+        # Output shape depends on whether we're returning logits or hidden states
+        if return_hidden_states:
+            # For hidden states, output shape is [batch_size, hidden_size]
+            # Note: dim is the hidden dimension size
+            hidden_size = self.model_args[0].dim
+            output_tensor = torch.zeros(batch_size, hidden_size)
+        else:
+            # Each model expected to run the same model, safe to use 1st vocab size
+            output_tensor = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
 
         if empty_slots is None:
             empty_slots = list(range(batch_size))
 
+        # For row-sharded users, use max_local_batch_size (users per row) for group_user_id
+        local_batch_size = getattr(self.model_args[0], "max_local_batch_size", max_batch_size_per_model)
+
         out_list = []
         for idx, user_id in enumerate(empty_slots):
             # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
-            group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
+            group_user_id = user_id % local_batch_size if page_table is None else 0
             seq_len = int(prompt_lens[idx])  # Full length of the current prompt
             num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
             last_token_idx = seq_len - 1  # Last token index of the current full prompt, including the cached tokens
@@ -348,7 +361,7 @@ class Generator:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
-
+            local_kwargs["global_user_id"] = user_id
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
@@ -387,13 +400,22 @@ class Generator:
             # Ensure all copying is done
             ttnn.synchronize_device(self.model[model_id].mesh_device)
 
-            # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[idx] = self.model[model_id].process_output_prefill(
-                out, last_token_idx=((last_token_idx_relative) % 32)
-            )
+            # Extract the last token's output (logits or hidden states)
+            # Use last_token_idx_relative to account for cached prefixes
+            if return_hidden_states:
+                # Extract hidden states (shape: [hidden_size])
+                output_tensor[idx] = self.model[model_id].process_output_prefill_hidden_states(
+                    out, last_token_idx=(last_token_idx_relative % 32)
+                )
+            else:
+                # Extract logits (shape: [1, vocab_size])
+                # Since we give unpadded_seq_len, only the tile containing the last token is returned
+                output_tensor[idx] = self.model[model_id].process_output_prefill(
+                    out, last_token_idx=(last_token_idx_relative % 32)
+                )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
-        return output_logits
+        return output_tensor
 
     def prefill_forward_single_user_text(
         self,

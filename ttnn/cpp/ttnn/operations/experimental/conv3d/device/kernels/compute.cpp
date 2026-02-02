@@ -121,8 +121,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     }
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t cb_vol2col_rm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_vol2col_tiled = get_compile_time_arg_val(1);
     constexpr uint32_t cb_weight_tiled = get_compile_time_arg_val(2);
@@ -291,4 +290,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

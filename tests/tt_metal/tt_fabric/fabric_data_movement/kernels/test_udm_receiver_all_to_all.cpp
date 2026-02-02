@@ -42,8 +42,6 @@ inline void poll_for_value(volatile tt_l1_ptr uint32_t* poll_addr, uint32_t expe
  * Skips slot = receiver_device_idx (no one sends to self).
  */
 void kernel_main() {
-    tt::tt_fabric::udm::fabric_local_state_init();
-
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
@@ -123,8 +121,6 @@ void kernel_main() {
             bytes_received += packet_payload_size_bytes;
         }
     }
-
-    tt::tt_fabric::udm::close_fabric_connection();
 
     if (!match) {
         test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_DATA_MISMATCH;

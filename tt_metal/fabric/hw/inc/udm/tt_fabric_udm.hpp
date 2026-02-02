@@ -293,7 +293,7 @@ FORCE_INLINE void fabric_fast_write_any_len(
     uint32_t num_dests = 1,
     uint8_t trid = 0,
     uint8_t posted = 0) {
-    auto [connection, is_init] = get_or_open_fabric_connection();
+    auto& connection = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
 
     // For optimization purpose, the non-last fabric writes will be posted, and only the last fabric write is determined
@@ -313,6 +313,8 @@ FORCE_INLINE void fabric_fast_write_any_len(
     if (!posted) {
         fabric_nonposted_writes_acked += num_dests;
     }
+
+    release_fabric_connection();
 }
 
 /**
@@ -340,7 +342,7 @@ FORCE_INLINE void fabric_fast_write_dw_inline(
     uint32_t num_dests = 1,
     uint8_t trid = 0,
     uint8_t posted = 0) {
-    auto [connection, is_init] = get_or_open_fabric_connection();
+    auto& connection = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
 
     fabric_write_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, trid, posted);
@@ -363,6 +365,8 @@ FORCE_INLINE void fabric_fast_write_dw_inline(
     }
 
     noc_async_writes_flushed();
+
+    release_fabric_connection();
 }
 
 /**
@@ -390,7 +394,7 @@ FORCE_INLINE void fabric_fast_atomic_inc(
     uint8_t trid = 0,
     uint8_t posted = 0,
     bool flush = true) {
-    auto [connection, is_init] = get_or_open_fabric_connection();
+    auto& connection = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
 
     fabric_write_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, trid, posted);
@@ -405,6 +409,8 @@ FORCE_INLINE void fabric_fast_atomic_inc(
     }
 
     noc_async_writes_flushed();
+
+    release_fabric_connection();
 }
 
 // Map downstream direction to mux array index [0-2], excluding my_direction
@@ -593,7 +599,7 @@ FORCE_INLINE void fabric_fast_read_any_len(
     uint32_t src_l1_addr,
     uint32_t size_bytes,
     uint8_t trid = 0) {
-    auto [connection, is_init] = get_or_open_fabric_connection();
+    auto& connection = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
 
     fabric_read_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, src_l1_addr, size_bytes, trid);
@@ -604,6 +610,8 @@ FORCE_INLINE void fabric_fast_read_any_len(
 
     fabric_reads_num_acked++;
     noc_async_writes_flushed();
+
+    release_fabric_connection();
 }
 
 /**

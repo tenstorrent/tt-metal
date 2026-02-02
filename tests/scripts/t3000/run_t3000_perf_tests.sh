@@ -66,7 +66,7 @@ run_t3000_resnet50_tests() {
 
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
-  pytest models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m "model_perf_t3000" ; fail+=$?
+  pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m "model_perf_t3000" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -120,7 +120,7 @@ run_t3000_gemma3_tests() {
   fail=0
   start_time=$(date +%s)
 
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/tests/test_perf_vision_cross_attention_transformer.py ; fail+=$?
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/tests/test_perf_vision_cross_attention_transformer.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -134,7 +134,7 @@ run_t3000_gemma3_tests() {
 }
 
 run_t3000_gemma3_tests_op_to_op() {
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/tests/test_vision_cross_attention_transformer_perf_ops.py::test_op_to_op_perf_gemma_vision
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/tests/test_vision_cross_attention_transformer_perf_ops.py::test_op_to_op_perf_gemma_vision
 }
 
 run_t3000_wan22_tests() {
@@ -180,11 +180,15 @@ run_t3000_stable_diffusion_35_large_tests() {
 }
 
 run_t3000_flux1_tests() {
-  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k 2x4sp0tp1"
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k wh_2x4sp0tp1"
 }
 
 run_t3000_motif_tests() {
   run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_performance_motif.py"
+}
+
+run_t3000_qwenimage_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k 2x4"
 }
 
 run_t3000_model_perf_tests() {

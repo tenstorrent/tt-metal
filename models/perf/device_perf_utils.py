@@ -80,7 +80,30 @@ def post_process_ops_log_detailed(
         stop = markers[markers == "stop"].index[0]
         df = df.iloc[start + 1 : stop]
     if op_name != "":
-        df = df[df["OP CODE"] == op_name]
+        df_filtered = df[df["OP CODE"] == op_name]
+        if df_filtered.empty:
+            # Try partial match (in case op_name is just the class name without namespace)
+            # First try exact suffix match
+            df_filtered = df[df["OP CODE"].str.endswith(f"::{op_name}", na=False)]
+            if df_filtered.empty:
+                # Try matching within template parameters (e.g., MeshDeviceOperationAdapter<...::GroupNormDeviceOperation>)
+                # This matches both "::GroupNormDeviceOperation" and "GroupNormDeviceOperation>" (end of template)
+                df_filtered = df[
+                    df["OP CODE"].str.contains(f"::{op_name}", na=False)
+                    | df["OP CODE"].str.contains(f"{op_name}>", na=False)
+                ]
+            if df_filtered.empty:
+                # Show what operation names are actually in the CSV
+                unique_op_codes = df["OP CODE"].unique() if not df.empty else []
+                error_msg = (
+                    f"No operations found matching op_name='{op_name}' in {filename}. "
+                    f"Found {len(unique_op_codes)} unique operation(s): {list(unique_op_codes)[:10]}"
+                )
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            else:
+                logger.info(f"Found {len(df_filtered)} operation(s) matching '{op_name}' (partial match)")
+        df = df_filtered
 
     # group by DEVICE ID
     df = df.groupby("DEVICE ID")
@@ -89,6 +112,26 @@ def post_process_ops_log_detailed(
 
     # Convert list of tuples to list of dataframes
     dfs = [group for _, group in df]
+
+    # Check if dfs is empty (no matching operations found)
+    if not dfs:
+        op_filter_msg = f" matching op_name='{op_name}'" if op_name else ""
+        error_msg = (
+            f"No device data found for operations{op_filter_msg} in {filename}. "
+            f"Operations were matched but no device data is available."
+        )
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
+    # Check if the first dataframe is empty
+    if len(dfs[0]) == 0:
+        op_filter_msg = f" matching op_name='{op_name}'" if op_name else ""
+        error_msg = (
+            f"No device data found for operations{op_filter_msg} in {filename}. "
+            f"Operations were matched but the first device group is empty."
+        )
+        logger.error(error_msg)
+        raise ValueError(error_msg)
 
     # concatenate the list of df into a single df by interleaving the rows
     df = pd.concat([df.iloc[[i]] for i in range(len(dfs[0])) for df in dfs], ignore_index=True)
