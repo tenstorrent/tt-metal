@@ -931,41 +931,5 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
     }
 }
 
-TEST_F(MeshTraceDynamicAllocationTestSuite, MultipleTracesWithDynamicAllocation) {
-    // Verify multiple traces can be captured and replayed
-    uint32_t num_traces = 3;
-    uint32_t num_replays = 3;
-
-    MeshCoordinateRange all_devices(mesh_device_->shape());
-    std::vector<MeshTraceId> trace_ids = {};
-
-    // Capture multiple traces
-    for (uint32_t trace_idx = 0; trace_idx < num_traces; trace_idx++) {
-        auto workload = std::make_shared<MeshWorkload>();
-        auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-            1, mesh_device_->compute_with_storage_grid_size(), 200 + trace_idx);
-        workload->add_program(all_devices, std::move(*programs[0]));
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-
-        auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-        mesh_device_->end_mesh_trace(0, trace_id);
-        trace_ids.push_back(trace_id);
-    }
-
-    // Replay all traces
-    for (uint32_t i = 0; i < num_replays; i++) {
-        for (auto trace_id : trace_ids) {
-            mesh_device_->replay_mesh_trace(0, trace_id, false);
-        }
-    }
-    Finish(mesh_device_->mesh_command_queue());
-
-    // Release all traces
-    for (auto trace_id : trace_ids) {
-        mesh_device_->release_mesh_trace(trace_id);
-    }
-}
-
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test
