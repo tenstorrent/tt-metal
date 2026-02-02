@@ -17,24 +17,6 @@ from pydantic import AliasChoices, BaseModel, Field
 import ttnn
 
 
-class HostEmbedding(torch.nn.Module):
-    def __init__(self, model_args):
-        super().__init__()
-        self.emb = torch.nn.Embedding(model_args.vocab_size, model_args.dim)
-
-    def forward(self, x):
-        return self.emb(x)
-
-
-class HostScaledEmbedding(HostEmbedding):
-    def __init__(self, model_args):
-        super().__init__(model_args)
-        self.embed_scale = model_args.embed_scale
-
-    def forward(self, x):
-        return self.emb(x) * self.embed_scale
-
-
 # Default configuration for Paged Attention
 class PagedAttentionConfig:
     def __init__(self, block_size=32, max_num_blocks=1024):

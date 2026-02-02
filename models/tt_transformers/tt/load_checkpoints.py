@@ -256,7 +256,7 @@ def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
 def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
     checkpoint = {}
 
-    (f"Loading {len(checkpoints)} chunked checkpoint files")
+    logger.info(f"Loading {len(checkpoints)} chunked checkpoint files")
     for ckpt in tqdm(checkpoints):
         if n_layers:
             # Layer range is in the file name, like layers_start-end.pth

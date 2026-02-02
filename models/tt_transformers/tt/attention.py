@@ -455,7 +455,6 @@ class Attention(LightweightModule):
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
-            # bias=self.wqkv_bias,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
