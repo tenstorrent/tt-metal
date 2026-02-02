@@ -483,10 +483,10 @@ run_claude_analysis() {
     # Use -p flag for non-interactive/pipe mode (print and exit)
     # Use --dangerously-skip-permissions to allow Claude to read source files
     if [[ $(id -u) -eq 0 ]]; then
-        # Running as root - use runuser to switch to claude user
+        # Running as root - run claude directly
         if command -v timeout &> /dev/null; then
             log_info "Using timeout (10 minute limit)"
-            if ! timeout 600 runuser -u "$CLAUDE_USER" -- bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
+            if ! timeout 600 bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
                 exit_code=$?
             fi
 
@@ -498,7 +498,7 @@ run_claude_analysis() {
             fi
         else
             # No timeout available
-            if ! runuser -u "$CLAUDE_USER" -- bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
+            if ! bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
                 exit_code=$?
             fi
         fi
