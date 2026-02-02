@@ -85,7 +85,6 @@ class Attention(LightweightModule):
 
         self.dtype = dtype
 
-        self.max_seq_len = configuration.max_seq_len
         self.grid_size = configuration.max_grid_size
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
@@ -994,7 +993,6 @@ class Attention(LightweightModule):
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
         tensor_copy = ttnn.clone(key_or_value_layer)
-        # key_or_value_layer.deallocate(True)
         # Get all tensors from multi-device tensor
         tensors = ttnn.get_device_tensors(tensor_copy)
         # Get only tensors from specific column chips
