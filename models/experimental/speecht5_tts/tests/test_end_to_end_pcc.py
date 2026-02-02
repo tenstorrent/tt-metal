@@ -36,13 +36,17 @@ from models.experimental.speecht5_tts.reference import (
     load_postnet_from_huggingface as load_postnet_ref,
 )
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_encoder import TTNNSpeechT5Encoder, preprocess_encoder_parameters
-from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder import TTNNSpeechT5Decoder, preprocess_decoder_parameters
+from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder_manual_attn import (
+    TTNNSpeechT5Decoder,
+    preprocess_decoder_parameters,
+    init_kv_cache,
+)
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import (
     TTNNSpeechT5SpeechDecoderPostnet,
     preprocess_postnet_parameters,
 )
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_encoder import TTNNEncoderConfig
-from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder import TTNNDecoderConfig
+from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder_manual_attn import TTNNDecoderConfig
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import TTNNPostNetConfig
 
 
@@ -147,7 +151,7 @@ def test_end_to_end_pcc():
     encoder_params = preprocess_encoder_parameters(hf_model.speecht5.encoder, ttnn_encoder_config, device)
     ttnn_encoder = TTNNSpeechT5Encoder(device=device, parameters=encoder_params, config=ttnn_encoder_config)
 
-    # TTNN Decoder
+    # TTNN Decoder (Hybrid FP32+BF16)
     ttnn_decoder_config = TTNNDecoderConfig(
         hidden_size=768,
         num_layers=6,
@@ -230,7 +234,7 @@ def test_end_to_end_pcc():
 
     # Create decoder inputs using PyTorch encoder output
     batch_size, seq_len, hidden_size = pytorch_encoder_output.shape
-    decoder_seq_len = 10  # Same as in other tests
+    decoder_seq_len = 50  # Increase to expose KV cache bug at longer sequences
 
     # Create mel input (random but deterministic)
     torch.manual_seed(123)  # Use different seed to avoid interference with speaker_embeddings
@@ -255,24 +259,59 @@ def test_end_to_end_pcc():
 
     print(f"PyTorch decoder output shape: {pytorch_decoder_output.shape}")
 
-    # TTNN decoder forward
+    # TTNN decoder forward WITH KV CACHE (decode mode)
+    # Initialize KV cache
+    batch_size = pytorch_encoder_output.shape[0]
+    encoder_seq_len = pytorch_encoder_output.shape[1]
+    kv_cache, cross_attn_cache = init_kv_cache(
+        ttnn_decoder_config, device, batch_size, max_sequence_length, encoder_seq_len
+    )
+
     decoder_input_ttnn = ttnn.from_torch(decoder_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     encoder_output_ttnn = ttnn.from_torch(
         pytorch_encoder_output, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
+    # Add unsqueeze for encoder output (required by decoder)
+    encoder_output_ttnn = ttnn.unsqueeze(encoder_output_ttnn, dim=1)
+
     speaker_embeddings_ttnn = ttnn.from_torch(
         speaker_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
 
-    ttnn_decoder_output = ttnn_decoder(
-        decoder_input_values=decoder_input_ttnn,
-        encoder_hidden_states=encoder_output_ttnn,
-        speaker_embeddings=speaker_embeddings_ttnn,
-    )
-    # Handle tuple return
-    if isinstance(ttnn_decoder_output, tuple):
-        ttnn_decoder_output = ttnn_decoder_output[0]
-    ttnn_decoder_output_torch = ttnn.to_torch(ttnn_decoder_output)
+    # Run decoder step-by-step with KV cache (autoregressive decode mode)
+    print(f"\nRunning decoder in DECODE MODE with KV cache (step-by-step)...")
+    ttnn_decoder_outputs = []
+
+    for step in range(decoder_seq_len):
+        # Extract current frame
+        current_frame = decoder_input[:, step : step + 1, :]
+        current_frame_ttnn = ttnn.from_torch(current_frame, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+        # Create position tensor
+        current_pos = torch.tensor([step], dtype=torch.int32)
+        current_pos_tensor = ttnn.from_torch(
+            current_pos.reshape(1, 1),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Decoder forward with KV cache
+        ttnn_dec_out = ttnn_decoder(
+            decoder_input_values=current_frame_ttnn,
+            encoder_hidden_states=encoder_output_ttnn,
+            kv_cache=kv_cache,
+            cross_attn_cache=cross_attn_cache,
+            cross_attn_cache_valid=(step > 0),
+            current_decode_pos=current_pos_tensor,
+            position_offset=step,
+        )
+
+        ttnn_decoder_outputs.append(ttnn.to_torch(ttnn_dec_out).squeeze(1))
+
+    # Concatenate all outputs
+    ttnn_decoder_output_torch = torch.cat(ttnn_decoder_outputs, dim=1)
 
     print(f"TTNN decoder output shape: {ttnn_decoder_output_torch.shape}")
 

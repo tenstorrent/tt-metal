@@ -53,7 +53,7 @@ from models.experimental.speecht5_tts.tt.ttnn_speecht5_encoder import (
     TTNNEncoderConfig,
     preprocess_encoder_parameters,
 )
-from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder import (
+from models.experimental.speecht5_tts.tt.ttnn_speecht5_decoder_manual_attn import (
     TTNNSpeechT5Decoder,
     TTNNDecoderConfig,
     preprocess_decoder_parameters,

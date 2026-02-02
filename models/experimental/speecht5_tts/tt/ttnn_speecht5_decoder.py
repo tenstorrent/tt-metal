@@ -142,11 +142,19 @@ def get_decode_sdpa_configs(config, bsz, device, max_seq_len=256):
     )
 
     # Compute appropriate chunk sizes based on max_seq_len
-    # Chunk sizes must divide evenly into padded sequence length
-    padded_seq_len = nearest_32(max_seq_len)
-    # Use smaller of 256 or padded_seq_len to ensure divisibility
-    k_chunk_size = min(256, padded_seq_len)
-    q_chunk_size = min(256, padded_seq_len)
+    # CRITICAL: Chunk sizes must be powers of 2 for SDPA decode
+    # Use the largest power of 2 that doesn't exceed max_seq_len (capped at 256)
+    def next_power_of_2(n):
+        """Find the largest power of 2 <= n, capped at 256."""
+        if n >= 256:
+            return 256
+        power = 1
+        while power * 2 <= n:
+            power *= 2
+        return power
+
+    k_chunk_size = next_power_of_2(max_seq_len)
+    q_chunk_size = next_power_of_2(max_seq_len)
 
     compute_grid_size = device.compute_with_storage_grid_size()
     sdpa_decode_progcfg = ttnn.SDPAProgramConfig(
@@ -210,10 +218,10 @@ def l1_width_sharded_memory(hidden_states):
 def get_high_perf_compute_config():
     """
     Get compute kernel config optimized for maximum core utilization and performance.
-    Uses HiFi4 for speed while maintaining L1 memory optimization.
+    Uses HiFi4 for maximum precision in attention operations.
     """
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Upgraded from HiFi2 for better precision
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,  # Keep L1 accumulation for memory efficiency
@@ -239,6 +247,9 @@ class TTNNDecoderConfig:
     speech_decoder_prenet_layers: int = 2
     speech_decoder_prenet_dropout: float = 0.0  # Disabled for inference - static masks cause noise accumulation
     speaker_embedding_dim: int = 512
+
+    # Precision control
+    use_fp32: bool = False  # If True, use FP32 for all decoder operations including weights
 
 
 class TTNNSpeechDecoderPrenet:
@@ -1389,7 +1400,7 @@ def preprocess_decoder_parameters(
     Converts all weights to TTNN format with proper:
     - Transposition for linear layers
     - Memory configuration (DRAM for weights)
-    - Data type (bfloat16)
+    - Data type (bfloat16 or float32 based on config.use_fp32)
     - Layout (TILE_LAYOUT)
 
     Also precomputes constant values for performance:
@@ -1411,6 +1422,9 @@ def preprocess_decoder_parameters(
     DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
     L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
+    # Select dtype based on config
+    DTYPE = ttnn.float32 if config.use_fp32 else ttnn.bfloat16
+
     # Helper to convert linear weights
 
     def convert_linear_from_dict(torch_linear):
@@ -1423,14 +1437,14 @@ def preprocess_decoder_parameters(
         return {
             "weight": ttnn.from_torch(
                 weight.T,  # Transpose for TTNN
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
             ),
             "bias": ttnn.from_torch(
                 bias.unsqueeze(0).unsqueeze(0),  # [256] -> [1, 1, 256] for proper broadcasting
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
@@ -1446,14 +1460,14 @@ def preprocess_decoder_parameters(
         return {
             "weight": ttnn.from_torch(
                 weight.T,  # Transpose for TTNN
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
             ),
             "bias": ttnn.from_torch(
                 bias.unsqueeze(0).unsqueeze(0),  # [256] -> [1, 1, 256] for proper broadcasting
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
@@ -1467,14 +1481,14 @@ def preprocess_decoder_parameters(
         return {
             "weight": ttnn.from_torch(
                 torch_ln.weight.data,
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
             ),
             "bias": ttnn.from_torch(
                 torch_ln.bias.data,
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
@@ -1495,7 +1509,7 @@ def preprocess_decoder_parameters(
     # Positional encoding (buffer)
     prenet_params["positional_encoding"] = ttnn.from_torch(
         torch_model.prenet.encode_positions.pe,
-        dtype=ttnn.bfloat16,
+        dtype=DTYPE,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=DRAM_MEMCFG,
@@ -1504,7 +1518,7 @@ def preprocess_decoder_parameters(
     # Positional encoding alpha (scalar parameter)
     prenet_params["encode_positions_alpha"] = ttnn.from_torch(
         torch_model.prenet.encode_positions.alpha.data,
-        dtype=ttnn.bfloat16,
+        dtype=DTYPE,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=DRAM_MEMCFG,
@@ -1524,7 +1538,7 @@ def preprocess_decoder_parameters(
     # Convert to TTNN and store in DRAM (weights memory)
     prenet_params["speaker_embeddings_normalized"] = ttnn.from_torch(
         speaker_embeddings_normalized,
-        dtype=ttnn.bfloat16,
+        dtype=DTYPE,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=DRAM_MEMCFG,
@@ -1559,7 +1573,7 @@ def preprocess_decoder_parameters(
         # Convert to TTNN
         mask_ttnn = ttnn.from_torch(
             mask,
-            dtype=ttnn.bfloat16,
+            dtype=DTYPE,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=DRAM_MEMCFG,  # Store masks in DRAM like weights
