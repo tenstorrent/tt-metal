@@ -1053,8 +1053,7 @@ void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     }
 }
 
-__attribute__((optimize("Os"))) void sigmoid_sub(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = sigmoid(in0_cb - in1_cb)
     /**
      * sigmoid(x) is accurately implemented as 1 / (1 + exp(-x))
@@ -1106,8 +1105,7 @@ void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, 
 }
 #endif
 
-__attribute__((optimize("Os"))) void logsigmoid_sub(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = logsigmoid(in0_cb - in1_cb)
     // Implemented as softplus for numerical stability. logsigmoid(x) = -softplus(-x)
     cb_wait_front(in0_cb, num_tiles);
@@ -1139,7 +1137,7 @@ __attribute__((optimize("Os"))) void logsigmoid_sub(
     cb_push_back(out_cb, num_tiles);
 }
 
-void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+__attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = in0_cb - in1_cb
 
     cb_wait_front(in0_cb, num_tiles);
