@@ -81,7 +81,7 @@ class DistributedNorm(LightweightModule):
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=self.args.model_config[self.ag_config_key]["num_links"]
                 if self.ag_config_key and mode == "decode"
-                else 1,
+                else self.tt_ccl.get_num_links(1),
                 topology=self.args.ccl_topology(),
                 memory_config=input_mem_cfg,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
