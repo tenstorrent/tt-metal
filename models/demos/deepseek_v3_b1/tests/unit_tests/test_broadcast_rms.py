@@ -34,7 +34,6 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
 @pytest.mark.parametrize("using_persistent_buffers", [True])
 @pytest.mark.parametrize("num_iters", [10])
 @pytest.mark.parametrize(
@@ -49,7 +48,7 @@ def create_fabric_router_config(max_payload_size):
     indirect=True,
 )
 def test_broadcast_rms_fused(
-    mesh_device,
+    bh_2d_mesh_device,
     mesh_rows,
     mesh_cols,
     sender_row,
@@ -67,11 +66,11 @@ def test_broadcast_rms_fused(
     num_devices = mesh_rows * mesh_cols
 
     # Validate mesh size
-    if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
 
     # Create submesh used by the test
-    submesh = mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
 
     # Configure a single worker sub-device covering the full compute grid
     compute_grid_size = submesh.compute_with_storage_grid_size()
