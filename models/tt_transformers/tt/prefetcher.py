@@ -259,7 +259,9 @@ class Prefetcher(LightweightModule):
         self.sender_cores = None
         self.receiver_cores = None
         self.mode = Mode.PREFILL
-        self.init_done = False
+        self.init_decode_done = False
+        self.init_prefill_done = False
+        self.prefetch_done = False
 
     # NOTE: DRAM prefetched weights are prefetched in the order of the construction of the module
     def register_callback(self, callback: Callable[[], None]):
@@ -300,8 +302,11 @@ class Prefetcher(LightweightModule):
         Args:
             mode: The mode to run the prefetcher in, either "decode" or "prefill"
         """
-        self.mode = Mode.DECODE if mode is None else mode
+        # If the prefetcher has already been initialized for the given mode, we do not need to initialize it again
+        if mode == Mode.DECODE and self.init_decode_done or mode == Mode.PREFILL and self.init_prefill_done:
+            return
 
+        self.mode = mode
         # Get the sender and receiver cores
         # Create a single config instance to ensure consistent state
         self.sender_cores = self.core_config.sender_cores
@@ -337,7 +342,8 @@ class Prefetcher(LightweightModule):
             "Prefetcher has only been thoroughly tested on Llama3.1-8B BH QB 2 and BH LB 1. If using for other models and other device types, expect potential errors."
         )
         logger.info("=" * 50)
-        self.init_done = True
+        self.init_decode_done = True if mode == Mode.DECODE else False
+        self.init_prefill_done = True if mode == Mode.PREFILL else False
 
     def create_address_tensor(self):
         """
@@ -372,7 +378,7 @@ class Prefetcher(LightweightModule):
         """
         Populates the tensor addresses that need to be prefetched
         """
-        assert self.init_done, "Prefetcher has not been initialized. Cannot insert tensors"
+        assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot insert tensors"
         bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
         if tensor.volume() % self.ring_size != 0:
             raise ValueError(
@@ -400,13 +406,15 @@ class Prefetcher(LightweightModule):
         The tensors are prefetched in the order of the registration of the callbacks
         NOTE: This only needs to be called if a callback is registered for inserting tensors
         """
-        assert self.init_done, "Prefetcher has not been initialized. Cannot prefetch tensors"
-        assert (
-            len(self.callbacks) > 0
-        ), "No tensors insertion callbacks have been inserted into the prefetcher queue. Cannot prefetch an empty queue"
         if self.mode == Mode.DECODE:
-            for callback in self.callbacks:
-                callback()
+            assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot prefetch tensors"
+            assert (
+                len(self.callbacks) > 0
+            ), "No tensors insertion callbacks have been inserted into the prefetcher queue. Cannot prefetch an empty queue"
+            if not self.prefetch_done:
+                for callback in self.callbacks:
+                    callback()
+                self.prefetch_done = True
         # NO-OP for prefill mode
         return
 
@@ -414,7 +422,7 @@ class Prefetcher(LightweightModule):
         """
         Start prefetching weights into global CB with dram_prefetcher op
         """
-        assert self.init_done, "Prefetcher has not been initialized. Cannot run prefetcher"
+        assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot run prefetcher"
         # Create global cb buffer if it was not yet created.
         if self.global_cb is None:
             self.global_cb_size = self.max_tensor_block_size
@@ -441,7 +449,7 @@ class Prefetcher(LightweightModule):
         return
 
     def stop(self):
-        assert self.init_done, "Prefetcher has not been initialized. Cannot stop prefetcher"
+        assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot stop prefetcher"
         assert self.garbage is not None, "Prefetcher has not been run. Cannot stop prefetcher"
         ttnn.deallocate(self.garbage)
         self.garbage = None

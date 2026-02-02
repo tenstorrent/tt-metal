@@ -693,6 +693,11 @@ class Generator:
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
             mode_switched = True
+
+        # Switch to prefill mode for prefetcher to reintialize sub devices for decode
+        for i in range(len(self.model)):
+            self.model[i].switch_mode(Mode.DECODE)
+
         sampling_on_device = sampling_params is not None
         split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)

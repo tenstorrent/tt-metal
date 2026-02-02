@@ -77,12 +77,12 @@ class TtMixtralMLP(LightweightModule):
                     x, [1, seq_len // self.model_args.prefill_len_cutoff, self.model_args.prefill_len_cutoff, -1]
                 )
                 pc_1 = self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"](seq_len)
-                pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
                 pc_3 = self.model_config["PREFILL_MIXTRAL_MLP_W3_PRG_CONFIG"](seq_len)
+                pc_2 = self.args.get_mlp_ff2_prg_config(Mode.PREFILL, seq_len, None)
             else:
                 pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"]
-                pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"]
                 pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"]
+                pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"]
 
             w1_out = ttnn.linear(
                 x,

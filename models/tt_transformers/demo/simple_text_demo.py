@@ -20,7 +20,6 @@ from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
-    Mode,
     PagedAttentionConfig,
     create_tt_model,
     preprocess_inputs_prefill,
@@ -1003,7 +1002,6 @@ def test_demo_text(
 
         if batch_idx != 0:
             for i in range(len(model)):
-                model[i].switch_mode("prefill")
                 for layer in model[i].layers:
                     k_cache, v_cache = layer.attention.layer_past
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
@@ -1116,10 +1114,6 @@ def test_demo_text(
             profiler.start(f"inference_decode_time_{1}", iteration=batch_idx)
             profiler.end(f"inference_decode_time_{1}", iteration=batch_idx)
             logger.info(f"Skipping decode forward pass when prefill mode is enabled")
-
-        if mode == "decode" or mode == "full":
-            for i in range(len(model)):
-                model[i].switch_mode(Mode.DECODE)
 
         while users_decoding and mode != "prefill":
             if iteration == 0:  # First iteration also accounts for compile time
