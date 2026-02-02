@@ -77,6 +77,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         """
         num_devices = mesh_device.get_num_devices()
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
+        num_dispatch_device_rows = mesh_device.shape[0]
 
         expert_mapping_tensors = ttnn.from_torch(
             torch.eye(num_devices, dtype=torch.int32)
