@@ -210,6 +210,11 @@ def test_deepseek_v3_mla_wkv_b2_sequence_trace_mode(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
+    # pytorch reference
+    torch_attn_out = torch_attn_out.permute(0, 2, 1, 3)
+    torch_v_out = torch.matmul(torch_attn_out, torch_wkv_b2_weight)
+    torch_v_out = torch_v_out.permute(0, 2, 1, 3)
+
     profiler = BenchmarkProfiler()
 
     try:
@@ -239,6 +244,7 @@ def test_deepseek_v3_mla_wkv_b2_sequence_trace_mode(
 
         assert list(tt_v_output.shape) == output_shape, f"V shape mismatch: {list(tt_v_output.shape)} != {output_shape}"
 
+        assert_with_pcc(torch_v_out, tt_v_output)
         logger.info("✓ wkv_b2 sequence trace mode test passed with correct output shape")
 
     finally:
