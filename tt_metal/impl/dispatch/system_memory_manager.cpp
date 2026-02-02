@@ -626,7 +626,6 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     auto timeout_duration = tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
 
     // Retry once on timeout - many non-deterministic failures are transient and resolve on retry.
-    // This is cheaper than retrying the entire CI job.
     bool timeout_occurred = false;
     auto on_timeout_first_attempt = [&timeout_occurred]() {
         timeout_occurred = true;
