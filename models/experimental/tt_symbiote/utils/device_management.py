@@ -18,7 +18,10 @@ class DeviceInit:
     def init_state(cls, device):
         """Initialize device state if not already initialized."""
         if device not in cls.DEVICE_TO_STATE_DICT:
-            cls.DEVICE_TO_STATE_DICT[device] = cls.init_state_impl(device)
+            res = cls.init_state_impl(device)
+            if res is not None:
+                assert isinstance(res, DistributedConfig), f"Expected DistributedConfig, got {type(res)}"
+            cls.DEVICE_TO_STATE_DICT[device] = res
         return cls.DEVICE_TO_STATE_DICT[device]
 
     @classmethod
