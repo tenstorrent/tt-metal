@@ -11,6 +11,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_metal {
 
@@ -55,6 +56,10 @@ struct MappedChipInfo {
     tt::tt_metal::AsicID asic_id{0};
     ChipId physical_chip_id = 0;
 
+    // Physical location information
+    tt::tt_metal::TrayID tray_id{0};
+    tt::tt_metal::ASICLocation asic_location{0};
+
     // Mesh coordinate information
     MeshCoordinate mesh_coord{0, 0};
 
@@ -79,13 +84,15 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding);
 
-    // Construct a TopologyMapper with fixed ASIC-position pinnings (tray, location).
+    // Construct a TopologyMapper with fixed ASIC-position pinnings.
+    // Each pinning maps a FabricNodeId to one or more ASIC positions (tray, location).
+    // For one-to-one pinnings, use a vector with a single position.
     // These pins must reference devices on the current host; if infeasible, construction will throw with details.
     TopologyMapper(
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
-        const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings);
+        const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_asic_position_pinnings);
 
     // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
     // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
@@ -210,6 +217,22 @@ public:
     HostName get_hostname_for_fabric_node_id(FabricNodeId fabric_node_id) const;
 
     /**
+     * @brief Get tray ID for a fabric node id
+     *
+     * @param fabric_node_id The fabric node id to get tray ID for
+     * @return tt::tt_metal::TrayID The tray ID of the fabric node id
+     */
+    tt::tt_metal::TrayID get_tray_id_for_fabric_node_id(FabricNodeId fabric_node_id) const;
+
+    /**
+     * @brief Get ASIC location for a fabric node id
+     *
+     * @param fabric_node_id The fabric node id to get ASIC location for
+     * @return tt::tt_metal::ASICLocation The ASIC location of the fabric node id
+     */
+    tt::tt_metal::ASICLocation get_asic_location_for_fabric_node_id(FabricNodeId fabric_node_id) const;
+
+    /**
      * @brief Get MPI rank for a mesh_id and host_rank pair
      *
      * Uses the topology mapper's fabric node to ASIC mapping to determine which hostname
@@ -286,11 +309,6 @@ private:
     void build_mapping();
 
     /**
-     * @brief Build bidirectional mappings between ASIC IDs and physical chip IDs
-     */
-    void build_asic_physical_chip_id_mappings();
-
-    /**
      * @brief Initialize chip_topology_mapping_ map with all ASICs from physical system descriptor
      *
      * Creates MappedChipInfo entries for all ASICs in the system, indexed by ASIC ID.
@@ -346,28 +364,36 @@ private:
      */
     void populate_fabric_node_id_to_asic_id_mappings(
         MeshId mesh_id,
-        const PhysicalAdjacencyMap& adjacency_map_physical,
-        const LogicalAdjacencyMap& adjacency_map_logical,
+        const AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_map_physical,
+        const AdjacencyGraph<FabricNodeId>& adjacency_map_logical,
         const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
         const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank);
 
     /**
-     * @brief Broadcast the mapping to all hosts
+     * @brief Broadcast chip info to hosts
      *
-     * Breaks the mapping of fabric node ids into a pairs of physical chip ids to
-     * logical chip ids and sends pairs to all hosts from the controller rank.
+     * Broadcasts chip topology info (including tray_id and asic_location) to target hosts.
+     * Only broadcasts entries for ASICs belonging to the specified host ranks.
+     *
+     * @param host_ranks List of host ranks (MPI ranks) to filter ASICs by. If empty, broadcasts all entries.
+     * @param target_rank Target rank to send to. If -1, broadcasts to all peers (excluding self).
      */
-    void broadcast_mapping_to_all_hosts();
+    void broadcast_chip_info_to_hosts(const std::vector<std::size_t>& host_ranks = {}, int target_rank = -1);
 
     /**
-     * @brief Receive the mapping from the 1st host
+     * @brief Receive chip info from a specific host
+     *
+     * Receives chip topology info from a specific host and overwrites chip_topology_mapping_ entries.
+     * The number of entries received matches the count sent by the broadcaster.
+     *
+     * @param source_rank The rank to receive from
      */
-    void receive_mapping_from_host(int rank);
+    void receive_chip_info_from_host(std::size_t source_rank);
 
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
     const LocalMeshBinding& local_mesh_binding_;
-    const std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings_;
+    const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings_;
     bool generate_mapping_locally_ = false;
 
     // Host-rank metadata for fabric-node-based queries (independent of MeshGraph's storage)
@@ -401,9 +427,19 @@ private:
     void rebuild_host_rank_structs_from_mapping(
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
-    void print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map) const;
+    /**
+     * @brief Verify the topology mapping against PSD and cluster API
+     *
+     * This function performs verification of the topology mapping:
+     * - Checks ASIC IDs exist in cluster.get_unique_chip_ids() for local chips
+     * - Verifies tray IDs and ASIC locations match the Physical System Descriptor
+     * - Ensures physical chip IDs map correctly to ASIC IDs via cluster API for local chips
+     */
+    void verify_topology_mapping() const;
 
-    void print_physical_adjacency_map(const std::map<MeshId, PhysicalAdjacencyMap>& adj_map) const;
+    void print_logical_adjacency_map(const std::map<MeshId, AdjacencyGraph<FabricNodeId>>& adj_map) const;
+
+    void print_physical_adjacency_map(const std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>>& adj_map) const;
 };
 
 }  // namespace tt::tt_fabric

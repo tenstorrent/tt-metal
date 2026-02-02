@@ -24,8 +24,8 @@ namespace tt::tt_fabric {
     enum class ConnectionValidationMode;
     template <typename TargetNode, typename GlobalNode>
     MappingResult<TargetNode, GlobalNode> solve_topology_mapping(...);
-    std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(...);
-    std::map<MeshId, AdjacencyGraph<AsicID>> build_adjacency_map_physical(...);
+    std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(...);
+    std::map<MeshId, AdjacencyGraph<AsicID>> build_adjacency_graph_physical(...);
 }
 ```
 
@@ -219,11 +219,11 @@ auto result = solve_topology_mapping(
 ```cpp
 // Build logical graphs from MeshGraph
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> logical_graphs =
-    build_adjacency_map_logical(mesh_graph);
+    build_adjacency_graph_logical(mesh_graph);
 
 // Build physical graphs from PhysicalSystemDescriptor
 std::map<MeshId, AdjacencyGraph<AsicID>> physical_graphs =
-    build_adjacency_map_physical(psd, asic_id_to_mesh_rank);
+    build_adjacency_graph_physical(psd, asic_id_to_mesh_rank);
 ```
 
 ## Architecture
@@ -242,6 +242,37 @@ tt_metal/fabric/
 ```
 
 **Important**: Internal implementation (`tt::tt_fabric::detail`) is in `tt_metal/fabric/` directory, not part of public API.
+
+### Internal Modules
+
+All implementation details are in `tt::tt_fabric::detail` namespace:
+
+1. **GraphIndexData**: Converts `AdjacencyGraph` to indexed representation for O(1) lookups
+2. **ConstraintIndexData**: Converts `MappingConstraints` to index-based representation
+3. **SearchHeuristic**: Unified node selection and candidate generation with integer cost-based priority
+4. **ConsistencyChecker**: Local and forward consistency validation during DFS
+5. **PathGraphDetector**: Fast path optimization for path graphs (O(n) instead of exponential)
+6. **DFSSearchEngine**: Core backtracking search with memoization (stateful - maintains internal state during search)
+7. **MappingValidator**: Final mapping validation and result building
+
+### Algorithm Flow
+
+```
+solve_topology_mapping(target_graph, global_graph, constraints)
+│
+├─► Preprocessing: Build GraphIndexData and ConstraintIndexData
+│
+├─► Fast Path Detection: Check if target is path graph, try O(n) algorithm
+│
+├─► General DFS Search (DFSSearchEngine):
+│   ├─ Pre-assignment: Apply required constraints (pinnings) and validate consistency
+│   ├─ SearchHeuristic::select_and_generate_candidates() - select node, generate ordered candidates
+│   ├─ ConsistencyChecker::check_local_consistency() - validate with mapped neighbors
+│   ├─ ConsistencyChecker::check_forward_consistency() - ensure future nodes have options
+│   └─ Backtracking with memoization (state tracked internally)
+│
+└─► Validation: MappingValidator validates mapping and builds result
+```
 
 ### Key Implementation Details
 
