@@ -34,7 +34,7 @@ file(
     deepseek_minimal_all_reduce/device/kernels/*
     deepseek_moe_reduce_scatter/device/kernels/*
     deepseek_b1_reduce_to_one/device/kernels/*
-    moe/device/kernels/*
+    moe_compute/device/kernels/*
 )
 
 target_sources(

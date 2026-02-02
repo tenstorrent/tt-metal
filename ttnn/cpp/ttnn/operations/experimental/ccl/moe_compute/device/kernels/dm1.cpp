@@ -43,6 +43,7 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_3;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_4;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_5;
+    constexpr auto cb_r2c_rdy = tt::CBIndex::c_6;
 
     // CB Aliases
     constexpr auto cb_c2s_out = tt::CBIndex::c_1;
@@ -125,7 +126,6 @@ void kernel_main() {
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Wait for compute core to tell us that all mm01 data is ready
             cb_wait_front(cb_c2w_rdy, 1);
-
             cb_pop_front(cb_c2w_rdy, 1);
 
             // Signal to tilize cores that they can send another chunk of tiles
@@ -162,4 +162,5 @@ void kernel_main() {
             }
         }
     }
+    noc_async_write_barrier();
 }

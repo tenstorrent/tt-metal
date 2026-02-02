@@ -271,7 +271,8 @@ void kernel_main() {
     constexpr uint32_t input_page_size = get_named_compile_time_arg_val("input_page_size");
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
     constexpr uint32_t mapping_page_size = get_named_compile_time_arg_val("mapping_page_size");
-    constexpr uint32_t output_page_size = get_named_compile_time_arg_val("output_page_size");
+    constexpr uint32_t per_expert_total_tokens_output_page_size =
+        get_named_compile_time_arg_val("per_expert_total_tokens_output_page_size");
     constexpr uint32_t expert_activation_output_page_size =
         get_named_compile_time_arg_val("expert_activation_output_page_size");
     constexpr uint32_t e_t_output_page_size = get_named_compile_time_arg_val("e_t_output_page_size");
@@ -330,7 +331,7 @@ void kernel_main() {
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                  // 1
     uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                   // 2
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);                  // 3
-    [[maybe_unused]] uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 4 - not used by reader
+    uint32_t per_expert_total_tokens_output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);  // 4
     uint32_t expert_activation_output_address = get_arg_val<uint32_t>(rt_args_idx++);        // 5
     uint32_t e_t_output_address = get_arg_val<uint32_t>(rt_args_idx++);                      // 6
     bool is_drain_tilize_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);                  // 7
@@ -345,8 +346,10 @@ void kernel_main() {
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
-    constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
-    constexpr auto expert_activation_output_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    constexpr auto per_expert_total_tokens_output_args =
+        TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
+    constexpr auto expert_activation_output_args =
+        TensorAccessorArgs<per_expert_total_tokens_output_args.next_compile_time_args_offset()>();
     constexpr auto e_t_output_args =
         TensorAccessorArgs<expert_activation_output_args.next_compile_time_args_offset()>();
 
@@ -355,9 +358,11 @@ void kernel_main() {
     const auto indices_tensor_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
     const auto scores_tensor_addr_gen = TensorAccessor(scores_args, scores_tensor_address, indices_page_size);
     const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
-    const auto output_tensor_addr_gen =
-        TensorAccessor(output_args, 0, output_page_size);  // output address not needed for reader
-    const auto expert_activation_output_addr_gen = TensorAccessor(
+    const auto per_expert_total_tokens_output_tensor_addr_gen = TensorAccessor(
+        per_expert_total_tokens_output_args,
+        per_expert_total_tokens_output_tensor_address,
+        per_expert_total_tokens_output_page_size);
+    const auto expert_activation_output_tensor_addr_gen = TensorAccessor(
         expert_activation_output_args, expert_activation_output_address, expert_activation_output_page_size);
     const auto e_t_output_tensor_addr_gen = TensorAccessor(e_t_output_args, e_t_output_address, e_t_output_page_size);
 
@@ -694,12 +699,12 @@ void kernel_main() {
         }
 
         // Push per-expert token counts to CB for writer to read
-        cb_reserve_back(per_expert_total_tokens_cb_id, experts_per_device);
+        cb_reserve_back(per_expert_total_tokens_cb_id, 1);
         uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(get_write_ptr(per_expert_total_tokens_cb_id));
         for (uint32_t e = 0; e < experts_per_device; e++) {
             per_expert_counts_ptr[e] = num_activated_tokens_per_expert[e];
         }
-        cb_push_back(per_expert_total_tokens_cb_id, experts_per_device);
+        cb_push_back(per_expert_total_tokens_cb_id, 1);
 
         cb_reserve_back(total_chunks_cb_id, one_page);
         uint32_t total_chunks = 0;
@@ -718,7 +723,7 @@ void kernel_main() {
 
         // Write to DRAM: activated rows + sentinel = (num_activated_tokens + 1) rows
         uint32_t expert_activation_write_size = (num_activated_tokens + 1) * aligned_activation_row_bytes;
-        uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_addr_gen);
+        uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
         noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
         // Barrier for this write is at the very end of the kernel
 
@@ -863,8 +868,8 @@ void kernel_main() {
 
         // Push per_expert_total_tokens_cb and total_chunks_cb so writer can read them
         // (drain core already pushed, non-drain cores need to mark as available)
-        cb_reserve_back(per_expert_total_tokens_cb_id, experts_per_device);
-        cb_push_back(per_expert_total_tokens_cb_id, experts_per_device);
+        cb_reserve_back(per_expert_total_tokens_cb_id, 1);
+        cb_push_back(per_expert_total_tokens_cb_id, 1);
         cb_reserve_back(total_chunks_cb_id, one_page);
         cb_push_back(total_chunks_cb_id, one_page);
     }
@@ -903,18 +908,22 @@ void kernel_main() {
 
     // write out e_t_output_tensor
     if (is_drain_tilize_core) {
-        constexpr uint32_t one_page = 1;
-        for (uint32_t e = 0; e < experts_per_device; e++) {
-            cb_push_back(e_t_cb_id, one_page);  // data is already there from previous work
-            cb_wait_front(e_t_cb_id, one_page);
-            uint32_t l1_read_addr = get_read_ptr(e_t_cb_id);
+        uint32_t l1_read_addr = get_read_ptr(e_t_cb_id);
+        for (uint32_t e = 0; e < experts_per_device; ++e) {
             noc_async_write_page(e, e_t_output_tensor_addr_gen, l1_read_addr);
-            noc_async_writes_flushed();
-            cb_pop_front(e_t_cb_id, one_page);
+            l1_read_addr += e_t_output_page_size;
         }
     }
 
-    // Explicit write barrier for expert_activation DRAM write and e_t L1 write (drain core only issued these writes)
+    // write out per_expert_total_tokens_output_tensor
+    if (is_drain_tilize_core) {
+        // tensor is a single page
+        uint32_t l1_read_addr = get_read_ptr(per_expert_total_tokens_cb_id);
+        noc_async_write_page(0, per_expert_total_tokens_output_tensor_addr_gen, l1_read_addr);
+    }
+
+    // Explicit write barrier for expert_activation DRAM write, e_t L1 write, and per_expert_total_tokens L1 write
+    // (drain core only issued these writes)
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }

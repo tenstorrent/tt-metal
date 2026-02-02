@@ -33,6 +33,8 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+
     const ttnn::Tensor& tilize_input_tensor = tensor_args.tilize_input_tensor;
     const ttnn::Tensor& tilize_mapping_tensor = tensor_args.tilize_expert_mapping_tensor;
 
@@ -43,53 +45,50 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     const auto& mesh_view = mesh_device->get_view();
     uint32_t num_devices = mesh_view.num_devices();
 
-    //-------------------------------------------------------------------------
-    // Tilize outputs
-    //-------------------------------------------------------------------------
-    uint32_t hidden_size = tilize_input_shape[-1];
     uint32_t experts = tilize_mapping_shape[-1];
     uint32_t experts_per_device = tt::div_up(experts, num_devices);
     uint32_t total_tokens =
         tilize_input_shape[0] *
         tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices (512)
 
-    // Output 0: Tilized output for matmul
-    // Output shape: [experts_per_device, total_tokens, hidden_size] - tiled for matmul
-    // TODO: (GR) Remove - temp for testing
-    auto output_shape = ttnn::Shape({experts_per_device, total_tokens, hidden_size});
-    auto tilized_output_spec = TensorSpec(
-        Shape(output_shape),
+    //-------------------------------------------------------------------------
+    // Tilize outputs
+    //-------------------------------------------------------------------------
+    // Output 0: Per expert total tokens tensor
+    auto per_expert_total_tokens_row_bytes = tt::align(experts_per_device * sizeof(uint32_t), l1_alignment);
+    auto per_expert_total_tokens_row_elements = per_expert_total_tokens_row_bytes / sizeof(uint32_t);
+    auto tilize_per_expert_total_tokens_shape = ttnn::Shape({1, per_expert_total_tokens_row_elements});
+    auto tilize_per_expert_total_tokens_spec = TensorSpec(
+        Shape(tilize_per_expert_total_tokens_shape),
         tt::tt_metal::TensorLayout(
-            tilize_input_tensor.dtype(),
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
     // Output 1: Expert activation tensor
     // Each row: [token_id, k_indices[experts_per_device], scores[experts_per_device]]
     // Row size in uint32_t elements: 2 * experts_per_device + 1
     // Total size: (tokens + 1) * aligned_row_bytes for sentinel row, stored as single DRAM page
-    constexpr uint32_t l1_alignment = 16;
     uint32_t activation_row_elements = 2 * experts_per_device + 1;
     uint32_t activation_row_bytes = tt::align(activation_row_elements * sizeof(uint32_t), l1_alignment);
-    uint32_t activation_total_bytes = (total_tokens + 1) * activation_row_bytes;  // +1 for sentinel row
-
-    // Single page containing entire tensor (tokens rows + sentinel)
-    auto expert_activation_shape = ttnn::Shape({1, activation_total_bytes / sizeof(uint32_t)});
-    auto expert_activation_spec = TensorSpec(
-        Shape(expert_activation_shape),
+    uint32_t activation_total_bytes = (total_tokens + 1) * activation_row_bytes;  // +1 to account for sentinel row
+    auto tilize_expert_activation_shape = ttnn::Shape({1, activation_total_bytes / sizeof(uint32_t)});
+    auto tilize_expert_activation_spec = TensorSpec(
+        Shape(tilize_expert_activation_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
 
-    // Output 2: Token indices
+    // Output 2: Token indices tensor
     // 1 page per expert per device
-    // each index is at a 16B offset due to NoC DMA restrictions, 16B = 4 UINT32 elements
-    // (tokens + 1), 1 extra element per page for -1 terminator
-    uint32_t page_width = (total_tokens + 1) * 4;
-    auto e_t_shape = ttnn::Shape({experts_per_device, page_width});
-    auto e_t_spec = TensorSpec(
-        Shape(e_t_shape),
+    // Each index is at a 16B offset due to NoC DMA restrictions
+    // (tokens + 1) -> 1 extra element per page for -1 terminator
+    uint32_t e_t_row_bytes = (total_tokens + 1) * tt::align(sizeof(uint32_t), l1_alignment);
+    uint32_t e_t_row_elements = e_t_row_bytes / sizeof(uint32_t);
+    auto tilize_e_t_shape = ttnn::Shape({experts_per_device, e_t_row_elements});
+    auto tilize_e_t_spec = TensorSpec(
+        Shape(tilize_e_t_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
@@ -98,6 +97,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     //-------------------------------------------------------------------------
     // Matmul outputs
     //-------------------------------------------------------------------------
+    // Output 3: Matmul final output tensor
     // TODO: (GR)
     auto matmul_output_shape = ttnn::Shape({1, 1});
     auto matmul_output_spec = TensorSpec(
@@ -107,14 +107,14 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
-    return {tilized_output_spec, expert_activation_spec, e_t_spec, matmul_output_spec};
+    return {tilize_per_expert_total_tokens_spec, tilize_expert_activation_spec, tilize_e_t_spec, matmul_output_spec};
 }
 
 MoEComputeDeviceOperation::tensor_return_value_t MoEComputeDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const std::vector<ttnn::TensorSpec>& output_specs = compute_output_specs(args, tensor_args);
     return {
-        create_device_tensor(output_specs[0], tensor_args.tilize_input_tensor.device()),  // TODO: (GR) remove
+        create_device_tensor(output_specs[0], tensor_args.tilize_input_tensor.device()),
         create_device_tensor(output_specs[1], tensor_args.tilize_input_tensor.device()),
         create_device_tensor(output_specs[2], tensor_args.tilize_input_tensor.device()),
         create_device_tensor(output_specs[3], tensor_args.tilize_input_tensor.device())};
