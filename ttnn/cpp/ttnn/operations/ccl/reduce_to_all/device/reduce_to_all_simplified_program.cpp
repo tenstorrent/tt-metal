@@ -35,13 +35,6 @@
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::ccl {
-namespace {
-
-// NOTE: Mux helper functions removed - replaced with aggregator-based approach
-// The aggregator is much simpler: workers write packets to aggregator L1 slots
-// via NoC and increment semaphore, aggregator forwards packets via fabric.
-
-}  // anonymous namespace
 
 ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variables_t>
 reduce_to_all_simplified_program_factory(
@@ -59,22 +52,11 @@ reduce_to_all_simplified_program_factory(
     // =========================================================================
     auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
 
-    if (forward_coord.has_value()) {
-        log_info(
-            tt::LogTest,
-            "physical device id: {}, current coord: {}, forward coordinate: {}",
-            mesh_device->get_device(device_coordinate)->id(),
-            device_coordinate,
-            forward_coord.value());
-    }
-    if (backward_coord.has_value()) {
-        log_info(
-            tt::LogTest,
-            "physical device id: {}, current coord: {}, backward coordinate: {}",
-            mesh_device->get_device(device_coordinate)->id(),
-            device_coordinate,
-            backward_coord.value());
-    }
+    TT_FATAL(forward_coord.has_value(), "Forward coordinate must be provided for ReduceToAll operation");
+    TT_FATAL(backward_coord.has_value(), "Backward coordinate must be provided for ReduceToAll operation");
+
+    const auto forward_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+    const auto backward_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
 
     // Determine which mux direction to use for R1 and R2 based on device position.
     // Ring topology: D0 ↔ D1 ↔ D2 ↔ D3 ↔ (back to D0)
@@ -151,16 +133,6 @@ reduce_to_all_simplified_program_factory(
     const uint32_t ms_tile_size_bytes = aligned_page_size;                       // Single combined MS tile
     const uint32_t total_packet_size = payload_size_bytes + ms_tile_size_bytes;  // L + MS
 
-    log_info(
-        tt::LogTest,
-        "input_page_size_bytes={}, aligned_page_size={}, payload_size_bytes={}, ms_tile_size_bytes={}, "
-        "total_packet_size={}",
-        input_page_size_bytes,
-        aligned_page_size,
-        payload_size_bytes,
-        ms_tile_size_bytes,
-        total_packet_size);
-
     // =========================================================================
     // Use intermediate tensors as receive buffers
     // =========================================================================
@@ -224,7 +196,7 @@ reduce_to_all_simplified_program_factory(
     // =========================================================================
     // Create Circular Buffers (combined MS format)
     // =========================================================================
-    // Local input CBs - ALIASED to input tensor shards (zero-copy reads)
+    // Local input CBs - ALIASED to input tensor shards
     tt::tt_metal::CircularBufferConfig cb_local_l_config =
         tt::tt_metal::CircularBufferConfig(out_tiles * aligned_page_size, {{cb_local_l, input_dataformat}})
             .set_page_size(cb_local_l, aligned_page_size)
@@ -239,7 +211,7 @@ reduce_to_all_simplified_program_factory(
             .set_globally_allocated_address(*input_tensor_ms.buffer());
     auto cb_local_ms_handle = CreateCircularBuffer(program, shard_grid, cb_local_ms_config);
 
-    // R1 neighbor CBs - ALIASED to R1 receive tensor (direct fabric write, zero-copy receive)
+    // R1 neighbor CBs - ALIASED to R1 receive tensor
     tt::tt_metal::CircularBufferConfig cb_r1_neighbor_l_config =
         tt::tt_metal::CircularBufferConfig(out_tiles * aligned_page_size, {{cb_r1_neighbor_l, input_dataformat}})
             .set_page_size(cb_r1_neighbor_l, aligned_page_size)
@@ -521,12 +493,6 @@ reduce_to_all_simplified_program_factory(
     auto r1_recv_sem = semaphores[0];
     auto r2_recv_sem = semaphores[1];
 
-    TT_FATAL(forward_coord.has_value(), "Forward coordinate must be provided for ReduceToAll operation");
-    TT_FATAL(backward_coord.has_value(), "Backward coordinate must be provided for ReduceToAll operation");
-
-    const auto forward_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-    const auto backward_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-
     // Split shard cores per link
     const uint32_t cores_per_link = num_shard_cores / num_links;
     std::vector<CoreCoord> cores_link_1(shard_cores.begin(), shard_cores.begin() + cores_per_link);
@@ -549,13 +515,8 @@ reduce_to_all_simplified_program_factory(
             0,                       // 1: buffer_offset (BRISC uses offset 0)
             fwd_sem,                 // 2: semaphore (bit-packed by workers)
         };
-        // Append fabric connection args (direction implicit in src→dst)
-        if (forward_coord.has_value()) {
-            const auto dst_node_id = forward_node_id;
-            log_info(tt::LogTest, "src_node_id={}, fwd dst_node_id={}", src_node_id, dst_node_id);
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_node_id, dst_node_id, link_idx, program, agg_core, brisc_rt_args);
-        }
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            src_node_id, forward_node_id, link_idx, program, agg_core, brisc_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, aggregator_brisc_kernel, agg_core, brisc_rt_args);
 
         // NCRISC runtime args (BWD direction)
@@ -565,13 +526,8 @@ reduce_to_all_simplified_program_factory(
             ncrisc_buffer_offset,    // 1: buffer_offset (NCRISC uses offset after BRISC region)
             bwd_sem,                 // 2: semaphore (bit-packed by workers)
         };
-        // Append fabric connection args (direction implicit in src→dst)
-        if (backward_coord.has_value()) {
-            const auto dst_node_id = backward_node_id;
-            log_info(tt::LogTest, "src_node_id={}, bwd dst_node_id={}", src_node_id, dst_node_id);
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_node_id, dst_node_id, link_idx, program, agg_core, ncrisc_rt_args);
-        }
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            src_node_id, backward_node_id, link_idx, program, agg_core, ncrisc_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, aggregator_ncrisc_kernel, agg_core, ncrisc_rt_args);
     }
 

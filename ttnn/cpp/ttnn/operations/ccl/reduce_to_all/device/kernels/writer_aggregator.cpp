@@ -47,9 +47,6 @@ FORCE_INLINE void prepare_header(
     constexpr uint32_t ATOMIC_INC_VAL = 1;
     constexpr bool FLUSH_WRITES = false;
 
-    DPRINT << "Preparing packet header for dst_mesh_id=" << dst_mesh_id << ", dst_chip_id=" << dst_chip_id
-           << ", dst_noc=" << dst_noc << ", sem_noc=" << sem_noc << ENDL();
-
     (void)fabric_set_unicast_route(header, dst_chip_id, dst_mesh_id);
     header->to_noc_fused_unicast_write_atomic_inc(
         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc, sem_noc, ATOMIC_INC_VAL, FLUSH_WRITES},
@@ -65,8 +62,6 @@ FORCE_INLINE void pack_payload(uint32_t slot_addr, uint32_t src_l, uint32_t src_
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
     uint32_t payload_start = slot_addr + packet_header_size_bytes;
 
-    DPRINT << "payload size_bytes=" << payload_size_bytes << ", ms_tile_size_bytes=" << ms_tile_size_bytes << ENDL();
-
     tt_memmove<true, false, false, 0>(payload_start, src_l, payload_size_bytes);
     tt_memmove<true, false, false, 0>(payload_start + payload_size_bytes, src_ms, ms_tile_size_bytes);
 }
@@ -78,12 +73,9 @@ FORCE_INLINE void pack_payload(uint32_t slot_addr, uint32_t src_l, uint32_t src_
  */
 template <uint32_t slot_size>
 FORCE_INLINE void forward_packet(uint32_t slot_addr, uint64_t agg_slot_noc, uint64_t agg_sem_noc, uint32_t slot_idx) {
-    DPRINT << "forward_packet: slot_addr=" << slot_addr << ", slot_idx=" << slot_idx << ", slot_size=" << slot_size
-           << ENDL();
     noc_async_write(slot_addr, agg_slot_noc, slot_size);
     noc_async_writes_flushed();
     noc_semaphore_inc(agg_sem_noc, 1u << slot_idx);
-    DPRINT << "forward_packet: signaled aggregator with bit " << (1u << slot_idx) << ENDL();
 }
 
 // =============================================================================
@@ -166,8 +158,6 @@ void kernel_main() {
     const uint64_t r2_agg_slot_noc = get_noc_addr(agg_core_x, agg_core_y, r2_agg_slot_addr);
     const uint64_t r2_agg_sem_noc = get_noc_addr(agg_core_x, agg_core_y, r2_agg_sem_addr);
 
-    DPRINT << "Writer starting R1 send to mesh " << r1_dst_mesh_id << " chip " << r1_dst_chip_id << ENDL();
-
     // ==========================================================================
     // ROUND 1: Send local input to R1 neighbor via aggregator
     // ==========================================================================
@@ -184,8 +174,6 @@ void kernel_main() {
 
         cb_push_back(cb_packet_slot, 1);
     }
-
-    DPRINT << "Writer R1 send complete, preparing R2 send after compute." << ENDL();
 
     // ==========================================================================
     // R2 Header Preparation (overlapped with compute - no data dependency)
@@ -206,17 +194,11 @@ void kernel_main() {
     // ==========================================================================
     {
         DeviceZoneScopedN("R2-WAIT-COMPUTE");
-
-        DPRINT << "Writer waiting for cb_sync" << ENDL();
         cb_wait_front(cb_sync, 1);
-        DPRINT << "Writer cb_sync acquired" << ENDL();
         cb_pop_front(cb_sync, 1);
 
-        DPRINT << "Writer waiting for cb_r1_result_l (" << out_tiles << " tiles)" << ENDL();
         cb_wait_front(cb_r1_result_l, out_tiles);
-        DPRINT << "Writer waiting for cb_r1_result_ms" << ENDL();
         cb_wait_front(cb_r1_result_ms, 1);
-        DPRINT << "Writer got R1 results from compute" << ENDL();
     }
 
     // ==========================================================================
