@@ -254,6 +254,7 @@ from ttnn.types import (
     SemaphoreDescriptor,
     ProgramDescriptor,
     MeshProgramDescriptor,
+    merge_descriptors,
     cb_descriptor_from_sharded_tensor,
     TensorAccessorArgs,
 )

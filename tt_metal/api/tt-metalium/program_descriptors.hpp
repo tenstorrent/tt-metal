@@ -144,25 +144,16 @@ struct ProgramDescriptor {
     std::optional<ttsl::hash::hash_t> custom_program_hash;
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
-
-    /**
-     * Merge another ProgramDescriptor into this one.
-     * The core ranges of the two descriptors must not overlap.
-     *
-     * @param other The ProgramDescriptor to merge into this one.
-     * @throws TT_FATAL if any core ranges overlap between the two descriptors.
-     */
-    void merge(const ProgramDescriptor& other);
-
-    /**
-     * Static helper to merge multiple ProgramDescriptors into a single one.
-     *
-     * @param descriptors Vector of ProgramDescriptors to merge.
-     * @return A new ProgramDescriptor containing all kernels, CBs, and semaphores.
-     * @throws TT_FATAL if any core ranges overlap between any of the descriptors.
-     */
-    static ProgramDescriptor merge_descriptors(const std::vector<ProgramDescriptor>& descriptors);
 };
+
+/**
+ * Merge multiple ProgramDescriptors into a single one.
+ *
+ * @param descriptors Vector of ProgramDescriptors to merge.
+ * @return A new ProgramDescriptor containing all kernels, CBs, and semaphores.
+ * @throws TT_FATAL if any core ranges overlap between any of the descriptors.
+ */
+ProgramDescriptor merge_descriptors(const std::vector<ProgramDescriptor>& descriptors);
 
 }  // namespace tt::tt_metal
 

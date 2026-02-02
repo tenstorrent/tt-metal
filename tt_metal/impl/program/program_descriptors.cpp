@@ -64,38 +64,7 @@ bool ranges_overlap_between_descriptors(const std::vector<CoreRange>& vec_a, con
 
 }  // namespace
 
-void ProgramDescriptor::merge(const ProgramDescriptor& other) {
-    // Check for overlapping core ranges between descriptors
-    // (different kernels within a single descriptor can share cores, but
-    // kernels from different descriptors should not overlap)
-    auto this_ranges = collect_all_kernel_core_ranges(*this);
-    auto other_ranges = collect_all_kernel_core_ranges(other);
-
-    TT_FATAL(
-        !ranges_overlap_between_descriptors(this_ranges, other_ranges),
-        "Cannot merge ProgramDescriptors with overlapping kernel core ranges. "
-        "Ensure that each descriptor operates on a distinct set of cores.");
-
-    // Merge kernels
-    for (const auto& kernel : other.kernels) {
-        kernels.push_back(kernel);
-    }
-
-    // Merge semaphores
-    for (const auto& sem : other.semaphores) {
-        semaphores.push_back(sem);
-    }
-
-    // Merge circular buffers
-    for (const auto& cb : other.cbs) {
-        cbs.push_back(cb);
-    }
-
-    // Custom program hash is invalidated after merge since it's no longer a single operation
-    custom_program_hash = std::nullopt;
-}
-
-ProgramDescriptor ProgramDescriptor::merge_descriptors(const std::vector<ProgramDescriptor>& descriptors) {
+ProgramDescriptor merge_descriptors(const std::vector<ProgramDescriptor>& descriptors) {
     if (descriptors.empty()) {
         return ProgramDescriptor{};
     }
