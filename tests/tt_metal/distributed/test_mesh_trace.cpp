@@ -760,5 +760,120 @@ INSTANTIATE_TEST_SUITE_P(
                                                        // Run on middle columns
                                                        {MeshCoordinateRange({0, 1}, {3, 3})}})));
 
+// Tests for dynamic trace buffer allocation (trace_region_size = 0)
+class MeshTraceDynamicAllocationTestSuite : public MeshDeviceFixtureBase {
+protected:
+    MeshTraceDynamicAllocationTestSuite() : MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = 0}) {}
+};
+
+TEST_F(MeshTraceDynamicAllocationTestSuite, BasicTraceWithZeroTraceRegion) {
+    // Verify trace capture and replay works when trace_region_size=0 with no tensor allocations during trace
+    uint32_t num_workloads = 3;
+    uint32_t num_replays = 5;
+
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+    std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
+    
+    // Create workloads before trace capture
+    for (uint32_t i = 0; i < num_workloads; i++) {
+        auto workload = std::make_shared<MeshWorkload>();
+        auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+            1, mesh_device_->compute_with_storage_grid_size(), 42);
+        workload->add_program(all_devices, std::move(*programs[0]));
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        mesh_workloads.push_back(workload);
+    }
+
+    // Capture trace
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+    for (auto& workload : mesh_workloads) {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    }
+    mesh_device_->end_mesh_trace(0, trace_id);
+
+    // Replay trace multiple times
+    for (uint32_t i = 0; i < num_replays; i++) {
+        mesh_device_->replay_mesh_trace(0, trace_id, false);
+    }
+    Finish(mesh_device_->mesh_command_queue());
+
+    mesh_device_->release_mesh_trace(trace_id);
+}
+
+TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithSmallAllocationsDuringCapture) {
+    // Verify trace works when small allocations during capture don't overlap
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+    
+    // Create a workload
+    auto workload = std::make_shared<MeshWorkload>();
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        1, mesh_device_->compute_with_storage_grid_size(), 123);
+    workload->add_program(all_devices, std::move(*programs[0]));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+
+    // Begin trace capture
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+    
+    // Allocate a small DRAM buffer during trace (simulating tensor allocation)
+    // Use a small size to ensure no overlap
+    constexpr size_t small_buffer_size = 1024 * 1024;  // 1MB
+    auto small_buffer = Buffer::create(
+        mesh_device_->get_devices()[0],
+        small_buffer_size,
+        small_buffer_size,
+        BufferType::DRAM,
+        std::nullopt,
+        true  // bottom_up = true (like tensor allocations)
+    );
+    
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    
+    // End trace capture (should succeed - no overlap)
+    mesh_device_->end_mesh_trace(0, trace_id);
+    
+    // Deallocate buffer and replay trace
+    small_buffer.reset();
+    mesh_device_->replay_mesh_trace(0, trace_id, false);
+    Finish(mesh_device_->mesh_command_queue());
+
+    mesh_device_->release_mesh_trace(trace_id);
+}
+
+TEST_F(MeshTraceDynamicAllocationTestSuite, MultipleTracesWithDynamicAllocation) {
+    // Verify multiple traces can be captured and replayed
+    uint32_t num_traces = 3;
+    uint32_t num_replays = 3;
+
+    MeshCoordinateRange all_devices(mesh_device_->shape());
+    std::vector<MeshTraceId> trace_ids = {};
+
+    // Capture multiple traces
+    for (uint32_t trace_idx = 0; trace_idx < num_traces; trace_idx++) {
+        auto workload = std::make_shared<MeshWorkload>();
+        auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+            1, mesh_device_->compute_with_storage_grid_size(), 200 + trace_idx);
+        workload->add_program(all_devices, std::move(*programs[0]));
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+
+        auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        mesh_device_->end_mesh_trace(0, trace_id);
+        trace_ids.push_back(trace_id);
+    }
+
+    // Replay all traces
+    for (uint32_t i = 0; i < num_replays; i++) {
+        for (auto trace_id : trace_ids) {
+            mesh_device_->replay_mesh_trace(0, trace_id, false);
+        }
+    }
+    Finish(mesh_device_->mesh_command_queue());
+
+    // Release all traces
+    for (auto trace_id : trace_ids) {
+        mesh_device_->release_mesh_trace(trace_id);
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test

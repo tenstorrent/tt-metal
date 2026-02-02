@@ -80,7 +80,11 @@ public:
     // Once the Trace Data per logical device has been captured in the
     // MeshTraceDescriptor corresponding to this MeshTraceBuffer,
     // it can be binarized to a MeshDevice through a Command Queue.
-    static void populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<MeshTraceBuffer>& trace_buffer);
+    // dram_high_water_mark is used when trace_region_size is 0 to validate no overlap
+    static void populate_mesh_buffer(
+        MeshCommandQueue& mesh_cq,
+        std::shared_ptr<MeshTraceBuffer>& trace_buffer,
+        DeviceAddr dram_high_water_mark = 0);
 };
 
 }  // namespace tt::tt_metal::distributed

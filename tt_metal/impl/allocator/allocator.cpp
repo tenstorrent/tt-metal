@@ -357,6 +357,21 @@ void AllocatorImpl::mark_allocations_safe() {
     allocations_unsafe_ = false;
 }
 
+void AllocatorImpl::begin_dram_high_water_mark_tracking() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    dram_manager_->begin_high_water_mark_tracking();
+}
+
+DeviceAddr AllocatorImpl::end_dram_high_water_mark_tracking() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->end_high_water_mark_tracking();
+}
+
+DeviceAddr AllocatorImpl::get_dram_high_water_mark() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_high_water_mark();
+}
+
 void AllocatorImpl::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     dram_manager_->clear();

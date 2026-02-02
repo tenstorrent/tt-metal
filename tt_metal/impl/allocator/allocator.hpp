@@ -74,6 +74,12 @@ public:
     void mark_allocations_unsafe();
     void mark_allocations_safe();
 
+    // High water mark tracking for DRAM allocations during trace capture
+    // Delegates to BankManager to account for banking properly
+    void begin_dram_high_water_mark_tracking();
+    DeviceAddr end_dram_high_water_mark_tracking();
+    DeviceAddr get_dram_high_water_mark() const;
+
     // what does clear even mean on an allocator???
     void clear();
 
@@ -104,6 +110,7 @@ private:
     // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
     // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
     bool allocations_unsafe_ = false;
+    
     std::unique_ptr<BankManager> dram_manager_;
     std::unique_ptr<BankManager> l1_manager_;
     std::unique_ptr<BankManager> l1_small_manager_;
