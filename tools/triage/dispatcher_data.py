@@ -448,8 +448,18 @@ class DispatcherData:
                 watcher_enabled = False
             else:
                 watcher_enabled = None  # Unknown state
+                log_check_location(
+                    location,
+                    False,
+                    f"unexpected watcher enable value: {watcher_enable_val}",
+                )
         except Exception:
-            pass
+            watcher_enabled = None
+            log_check_location(
+                location,
+                False,
+                f"failed to read watcher enable from mailboxes. {MAILBOX_CORRUPTED_MESSAGE}",
+            )
 
         # Subordinate sync is per-RISC (BRISC is the master, so no sync entry for it)
         try:
