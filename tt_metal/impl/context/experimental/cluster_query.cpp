@@ -88,16 +88,16 @@ public:
             log_critical(tt::LogMetal, "Cannot teardown ClusterQuery: Runtime has a bound context");
             return false;
         }
+        distributed_context_.reset();
+        compute_only_distributed_context_.reset();
+        control_plane_.reset();
         cluster_.reset();
         hal_.reset();
         initialized_ = false;
         return true;
     }
 
-    bool is_initialized() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return initialized_;
-    }
+    bool is_initialized() const { return initialized_; }
 
     tt::Cluster& cluster() {
         LOCK_ASSERT_INITIALIZED_FUNCTION();
