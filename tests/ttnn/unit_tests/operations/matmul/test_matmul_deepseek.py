@@ -691,18 +691,15 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
 
     tile_h = 32
     tile_w = 32
-    num_dram_banks = 12
-    in0_core_grid_x = 4
-    in0_core_grid_y = 3
-    out_core_grid_x = 4
-    out_core_grid_y = 3
     expected_pcc = 0.9997
 
-    num_in0_cores = in0_core_grid_x * in0_core_grid_y
-    num_out_cores = out_core_grid_x * out_core_grid_y
+    # Get the optimal DRAM bank-to-worker core assignment from the device.
+    # The factory uses this same assignment to map workers to DRAM banks.
+    optimal_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
 
-    assert num_in0_cores == num_dram_banks
-    assert num_out_cores == num_dram_banks
+    num_dram_banks = len(optimal_worker_cores)
+    num_in0_cores = num_dram_banks
+    num_out_cores = num_dram_banks
 
     batches_per_core_in0 = batch // num_in0_cores
     batches_per_core_out = batch // num_out_cores
@@ -710,17 +707,18 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
     in0_shape = [1, batch, m, k]
     in1_shape = [1, batch, k, n]
 
-    # in0 L1 shard grid
+    # Use optimal worker cores for L1 shard grids - this ensures the shard ordering
+    # matches the factory's worker ordering (critical for correct data routing!)
     in0_shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(in0_core_grid_x - 1, in0_core_grid_y - 1))}
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
     )
 
-    # Output L1 shard grid
+    # Output L1 shard grid - same cores as input
     out_shard_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(out_core_grid_x - 1, out_core_grid_y - 1))}
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
     )
 
-    # DRAM shard grid: 12 DRAM banks
+    # DRAM shard grid: num_dram_banks DRAM banks (1D grid from 0 to num_dram_banks-1)
     dram_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
 
     # in0: L1 sharded by batch
