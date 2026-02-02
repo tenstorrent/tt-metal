@@ -34,9 +34,7 @@ def launch(op_descriptors: List[OpDescriptor]) -> List[List["ttnn.Tensor"]]:
     Example:
         >>> left = models.experimental.ops.descriptors.normalization.rms_norm(input1, weight=w1, cores=cores1)
         >>> right = models.experimental.ops.descriptors.normalization.rms_norm(input2, weight=w2, cores=cores2)
-        >>> for _ in range(100):
-        ...     left_out, right_out = launch([left, right])
-        >>> assert left_out is left.output_tensors[0]
+        >>> left_out, right_out = launch([left, right])
     """
     if not op_descriptors:
         raise ValueError("op_descriptors cannot be empty")
@@ -57,10 +55,9 @@ def launch(op_descriptors: List[OpDescriptor]) -> List[List["ttnn.Tensor"]]:
     ]
 
     # Execute the merged program
-    # Device program cache (via compute_program_hash) handles compiled program caching
     ttnn.generic_op(io_tensors, merged)
 
-    # Return output tensors from each op descriptor (first output for each, matching ProgramBranch.output)
+    # Return output tensors from each op
     return [op_descriptor.output_tensors for op_descriptor in op_descriptors]
 
 
