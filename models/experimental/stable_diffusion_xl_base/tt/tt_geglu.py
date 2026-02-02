@@ -67,7 +67,8 @@ class TtGEGLU(LightweightModule):
         tracy.signpost("GEGLU Linear 2 End")
 
         ttnn.deallocate(input_tensor)
-        if "down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path:
+        if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
+            # gate is L1 BS, hidden_states is L1 interleaved; mul_ will output its result in L1 BS
             hidden_states = ttnn.mul_(gate, hidden_states, use_legacy=False, fast_and_approximate_mode=True)
         else:
             hidden_states = ttnn.mul_(hidden_states, gate, use_legacy=False, fast_and_approximate_mode=True)
