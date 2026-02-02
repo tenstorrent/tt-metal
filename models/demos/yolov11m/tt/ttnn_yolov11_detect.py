@@ -26,13 +26,27 @@ class TtnnDetect:
         self.cv3_0_1_1 = TtnnConv(device, parameter.cv3[0][1][1], conv_pt.cv3[0][1][1], is_detect=True)
         self.cv3_0_2_0 = Yolov11Conv2D(parameter.cv3[0][2], conv_pt.cv3[0][2], device=device, is_detect=True)
 
-        self.cv3_1_0_0 = TtnnConv(device, parameter.cv3[1][0][0], conv_pt.cv3[1][0][0], is_detect=True)
+        self.cv3_1_0_0 = TtnnConv(
+            device,
+            parameter.cv3[1][0][0],
+            conv_pt.cv3[1][0][0],
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
+        )
         self.cv3_1_0_1 = TtnnConv(device, parameter.cv3[1][0][1], conv_pt.cv3[1][0][1], is_detect=True)
         self.cv3_1_1_0 = TtnnConv(device, parameter.cv3[1][1][0], conv_pt.cv3[1][1][0], is_detect=True)
         self.cv3_1_1_1 = TtnnConv(device, parameter.cv3[1][1][1], conv_pt.cv3[1][1][1], is_detect=True)
         self.cv3_1_2_0 = Yolov11Conv2D(parameter.cv3[1][2], conv_pt.cv3[1][2], device=device, is_detect=True)
 
-        self.cv3_2_0_0 = TtnnConv(device, parameter.cv3[2][0][0], conv_pt.cv3[2][0][0], is_detect=True)
+        self.cv3_2_0_0 = TtnnConv(
+            device,
+            parameter.cv3[2][0][0],
+            conv_pt.cv3[2][0][0],
+            is_detect=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
+        )
         self.cv3_2_0_1 = TtnnConv(device, parameter.cv3[2][0][1], conv_pt.cv3[2][0][1], is_detect=True)
         self.cv3_2_1_0 = TtnnConv(device, parameter.cv3[2][1][0], conv_pt.cv3[2][1][0], is_detect=True)
         self.cv3_2_1_1 = TtnnConv(device, parameter.cv3[2][1][1], conv_pt.cv3[2][1][1], is_detect=True)
