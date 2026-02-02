@@ -47,7 +47,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_sender_grid_end_x"),
         get_named_compile_time_arg_val("gather_sender_grid_end_y"),
         get_named_compile_time_arg_val("gather_row_major"),
-        get_write_ptr(get_named_compile_time_arg_val("gather_dst_cb")),  // receiver_data_addr from CB write ptr
+        get_named_compile_time_arg_val("gather_receiver_data_addr"),  // receiver's output tensor address
     };
 
 // ============================================================================
@@ -91,6 +91,7 @@ void kernel_main() {
     // Gather compute args (no-op for TRISC)
     deepseek_b1_ops::Gather::ComputeArgs gather_args{};
 #endif
+    DPRINT << "Output Hidden kernel started" << ENDL();
 
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers
@@ -127,4 +128,5 @@ void kernel_main() {
         deepseek_b1_ops::Gather::Op<Core::is_matmul_core, Core::is_gather_receiver_core, true> gather;
         gather(gather_args);
     }
+    DPRINT << "Output Hidden kernel finished" << ENDL();
 }

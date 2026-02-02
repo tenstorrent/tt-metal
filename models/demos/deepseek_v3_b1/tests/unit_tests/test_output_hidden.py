@@ -56,13 +56,15 @@ def test_output_hidden(device, M, K, N, in0_dtype, in1_dtype):
     # Create matmul core grid
     matmul_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GRID_X - 1, GRID_Y - 1))])
 
-    # Gather receiver core: (9, 11)
-    gather_core = ttnn.CoreCoord(9, 11)
+    # Gather receiver core: (11, 9)
+    gather_core = ttnn.CoreCoord(11, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
     # Create input and weights PyTorch tensors
     torch.manual_seed(0)
     torch_input = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_input = torch_input.repeat(96, 1)
+    logger.info(f"Input shape: {torch_input.shape}")
     torch_weights = torch.randn((K, N), dtype=torch.bfloat16)
 
     # Compute reference output using PyTorch

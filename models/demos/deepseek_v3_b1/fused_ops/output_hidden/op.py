@@ -90,8 +90,8 @@ class OutputHidden:
         matmul_core_grid = ttnn.CoreRangeSet([matmul_grid])
         num_matmul_cores = matmul_grid.grid_size().x * matmul_grid.grid_size().y  # 96
 
-        # Gather receiver core: (9, 11)
-        gather_core = ttnn.CoreCoord(9, 11)
+        # Gather receiver core: (11, 9)
+        gather_core = ttnn.CoreCoord(11, 9)
         gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
         # Full grid (union of matmul and gather cores for semaphore allocation)
@@ -135,6 +135,10 @@ class OutputHidden:
         # Compile-time args
         # ========================================================================
         # NCRISC: matmul reader + gather sender
+        # Get output tensor's buffer address to pass directly to senders
+        # (since CB 3 only exists on gather core, senders can't use get_write_ptr)
+        gather_receiver_data_addr = output_tensor.buffer_address()
+
         ncrisc_named_compile_time_args = [
             # Matmul
             ("matmul_in0", matmul_in0_cb),
@@ -154,7 +158,7 @@ class OutputHidden:
             ("gather_sender_grid_end_x", MATMUL_GRID_END_X),
             ("gather_sender_grid_end_y", MATMUL_GRID_END_Y),
             ("gather_row_major", 1),
-            ("gather_dst_cb", gather_dst_cb),
+            ("gather_receiver_data_addr", gather_receiver_data_addr),
         ]
 
         # BRISC: matmul writer (no-op) + gather receiver
@@ -203,19 +207,22 @@ class OutputHidden:
         )
 
         # CB 3: Gather output (from sharded tensor, on gather core only)
-        # Must be visible on both sender and receiver grids for get_write_ptr
-        gather_dst_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=gather_dst_cb,
-            data_format=data_format,
-            page_size=tile_1x32_size,
-            tile=matmul_out_tile_descriptor,
-        )
-        gather_dst_cb_core_ranges = matmul_core_grid.merge(gather_core_grid)
-        gather_dst_cb_descriptor = ttnn.CBDescriptor(
-            total_size=gather_dst_num_pages * tile_1x32_size,
-            core_ranges=gather_dst_cb_core_ranges,
-            format_descriptors=[gather_dst_cb_format],
-        )
+        # Note: Sharded tensor CBs don't support TSLICE printing due to different
+        # internal state management. Use direct memory access for debugging.
+        gather_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gather_dst_cb, output_tensor)
+
+        # gather_dst_cb_format = ttnn.CBFormatDescriptor(
+        #     buffer_index=gather_dst_cb,
+        #     data_format=data_format,
+        #     page_size=tile_1x32_size,
+        #     tile=matmul_out_tile_descriptor,
+        # )
+        # gather_dst_cb_core_ranges = matmul_core_grid.merge(gather_core_grid)
+        # gather_dst_cb_descriptor = ttnn.CBDescriptor(
+        #     total_size=gather_dst_num_pages * tile_1x32_size,
+        #     core_ranges=gather_dst_cb_core_ranges,
+        #     format_descriptors=[gather_dst_cb_format],
+        # )
 
         # ========================================================================
         # Semaphore descriptors

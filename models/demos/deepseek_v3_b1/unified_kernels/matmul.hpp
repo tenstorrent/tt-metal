@@ -102,8 +102,9 @@ struct Matmul {
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
             cb_wait_front(args.in0, args.k_num_tiles);
             cb_wait_front(args.in1, args.k_num_tiles * out_w);
-
-            // Reserve output tiles
+            // DPRINT<<"In 0:"<<TSLICE(args.in0, 0, SliceRange::h0_w0_32())<<ENDL();
+            // DPRINT<<"In 1:"<<TSLICE(args.in1, 0, SliceRange::h0_w0_32())<<ENDL();
+            //  Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
             if constexpr (out_w <= 8) {
