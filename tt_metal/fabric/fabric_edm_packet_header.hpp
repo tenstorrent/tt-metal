@@ -164,13 +164,23 @@ struct SparseMulticastRoutingCommandHeader {
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
 };
+
+// 2 bits
+enum NocScatterWriteChunkEncoding : uint8_t {
+    CHUNK_ENCODING_NOP = 0,
+    CHUNK_ENCODING_UNICAST_WRITE = 1,
+    CHUNK_ENCODING_SEMINC_NO_FLUSH = 2,
+    CHUNK_ENCODING_SEMINC_FLUSH = 3,
+    CHUNK_ENCODING_LAST = CHUNK_ENCODING_SEMINC_FLUSH
+};
+
 #define NOC_SCATTER_WRITE_MAX_CHUNKS 4
 static constexpr uint8_t NOC_SCATTER_WRITE_MIN_CHUNKS = 2;
 struct NocUnicastScatterCommandHeader {
     uint64_t noc_address[NOC_SCATTER_WRITE_MAX_CHUNKS];
     uint16_t chunk_size[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];  // last chunk size is implicit
     uint8_t chunk_count;
-    uint8_t reserved = 0;
+    uint8_t chunk_encoding;
 
     NocUnicastScatterCommandHeader() = delete;
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init,hicpp-member-init)

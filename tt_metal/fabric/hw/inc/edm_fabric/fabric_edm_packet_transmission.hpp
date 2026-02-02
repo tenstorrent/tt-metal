@@ -201,54 +201,179 @@ FORCE_INLINE
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            constexpr uint8_t CHUNK_ENCODING_MASK = 0b11;  // Gets us the encoding of the first chunk
+            constexpr uint8_t CHUNK_ENCODING_SEMINC_MASK = 0b10;
+            constexpr uint8_t ENCODING_UNICAST_WRITE =
+                static_cast<uint8_t>(tt::tt_fabric::NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE);
+            constexpr uint8_t ENCODING_SEMINC_NO_FLUSH =
+                static_cast<uint8_t>(tt::tt_fabric::NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH);
+            constexpr uint8_t ENCODING_SEMINC_FLUSH =
+                static_cast<uint8_t>(tt::tt_fabric::NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH);
+            constexpr uint8_t ENCODING_NOP =
+                static_cast<uint8_t>(tt::tt_fabric::NocScatterWriteChunkEncoding::CHUNK_ENCODING_NOP);
             const auto& scatter = header.command_fields.unicast_scatter_write;
             const uint8_t chunk_count = scatter.chunk_count;
+            uint8_t packet_encoding = scatter.chunk_encoding;
 
             // NOTE: when chunk_count < 4, chunk_size[n-2] can be used without calculating final_chunk_size.
             //       However the perf (n == 2) is much worse than implementation below.
             //       Need to check perf with 2 <= n <= 4
             size_t offset = 0;
             const uint8_t last_chunk_index = chunk_count - 1;
+            // First chunk
+            uint8_t chunk_encoding = packet_encoding & CHUNK_ENCODING_MASK;
+            uint64_t destination_noc_address = scatter.noc_address[0];
             uint16_t chunk_size = scatter.chunk_size[0];
-            noc_async_write_one_packet_with_trid<update_counter, false>(
-                payload_start_address + offset,
-                scatter.noc_address[0],
-                chunk_size,
-                transaction_id,
-                tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc);
-            offset += chunk_size;
-            if (chunk_count > 2) {
-                chunk_size = scatter.chunk_size[1];
+            if (chunk_encoding == ENCODING_UNICAST_WRITE) {
                 noc_async_write_one_packet_with_trid<update_counter, false>(
                     payload_start_address + offset,
-                    scatter.noc_address[1],
+                    destination_noc_address,
                     chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
                     tt::tt_fabric::edm_to_local_chip_noc);
                 offset += chunk_size;
-                if (chunk_count == 4) [[likely]] {
-                    chunk_size = scatter.chunk_size[2];
+            } else if (chunk_encoding != ENCODING_NOP) {
+                if (chunk_encoding == ENCODING_SEMINC_FLUSH) {
+                    flush_write_to_noc_pipeline(rx_channel_id);
+                }
+                // If a semaphore increment is being performed, the increment value is fed in in the chunk size, to
+                // reduce payload size
+                noc_semaphore_inc<true>(
+                    destination_noc_address,
+                    chunk_size,
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
+            } else {
+                ASSERT(false);
+            }
+            // Shift the packet encoding to the next chunk
+            packet_encoding >>= 2;
+            if (chunk_count > 2) {
+                chunk_encoding = packet_encoding & CHUNK_ENCODING_MASK;
+                destination_noc_address = scatter.noc_address[1];
+                chunk_size = scatter.chunk_size[1];
+                if (chunk_encoding == ENCODING_UNICAST_WRITE) {
                     noc_async_write_one_packet_with_trid<update_counter, false>(
                         payload_start_address + offset,
-                        scatter.noc_address[2],
+                        destination_noc_address,
                         chunk_size,
                         transaction_id,
                         tt::tt_fabric::local_chip_data_cmd_buf,
                         tt::tt_fabric::edm_to_local_chip_noc);
                     offset += chunk_size;
+                } else if (chunk_encoding != ENCODING_NOP) {
+                    if (chunk_encoding == ENCODING_SEMINC_FLUSH) {
+                        flush_write_to_noc_pipeline(rx_channel_id);
+                    }
+                    noc_semaphore_inc<true>(
+                        destination_noc_address,
+                        chunk_size,
+                        tt::tt_fabric::edm_to_local_chip_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc);
+                } else {
+                    ASSERT(false);
+                }
+                packet_encoding >>= 2;
+                if (chunk_count == 4) [[likely]] {
+                    chunk_encoding = packet_encoding & CHUNK_ENCODING_MASK;
+                    destination_noc_address = scatter.noc_address[2];
+                    chunk_size = scatter.chunk_size[2];
+                    if (chunk_encoding == ENCODING_UNICAST_WRITE) {
+                        noc_async_write_one_packet_with_trid<update_counter, false>(
+                            payload_start_address + offset,
+                            destination_noc_address,
+                            chunk_size,
+                            transaction_id,
+                            tt::tt_fabric::local_chip_data_cmd_buf,
+                            tt::tt_fabric::edm_to_local_chip_noc);
+                        offset += chunk_size;
+                    } else if (chunk_encoding != ENCODING_NOP) {
+                        if (chunk_encoding == ENCODING_SEMINC_FLUSH) {
+                            flush_write_to_noc_pipeline(rx_channel_id);
+                        }
+                        noc_semaphore_inc<true>(
+                            destination_noc_address,
+                            chunk_size,
+                            tt::tt_fabric::edm_to_local_chip_noc,
+                            tt::tt_fabric::forward_and_local_write_noc_vc);
+                    } else {
+                        ASSERT(false);
+                    }
                 }
             }
 
             const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
-            noc_async_write_one_packet_with_trid<update_counter, false>(
-                payload_start_address + offset,
-                scatter.noc_address[last_chunk_index],
-                final_chunk_size,
-                transaction_id,
-                tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc);
+            chunk_encoding = packet_encoding & CHUNK_ENCODING_MASK;
+            const uint64_t final_destination_noc_address = scatter.noc_address[last_chunk_index];
+            if (chunk_encoding == ENCODING_UNICAST_WRITE) {
+                noc_async_write_one_packet_with_trid<update_counter, false>(
+                    payload_start_address + offset,
+                    final_destination_noc_address,
+                    final_chunk_size,
+                    transaction_id,
+                    tt::tt_fabric::local_chip_data_cmd_buf,
+                    tt::tt_fabric::edm_to_local_chip_noc);
+            } else if (chunk_encoding != ENCODING_NOP) {
+                if (chunk_encoding == ENCODING_SEMINC_FLUSH) {
+                    flush_write_to_noc_pipeline(rx_channel_id);
+                }
+                noc_semaphore_inc<true>(
+                    final_destination_noc_address,
+                    final_chunk_size,
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
+            } else {
+                ASSERT(false);
+            }
+            // const auto& scatter = header.command_fields.unicast_scatter_write;
+            // const uint8_t chunk_count = scatter.chunk_count;
+
+            // // NOTE: when chunk_count < 4, chunk_size[n-2] can be used without calculating final_chunk_size.
+            // //       However the perf (n == 2) is much worse than implementation below.
+            // //       Need to check perf with 2 <= n <= 4
+            // size_t offset = 0;
+            // const uint8_t last_chunk_index = chunk_count - 1;
+            // uint16_t chunk_size = scatter.chunk_size[0];
+            // noc_async_write_one_packet_with_trid<update_counter, false>(
+            //     payload_start_address + offset,
+            //     scatter.noc_address[0],
+            //     chunk_size,
+            //     transaction_id,
+            //     tt::tt_fabric::local_chip_data_cmd_buf,
+            //     tt::tt_fabric::edm_to_local_chip_noc);
+            // offset += chunk_size;
+            // if (chunk_count > 2) {
+            //     chunk_size = scatter.chunk_size[1];
+            //     noc_async_write_one_packet_with_trid<update_counter, false>(
+            //         payload_start_address + offset,
+            //         scatter.noc_address[1],
+            //         chunk_size,
+            //         transaction_id,
+            //         tt::tt_fabric::local_chip_data_cmd_buf,
+            //         tt::tt_fabric::edm_to_local_chip_noc);
+            //     offset += chunk_size;
+            //     if (chunk_count == 4) [[likely]] {
+            //         chunk_size = scatter.chunk_size[2];
+            //         noc_async_write_one_packet_with_trid<update_counter, false>(
+            //             payload_start_address + offset,
+            //             scatter.noc_address[2],
+            //             chunk_size,
+            //             transaction_id,
+            //             tt::tt_fabric::local_chip_data_cmd_buf,
+            //             tt::tt_fabric::edm_to_local_chip_noc);
+            //         offset += chunk_size;
+            //     }
+            // }
+
+            // const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
+            // noc_async_write_one_packet_with_trid<update_counter, false>(
+            //     payload_start_address + offset,
+            //     scatter.noc_address[last_chunk_index],
+            //     final_chunk_size,
+            //     transaction_id,
+            //     tt::tt_fabric::local_chip_data_cmd_buf,
+            //     tt::tt_fabric::edm_to_local_chip_noc);
         } break;
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
