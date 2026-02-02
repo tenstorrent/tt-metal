@@ -613,3 +613,142 @@ def test_composite_8_ops_random_cores(device):
         expected = norm_fn(torch_input, torch_weight)
         actual = ttnn.to_torch(ttnn.from_device(output[0]))
         assert_allclose(expected, actual, rtol=1e-2, atol=2.5e-2)
+
+
+def test_composite_program_cache(device):
+    """Test that composite.launch() properly caches the merged program."""
+    # Setup: sharded tensors on non-overlapping cores
+    batch_size, seq_len, hidden_dim = 1, 128, 1024
+    torch.manual_seed(0)
+
+    # Core ranges for two operations (non-overlapping)
+    cores_left = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    cores_right = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 1))})
+
+    # Create compute kernel configs
+    arch = device.arch()
+    compute_config = ttnn.rmsnorm_default_compute_config(arch)
+
+    # Helper to create inputs and run composite
+    def run_composite_ops():
+        # Create inputs
+        torch_input_left = torch.randn(batch_size, seq_len, hidden_dim, dtype=torch.bfloat16)
+        torch_input_right = torch.randn(batch_size, seq_len, hidden_dim, dtype=torch.bfloat16)
+        torch_weight_left = torch.ones(hidden_dim, dtype=torch.bfloat16)
+        torch_weight_right = torch.ones(hidden_dim, dtype=torch.bfloat16)
+
+        # Convert to ttnn tensors (sharded)
+        ttnn_input_left = ttnn.from_torch(torch_input_left, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_input_right = ttnn.from_torch(
+            torch_input_right, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        ttnn_weight_left = ttnn.from_torch(
+            torch_weight_left, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        ttnn_weight_right = ttnn.from_torch(
+            torch_weight_right, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+        # Create operation descriptors
+        left = descriptors.rms_norm(
+            ttnn_input_left,
+            core_range_set=cores_left,
+            weight=ttnn_weight_left,
+            compute_kernel_config=compute_config,
+        )
+        right = descriptors.rms_norm(
+            ttnn_input_right,
+            core_range_set=cores_right,
+            weight=ttnn_weight_right,
+            compute_kernel_config=compute_config,
+        )
+
+        # Launch composite operation
+        outputs = composite.launch([left, right])
+        return outputs
+
+    # Get initial cache count
+    initial_cache_entries = device.num_program_cache_entries()
+
+    # Run the same composite operation 3 times
+    for _ in range(3):
+        outputs = run_composite_ops()
+        # Verify outputs are valid tensors
+        assert len(outputs) == 2
+        assert all(len(out) == 1 for out in outputs)
+
+    # Check that only 1 new program was cached (the merged program)
+    # Each iteration should reuse the same cached merged program
+    final_cache_entries = device.num_program_cache_entries()
+    new_entries = final_cache_entries - initial_cache_entries
+
+    assert new_entries == 1, (
+        f"Expected 1 new program cache entry for the merged program, "
+        f"but got {new_entries} entries (initial: {initial_cache_entries}, final: {final_cache_entries})"
+    )
+
+
+def test_composite_program_cache_different_configs(device):
+    """Test that different composite configurations create separate cache entries."""
+    # Setup
+    batch_size, seq_len, hidden_dim = 1, 128, 1024
+    torch.manual_seed(0)
+
+    # Core ranges
+    cores_left = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    cores_right = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 1))})
+
+    arch = device.arch()
+    compute_config = ttnn.rmsnorm_default_compute_config(arch)
+
+    # Helper to run composite with specific configuration
+    def run_composite_with_cores(core_set_left, core_set_right):
+        torch_input_left = torch.randn(batch_size, seq_len, hidden_dim, dtype=torch.bfloat16)
+        torch_input_right = torch.randn(batch_size, seq_len, hidden_dim, dtype=torch.bfloat16)
+        torch_weight = torch.ones(hidden_dim, dtype=torch.bfloat16)
+
+        ttnn_input_left = ttnn.from_torch(torch_input_left, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_input_right = ttnn.from_torch(
+            torch_input_right, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        ttnn_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+        left = descriptors.rms_norm(
+            ttnn_input_left,
+            core_range_set=core_set_left,
+            weight=ttnn_weight,
+            compute_kernel_config=compute_config,
+        )
+        right = descriptors.rms_norm(
+            ttnn_input_right,
+            core_range_set=core_set_right,
+            weight=ttnn_weight,
+            compute_kernel_config=compute_config,
+        )
+
+        return composite.launch([left, right])
+
+    # Get initial cache count
+    initial_cache_entries = device.num_program_cache_entries()
+
+    # Run with first configuration twice (should cache 1 program)
+    for _ in range(2):
+        run_composite_with_cores(cores_left, cores_right)
+
+    cache_after_first = device.num_program_cache_entries()
+    assert cache_after_first - initial_cache_entries == 1, "First configuration should add 1 cache entry"
+
+    # Run with different core configuration (should add new cache entry)
+    cores_left_new = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(5, 1))})
+    cores_right_new = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(7, 1))})
+
+    run_composite_with_cores(cores_left_new, cores_right_new)
+
+    cache_after_second = device.num_program_cache_entries()
+    assert cache_after_second - cache_after_first == 1, "Different configuration should add 1 new cache entry"
+
+    # Run first configuration again (should reuse cached program, no new entry)
+    run_composite_with_cores(cores_left, cores_right)
+
+    cache_final = device.num_program_cache_entries()
+    assert cache_final == cache_after_second, "Rerunning first configuration should not add new cache entry"
