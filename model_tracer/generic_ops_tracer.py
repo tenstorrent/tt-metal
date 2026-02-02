@@ -657,7 +657,7 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     print(f"📊 Found {len(json_files)} operation trace files")
 
     # Create metadata file with source and machine info
-    # This will be used when importing traces with --from-trace-dir
+    # This will be used when importing traces with --load
     metadata = {
         "test_source": test_path,
         "timestamp": datetime.now().isoformat(),
@@ -890,7 +890,7 @@ Examples (Standalone Python scripts):
     python model_tracer/generic_ops_tracer.py model.py --store --output-dir ./my_traces
 
 Examples (Import existing traces):
-    python model_tracer/generic_ops_tracer.py --from-trace-dir /path/to/traces
+    python model_tracer/generic_ops_tracer.py --load /path/to/traces
         """,
     )
     parser.add_argument("test_path", nargs="?", help="Path to test file or script")
@@ -905,6 +905,7 @@ Examples (Import existing traces):
     )
     parser.add_argument("-d", "--debug", action="store_true", help="[DEPRECATED] Live output is now always enabled")
     parser.add_argument(
+        "--load",
         "--from-trace-dir",
         type=str,
         help="Process existing trace directory and add to master JSON (skips test execution). "
@@ -920,14 +921,14 @@ Examples (Import existing traces):
     else:
         args, extra_args = parser.parse_known_args()
 
-    # Either test_path or from_trace_dir must be provided
-    if not args.test_path and not args.from_trace_dir:
-        print("❌ Error: Either test_path or --from-trace-dir is required")
+    # Either test_path or load must be provided
+    if not args.test_path and not args.load:
+        print("❌ Error: Either test_path or --load is required")
         parser.print_help()
         return 1
 
-    if args.from_trace_dir and args.test_path:
-        print("❌ Error: Cannot specify both test_path and --from-trace-dir")
+    if args.load and args.test_path:
+        print("❌ Error: Cannot specify both test_path and --load")
         parser.print_help()
         return 1
 
@@ -935,17 +936,17 @@ Examples (Import existing traces):
     print("=" * 50)
 
     # Handle two modes: run test or process existing traces
-    if args.from_trace_dir:
-        print(f"📂 Processing existing traces from: {args.from_trace_dir}")
-        if not os.path.isdir(args.from_trace_dir):
-            print(f"❌ Error: Trace directory not found: {args.from_trace_dir}")
+    if args.load:
+        print(f"📂 Processing existing traces from: {args.load}")
+        if not os.path.isdir(args.load):
+            print(f"❌ Error: Trace directory not found: {args.load}")
             return 1
-        trace_dir = args.from_trace_dir
-        test_source = os.path.basename(args.from_trace_dir)
+        trace_dir = args.load
+        test_source = os.path.basename(args.load)
         # Find all JSON files in the trace directory
         trace_files = [os.path.join(trace_dir, f) for f in os.listdir(trace_dir) if f.endswith(".json")]
         if not trace_files:
-            print(f"❌ Error: No JSON trace files found in {args.from_trace_dir}")
+            print(f"❌ Error: No JSON trace files found in {args.load}")
             return 1
         result = {
             "success": True,
@@ -966,7 +967,7 @@ Examples (Import existing traces):
 
     try:
         # Run test with tracing (unless processing existing traces)
-        if not args.from_trace_dir:
+        if not args.load:
             result = run_test_with_tracing(args.test_path, args.output_dir, args.store, args.debug, extra_args)
 
         print("\n" + "=" * 50)
@@ -974,7 +975,7 @@ Examples (Import existing traces):
         print("=" * 50)
 
         # Display test results if we ran tests (not from existing traces)
-        if not args.from_trace_dir and "test_stats" in result:
+        if not args.load and "test_stats" in result:
             stats = result["test_stats"]
             if stats["total"] > 0:
                 print(f"Test Results: ✅ {stats['passed']} passed, ❌ {stats['failed']} failed (Total: {stats['total']})")
@@ -991,18 +992,16 @@ Examples (Import existing traces):
             machine_info = get_machine_info()
 
             # Extract test source name and possibly override machine_info from metadata
-            if args.from_trace_dir:
+            if args.load:
                 # Try to load metadata file if it exists
-                metadata_file = os.path.join(args.from_trace_dir, "_trace_metadata.json")
+                metadata_file = os.path.join(args.load, "_trace_metadata.json")
                 if os.path.exists(metadata_file):
                     try:
                         with open(metadata_file, "r") as f:
                             metadata = json.load(f)
 
                         # Use test_source from metadata
-                        test_source = metadata.get(
-                            "test_source", os.path.basename(os.path.abspath(args.from_trace_dir))
-                        )
+                        test_source = metadata.get("test_source", os.path.basename(os.path.abspath(args.load)))
 
                         # Convert to relative path if needed
                         if os.path.isabs(test_source) and BASE_DIR in test_source:
@@ -1034,10 +1033,10 @@ Examples (Import existing traces):
                                     )
                     except Exception as e:
                         print(f"⚠️ Could not load metadata file: {e}")
-                        test_source = os.path.basename(os.path.abspath(args.from_trace_dir))
+                        test_source = os.path.basename(os.path.abspath(args.load))
                 else:
                     # Fallback to directory name if no metadata
-                    test_source = os.path.basename(os.path.abspath(args.from_trace_dir))
+                    test_source = os.path.basename(os.path.abspath(args.load))
             else:
                 test_source = args.test_path
                 if os.path.isabs(test_source) and BASE_DIR in test_source:
@@ -1129,8 +1128,8 @@ Examples (Import existing traces):
             print(f"   Source: {test_source}")
 
             # Cleanup individual trace files and subdirectory if not storing
-            # Never cleanup when processing existing traces (--from-trace-dir)
-            if not args.from_trace_dir and not result["keep_traces"]:
+            # Never cleanup when processing existing traces (--load)
+            if not args.load and not result["keep_traces"]:
                 print("\n🧹 Cleaning up individual trace files...")
                 cleaned_count = 0
                 for trace_file in tqdm(result["trace_files"], desc="Removing files", unit="file"):
