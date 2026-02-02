@@ -113,9 +113,11 @@ class TtBasicTransformerBlock(LightweightModule):
         )
 
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
+
         if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
+            # Use interleaved memory layout as LayerNorm will output a tensor with interleaved layout
             hidden_states = ttnn.add(
-                hidden_states, attn_hidden_states, use_legacy=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                hidden_states, attn_hidden_states, use_legacy=False, memory_config=ttnn.L1_MEMORY_CONFIG
             )
         else:
             hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
@@ -129,6 +131,10 @@ class TtBasicTransformerBlock(LightweightModule):
             memory_config=hidden_states.memory_config() if hidden_states.is_sharded() else ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.ln_program_config if hidden_states.is_sharded() else self.legacy_program_config,
         )
+
+        if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
+            # Move add output to DRAM to make space in L1 for FeedForward Matmuls
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         attn_hidden_states = self.ff(attn_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
