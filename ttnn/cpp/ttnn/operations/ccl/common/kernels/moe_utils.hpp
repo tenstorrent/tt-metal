@@ -836,11 +836,11 @@ inline void send_init_semaphore_to_configured_targets(
 // 0 --> 1 --> 2 --> 3 --> 4 --- 5
 //      [X]               [X]
 // We would set a hop mask of 0b01001 and set direction to eth_chan_directions::EAST.
-template <int32_t FabricMaxPacketSzBytes, typename AddrGenType, typename FabricConnectionsType>
+template <int32_t FabricMaxPacketSzBytes, typename AddrGenType>
 inline void fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction(
     // Fabric parameters
     AddrGenType addrgen,
-    FabricConnectionsType& fabric_connections,
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint16_t fabric_mcast_hop_mask,
     uint32_t fabric_direction,  // eth_chan_directions index
@@ -873,18 +873,11 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction(
 // Eg. Going West (3->0) or North (2->0)
 template <tt::tt_fabric::Topology Topology, uint32_t AxisSize>
 inline uint32_t calculate_hops_direction_enforced_1D(uint32_t src_coord, uint32_t dest_coord, Polarity polarity) {
-    if constexpr (has_wrap_around<Topology>()) {
-        return directional_wrap_distance<AxisSize>(src_coord, dest_coord, polarity);
-    } else {
-        uint32_t distance = (polarity == Polarity::POSITIVE) ? (dest_coord - src_coord) : (src_coord - dest_coord);
-        // If wraparound is not enabled, then distance can never be negative.
-        // Eg. going "forward" from 3 to 2 is impossible.
-        // TODO: Add an actual error/assertion here
-        // if (distance < 0) {
-        //     ASSERT(false);
-        // }
-        return distance;
-    }
+    // Currently this function has only been tested for 1D Ring topology.
+    static_assert(
+        has_wrap_around<Topology>(),
+        "calculate_hops_direction_enforced_1D has only been tested for 1D topologies with wraparound links");
+    return directional_wrap_distance<AxisSize>(src_coord, dest_coord, polarity);
 }
 
 // Given a list of destinations, generates a hop mask relative to the source chip
@@ -899,7 +892,7 @@ template <
 inline std::pair<uint16_t, uint32_t> get_fabric_mcast_hop_mask_and_direction(
     uint32_t linearized_dest_mesh_coords[MaxNumDestinations], uint32_t NumDestinations) {
     // Guard to make sure the number of destinations is not greater than the maximum number of destinations
-    ASSERT(NumDestinations <= MaxNumDestinations);
+    ASSERT(NumDestinations > 0 && NumDestinations <= MaxNumDestinations);
 
     // Figure out direction of this multicast packet
     // Direction will follow the path used for the first destination
@@ -914,8 +907,7 @@ inline std::pair<uint16_t, uint32_t> get_fabric_mcast_hop_mask_and_direction(
             ? Polarity::POSITIVE
             : Polarity::NEGATIVE;
     bool travelling_ew =
-        (routing_direction == eth_chan_directions::EAST || routing_direction == eth_chan_directions::WEST) ? true
-                                                                                                           : false;
+        (routing_direction == eth_chan_directions::EAST || routing_direction == eth_chan_directions::WEST);
     // Generate the multicast packet's hop mask
     auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(LinearizedSrcMeshCoord);
     uint16_t fabric_mcast_hop_mask = 0;
@@ -928,6 +920,8 @@ inline std::pair<uint16_t, uint32_t> get_fabric_mcast_hop_mask_and_direction(
         } else {
             num_hops = calculate_hops_direction_enforced_1D<Topology, MeshRows>(src_row, dest_row, direction_polarity);
         }
+        // Guard to make sure that num_hops is a valid result
+        ASSERT(num_hops > 0 && num_hops <= 16);  // Currently fabric sparse multicast only supports up to 16 hops
         // Set the corresponding bit in the fabric multicast hop mask
         fabric_mcast_hop_mask |= (1 << (num_hops - 1));
     }
@@ -944,12 +938,11 @@ template <
     uint32_t MeshCols,
     uint32_t FabricMaxNumDestinations,
     int32_t FabricMaxPacketSzBytes,
-    typename AddrGenType,
-    typename FabricConnectionsType>
+    typename AddrGenType>
 inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
     // Fabric parameters
     AddrGenType addrgen,
-    FabricConnectionsType& fabric_connections,
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t linearized_dest_mesh_coords[FabricMaxNumDestinations],
     uint32_t NumDestinations,

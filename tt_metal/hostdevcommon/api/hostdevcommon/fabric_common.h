@@ -347,8 +347,8 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
  * them. This function converts the hop mask into a fabric multicast packet header routing field, following the 2-bit
  * encoding shown in encode_1d_multicast.
  *
- * @param hop_mask Bitmask of hops to write
- * @param buffer Output buffer (uint32_t, will be expanded into array in future)
+ * @param hop_mask Bitmask of hops to write. Currently only supports uint16_t, tracked in #36581
+ * @param buffer Output buffer (uint32_t, will be expanded into array in future, tracked in #36581)
  *
  * Example: hop mask 0b1010 would be converted into the following routing fields:
  *   - Hop 0 (0): FORWARD_ONLY (0b10)
@@ -359,13 +359,22 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
  *
  * Router consumes fields LSB-first (hop 0 at bits 0-1, hop 1 at bits 2-3, etc.)
  */
-inline void encode_1d_sparse_multicast(uint16_t hop_mask, uint32_t& buffer) {
+template <typename HopMaskType>
+inline void encode_1d_sparse_multicast(HopMaskType hop_mask, uint32_t& buffer) {
     using LowLatencyFields = RoutingFieldsConstants::LowLatency;
+
+    static_assert(
+        std::is_unsigned_v<HopMaskType> && (sizeof(HopMaskType) == sizeof(uint16_t)),
+        "hop_mask must be an unsigned integer and currently only supports uint16_t, tracked in #36581");
 
     auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
         const uint32_t bit_pos = (hop_index % LowLatencyFields::BASE_HOPS) * LowLatencyFields::FIELD_WIDTH;
         buffer |= (field_value << bit_pos);
     };
+
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+    ASSERT(hop_mask > 0);
+#endif
 
     buffer = 0;
     uint32_t hop_index = 0;
@@ -387,6 +396,7 @@ inline void encode_1d_sparse_multicast(uint16_t hop_mask, uint32_t& buffer) {
         hop_mask >>= 1;
     }
 }
+
 //=============================================================================
 // 2D Routing Encoders
 //=============================================================================

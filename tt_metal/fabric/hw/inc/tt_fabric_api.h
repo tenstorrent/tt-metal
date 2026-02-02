@@ -312,7 +312,8 @@ bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_
 }
 
 // 1D sparse multicast
-void fabric_set_sparse_multicast_route (volatile tt_l1_ptr LowLatencyPacketHeader* packet_header, uint16_t hop_mask) {
+template <typename HopMaskType>  // HopMaskType is uint8_t, uint16_t, uint32_t, or uint64_t
+void fabric_set_sparse_multicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_header, HopMaskType hop_mask) {
     uint32_t temp_routing_fields;
     routing_encoding::encode_1d_sparse_multicast(hop_mask, temp_routing_fields);
 

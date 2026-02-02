@@ -60,10 +60,6 @@
 #include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::vector;
 
@@ -194,12 +190,12 @@ bool cb_config_successful(
     distributed::MeshWorkload& workload,
     const DummyProgramMultiCBConfig& program_config) {
     bool pass = true;
+    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
 
     // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
     // to read from
     vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size =
-        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size = max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     auto* device = mesh_device->get_devices()[0];
     uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
@@ -1193,8 +1189,7 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
     uint32_t num_tiles = 2;
     uint32_t cb_size = num_tiles * single_tile_size;
 
-    uint32_t cb_config_buffer_size =
-        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    uint32_t cb_config_buffer_size = max_cbs_ * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     CoreCoord core_coord(0, 0);
 
     for (const auto& device : devices_) {
@@ -1475,8 +1470,8 @@ namespace multicore_tests {
 TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1496,8 +1491,8 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
 TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1538,8 +1533,8 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultiCo
 TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1562,8 +1557,8 @@ TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges)
 TEST_F(UnitMeshCQFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    std::vector<CBConfig> cb_config_vector(max_cbs_, cb_config);
+    for (uint32_t i = 0; i < max_cbs_; i++) {
         cb_config_vector[i].cb_id = i;
     }
 
@@ -1864,7 +1859,9 @@ namespace stress_tests {
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_WORKLOADS = 100;
     uint32_t MAX_LOOP = 100;
-    uint32_t page_size = 1024;
+    // Smaller page size for architectures with more CBs to ensure all test CBs fit in L1
+    constexpr uint32_t l1_cb_test_budget = 1024 * 32;
+    uint32_t page_size = l1_cb_test_budget / max_cbs_;
 
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP();  // Running on second CQ is hanging on CI
@@ -1904,14 +1901,14 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
             BRISC_OUTER_LOOP = MAX_LOOP;
             BRISC_MIDDLE_LOOP = MAX_LOOP;
             BRISC_INNER_LOOP = MAX_LOOP;
-            NUM_CBS = NUM_CIRCULAR_BUFFERS;
+            NUM_CBS = max_cbs_;
             NUM_SEMS = NUM_SEMAPHORES;
             USE_MAX_RT_ARGS = true;
         } else {
             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-            NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
+            NUM_CBS = rand() % (max_cbs_) + 1;
             NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
             USE_MAX_RT_ARGS = false;
         }
@@ -2143,7 +2140,9 @@ TEST_F(UnitMeshCQFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
 TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_WORKLOADS = 100;
     uint32_t MAX_LOOP = 100;
-    uint32_t page_size = 1024;
+    // Smaller page size for architectures with more CBs to ensure all test CBs fit in L1
+    constexpr uint32_t l1_cb_test_budget = 1024 * 32;
+    uint32_t page_size = l1_cb_test_budget / max_cbs_;
 
     // Make random
     auto random_seed = 0;  // (unsigned int)time(NULL);
@@ -2185,14 +2184,14 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
             BRISC_OUTER_LOOP = MAX_LOOP;
             BRISC_MIDDLE_LOOP = MAX_LOOP;
             BRISC_INNER_LOOP = MAX_LOOP;
-            NUM_CBS = NUM_CIRCULAR_BUFFERS;
+            NUM_CBS = max_cbs_;
             NUM_SEMS = NUM_SEMAPHORES;
             USE_MAX_RT_ARGS = true;
         } else {
             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-            NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
+            NUM_CBS = rand() % (max_cbs_) + 1;
             NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
             USE_MAX_RT_ARGS = false;
         }
