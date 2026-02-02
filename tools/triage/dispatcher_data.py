@@ -207,9 +207,9 @@ class DispatcherData:
         self._DISPATCH_MODE_DEV = self._brisc_elf.get_enum_value("dispatch_mode::DISPATCH_MODE_DEV")
         self._DISPATCH_MODE_HOST = self._brisc_elf.get_enum_value("dispatch_mode::DISPATCH_MODE_HOST")
 
-        # Watcher enable constants
-        self._WATCHER_ENABLED = self._brisc_elf.get_enum_value("watcher_enable_msg_t::WatcherEnabled")
-        self._WATCHER_DISABLED = self._brisc_elf.get_enum_value("watcher_enable_msg_t::WatcherDisabled")
+        # Watcher enable constants (not used in firmware elf, so can't be retrieved from elf)
+        self._WATCHER_ENABLED = 3
+        self._WATCHER_DISABLED = 2
 
         # Subordinate sync map indices for each processor type
         # BRISC is the master, so it doesn't have a subordinate sync entry
