@@ -73,7 +73,7 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
     const std::uint32_t tile_size = get_local_cb_interface(srca_operand_id).fifo_page_size;
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, to_from_int8>(
-        unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], tile_size);
+        unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], tile_size, face_r_dim, num_faces);
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
@@ -87,7 +87,7 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
     const std::uint32_t tile_size = get_local_cb_interface(srcb_operand_id).fifo_page_size;
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, to_from_int8>(
-        unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size);
+        unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size, face_r_dim, num_faces);
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
