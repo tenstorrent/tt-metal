@@ -438,29 +438,10 @@ uint64_t BankManager::allocate_buffer(
         // Track high water mark for bottom-up allocations
         if (tracking_high_water_mark_ && bottom_up) {
             // Calculate end address in interleaved space: address + size_per_bank
-            DeviceAddr end_address_interleaved = address.value() + size_per_bank;
-            
-            // Account for banking: bank offsets can affect the actual extent.
-            // The physical end address in each bank is: address + bank_offset[i] + size_per_bank.
-            // Since we're tracking in interleaved space (where addresses are compared),
-            // the end address is address + size_per_bank. However, to be conservative and
-            // account for banking differences, we consider the maximum physical extent.
-            DeviceAddr max_end_address = end_address_interleaved;
-            if (!bank_id_to_bank_offset_.empty()) {
-                // Find the maximum bank offset to account for banking
-                int64_t max_bank_offset = bank_id_to_bank_offset_.begin()->second;
-                int64_t min_bank_offset = bank_id_to_bank_offset_.begin()->second;
-                for (const auto& [bank_id, bank_offset] : bank_id_to_bank_offset_) {
-                    max_bank_offset = std::max(max_bank_offset, bank_offset);
-                    min_bank_offset = std::min(min_bank_offset, bank_offset);
-                }
-                // The difference in bank offsets can affect the effective extent.
-                // Add the offset range to be conservative.
-                DeviceAddr offset_range = static_cast<DeviceAddr>(max_bank_offset - min_bank_offset);
-                max_end_address = end_address_interleaved + offset_range;
-            }
-            
-            high_water_mark_ = std::max(high_water_mark_, max_end_address);
+            // Bank offsets don't need to be accounted for here since overlap comparisons
+            // are done in interleaved space where both allocations have the same bank offset applied
+            DeviceAddr end_address = address.value() + size_per_bank;
+            high_water_mark_ = std::max(high_water_mark_, end_address);
         }
         
         // No neighbors, nothing to invalidate
@@ -522,29 +503,10 @@ uint64_t BankManager::allocate_buffer(
     // Track high water mark for bottom-up allocations
     if (tracking_high_water_mark_ && bottom_up) {
         // Calculate end address in interleaved space: address + size_per_bank
-        DeviceAddr end_address_interleaved = address.value() + size_per_bank;
-        
-        // Account for banking: bank offsets can affect the actual extent.
-        // The physical end address in each bank is: address + bank_offset[i] + size_per_bank.
-        // Since we're tracking in interleaved space (where addresses are compared),
-        // the end address is address + size_per_bank. However, to be conservative and
-        // account for banking differences, we consider the maximum physical extent.
-        DeviceAddr max_end_address = end_address_interleaved;
-        if (!bank_id_to_bank_offset_.empty()) {
-            // Find the maximum bank offset to account for banking
-            int64_t max_bank_offset = bank_id_to_bank_offset_.begin()->second;
-            int64_t min_bank_offset = bank_id_to_bank_offset_.begin()->second;
-            for (const auto& [bank_id, bank_offset] : bank_id_to_bank_offset_) {
-                max_bank_offset = std::max(max_bank_offset, bank_offset);
-                min_bank_offset = std::min(min_bank_offset, bank_offset);
-            }
-            // The difference in bank offsets can affect the effective extent.
-            // Add the offset range to be conservative.
-            DeviceAddr offset_range = static_cast<DeviceAddr>(max_bank_offset - min_bank_offset);
-            max_end_address = end_address_interleaved + offset_range;
-        }
-        
-        high_water_mark_ = std::max(high_water_mark_, max_end_address);
+        // Bank offsets don't need to be accounted for here since overlap comparisons
+        // are done in interleaved space where both allocations have the same bank offset applied
+        DeviceAddr end_address = address.value() + size_per_bank;
+        high_water_mark_ = std::max(high_water_mark_, end_address);
     }
     
     // Allocation in this allocator invalidates caches in allocators that depend on this allocator
