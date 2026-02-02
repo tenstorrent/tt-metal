@@ -987,6 +987,10 @@ class TT_CCL:
         )
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         num_links = 4
+        if seqlen > 128:
+            num_workers_per_link = 4
+        else:
+            num_workers_per_link = 1
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
             persistent_output_buffers=persistent_buffers_list,
@@ -998,7 +1002,7 @@ class TT_CCL:
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
-            num_workers_per_link=1,
+            num_workers_per_link=num_workers_per_link,
         )
 
         # reshape input back
