@@ -11,9 +11,21 @@ from models.common.utility_functions import comp_pcc
 
 
 def assert_quality(torch_output, tt_output):
+    import pandas as pd
+
+    def print_with_indices(tensor, name):
+        arr = tensor.to(torch.float32).detach().cpu().numpy()
+        df = pd.DataFrame(arr)
+        # print(f"{name} (rows: 0-{df.shape[0]-1}, cols: 0-{df.shape[1]-1}):")
+        # print(df.to_string(index=True, header=True))
+        df.to_csv(f"debug_outputs_{name.lower().replace(' ', '_').replace('/', '_')}.csv")
+
+    print_with_indices(tt_output, "TT OUTPUT")
+
     pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
     relative_rmse_val = torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / torch_output.std().item()
     logger.info(f"PCC: {pcc_val:.7f}, Relative RMSE: {relative_rmse_val:.4f}")
+
     return {
         "pcc": pcc_val,
         "relative_rmse": relative_rmse_val,
@@ -46,6 +58,11 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     torch_matmul_weight = torch.randn(K, N, dtype=torch.bfloat16)
     torch_addcmul_a = torch.randn(1, N, dtype=torch.bfloat16)  # base value (broadcast like bias)
     torch_addcmul_b = torch.randn(M, N, dtype=torch.bfloat16)  # gate
+
+    # torch_matmul_input = torch.full_like(torch_matmul_input, fill_value=2.0)
+    # torch_matmul_weight = torch.eye(K, N, dtype=torch.bfloat16)
+    # torch_addcmul_a = torch.full_like(torch_addcmul_a, fill_value=0.0)  # expected output will be == 1
+    # torch_addcmul_b = torch.full_like(torch_addcmul_b, fill_value=2.0)  # expected output will be == 1
 
     torch_bias = torch.randn(1, N, dtype=torch.bfloat16) if use_bias else None
 
@@ -107,15 +124,17 @@ def run_dit_minimal_matmul_addcmul_fused_test(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 def test_dit_minimal_matmul_addcmul_fused_basic(device, use_bias, dtype):
     """Basic functionality test with small shapes."""
-    run_dit_minimal_matmul_addcmul_fused_test(
+    check_result = run_dit_minimal_matmul_addcmul_fused_test(
         device=device,
-        M=256,
-        K=512,
-        N=1024,
+        M=128,
+        K=128,
+        N=128,
         scalar=1.0,
         dtype=dtype,
         use_bias=use_bias,
     )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
 
 
 @pytest.mark.parametrize(
@@ -133,7 +152,7 @@ def test_dit_minimal_matmul_addcmul_fused_wan2_shapes(device, M, K, N, config_na
     K_block = 8
     N_block = 8
 
-    run_dit_minimal_matmul_addcmul_fused_test(
+    check_result = run_dit_minimal_matmul_addcmul_fused_test(
         device=device,
         M=M,
         K=K,
@@ -147,12 +166,14 @@ def test_dit_minimal_matmul_addcmul_fused_wan2_shapes(device, M, K, N, config_na
         subblock_h=2,
         subblock_w=2,
     )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
 
 
 @pytest.mark.parametrize("scalar_value", [0.5, 1.0, 2.0], ids=["scalar_0.5", "scalar_1.0", "scalar_2.0"])
 def test_dit_minimal_matmul_addcmul_fused_scalar_values(device, scalar_value):
     """Test with different scalar multiplier values."""
-    run_dit_minimal_matmul_addcmul_fused_test(
+    check_result = run_dit_minimal_matmul_addcmul_fused_test(
         device=device,
         M=512,
         K=1024,
@@ -161,3 +182,5 @@ def test_dit_minimal_matmul_addcmul_fused_scalar_values(device, scalar_value):
         dtype=ttnn.bfloat16,
         use_bias=False,
     )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
