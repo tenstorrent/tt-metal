@@ -88,16 +88,7 @@ class TtYOLOv5xConv2D:
             enable_weights_double_buffer=self.enable_weights_double_buffer,
         )
 
-        # Note: When auto_shard is True, Conv2dConfig.shard_layout cannot be set to None
-        # (setter only accepts TensorMemoryLayout). Keep the layout from constructor above.
-
-        if conv.in_channels == 3 or conv.in_channels == 6:
-            config_override = config_override or {}
-            config_override["act_block_h"] = 64
-        elif conv.in_channels >= 512:
-            # Reduce act_block_h for large-channel convs so circular buffers fit in L1 (e.g. Wormhole 1499136 B)
-            config_override = config_override or {}
-            config_override.setdefault("act_block_h", 32)
+        config_override = {"act_block_h": 64} if conv.in_channels == 3 or conv.in_channels == 6 else config_override
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
