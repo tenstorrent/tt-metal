@@ -522,7 +522,8 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
              v_addr,
              0,  // mask_addr,
              page_table_addr,
-             0,  // attention sink addr,
+             0,  // attention_sink_addr,
+             0,  // chunk_start_idx_addr (ring has no chunk_start_idx_tensor)
              i,
              local_batch_start,
              local_batch_end,
@@ -700,6 +701,7 @@ void RingDistributedSdpaMeshWorkloadFactory::override_runtime_arguments(
             reader_args[1] = k_addr;
             reader_args[2] = v_addr;
             reader_args[4] = page_table_addr;  // Update page_table_addr (index 4 is after mask_addr)
+            reader_args[6] = 0;                // chunk_start_idx_addr (ring has no chunk_start_idx_tensor)
 
             writer_args[0] = out_addr;
         }
