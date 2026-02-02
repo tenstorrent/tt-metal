@@ -45,7 +45,7 @@ struct Core {
 // Receivers run on the opposite RISC from their sender role.
 // This is different from the mega kernel where all senders are on BRISC.
 
-KERNEL_ENTRY {
+void kernel_main() {
 // ============================================================================
 // NCRISC - NOC0 sender OR receiver (if NOC1 sender)
 // ============================================================================
@@ -54,8 +54,7 @@ KERNEL_ENTRY {
     constexpr bool is_ncrisc_sender = Core::is_sender_core && Core::is_noc0_sender;
     constexpr bool is_ncrisc_receiver = Core::is_receiver_core && !Core::is_noc0_sender;
 
-    using GatherHeadsOp =
-        deepseek_b1_ops::GatherHeads::Op<is_ncrisc_sender, is_ncrisc_receiver, true, true, false, false>;
+    using GatherHeadsOp = deepseek_b1_ops::GatherHeads::Op<is_ncrisc_sender, is_ncrisc_receiver, true, true, false>;
 
     if constexpr (is_ncrisc_sender) {
         // NOC0 sender on NCRISC
@@ -141,8 +140,7 @@ KERNEL_ENTRY {
     constexpr bool is_brisc_sender = Core::is_sender_core && Core::is_noc1_sender;
     constexpr bool is_brisc_receiver = Core::is_receiver_core && Core::is_noc0_sender;
 
-    using GatherHeadsOp =
-        deepseek_b1_ops::GatherHeads::Op<is_brisc_sender, is_brisc_receiver, true, true, false, false>;
+    using GatherHeadsOp = deepseek_b1_ops::GatherHeads::Op<is_brisc_sender, is_brisc_receiver, true, true, false>;
 
     if constexpr (is_brisc_sender) {
         // NOC1 sender on BRISC
@@ -227,4 +225,3 @@ KERNEL_ENTRY {
     // Gather is a dataflow-only operation, no compute needed
 #endif
 }
-KERNEL_END

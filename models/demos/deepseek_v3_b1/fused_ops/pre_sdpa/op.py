@@ -293,7 +293,7 @@ class PreSDPA:
         QNOPE_DATA_SIZE = 512  # Elements per QNOPE head
         QROPE_DATA_SIZE = 64  # Elements per QROPE head
         HEADS_PER_SDPA_INPUT_CORE = 8  # 8 interleaved heads per SDPA Input core
-        UNICAST_NUM_SENDERS_PER_SDPA_INPUT = 16  # 8 QNOPE + 8 QROPE heads (4 QROPE cores × 2 heads)
+        UNICAST_NUM_SENDERS_PER_SDPA_INPUT = 12  # 8 QNOPE cores + 4 QROPE cores
 
         # ========================================================================
         # Mcast grid configuration (decoupled from matmul weights tensor)
@@ -331,7 +331,8 @@ class PreSDPA:
         gather_noc1_receiver_semaphore_id = 3
 
         # Semaphore ID for gather heads synchronization (QNOPE/QROPE -> SDPA)
-        gather_heads_receiver_semaphore_id = 4
+        # Reuse gather_noc0_receiver_semaphore_id (ID 2)
+        gather_heads_receiver_semaphore_id = gather_noc0_receiver_semaphore_id
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
@@ -362,14 +363,13 @@ class PreSDPA:
         matmul3_weights_cb = 12  # Weights CB for third matmul (height sharded on Qnope grid)
         matmul3_output_cb = 13  # Output CB for third matmul (Qnope final output)
         qrope_output_cb = 14  # Output CB for Qrope (RoPE output)
-        sdpa_input_receive_cb = 15  # Staging CB for gather heads (for address computation)
-        sdpa_input_output_cb = 16  # Output CB for SDPA Input (linked to tensor)
-        qrope_cos_cb = 17  # Cos CB for RoPE
-        qrope_sin_cb = 18  # Sin CB for RoPE
-        qrope_trans_mat_cb = 19  # Trans_mat CB for RoPE
-        qrope_rotated_input_interm_cb = 20  # Rotated input intermediate CB for RoPE
-        qrope_cos_interm_cb = 21  # Cos intermediate CB for RoPE
-        qrope_sin_interm_cb = 22  # Sin intermediate CB for RoPE
+        gather_heads_out_cb = 15  # Output CB for gather_heads (linked to tensor, allocated on sender+receiver cores)
+        qrope_cos_cb = 16  # Cos CB for RoPE
+        qrope_sin_cb = 17  # Sin CB for RoPE
+        qrope_trans_mat_cb = 18  # Trans_mat CB for RoPE
+        qrope_rotated_input_interm_cb = 19  # Rotated input intermediate CB for RoPE
+        qrope_cos_interm_cb = 20  # Cos intermediate CB for RoPE
+        qrope_sin_interm_cb = 21  # Sin intermediate CB for RoPE
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
         rmsnorm2_numel = 1536
@@ -570,7 +570,7 @@ class PreSDPA:
         head_stride_bytes = COMBINED_HEAD_SIZE * 2  # 576 * 2 = 1152 bytes (2 bytes per bfloat16 element)
         qnope_data_size_bytes = QNOPE_DATA_SIZE * 2  # 512 * 2 = 1024 bytes
         qrope_data_size_bytes = QROPE_DATA_SIZE * 2  # 64 * 2 = 128 bytes
-        sdpa_input_output_pages = (
+        gather_heads_out_pages = (
             HEADS_PER_SDPA_INPUT_CORE * COMBINED_HEAD_SIZE // 32
         )  # 8 * 576 / 32 = 144 tiles of 1x32
 
@@ -604,16 +604,15 @@ class PreSDPA:
             ("qnope_src_num_pages", matmul3_out_w),  # 16 tiles of 1x32
             ("qrope_src_num_pages", matmul2_out_w),  # 4 tiles of 1x32 (2 heads × 2 tiles)
             ("qnope_grid_cols", QNOPE_GRID_COLS),
-            ("receive_cb", sdpa_input_receive_cb),  # Staging CB (allocated on sender+receiver grids)
+            ("receive_cb", gather_heads_out_cb),  # Output CB (allocated on sender+receiver grids, linked to tensor)
         ]
 
         # NCRISC receiver compile-time args (SDPA Input cores)
         gather_heads_ncrisc_named_compile_time_args = [
-            ("num_senders", UNICAST_NUM_SENDERS_PER_SDPA_INPUT),  # 16 (8 QNOPE + 8 QROPE heads)
+            ("num_senders", UNICAST_NUM_SENDERS_PER_SDPA_INPUT),  # 12 cores (8 QNOPE + 4 QROPE)
             ("receiver_semaphore_id", gather_heads_receiver_semaphore_id),
-            ("receive_cb", sdpa_input_receive_cb),  # Staging CB
-            ("out_cb", sdpa_input_output_cb),  # Output CB (linked to tensor)
-            ("dst_num_pages", sdpa_input_output_pages),  # 144 tiles of 1x32
+            ("receive_cb", gather_heads_out_cb),  # Output CB
+            ("dst_num_pages", gather_heads_out_pages),  # 144 tiles of 1x32
         ]
 
         # RMSNorm compute compile-time args (named args for TRISC)
@@ -875,16 +874,16 @@ class PreSDPA:
             format_descriptors=[matmul3_output_cb_format],
         )
 
-        # CB 17: Cos (sharded tensor)
+        # CB 16: Cos (sharded tensor)
         qrope_cos_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_cos_cb, cos_tensor)
 
-        # CB 18: Sin (sharded tensor)
+        # CB 17: Sin (sharded tensor)
         qrope_sin_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_sin_cb, sin_tensor)
 
-        # CB 22: Trans_mat (sharded tensor)
+        # CB 18: Trans_mat (sharded tensor)
         qrope_trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(qrope_trans_mat_cb, trans_mat_tensor)
 
-        # CB 23: Rotated input intermediate CB (not backed by tensor)
+        # CB 19: Rotated input intermediate CB
         # Sized for one head (Wt tiles = 2 tiles), since RoPE processes one head at a time
         qrope_interm_tile_size = qrope_head_dim_per_core_t * TILE_1x32.get_tile_size(data_format)
         qrope_rotated_input_interm_cb_format = ttnn.CBFormatDescriptor(
@@ -899,7 +898,7 @@ class PreSDPA:
             format_descriptors=[qrope_rotated_input_interm_cb_format],
         )
 
-        # CB 24: Cos intermediate CB (not backed by tensor)
+        # CB 20: Cos intermediate CB
         qrope_cos_interm_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=qrope_cos_interm_cb,
             data_format=data_format,
@@ -912,7 +911,7 @@ class PreSDPA:
             format_descriptors=[qrope_cos_interm_cb_format],
         )
 
-        # CB 25: Sin intermediate CB (not backed by tensor)
+        # CB 21: Sin intermediate CB
         qrope_sin_interm_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=qrope_sin_interm_cb,
             data_format=data_format,
@@ -943,32 +942,16 @@ class PreSDPA:
             format_descriptors=[qrope_output_cb_format],
         )
 
-        # CB 15: SDPA Input receive buffer (staging buffer for gather heads)
-        # Must be allocated on union of sender (QNOPE/QROPE) and receiver (SDPA Input) grids
-        # so that senders can use get_write_ptr to compute destination address.
-        # Note: We need this staging buffer because:
-        # 1. Senders need get_write_ptr(cb) to compute destination address
-        # 2. cb_descriptor_from_sharded_tensor only allocates CB on tensor's shard cores
-        # 3. We can't have two CB descriptors with the same index on different core sets
-        # 4. So we use a staging buffer (CB 15) and copy to output buffer (CB 16)
-        sdpa_input_receive_cb_core_ranges = qnope_grid.merge(qrope_grid).merge(sdpa_input_grid)
-        sdpa_input_receive_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
-        sdpa_input_receive_page_size = TILE_1x32.get_tile_size(data_format)
-        sdpa_input_receive_total_size = sdpa_input_output_pages * sdpa_input_receive_page_size
-        sdpa_input_receive_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=sdpa_input_receive_cb,
-            data_format=data_format,
-            page_size=sdpa_input_receive_page_size,
-            tile=sdpa_input_receive_tile_descriptor,
-        )
-        sdpa_input_receive_cb_descriptor = ttnn.CBDescriptor(
-            total_size=sdpa_input_receive_total_size,
-            core_ranges=sdpa_input_receive_cb_core_ranges,
-            format_descriptors=[sdpa_input_receive_cb_format],
-        )
-
-        # CB 16: SDPA Input output buffer (linked to tensor)
-        sdpa_input_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(sdpa_input_output_cb, output_tensor)
+        # CB 15: Gather heads output buffer (directly gather into output, no staging)
+        # Allocate CB on union of sender (QNOPE/QROPE) and receiver (SDPA Input) grids
+        # The output tensor is only sharded on receiver cores (sdpa_input_grid)
+        # On sender cores: CB is allocated but not backed by tensor memory (just for get_write_ptr)
+        # On receiver cores: CB is backed by the output tensor's device buffer
+        gather_heads_out_cb_core_ranges = qnope_grid.merge(qrope_grid).merge(sdpa_input_grid)
+        # Create CB descriptor linked to output tensor
+        gather_heads_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gather_heads_out_cb, output_tensor)
+        # Override core_ranges to include sender cores (for get_write_ptr access)
+        gather_heads_out_cb_descriptor.core_ranges = gather_heads_out_cb_core_ranges
 
         # ========================================================================
         # Mcast2 compile-time args (uses same grid and semaphores as first mcast)
@@ -1010,13 +993,6 @@ class PreSDPA:
 
         gather_noc1_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=gather_noc1_receiver_semaphore_id,
-            core_ranges=full_device_grid,
-            initial_value=0,
-        )
-
-        # GatherHeads semaphore (ID 4 - for QNOPE/QROPE -> SDPA synchronization)
-        gather_heads_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
-            id=gather_heads_receiver_semaphore_id,
             core_ranges=full_device_grid,
             initial_value=0,
         )
@@ -1136,21 +1112,19 @@ class PreSDPA:
                 matmul3_weights_cb_descriptor,  # CB 12: Matmul3 weights
                 matmul3_output_cb_descriptor,  # CB 13: Matmul3 output (Qnope final)
                 qrope_output_cb_descriptor,  # CB 14: Qrope output (RoPE output)
-                sdpa_input_receive_cb_descriptor,  # CB 15: SDPA Input staging buffer
-                sdpa_input_output_cb_descriptor,  # CB 16: SDPA Input output (linked to tensor)
-                qrope_cos_cb_descriptor,  # CB 17: Cos (sharded tensor)
-                qrope_sin_cb_descriptor,  # CB 18: Sin (sharded tensor)
-                qrope_trans_mat_cb_descriptor,  # CB 19: Trans_mat (sharded tensor)
-                qrope_rotated_input_interm_cb_descriptor,  # CB 20: Rotated input intermediate
-                qrope_cos_interm_cb_descriptor,  # CB 21: Cos intermediate
-                qrope_sin_interm_cb_descriptor,  # CB 22: Sin intermediate
+                gather_heads_out_cb_descriptor,  # CB 15: Gather heads output (linked to tensor, no staging)
+                qrope_cos_cb_descriptor,  # CB 16: Cos (sharded tensor)
+                qrope_sin_cb_descriptor,  # CB 17: Sin (sharded tensor)
+                qrope_trans_mat_cb_descriptor,  # CB 18: Trans_mat (sharded tensor)
+                qrope_rotated_input_interm_cb_descriptor,  # CB 19: Rotated input intermediate
+                qrope_cos_interm_cb_descriptor,  # CB 20: Cos intermediate
+                qrope_sin_interm_cb_descriptor,  # CB 21: Sin intermediate
             ],
             semaphores=[
                 mcast_sender_semaphore_descriptor,  # ID 0
                 mcast_receiver_semaphore_descriptor,  # ID 1
-                gather_noc0_receiver_semaphore_descriptor,  # ID 2
+                gather_noc0_receiver_semaphore_descriptor,  # ID 2 (reused by gather_heads)
                 gather_noc1_receiver_semaphore_descriptor,  # ID 3
-                gather_heads_receiver_semaphore_descriptor,  # ID 4
             ],
         )
 

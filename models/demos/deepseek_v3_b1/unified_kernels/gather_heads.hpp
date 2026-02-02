@@ -80,15 +80,8 @@ struct GatherHeads {
     //   setup_sharded_input: true to call setup_sharded_buffer (standalone op)
     //   pop_src: whether to pop the source CB after sending
     //   use_cb_output: true to use cb_reserve_back/cb_push_back
-    //   count_heads: true to count heads (QNOPE=1, QROPE=2), false to count cores
     // ========================================================================
-    template <
-        bool IsSenderCore,
-        bool IsReceiverCore,
-        bool setup_sharded_input,
-        bool pop_src,
-        bool use_cb_output,
-        bool count_heads>
+    template <bool IsSenderCore, bool IsReceiverCore, bool setup_sharded_input, bool pop_src, bool use_cb_output>
     class Op {
     public:
         // Overload for sender args
@@ -152,9 +145,6 @@ struct GatherHeads {
                 uint32_t dst_offset = my_col * args.head_stride_bytes;
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset);
                 noc_async_write(src_addr, dst_data_noc_addr, args.qnope_data_size_bytes);
-
-                // Increment semaphore: 1 head for QNOPE when counting heads, or 1 for core counting
-                noc_semaphore_inc(dst_semaphore_noc_addr, 1);
             } else {
                 // Qrope core: sends 2 chunks of 64 elements each
                 uint32_t qrope_col = my_col - args.qnope_cols;
@@ -164,15 +154,11 @@ struct GatherHeads {
                 uint64_t dst_data_noc_addr1 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset1);
                 noc_async_write(src_addr, dst_data_noc_addr0, args.qrope_head_size_bytes);
                 noc_async_write(src_addr + args.qrope_head_size_bytes, dst_data_noc_addr1, args.qrope_head_size_bytes);
-
-                // Increment semaphore: 2 heads for QROPE when counting heads, or 1 for core counting
-                if constexpr (count_heads) {
-                    noc_semaphore_inc(dst_semaphore_noc_addr, 2);
-                } else {
-                    noc_semaphore_inc(dst_semaphore_noc_addr, 1);
-                }
             }
 
+            noc_semaphore_inc(dst_semaphore_noc_addr, 1);
+
+            // TODO #36982: Review if we can switch this to a noc_async_writes_flushed()
             noc_async_write_barrier();
 
             // Pop source CB after sending

@@ -207,7 +207,7 @@ void kernel_main() {
     };
 
     // BRISC: Sender args for QNOPE/QROPE cores
-    // Senders write to staging CB (allocated on sender+receiver cores)
+    // Senders write directly to output CB (allocated on sender+receiver cores)
     constexpr uint32_t receive_cb = get_named_compile_time_arg_val("receive_cb");
     deepseek_b1_ops::GatherHeads::SenderArgs gather_heads_args{
         0,  // sender_grid_start_x (logical 0)
@@ -241,7 +241,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("target_noc_y_row6"),
             get_named_compile_time_arg_val("target_noc_y_row7"),
         },
-        get_write_ptr(receive_cb),  // Write to staging CB
+        get_write_ptr(receive_cb),  // Write directly to output CB
     };
 
 // ============================================================================
@@ -404,7 +404,7 @@ void kernel_main() {
     deepseek_b1_ops::GatherHeads::ReceiverArgs gather_heads_args{
         get_named_compile_time_arg_val("receiver_semaphore_id"),
         get_named_compile_time_arg_val("num_senders"),
-        get_named_compile_time_arg_val("receive_cb"),  // Staging CB
+        get_named_compile_time_arg_val("receive_cb"),  // Output CB
         get_named_compile_time_arg_val("dst_num_pages"),
     };
 #endif
@@ -495,76 +495,50 @@ void kernel_main() {
         matmul2(matmul2_args);
     }
 
-    // ========================================================================
-    // Matmul3 (QNoPE): matmul3_input[64, 1, 128] @ matmul3_weights[64, 128, 512] -> matmul3_output[64, 1, 512]
-    // 64 cores (8x8 grid) each compute 1x16 output tiles (16 1x32 tiles)
-    // ========================================================================
     {
-        DeviceZoneScopedN("MATMUL3");
-        // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-        deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
-        matmul3(matmul3_args);
+        DeviceZoneScopedN("Q_HEADS") static_assert(
+            !(Core::is_qnope_core && Core::is_qrope_core), "Core cannot be both QNOPE and QROPE");
+
+        // ========================================================================
+        // Matmul3 (QNoPE): matmul3_input[64, 1, 128] @ matmul3_weights[64, 128, 512] -> matmul3_output[64, 1, 512]
+        // 64 cores (8x8 grid) each compute 1x16 output tiles (16 1x32 tiles)
+        // ========================================================================
+        {
+            DeviceZoneScopedN("QNOPE/MATMUL3");
+            // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+            deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
+            matmul3(matmul3_args);
+        }
+
+        // ========================================================================
+        // RoPE (Qrope): Applies rotary position embedding to Qrope heads
+        // Reads from matmul2_output_cb, writes to qrope_output_cb
+        // ========================================================================
+        {
+            DeviceZoneScopedN("QROPE");
+            deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
+            rope(qrope_args);
+        }
+
+        // ========================================================================
+        // GatherHeads: QNOPE/QROPE -> SDPA interleaved transfer
+        // QNOPE cores (cols 0-7): send [1, 512] to SDPA at offset = head_idx * 576
+        // QROPE cores (cols 8-11): send 2x [1, 64] to SDPA at offsets:
+        //   - head_idx * 576 + 512
+        //   - (head_idx + 1) * 576 + 512
+        // ========================================================================
+        {
+            DeviceZoneScopedN("GATHER_HEADS");
+            // GatherHeads Op configuration:
+            // - IsSenderCore: is_qnope_core || is_qrope_core
+            // - IsReceiverCore: is_sdpa_input_core
+            // - setup_sharded_input: false (data already in CB from previous compute)
+            // - pop_src: true (pop source CB after sending)
+            // - use_cb_output: true (receiver uses cb_reserve_back/cb_push_back, writes directly to output tensor)
+            constexpr bool is_gather_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
+            deepseek_b1_ops::GatherHeads::Op<is_gather_heads_sender, Core::is_sdpa_input_core, false, true, true>
+                gather_heads;
+            gather_heads(gather_heads_args);
+        }
     }
-
-    // ========================================================================
-    // RoPE (Qrope): Applies rotary position embedding to Qrope heads
-    // Reads from matmul2_output_cb, writes to qrope_output_cb
-    // ========================================================================
-    {
-        DeviceZoneScopedN("QROPE");
-        deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
-        rope(qrope_args);
-    }
-
-    // ========================================================================
-    // GatherHeads: QNOPE/QROPE -> SDPA interleaved transfer
-    // QNOPE cores (cols 0-7): send [1, 512] to SDPA at offset = head_idx * 576
-    // QROPE cores (cols 8-11): send 2x [1, 64] to SDPA at offsets:
-    //   - head_idx * 576 + 512
-    //   - (head_idx + 1) * 576 + 512
-    // ========================================================================
-    {
-        DeviceZoneScopedN("GATHER_HEADS");
-        // GatherHeads Op configuration:
-        // - IsSenderCore: is_qnope_core || is_qrope_core
-        // - IsReceiverCore: is_sdpa_input_core
-        // - setup_sharded_input: false (data already in CB from previous compute)
-        // - pop_src: true (pop source CB after sending)
-        // - use_cb_output: true (receiver uses cb_reserve_back/cb_push_back)
-        // - count_heads: true (QNOPE sends 1, QROPE sends 2)
-        constexpr bool is_gather_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
-        deepseek_b1_ops::GatherHeads::Op<is_gather_heads_sender, Core::is_sdpa_input_core, false, true, true, true>
-            gather_heads;
-        gather_heads(gather_heads_args);
-    }
-
-// NOTE: Copy to output CB for testing, change once SDPA is fused
-#if defined(COMPILE_FOR_NCRISC)
-    // ========================================================================
-    // SDPA Input: Copy from staging CB to output CB (linked to tensor)
-    // ========================================================================
-    if constexpr (Core::is_sdpa_input_core) {
-        DeviceZoneScopedN("GATHER_HEADS_COPY_TO_OUTPUT");
-
-        constexpr uint32_t receive_cb = get_named_compile_time_arg_val("receive_cb");
-        constexpr uint32_t out_cb = get_named_compile_time_arg_val("out_cb");
-        constexpr uint32_t dst_num_pages = get_named_compile_time_arg_val("dst_num_pages");
-
-        // Copy from staging CB to output CB (local L1 copy)
-        cb_wait_front(receive_cb, dst_num_pages);
-        cb_reserve_back(out_cb, dst_num_pages);
-
-        uint32_t src_addr = get_read_ptr(receive_cb);
-        uint32_t dst_addr = get_write_ptr(out_cb);
-        uint32_t tile_size = get_tile_size(receive_cb);
-        uint32_t copy_size = dst_num_pages * tile_size;
-
-        uint64_t noc_dst_addr = get_noc_addr(my_x[0], my_y[0], dst_addr);
-        noc_async_write(src_addr, noc_dst_addr, copy_size);
-        noc_async_write_barrier();
-
-        cb_pop_front(receive_cb, dst_num_pages);
-        cb_push_back(out_cb, dst_num_pages);
-    }
-#endif
 }
