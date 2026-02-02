@@ -134,28 +134,31 @@ class MeshConfig:
             padded = True
 
         # Reduce-scatter along TP axis
-        scattered = ttnn.experimental.reduce_scatter_minimal_async(
-            tensor,
-            dim=3,
-            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
-            num_links=ccl_manager.num_links,
-            memory_config=memory_config,
-            topology=ccl_manager.topology,
-            cluster_axis=axis,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-        )
+        # scattered = ttnn.experimental.reduce_scatter_minimal_async(
+        #     tensor,
+        #     dim=3,
+        #     multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+        #     num_links=ccl_manager.num_links,
+        #     memory_config=memory_config,
+        #     topology=ccl_manager.topology,
+        #     cluster_axis=axis,
+        #     barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        # )
 
-        # All-gather back
-        gathered = ttnn.experimental.all_gather_async(
-            scattered,
-            dim=3,
-            cluster_axis=axis,
-            mesh_device=ccl_manager.mesh_device,
-            topology=ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=ccl_manager.num_links,
-            memory_config=memory_config,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        # # All-gather back
+        # gathered = ttnn.experimental.all_gather_async(
+        #     scattered,
+        #     dim=3,
+        #     cluster_axis=axis,
+        #     mesh_device=ccl_manager.mesh_device,
+        #     topology=ccl_manager.topology,
+        #     multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
+        #     num_links=ccl_manager.num_links,
+        #     memory_config=memory_config,
+        #     barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        # )
+        gathered = ttnn.all_reduce(
+            tensor, num_links=ccl_manager.num_links, memory_config=memory_config, topology=ccl_manager.topology
         )
 
         # Remove padding if applied
@@ -173,16 +176,23 @@ class MeshConfig:
         """
         memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
 
-        return ttnn.experimental.all_gather_async(
+        # return ttnn.experimental.all_gather_async(
+        #     tensor,
+        #     dim=dim,
+        #     cluster_axis=axis,
+        #     mesh_device=ccl_manager.mesh_device,
+        #     topology=ttnn.Topology.Linear if linear else ccl_manager.topology,
+        #     multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
+        #     num_links=ccl_manager.num_links,
+        #     memory_config=memory_config,
+        #     barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        # )
+        return ttnn.all_gather(
             tensor,
             dim=dim,
-            cluster_axis=axis,
-            mesh_device=ccl_manager.mesh_device,
-            topology=ttnn.Topology.Linear if linear else ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
             num_links=ccl_manager.num_links,
             memory_config=memory_config,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            topology=ttnn.Topology.Linear if linear else ccl_manager.topology,
         )
 
     def __repr__(self):
