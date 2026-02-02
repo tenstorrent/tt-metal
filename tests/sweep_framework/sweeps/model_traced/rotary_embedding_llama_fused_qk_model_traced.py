@@ -169,9 +169,7 @@ def run(
     torch_input_d = sin_matrix[:, :, :cache_size, :].repeat(1, cos_dim1, 1, 1).to(torch.bfloat16)
 
     # Generate transformation matrix using production code
-    torch_input_e = (
-        get_rot_transformation_mat(dhead=head_dim).to(torch.bfloat16) if has_input_e or shape_e is not None else None
-    )
+    torch_input_e = get_rot_transformation_mat().to(torch.bfloat16) if has_input_e or shape_e is not None else None
 
     # Compute golden reference outputs for both Q and K
     # For fused_qk, the cos/sin have dim[1] = n_heads_q + n_heads_k
@@ -267,7 +265,7 @@ def run(
         )
     else:
         # If no trans_mat, create a default one
-        torch_input_e = get_rot_transformation_mat(dhead=head_dim).to(torch.bfloat16)
+        torch_input_e = get_rot_transformation_mat().to(torch.bfloat16)
         input_tensor_e = ttnn.from_torch(
             torch_input_e,
             dtype=ttnn.bfloat16,

@@ -53,9 +53,7 @@ class VisionTransformer(LightweightModule):
         self.weight_cache_path = weight_cache_path
 
         # Create transformation matrix for RoPE QK prefill
-        transformation_mat_torch = get_rot_transformation_mat(
-            args.head_dim
-        )  # todo)) args.head_dim is ignored inside the function
+        transformation_mat_torch = get_rot_transformation_mat()  # todo)) args.head_dim is ignored inside the function
         self.transformation_mats = {
             "prefill": ttnn.as_tensor(
                 transformation_mat_torch,

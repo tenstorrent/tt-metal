@@ -104,7 +104,7 @@ def test_decoder_inference(
         )
     else:
         rot_mats_local = None
-    transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+    transformation_mat_torch = get_rot_transformation_mat()
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,

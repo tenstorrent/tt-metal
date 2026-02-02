@@ -434,10 +434,10 @@ def run(
     if is_decode_mode:
         # For decode mode, transformation matrix is [1, 1, batch*32, 32]
         # Each core gets a [32, 32] shard
-        torch_trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(1, 1, batch, 1).to(torch.bfloat16)
+        torch_trans_mat = get_rot_transformation_mat().repeat(1, 1, batch, 1).to(torch.bfloat16)
     else:
         # For prefill mode, use standard transformation matrix based on head_dim
-        torch_trans_mat = get_rot_transformation_mat(head_dim).to(torch.bfloat16)
+        torch_trans_mat = get_rot_transformation_mat().to(torch.bfloat16)
 
     # --- Compute Golden Reference Output ---
     if is_decode_mode:

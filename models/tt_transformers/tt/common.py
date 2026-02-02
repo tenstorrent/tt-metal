@@ -416,7 +416,7 @@ def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, ori
 
 
 #  Add-Multiply method of rotary embeddings for prefill
-def get_rot_transformation_mat(dhead):
+def get_rot_transformation_mat():
     # ROPE op uses a single tile
     dhead = 32
     rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
@@ -690,7 +690,6 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
         dim = x.dim() + dim
     assert isinstance(x, torch.Tensor), "Input must be a torch.Tensor"
     assert -x.dim() <= dim < x.dim(), f"Dimension {dim} out of range (expected between {-x.dim()} and {x.dim() - 1})"
-    dim = x.dim() + dim if dim < 0 else dim
 
     current_size = x.size(dim)
     pad_size = size - current_size

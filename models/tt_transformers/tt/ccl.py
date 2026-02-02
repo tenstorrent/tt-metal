@@ -412,7 +412,6 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, tt_ccl, compute_ker
     )
 
     tt_stats_gathered.deallocate(True)
-    # inp.deallocate(True)
 
     return tt_out
 

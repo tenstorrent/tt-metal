@@ -86,7 +86,7 @@ def test_attention_inference(
         theta=model_args.rope_theta,
         rope_scaling=model_args.rope_scaling,
     )
-    transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+    transformation_mat_torch = get_rot_transformation_mat()
 
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,

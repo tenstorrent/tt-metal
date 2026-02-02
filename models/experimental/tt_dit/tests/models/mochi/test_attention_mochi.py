@@ -167,7 +167,7 @@ def test_mochi_attention(
     tt_rope_sin = bf16_tensor_2dshard(rope_sin_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
 
     # Create transformation matrix for RoPE
-    trans_mat = get_rot_transformation_mat(None)
+    trans_mat = get_rot_transformation_mat()
     tt_trans_mat = bf16_tensor(trans_mat, device=mesh_device)
 
     # Run torch model

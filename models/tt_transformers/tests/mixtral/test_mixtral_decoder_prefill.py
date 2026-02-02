@@ -89,7 +89,7 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
         model_args.rope_scaling.factor if model_args.rope_scaling else None,
         model_args.max_context_len,
     )
-    transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+    transformation_mat_torch = get_rot_transformation_mat()
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,

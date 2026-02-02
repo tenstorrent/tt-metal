@@ -61,7 +61,7 @@ class RotarySetup(LightweightModule):
             else ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
         )
         # Generate the transformation matrix
-        trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
+        trans_mat = get_rot_transformation_mat().repeat(
             1,
             1,
             batch_size,
@@ -93,7 +93,7 @@ class RotarySetup(LightweightModule):
         )
 
         # TODO: Colman, should this be TILE_SIZE or head_dim? Why should it be different for prefill and decode?
-        prefill_trans_mat_torch = get_rot_transformation_mat(dhead=head_dim)
+        prefill_trans_mat_torch = get_rot_transformation_mat()
         self.transformation_mat_prefill = ttnn.from_torch(
             prefill_trans_mat_torch,
             device=device,

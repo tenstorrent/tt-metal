@@ -39,7 +39,7 @@ class TtLlamaRotary(torch.nn.Module):
         self.fuse_qk = fuse_qk
 
         self.transformation_mat = ttnn.from_torch(
-            get_rot_transformation_mat(dhead=ttnn.TILE_SIZE), device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype
+            get_rot_transformation_mat(), device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype
         )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -644,7 +644,7 @@ def test_rotary_embedding_llama_per_head(
     # ttnn implementation requires stacked cos, sin
     cos_reshape = torch.stack([cos, cos], dim=-1).flatten(-2)
     sin_reshape = torch.stack([sin, sin], dim=-1).flatten(-2)
-    trans_mat = get_rot_transformation_mat(None)
+    trans_mat = get_rot_transformation_mat()
 
     # Apply ground truth implementation with unstacked cos, sin
     gt = apply_rotary_emb_qk_real(x, cos, sin)

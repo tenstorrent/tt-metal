@@ -101,7 +101,7 @@ def test_vision_block_inference(
 
         rot_mats = [cos, sin]
 
-        transformation_mat_torch = get_rot_transformation_mat(model_args.vision_head_dim)
+        transformation_mat_torch = get_rot_transformation_mat()
 
         transformation_mats_prefill = ttnn.as_tensor(
             transformation_mat_torch,
