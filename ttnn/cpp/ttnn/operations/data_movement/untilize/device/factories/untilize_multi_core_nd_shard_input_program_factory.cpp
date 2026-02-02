@@ -231,7 +231,7 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     uint32_t start_shard_id = 0;
     for (auto core : full_cores) {
         auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
-        uint32_t num_blocks_on_core = 0;
+        uint32_t num_input_blocks_to_process = 0;
 
         if (core_it != mapped_cores.end()) {
             const size_t core_idx = std::distance(mapped_cores.begin(), core_it);
@@ -248,7 +248,7 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
 
                 while (page_offset < total_pages) {
                     // This page is valid (non-padding), count this block
-                    num_blocks_on_core++;
+                    num_input_blocks_to_process++;
 
                     // Advance by num_tiles_per_input_block
                     page_offset += num_tiles_per_input_block;
@@ -269,7 +269,7 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
         start_shard_id++;
 
         // Compute run-time args
-        std::vector<uint32_t> compute_run_time_args = {num_blocks_on_core};
+        std::vector<uint32_t> compute_run_time_args = {num_input_blocks_to_process};
         // Set run-time arg
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
