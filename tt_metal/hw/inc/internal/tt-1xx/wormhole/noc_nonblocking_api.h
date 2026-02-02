@@ -211,9 +211,6 @@ inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, state->targ_addr_mid);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, state->packet_tag);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, state->at_data);
-#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, state->ret_addr_mid);
-#endif
 }
 
 // Returns number of read transactions issued on this noc.
