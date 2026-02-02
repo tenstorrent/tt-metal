@@ -7,52 +7,38 @@
 
 void kernel_main() {
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(1);
-    constexpr uint32_t tile_id_stride = get_compile_time_arg_val(2);
-    constexpr uint32_t block_id_stride = get_compile_time_arg_val(3);
-    constexpr uint32_t num_dims = get_compile_time_arg_val(4);
-    constexpr uint32_t size_tile = get_compile_time_arg_val(5);
+    constexpr uint32_t tile_id_stride = get_compile_time_arg_val(1);
+    constexpr uint32_t num_dims = get_compile_time_arg_val(2);
+    constexpr uint32_t size_tile = get_compile_time_arg_val(3);
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t src_block_id_start = get_arg_val<uint32_t>(1);
-    const uint32_t num_blocks = get_arg_val<uint32_t>(2);
+    const uint32_t src_tile_id_start = get_arg_val<uint32_t>(1);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(2);
 
-    tt_l1_ptr uint32_t* shape_blocks = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
-    tt_l1_ptr uint32_t* block_id_gap = shape_blocks + num_dims;
-    tt_l1_ptr uint32_t* block_coord = block_id_gap + num_dims;
+    tt_l1_ptr uint32_t* shape_tiles = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
+    tt_l1_ptr uint32_t* tile_coord = shape_tiles + num_dims;
+    tt_l1_ptr uint32_t* tile_id_acc = tile_coord + num_dims;
+    tt_l1_ptr uint32_t* coord_inc = tile_id_acc + num_dims;
 
-    constexpr auto src_args = TensorAccessorArgs<6>();
+    constexpr auto src_args = TensorAccessorArgs<4>();
     const auto s = TensorAccessor(src_args, src_addr, size_tile);
 
-    auto read_block = [&](uint32_t num_tiles, uint32_t start_id, uint32_t id_step, uint32_t size_tile) {
-        cb_reserve_back(cb_id, num_tiles);
+    uint32_t src_tile_id = src_tile_id_start;
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        cb_reserve_back(cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_id);
-        uint32_t id = start_id;
-        for (uint32_t k = 0; k < num_tiles; k++) {
-            uint64_t src_noc_addr = get_noc_addr(id, s);
-            noc_async_read(src_noc_addr, l1_write_addr, size_tile);
-
-            l1_write_addr += size_tile;
-            id += id_step;
-        }
-
+        noc_async_read_tile(src_tile_id, s, l1_write_addr);
         noc_async_read_barrier();
-        cb_push_back(cb_id, num_tiles);
-    };
+        cb_push_back(cb_id, 1);
 
-    uint32_t src_block_id = src_block_id_start;
-
-    for (uint32_t i = 0; i < num_blocks; i++) {
-        read_block(num_tiles_per_block, src_block_id, tile_id_stride, size_tile);
-        src_block_id += block_id_stride;
-
-        for (uint32_t j = num_dims - 1; j >= 0; j--) {
-            block_coord[j]++;
-            if (block_coord[j] == shape_blocks[j]) {
-                block_coord[j] = 0;
-                src_block_id += block_id_gap[j];
-            } else {
-                break;
+        for (int32_t j = num_dims - 1; j >= 1; j--) {
+            tile_coord[j] += coord_inc[j];
+            src_tile_id += coord_inc[j] * tile_id_acc[j];
+            if (tile_coord[j] >= shape_tiles[j]) {
+                tile_coord[j] -= shape_tiles[j];
+                tile_coord[j - 1] += 1;
+                src_tile_id += tile_id_acc[j - 1] - shape_tiles[j] * tile_id_acc[j];
             }
         }
     }
