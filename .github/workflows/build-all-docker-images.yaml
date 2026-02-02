@@ -178,7 +178,10 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - name: Build and push CI Build image
+        id: build-ci-build
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -192,6 +195,7 @@ jobs:
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
+        id: build-ci-test
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -205,6 +209,7 @@ jobs:
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
+        id: build-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -218,6 +223,7 @@ jobs:
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
+        id: build-basic-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -231,6 +237,7 @@ jobs:
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
+        id: build-basic-ttnn-runtime
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -243,6 +250,54 @@ jobs:
           pull: true
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
+      - name: 📊 Show Ubuntu 22.04 image sizes
+        run: |
+          echo "## Ubuntu 22.04 Docker Image Sizes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Digest |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| CI Build | \`${{ steps.build-ci-build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| CI Test | \`${{ steps.build-ci-test.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dev | \`${{ steps.build-dev.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Basic Dev | \`${{ steps.build-basic-dev.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Basic TTNN Runtime | \`${{ steps.build-basic-ttnn-runtime.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full Metadata" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>CI Build metadata</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.build-ci-build.outputs.metadata }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>CI Test metadata</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.build-ci-test.outputs.metadata }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>Dev metadata</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.build-dev.outputs.metadata }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>Basic Dev metadata</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.build-basic-dev.outputs.metadata }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>Basic TTNN Runtime metadata</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.build-basic-ttnn-runtime.outputs.metadata }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
 
   # Build Ubuntu 24.04 images
   build-ubuntu-2404:
@@ -263,6 +318,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push CI Build image
+        id: build-ci-build
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -276,6 +332,7 @@ jobs:
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
+        id: build-ci-test
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -289,6 +346,7 @@ jobs:
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
+        id: build-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -302,6 +360,7 @@ jobs:
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
+        id: build-basic-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -315,6 +374,7 @@ jobs:
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
+        id: build-basic-ttnn-runtime
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -327,6 +387,54 @@ jobs:
           pull: true
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
+      - name: 📊 Show Ubuntu 24.04 image sizes
+        run: |
+          echo "## Ubuntu 24.04 Docker Image Sizes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Digest |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| CI Build | \`${{ steps.build-ci-build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| CI Test | \`${{ steps.build-ci-test.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dev | \`${{ steps.build-dev.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Basic Dev | \`${{ steps.build-basic-dev.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Basic TTNN Runtime | \`${{ steps.build-basic-ttnn-runtime.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full Metadata" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>CI Build metadata</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.build-ci-build.outputs.metadata }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>CI Test metadata</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.build-ci-test.outputs.metadata }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>Dev metadata</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.build-dev.outputs.metadata }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>Basic Dev metadata</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.build-basic-dev.outputs.metadata }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>Basic TTNN Runtime metadata</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.build-basic-ttnn-runtime.outputs.metadata }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
 
   # Build ManyLinux image
   build-manylinux:
@@ -347,6 +455,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push ManyLinux image
+        id: build-manylinux
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -357,6 +466,19 @@ jobs:
           pull: true
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
+      - name: 📊 Show ManyLinux image size
+        run: |
+          echo "## ManyLinux Docker Image Size" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Digest |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ManyLinux | \`${{ steps.build-manylinux.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full Metadata" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.build-manylinux.outputs.metadata }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
   # Update latest tags on main
   tag-latest:
