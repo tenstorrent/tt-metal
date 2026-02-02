@@ -54,6 +54,8 @@ runs:
           else
             echo "has_latency_data=false" >> $GITHUB_OUTPUT
             echo "Latency files not found, database upload will be skipped"
+            echo "DEBUG: Listing generated/fabric directory contents:"
+            ls -la generated/fabric/ 2>&1 || echo "Directory generated/fabric/ does not exist"
           fi
         else
           echo "has_latency_data=false" >> $GITHUB_OUTPUT
