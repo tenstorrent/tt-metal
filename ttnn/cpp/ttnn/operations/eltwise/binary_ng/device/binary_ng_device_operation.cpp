@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,9 +24,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case LOGICAL_OR:
         case LOGICAL_XOR:
         case SQUARED_DIFFERENCE:
-        case RSUB: return a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16);
+        case RSUB: return a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16 || a == UINT8);
         case MUL:
-            return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
+            return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16 || a == UINT8));
         case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
         case LOGADDEXP:
         case LOGADDEXP2:
@@ -36,16 +36,17 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case GT:
         case LT:
         case GE:
-        case LE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
+        case LE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16) || (a == UINT8 && b == UINT8));
         case LCM:
         case GCD: return (a == INT32 && b == INT32);
         case LEFT_SHIFT:
         case RIGHT_SHIFT:
-            return ((a == INT32 || a == UINT32 || a == UINT16) && (b == INT32 || b == UINT32 || b == UINT16));
+            // UINT8 shifts are supported in SFPU; UINT8 is treated like UINT16
+            return ((a == INT32 || a == UINT32 || a == UINT16 || a == UINT8) && (b == INT32 || b == UINT32 || b == UINT16 || b == UINT8));
         case LOGICAL_RIGHT_SHIFT: return ((a == INT32 || a == UINT32) && (b == INT32 || b == UINT32));
         case BITWISE_XOR:
         case BITWISE_OR:
-        case BITWISE_AND: return a == b && (a == INT32 || a == UINT32 || a == UINT16);
+        case BITWISE_AND: return a == b && (a == INT32 || a == UINT32 || a == UINT16 || a == UINT8);
         case DIV_FLOOR:
         case DIV_TRUNC:
         case REMAINDER:
