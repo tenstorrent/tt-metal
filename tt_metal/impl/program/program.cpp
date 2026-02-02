@@ -86,7 +86,6 @@ namespace tt {
 class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
 namespace tt_metal {
-class CommandQueue;
 class EnqueueProgramCommand;
 namespace experimental {
 class GlobalCircularBuffer;
@@ -1539,11 +1538,11 @@ uint32_t detail::ProgramImpl::get_cb_base_addr(IDevice* device, CoreCoord /*logi
                            .cb_offset;
 }
 
-void detail::ProgramImpl::set_last_used_command_queue_for_testing(CommandQueue* queue) {
+void detail::ProgramImpl::set_last_used_command_queue_for_testing(HWCommandQueue* queue) {
     this->last_used_command_queue_for_testing = queue;
 }
 
-CommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
+HWCommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
     return this->last_used_command_queue_for_testing;
 }
 
