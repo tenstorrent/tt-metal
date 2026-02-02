@@ -773,7 +773,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, BasicTraceWithZeroTraceRegion) {
 
     MeshCoordinateRange all_devices(mesh_device_->shape());
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
-    
+
     // Create workloads before trace capture
     for (uint32_t i = 0; i < num_workloads; i++) {
         auto workload = std::make_shared<MeshWorkload>();
@@ -860,7 +860,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
     // Allocate as many buffers as possible DURING trace capture (bottom-up, like tensor allocations)
     // This increases the high water mark, which should cause overlap with the trace buffer
     std::vector<std::shared_ptr<MeshBuffer>> blocking_buffers;
-    constexpr size_t min_buffer_size = 4 * 1024;       // 4KB minimum
+    constexpr size_t min_buffer_size = 4 * 1024;            // 4KB minimum
     constexpr size_t max_buffer_size = 1024 * 1024 * 1024;  // 1GB max per buffer
     size_t current_buffer_size = max_buffer_size;
     size_t total_allocated = 0;
@@ -907,8 +907,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
         // If we get here, no overlap was detected
     } catch (const std::runtime_error& e) {
         std::string error_msg = e.what();
-        if (error_msg.find("overlap") != std::string::npos ||
-            error_msg.find("high water mark") != std::string::npos) {
+        if (error_msg.find("overlap") != std::string::npos || error_msg.find("high water mark") != std::string::npos) {
             overlap_detected = true;
         } else {
             // Re-throw unexpected errors
@@ -923,9 +922,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
         // This is still valid, release the trace and log it
         mesh_device_->release_mesh_trace(trace_id);
         log_info(
-            tt::LogTest,
-            "No overlap detected with {} bytes allocated - trace fit in remaining space",
-            total_allocated);
+            tt::LogTest, "No overlap detected with {} bytes allocated - trace fit in remaining space", total_allocated);
         SUCCEED() << "No overlap detected (trace fit in available space)";
     }
 }

@@ -434,7 +434,7 @@ uint64_t BankManager::allocate_buffer(
                 mem_stats.largest_free_block_bytes);
         }
         allocated_buffers_[allocator_id.get()].insert(address.value());
-        
+
         // Track high water mark for bottom-up allocations
         if (tracking_high_water_mark_ && bottom_up) {
             // Calculate end address in interleaved space: address + size_per_bank
@@ -443,7 +443,7 @@ uint64_t BankManager::allocate_buffer(
             DeviceAddr end_address = address.value() + size_per_bank;
             high_water_mark_ = std::max(high_water_mark_, end_address);
         }
-        
+
         // No neighbors, nothing to invalidate
         return address.value();
     }
@@ -499,7 +499,7 @@ uint64_t BankManager::allocate_buffer(
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[allocator_id.get()].insert(address.value());
-    
+
     // Track high water mark for bottom-up allocations
     if (tracking_high_water_mark_ && bottom_up) {
         // Calculate end address in interleaved space: address + size_per_bank
@@ -508,7 +508,7 @@ uint64_t BankManager::allocate_buffer(
         DeviceAddr end_address = address.value() + size_per_bank;
         high_water_mark_ = std::max(high_water_mark_, end_address);
     }
-    
+
     // Allocation in this allocator invalidates caches in allocators that depend on this allocator
     this->invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
     return address.value();
@@ -586,9 +586,7 @@ DeviceAddr BankManager::end_high_water_mark_tracking() {
     return high_water_mark_;
 }
 
-DeviceAddr BankManager::get_high_water_mark() const {
-    return high_water_mark_;
-}
+DeviceAddr BankManager::get_high_water_mark() const { return high_water_mark_; }
 
 void BankManager::dump_blocks(std::ostream& out, BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     const auto* alloc = this->get_allocator_from_id(allocator_id);

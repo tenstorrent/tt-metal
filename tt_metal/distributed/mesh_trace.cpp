@@ -161,11 +161,11 @@ void MeshTrace::populate_mesh_buffer(
     const auto current_trace_buffers_size = mesh_cq.device()->get_trace_buffers_size();
     mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
     auto trace_region_size = mesh_cq.device()->allocator_impl()->get_config().trace_region_size;
-    
+
     // When trace_region_size is 0, use dynamic allocation mode (allocate in DRAM, top-down)
     BufferType buffer_type = BufferType::TRACE;
     std::optional<bool> bottom_up = std::nullopt;
-    
+
     if (trace_region_size == 0) {
         // Dynamic allocation mode: allocate trace buffer in DRAM (top-down)
         buffer_type = BufferType::DRAM;
@@ -192,7 +192,7 @@ void MeshTrace::populate_mesh_buffer(
 
     trace_buffer->mesh_buffer =
         MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
-    
+
     // In dynamic allocation mode, validate that trace buffer doesn't overlap with allocations during trace
     if (trace_region_size == 0 && dram_high_water_mark > 0) {
         // Get the address of the trace buffer (it's allocated top-down, so we check the start address)
