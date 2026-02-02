@@ -13,7 +13,6 @@
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
 #include "experimental/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // for scale+mask+softmax:
