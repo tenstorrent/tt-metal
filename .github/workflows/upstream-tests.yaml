@@ -239,7 +239,7 @@ jobs:
           build-args: |
             TECHDEBT_INSTALL_TTT_REQS=${{ matrix.image-config.techdebt-install-ttt-reqs && 'true' || 'false' }}
           outputs: |
-            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
   test-wh-6u-image:
     needs:
       - get-image-tags

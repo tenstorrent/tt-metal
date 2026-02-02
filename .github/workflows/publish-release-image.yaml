@@ -80,7 +80,7 @@ jobs:
           file: dockerfile/Dockerfile
           target: ${{ matrix.image }}
           outputs: |
-            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
 
   smoke-test-docker-image:
     if: ${{ !inputs.dry-run }}
