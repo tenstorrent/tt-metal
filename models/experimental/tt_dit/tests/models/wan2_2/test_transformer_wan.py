@@ -22,8 +22,13 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 
 
 @pytest.mark.parametrize(
+    "dit_unit_test",
+    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
+)
+@pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp",
     [
+        [(1, 1), (1, 1), 0, 1, 0, {}, ttnn.Topology.Linear, False],
         [(2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False],
         [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True],
@@ -33,6 +38,7 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
         [(4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
+        "1x1sp0tp1",
         "2x2sp0tp1",
         "2x4sp0tp1",
         "2x4sp1tp0",
@@ -63,6 +69,7 @@ def test_wan_transformer_block(
     prompt_seq_len: int,
     is_fsdp: bool,
     topology: ttnn.Topology,
+    dit_unit_test: bool,
 ) -> None:
     torch_dtype = torch.float32
     parent_mesh_device = mesh_device
@@ -90,9 +97,12 @@ def test_wan_transformer_block(
     MAX_RMSE = 0.032
 
     # Load Wan2.2-T2V-14B model from HuggingFace
-    parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
-        "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", torch_dtype=torch_dtype, trust_remote_code=True
-    )
+    if dit_unit_test:
+        parent_torch_model = TorchWanTransformer3DModel(num_layers=1)
+    else:
+        parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
+            "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", torch_dtype=torch_dtype, trust_remote_code=True
+        )
     torch_model = parent_torch_model.blocks[layer_id]
     torch_model.eval()
 
