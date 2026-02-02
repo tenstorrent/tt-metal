@@ -943,14 +943,14 @@ class PreSDPA:
             format_descriptors=[qrope_output_cb_format],
         )
 
-        # CB 26: SDPA Input receive buffer (staging buffer for gather heads)
+        # CB 15: SDPA Input receive buffer (staging buffer for gather heads)
         # Must be allocated on union of sender (QNOPE/QROPE) and receiver (SDPA Input) grids
         # so that senders can use get_write_ptr to compute destination address.
         # Note: We need this staging buffer because:
         # 1. Senders need get_write_ptr(cb) to compute destination address
         # 2. cb_descriptor_from_sharded_tensor only allocates CB on tensor's shard cores
         # 3. We can't have two CB descriptors with the same index on different core sets
-        # 4. So we use a staging buffer (CB 20) and copy to output buffer (CB 21)
+        # 4. So we use a staging buffer (CB 15) and copy to output buffer (CB 16)
         sdpa_input_receive_cb_core_ranges = qnope_grid.merge(qrope_grid).merge(sdpa_input_grid)
         sdpa_input_receive_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         sdpa_input_receive_page_size = TILE_1x32.get_tile_size(data_format)
@@ -1164,6 +1164,7 @@ class PreSDPA:
             matmul3_weights_tensor,
             sin_tensor,
             cos_tensor,
+            trans_mat_tensor,
             output_tensor,
         ]
         ttnn.generic_op(io_tensors, program_descriptor)
