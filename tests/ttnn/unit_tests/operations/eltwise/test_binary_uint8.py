@@ -159,6 +159,97 @@ def test_binary_uint8_comparison(a_shape, b_shape, ttnn_fn, device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        (torch.Size([1, 2, 32, 64]), torch.Size([1, 2, 32, 64])),
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        ttnn.bitwise_and,
+        ttnn.bitwise_or,
+        ttnn.bitwise_xor,
+    ],
+)
+def test_binary_uint8_bitwise(a_shape, b_shape, ttnn_fn, device):
+    torch_input_tensor_a = torch.randint(0, 256, a_shape, dtype=torch.uint8)
+    torch_input_tensor_b = torch.randint(0, 256, b_shape, dtype=torch.uint8)
+
+    golden_function = ttnn.get_golden_function(ttnn_fn)
+    torch_output_tensor = golden_function(torch_input_tensor_a.to(torch.int32), torch_input_tensor_b.to(torch.int32))
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint8,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint8,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    output_tensor = ttnn_fn(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32).to(torch.uint8)
+
+    assert torch.equal(output_tensor, torch_output_tensor.to(torch.uint8))
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        (torch.Size([1, 2, 32, 64]), torch.Size([1, 2, 32, 64])),
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        ttnn.gt,
+        ttnn.lt,
+        ttnn.ge,
+        ttnn.le,
+    ],
+)
+def test_binary_uint8_relational(a_shape, b_shape, ttnn_fn, device):
+    torch_input_tensor_a = torch.randint(0, 100, a_shape, dtype=torch.uint8)
+    torch_input_tensor_b = torch.randint(0, 100, b_shape, dtype=torch.uint8)
+
+    golden_function = ttnn.get_golden_function(ttnn_fn)
+    torch_output_tensor = golden_function(torch_input_tensor_a.to(torch.int32), torch_input_tensor_b.to(torch.int32))
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint8,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint8,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    output_tensor = ttnn_fn(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+    
+    if torch_output_tensor.dtype == torch.bool:
+        torch_output_tensor = torch_output_tensor.int()
+
+    output_tensor = (output_tensor != 0).int()
+    torch_output_tensor = (torch_output_tensor != 0).int()
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
 def test_binary_ne_uint8_specific_case(device):
     # Specific case from PR description
     torch_ones = torch.ones([32, 32], dtype=torch.uint8)
