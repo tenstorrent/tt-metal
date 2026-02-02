@@ -7,12 +7,12 @@ import math
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+from models.demos.nlp.llms.deepseek_v3_b1.micro_ops.rope.op import RopeSingleCore
+from models.demos.nlp.llms.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32
+from models.demos.nlp.llms.deepseek_v3_b1.utils import float_to_uint32
 
 
 class KVCacheBranch:
@@ -418,7 +418,7 @@ class KVCacheBranch:
         # ========================================================================
 
         unified_kernel = UnifiedKernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/fused_ops/kv_cache_branch/kernels/kv_cache_branch_kernel.cpp",
+            kernel_source="models/demos/nlp/llms/deepseek_v3_b1/fused_ops/kv_cache_branch/kernels/kv_cache_branch_kernel.cpp",
             core_ranges=input_core_grid,
             # NCRISC named compile-time args:
             ncrisc_named_compile_time_args=dkv_matmul_ncrisc_named_compile_time_args

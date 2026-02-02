@@ -15,7 +15,7 @@ from models.demos.nlp.embedding.bge_large_en.wormhole.tests.pcc.utils import ass
 from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import BertModel, custom_extended_mask
 
 if is_blackhole():
-    from models.demos.blackhole.bge_large_en.ttnn.common import custom_preprocessor
+    from models.demos.nlp.embedding.bge_large_en.common.common import custom_preprocessor
 else:
     from models.demos.nlp.embedding.bge_large_en.wormhole.ttnn.common import custom_preprocessor
 
