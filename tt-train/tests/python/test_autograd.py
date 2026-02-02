@@ -3,48 +3,13 @@
 
 import ml_dtypes
 import numpy as np
+from numpy.testing import assert_array_max_ulp
 import pytest
 import os
 import sys
 
 import ttnn
 import ttml  # noqa: E402
-
-
-def ulp_compare(actual, expected, max_ulp=1):
-    """
-    Compare floating point arrays using ULP (Unit of Least Precision).
-
-    For floating point division x/x, the result may not be exactly 1.0 due to
-    the way division is computed (x * reciprocal(x)). This function allows
-    for a small tolerance based on ULP.
-
-    Args:
-        actual: The actual result array
-        expected: The expected result array
-        max_ulp: Maximum allowed ULP difference (default 1)
-
-    Returns:
-        Boolean array indicating where values match within tolerance
-    """
-    actual = np.asarray(actual)
-    expected = np.asarray(expected)
-
-    # Handle special cases (inf, nan) with exact comparison
-    special_mask = np.isinf(expected) | np.isnan(expected)
-
-    # Get machine epsilon for the dtype
-    eps = np.finfo(expected.dtype).eps
-
-    # For normal values, compute ULP difference
-    # ULP difference = |actual - expected| / (eps * max(|expected|, 1.0))
-    with np.errstate(divide="ignore", invalid="ignore"):
-        ulp_diff = np.abs(actual - expected) / (eps * np.maximum(np.abs(expected), 1.0))
-
-    normal_match = ulp_diff <= max_ulp
-    special_match = (actual == expected) | (np.isnan(actual) & np.isnan(expected))
-
-    return np.where(special_mask, special_match, normal_match)
 
 
 def supported_autograd_types_except(*except_types):
@@ -652,9 +617,6 @@ def test_binary_operators_div(tensor_data, numpy_type, autograd_type, layout):
     # For floating point types, use ULP comparison to allow for small precision
     # differences from computing x * reciprocal(x) instead of exactly 1.0
     if is_float_ttnn_type or (autograd_type is None and is_float_numpy_type):
-        assert ulp_compare(actual, expected, max_ulp=1).all(), (
-            f"Division result differs by more than 1 ULP.\n"
-            f"Actual: {actual}\nExpected: {expected}"
-        )
+        assert_array_max_ulp(actual, expected, maxulp=1)
     else:
         assert (actual == expected).all()
