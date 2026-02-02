@@ -19,23 +19,18 @@
 
 #define DEBUG_PRINT 0
 
-// Helper for conv tilize operations using config-based API
-// CB indices are template parameters, flags computed from init/uninit bools
 #ifdef SPLIT_READER
-#define TILIZE_IN_ATTR __attribute__((noinline))
+template <bool init_tilize = true, bool uninit_tilize = true>
+__attribute__((noinline)) void tilize_in(
 #else
-#define TILIZE_IN_ATTR
+template <bool init_tilize = true, bool uninit_tilize = true>
+void tilize_in(
 #endif
-
-template <uint32_t in_cb_id, uint32_t out_cb_id, bool init_tilize = true, bool uninit_tilize = true>
-TILIZE_IN_ATTR void tilize_in(uint32_t in_block_w, uint32_t in_num_subblocks) {
-    // Compute flags at compile time: base flags + conditional SKIP_INIT/SKIP_UNINIT
-    constexpr TilizeFlags flags = TilizeFlags::FAST | TilizeFlags::DT_RECONFIG |
-                                  (init_tilize ? TilizeFlags::NONE : TilizeFlags::SKIP_INIT) |
-                                  (uninit_tilize ? TilizeFlags::NONE : TilizeFlags::SKIP_UNINIT);
-
-    compute_kernel_lib::tilize<TilizeConfig<InputCB<in_cb_id>, OutputCB<out_cb_id>, flags>>(
-        in_block_w, in_num_subblocks);
+    uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
+    // Replaced manual tilize loop with unified helper function
+    // This uses fast tilize with DT variant (fast_tilize_init_with_dt)
+    compute_kernel_lib::tilize<init_tilize, uninit_tilize, true, true>(
+        in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
@@ -278,15 +273,12 @@ void kernel_main() {
                             pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                             pack_reconfig_l1_acc(0);
                         }
-                        tilize_in<
-                            in0_pretilize_cb_id,
-                            tilized_in0_cb_id,
-                            true,
-                            !split_reader || split_reader_cb_shared>(in0_block_w, in0_num_subblocks_read);
+                        tilize_in<true, !split_reader || split_reader_cb_shared>(
+                            in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
 
                         if constexpr (split_reader && !split_reader_cb_shared) {
-                            tilize_in<in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
-                                in0_block_w, in0_num_subblocks_read_last);
+                            tilize_in<false, true>(
+                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
                         }
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
@@ -311,14 +303,14 @@ void kernel_main() {
                     }
 
                     if constexpr (!activation_reuse) {
-                        tilize_in<in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
-                            in0_block_w, in0_num_subblocks_read);
+                        tilize_in<true, !split_reader>(
+                            in0_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
                     }
 
                     if constexpr (split_reader) {
                         if constexpr (!activation_reuse) {
-                            tilize_in<in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
-                                in0_block_w, in0_num_subblocks_read_last);
+                            tilize_in<false, true>(
+                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
                         } else {
                             PACK((get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr = tilized_cb_start_address));
                             tilize_in_reuse_split_reader<
@@ -601,8 +593,7 @@ void kernel_main() {
                     pack_untilize_uninit(matmul_partials_cb);
                 } else {
                     // Flatten nested loops into single iteration count: in0_num_subblocks * out_subblock_h
-                    compute_kernel_lib::untilize<
-                        UntilizeConfig<WidthInTiles<out_block_w>, InputCB<matmul_partials_cb>, OutputCB<out_cb_id>>>(
+                    compute_kernel_lib::untilize<out_block_w, matmul_partials_cb, out_cb_id>(
                         in0_num_subblocks * out_subblock_h);
                 }
             }
