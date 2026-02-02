@@ -395,6 +395,12 @@ class DispatcherData:
             elif mode_val == self._DISPATCH_MODE_HOST:
                 dispatch_mode = "HOST"
             else:
+                # Unexpected/unknown dispatch mode value; track for debugging but preserve behavior.
+                log_check_location(
+                    location,
+                    False,
+                    f"unexpected dispatch mode value '{mode_val}' in launch message",
+                )
                 dispatch_mode = str(mode_val)
         except Exception:
             log_check_location(
