@@ -35,7 +35,9 @@ struct LogicalPipelineStageConfig {
 // Determine how the Multi Mesh Coordinate system is instantiated on the physical cluster.
 std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> generate_asic_id_to_mesh_coord_map(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device) {
+    log_critical(tt::LogTest, "Starting control plane");
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    log_critical(tt::LogTest, "Finished control plane");
     std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> asic_id_to_mesh_coord_map;
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
@@ -153,6 +155,7 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
 // - This data is streamed through the pipeline for 10 iterations
 // - Final pipeline stage validates data correctness
 TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
+    log_critical(tt::LogTest, "Starting TestSendRecvPipeline");
     auto arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
     if (arch != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "This test can only run on Blackhole systems";
@@ -169,8 +172,11 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
 
     const uint32_t socket_fifo_size = XFER_SIZE * 8;
 
+    log_critical(tt::LogTest, "Starting to create physical system descriptor");
     auto physical_system_descriptor = create_physical_system_descriptor();
+    log_critical(tt::LogTest, "Starting to generate asic_id_to_mesh_coord_map");
     auto asic_id_to_mesh_coord = generate_asic_id_to_mesh_coord_map(mesh_device_);
+    log_critical(tt::LogTest, "Finished generating asic_id_to_mesh_coord_map");
     auto pipeline_stages = build_2x4_pipeline(physical_system_descriptor, asic_id_to_mesh_coord);
 
     const auto my_mesh_id = *distributed_context->rank();

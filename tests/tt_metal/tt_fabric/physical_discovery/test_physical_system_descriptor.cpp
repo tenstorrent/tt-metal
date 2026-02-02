@@ -154,6 +154,9 @@ TEST(PhysicalDiscovery, GenerateTrayToPCIeDeviceMapping) {
         cluster.get_driver(), distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, true);
     const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
 
+    // Get the hostname for this process
+    auto hostname = physical_system_desc.my_host_name();
+
     // Generate a YAML File with the tray to pcie device mapping
     YAML::Node tray_to_pcie_device_mapping;
     YAML::Node device_mapping;  // Create a separate node for the device mapping
@@ -164,7 +167,10 @@ TEST(PhysicalDiscovery, GenerateTrayToPCIeDeviceMapping) {
     }
     tray_to_pcie_device_mapping["device_mapping"] = device_mapping;
     tray_to_pcie_device_mapping["arch"] = enchantum::to_string(cluster.get_cluster_desc()->get_arch());
-    std::ofstream outfile("tray_to_pcie_device_mapping.yaml");
+
+    // Generate filename with hostname
+    std::string filename = "tray_to_pcie_device_mapping_" + hostname + ".yaml";
+    std::ofstream outfile(filename);
     outfile << tray_to_pcie_device_mapping;
     outfile.close();
 }

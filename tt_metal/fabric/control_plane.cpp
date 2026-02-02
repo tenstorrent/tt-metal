@@ -434,12 +434,14 @@ void ControlPlane::init_control_plane(
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    log_critical(tt::LogFabric, "Starting init_control_plane");
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
+    log_critical(tt::LogFabric, "Starting to create mesh_graph");
     // Create mesh_graph first
     this->mesh_graph_ = std::make_unique<MeshGraph>(mesh_graph_desc_file, fabric_config);
 
@@ -480,6 +482,7 @@ void ControlPlane::init_control_plane(
             fixed_asic_position_pinnings.emplace_back(pos, fabric_node);
         }
 
+        log_critical(tt::LogFabric, "Starting topology mapper");
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
@@ -488,6 +491,7 @@ void ControlPlane::init_control_plane(
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
+    log_critical(tt::LogFabric, "Finished topology mapper");
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
