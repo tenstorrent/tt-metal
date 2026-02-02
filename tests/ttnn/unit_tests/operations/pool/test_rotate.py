@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, is_watcher_enabled
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -269,6 +269,8 @@ def test_memory_configs(device, memory_config):
 @pytest.mark.parametrize("interpolation_mode", ["nearest", "bilinear"])
 def test_height_sharded_memory(device, interpolation_mode):
     """Test rotation with height and block sharded memory configurations using full grid."""
+    if is_watcher_enabled() and shard_strategy in ("width", "block"):
+        pytest.skip("Skipping due to watcher compilation error")
     torch.manual_seed(0)
 
     grid_size = device.compute_with_storage_grid_size()

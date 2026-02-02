@@ -6,6 +6,7 @@ import ttnn
 import math
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool2d
+from models.common.utility_functions import is_watcher_enabled
 
 
 # Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
@@ -171,6 +172,13 @@ def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
         ceil_mode,
     ) = input_spec
 
+    # Test failing with watcher enabled, github issue #29024
+    if (
+        is_watcher_enabled()
+        and in_dtype == ttnn.bfloat16
+        and input_spec == [1, 1, 59, 59, 3, 5, 4, 2, 1, 1, 5, 4, True]
+    ):
+        pytest.skip("Test is not passing with watcher enabled")
     run_max_pool2d(
         [in_n, in_c, in_h, in_w],
         (kernel_h, kernel_w),

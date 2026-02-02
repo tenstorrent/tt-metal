@@ -108,6 +108,14 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
 @pytest.mark.parametrize("from_layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("to_layout", [ttnn.ROW_MAJOR_LAYOUT])
 def test_to_layout_wide_tensor(device, shape, on_device, from_layout, to_layout):
+    # if (
+    #     is_watcher_enabled()
+    #     and to_layout == ttnn.ROW_MAJOR_LAYOUT
+    #     and from_layout == ttnn.TILE_LAYOUT
+    #     and on_device
+    #     and shape == (1, 1, 512, 5120)
+    # ):
+    #     pytest.skip("Skipping due to watcher being enabled, see issue #XXXXX")
     torch.manual_seed(0)
     torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor)
