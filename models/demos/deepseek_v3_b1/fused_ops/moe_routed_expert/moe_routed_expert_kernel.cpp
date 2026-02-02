@@ -4,20 +4,21 @@
 // MoE Routed Expert fused kernel
 // Single kernel file, compiles correctly for all RISC cores
 //
-// Implements: Mcast -> Matmul+Activation (extendable with more fusions)
-// - Sender core: Mcast sender only (outside compute grid)
-// - Compute cores: Mcast receiver + Matmul+Activation compute
+// Implements: Mcast -> Matmul+Activation -> Gather
+// - Sender core: Mcast sender, Gather receiver (outside compute grid)
+// - Compute cores: Mcast receiver, Matmul+Activation compute, Gather sender
 // - Mcast grid: Rectangle encompassing sender and compute cores
 //
 // RISC assignments:
-// - BRISC: Mcast sender (sender core only)
-// - NCRISC: Mcast receiver + setup sharded buffers
+// - BRISC: Mcast sender (sender core), Gather receiver (sender core)
+// - NCRISC: Mcast receiver, setup sharded buffers, Gather sender (compute cores)
 // - TRISC: Matmul+Activation compute (compute cores only)
 
 #include "../../unified_kernels/kernel_op_api.hpp"
 #include "../../unified_kernels/kernel_utils.hpp"
 #include "../../unified_kernels/mcast.hpp"
 #include "../../unified_kernels/matmul.hpp"
+#include "../../unified_kernels/gather.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
@@ -42,6 +43,22 @@ void kernel_main() {
     // Matmul CTArgs and args
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
+
+    // Gather sender args (compute cores send to sender core)
+    deepseek_b1_ops::Gather::SenderArgs gather_args{
+        get_named_compile_time_arg_val("gather_dest_noc_x"),
+        get_named_compile_time_arg_val("gather_dest_noc_y"),
+        get_named_compile_time_arg_val("gather_data_size_bytes"),
+        get_named_compile_time_arg_val("gather_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("gather_src_cb"),
+        get_named_compile_time_arg_val("gather_src_num_pages"),
+        get_named_compile_time_arg_val("gather_sender_grid_start_x"),
+        get_named_compile_time_arg_val("gather_sender_grid_start_y"),
+        get_named_compile_time_arg_val("gather_sender_grid_end_x"),
+        get_named_compile_time_arg_val("gather_sender_grid_end_y"),
+        get_named_compile_time_arg_val("gather_row_major"),
+        get_named_compile_time_arg_val("gather_receiver_data_addr"),
+    };
 
     // Setup sharded persistent buffers
     if constexpr (Core::is_sender_core) {
@@ -83,6 +100,16 @@ void kernel_main() {
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
 
+    // Gather receiver args (sender core receives from compute cores)
+    deepseek_b1_ops::Gather::ReceiverArgs gather_args{
+        get_named_compile_time_arg_val("gather_noc0_num_senders"),
+        get_named_compile_time_arg_val("gather_noc1_num_senders"),
+        get_named_compile_time_arg_val("gather_noc0_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("gather_noc1_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("gather_dst_cb"),
+        get_named_compile_time_arg_val("gather_dst_num_pages"),
+    };
+
 #elif defined(COMPILE_FOR_TRISC)
     // Mcast CTArgs and args (no-op for TRISC)
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
@@ -98,6 +125,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("matmul_out"),
         get_named_compile_time_arg_val("matmul_k_num_tiles"),
     };
+
+    // Gather args (no-op for TRISC)
+    deepseek_b1_ops::Gather::ComputeArgs gather_args{};
 #endif
 
     // ========================================================================
@@ -120,5 +150,15 @@ void kernel_main() {
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
         deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, false> matmul;
         matmul(matmul_args);
+    }
+
+    // ========================================================================
+    // Gather: Collect matmul outputs from compute cores to sender core
+    // ========================================================================
+    {
+        DeviceZoneScopedN("GATHER");
+        // pop_src = true (matmul output consumed after gather)
+        deepseek_b1_ops::Gather::Op<Core::is_matmul_core, Core::is_sender_core, true> gather;
+        gather(gather_args);
     }
 }
