@@ -14,10 +14,5 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(3);
 
     compute_kernel_hw_startup(src_cb_id, out_cb_id);
-
-    compute_kernel_lib::untilize<UntilizeConfig<
-        WidthInTiles<per_core_block_tile_cnt>,
-        InputCB<src_cb_id>,
-        OutputCB<out_cb_id>,
-        UntilizeFlags::FORCE_PACK_UNTILIZE_WIDE_FP32>>(per_core_block_cnt);
+    compute_kernel_lib::untilize<per_core_block_tile_cnt, src_cb_id, out_cb_id>(per_core_block_cnt);
 }
