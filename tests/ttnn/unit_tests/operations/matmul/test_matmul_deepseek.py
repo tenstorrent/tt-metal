@@ -11,7 +11,7 @@ import math
 import ttnn
 
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import pad_to_dram_banks
-from models.common.utility_functions import comp_pcc, skip_for_blackhole, is_blackhole
+from models.common.utility_functions import comp_pcc, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
