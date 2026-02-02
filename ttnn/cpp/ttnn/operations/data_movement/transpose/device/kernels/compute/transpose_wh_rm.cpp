@@ -12,8 +12,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
-template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_tilize, uint32_t cb_untilize, uint32_t cb_out>
-ALWI void transpose_with_untilize() {
+template <uint32_t Wt, uint32_t Ht, uint32_t HtWt>
+ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint32_t cb_out) {
     uint32_t tile_idx = 0;
 
     for (uint32_t w = 0; w < Wt; ++w) {
@@ -32,7 +32,7 @@ ALWI void transpose_with_untilize() {
         cb_push_back(cb_untilize, Ht);
 
         // untilize
-        compute_kernel_lib::untilize<UntilizeConfig<WidthInTiles<Ht>, InputCB<cb_untilize>, OutputCB<cb_out>>>(1);
+        compute_kernel_lib::untilize<Ht, cb_untilize, cb_out>(1);
     }
 }
 
@@ -43,10 +43,8 @@ template <
     bool use_narrow_row,
     uint32_t row_size,
     uint32_t pack_num_pages_last_col,
-    uint32_t pack_num_pages_last_row_col,
-    uint32_t cb_tilize,
-    uint32_t cb_out>
-ALWI void transpose_with_pack_untilize_narrow_row() {
+    uint32_t pack_num_pages_last_row_col>
+ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, uint32_t cb_out) {
     uint32_t tile_idx = 0;
 
     transpose_wh_init_short(cb_tilize);
@@ -78,8 +76,8 @@ ALWI void transpose_with_pack_untilize_narrow_row() {
     pack_untilize_uninit(cb_out);
 }
 
-template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_tilize, uint32_t cb_out>
-ALWI void transpose_with_pack_untilize() {
+template <uint32_t Wt, uint32_t Ht, uint32_t HtWt>
+ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, uint32_t cb_out) {
     uint32_t tile_idx = 0;
 
     transpose_wh_init_short(cb_tilize);
@@ -149,13 +147,13 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         // Tilize input with activation pattern (Ht rows × Wt tiles)
-        compute_kernel_lib::tilize<TilizeConfig<InputCB<cb_in>, OutputCB<cb_tilize>>>(Wt, 1, Ht);
+        compute_kernel_lib::tilize<cb_in, cb_tilize>(Wt, Ht);
 
         // transpose
         cb_wait_front(cb_tilize, HtWt);
         uint32_t tile_idx = 0;
         if constexpr (Ht > 8) {  // temporary fix until pack_untilze is fully fixed
-            transpose_with_untilize<Wt, Ht, HtWt, cb_tilize, cb_untilize, cb_out>();
+            transpose_with_untilize<Wt, Ht, HtWt>(cb_tilize, cb_untilize, cb_out);
         } else {
 #ifdef SHARDED
             if constexpr (use_narrow_row) {
@@ -166,14 +164,12 @@ void kernel_main() {
                     use_narrow_row,
                     row_size,
                     pack_num_pages_last_col,
-                    pack_num_pages_last_row_col,
-                    cb_tilize,
-                    cb_out>();
+                    pack_num_pages_last_row_col>(cb_tilize, cb_out);
             } else {
-                transpose_with_pack_untilize<Wt, Ht, HtWt, cb_tilize, cb_out>();
+                transpose_with_pack_untilize<Wt, Ht, HtWt>(cb_tilize, cb_out);
             }
 #else
-            transpose_with_pack_untilize<Wt, Ht, HtWt, cb_tilize, cb_out>();
+            transpose_with_pack_untilize<Wt, Ht, HtWt>(cb_tilize, cb_out);
 #endif
         }
         cb_pop_front(cb_tilize, HtWt);
