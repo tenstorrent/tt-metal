@@ -19,11 +19,31 @@ class TtnnYoloV11:
         self.conv1 = TtnnConv(device, parameters.conv_args[0], parameters.model[0], deallocate_activation=True)
         self.conv2 = TtnnConv(device, parameters.conv_args[1], parameters.model[1], deallocate_activation=True)
         self.c3k2_1 = TtnnC3k2(device, parameters.conv_args[2], parameters.model[2], is_bk_enabled=False)
-        self.conv3 = TtnnConv(device, parameters.conv_args[3], parameters.model[3], deallocate_activation=True)
+        self.conv3 = TtnnConv(
+            device,
+            parameters.conv_args[3],
+            parameters.model[3],
+            deallocate_activation=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=False,
+        )
         self.c3k2_2 = TtnnC3k2(device, parameters.conv_args[4], parameters.model[4], is_bk_enabled=False)
-        self.conv5 = TtnnConv(device, parameters.conv_args[5], parameters.model[5], deallocate_activation=True)
+        self.conv5 = TtnnConv(
+            device,
+            parameters.conv_args[5],
+            parameters.model[5],
+            deallocate_activation=True,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+        )
         self.c3k2_3 = TtnnC3k2(device, parameters.conv_args[6], parameters.model[6], is_bk_enabled=False)
-        self.conv6 = TtnnConv(device, parameters.conv_args[7], parameters.model[7])
+        self.conv6 = TtnnConv(
+            device,
+            parameters.conv_args[7],
+            parameters.model[7],
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+        )
         self.c3k2_4 = TtnnC3k2(device, parameters.conv_args[8], parameters.model[8], is_bk_enabled=False)
         self.sppf = TtnnSPPF(device, parameters.conv_args[9], parameters.model[9])
         self.c2psa = TtnnC2PSA(device, parameters.conv_args[10], parameters.model[10])
@@ -38,7 +58,14 @@ class TtnnYoloV11:
         self.c3k2_7 = TtnnC3k2(
             device, parameters.conv_args[19], parameters.model[19], is_bk_enabled=False, reshard=True
         )
-        self.conv8 = TtnnConv(device, parameters.conv_args[20], parameters.model[20], deallocate_activation=True)
+        self.conv8 = TtnnConv(
+            device,
+            parameters.conv_args[20],
+            parameters.model[20],
+            deallocate_activation=False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+        )
         self.c3k2_8 = TtnnC3k2(
             device, parameters.conv_args[22], parameters.model[22], is_bk_enabled=False, reshard=True
         )
