@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <cmath>
 #include <iomanip>
 #include <functional>
@@ -18,6 +19,7 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_constants.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_results.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -582,8 +584,6 @@ void ResultsManager<T, U>::populate_upload_metadata_fields() {
     std::string machine_type = std::string(enchantum::to_string(cluster_type));
     std::transform(machine_type.begin(), machine_type.end(), machine_type.begin(), ::tolower);
 
-    // !<<<<<<<<<<<<<<<<<<<<<<<<<<< Remember that this affects schema on supserset side make sure to
-    // change>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>!
     std::string file_name = get_perf_metric_name() + "_" + arch_name + "_" + machine_type;
 
     auto now = std::chrono::system_clock::now();
@@ -724,17 +724,6 @@ void BandwidthResultsManager::compare_summary_results_with_golden() {
     set_comparison_statistics_csv_file_path();
     post_comparison_analyzer.generate_comparison_statistics_csv(comparison_statistics_csv_file_path_);
 }
-
-// ==============================================LATENCY TEST
-// MANAGER======================================================
-
-#include <algorithm>
-#include <fstream>
-#include <iomanip>
-#include <numeric>
-#include <sstream>
-#include <tt-logger/tt-logger.hpp>
-#include "impl/context/metal_context.hpp"
 
 LatencyResultsManager::LatencyResultsManager(TestFixture& fixture, SenderMemoryMap& sender_memory_map) :
     fixture_(fixture), sender_memory_map_(sender_memory_map) {

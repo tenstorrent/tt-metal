@@ -130,7 +130,7 @@ jobs:
           prefix: "test_reports_"
       - name: Check for benchmark/latency data
         id: check-data
-        if: ${{ !cancelled() && github.ref_name == 'nzhao/latency-result-superset-export' && contains(matrix.test-group.name, 'Fabric BW') }}
+        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name, 'Fabric BW') }}
         uses: ./docker-job/.github/actions/check-latency-bw-results
         with:
           path: /work
@@ -149,7 +149,7 @@ jobs:
           path: /work
       - name: Upload latency data
         ## Only upload fabric latency data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'nzhao/latency-result-superset-export' && contains(matrix.test-group.name, 'Fabric BW') && steps.check-data.outputs.has_latency_data == 'true' }}
+        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name, 'Fabric BW') && steps.check-data.outputs.has_latency_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

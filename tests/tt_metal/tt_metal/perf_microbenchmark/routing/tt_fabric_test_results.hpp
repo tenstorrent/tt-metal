@@ -11,24 +11,17 @@
 #include <fstream>
 #include <optional>
 #include <functional>
-#include "tt_fabric_test_config.hpp"
-#include <enchantum/enchantum.hpp>
-
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
-#include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-
-using Topology = tt::tt_fabric::Topology;
-using NocSendType = tt::tt_fabric::NocSendType;
-using RoutingDirection = tt::tt_fabric::RoutingDirection;
-
 #include <map>
 #include <optional>
 #include <string>
 #include <cmath>
+#include <enchantum/enchantum.hpp>
+#include "tt_fabric_test_config.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include <tt-logger/tt-logger.hpp>
-
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_fabric_test_common.hpp"
 #include "tt_fabric_test_interfaces.hpp"
@@ -39,6 +32,9 @@ using RoutingDirection = tt::tt_fabric::RoutingDirection;
 #include "tt_fabric_test_results.hpp"
 
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
+using Topology = tt::tt_fabric::Topology;
+using NocSendType = tt::tt_fabric::NocSendType;
+using RoutingDirection = tt::tt_fabric::RoutingDirection;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
 using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
 using SenderMemoryMap = tt::tt_fabric::fabric_tests::SenderMemoryMap;
@@ -51,7 +47,6 @@ using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using CoreCoord = tt::tt_metal::CoreCoord;
 using FabricNodeId = tt::tt_fabric::FabricNodeId;
 using MeshId = tt::tt_fabric::MeshId;
-using NocSendType = tt::tt_fabric::NocSendType;
 using tt::tt_fabric::fabric_tests::CI_ARTIFACTS_DIR;
 using tt::tt_fabric::fabric_tests::OUTPUT_DIR;
 namespace tt::tt_fabric::fabric_tests {

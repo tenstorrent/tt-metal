@@ -90,7 +90,7 @@ jobs:
           check_latency: "true"
       - name: Upload BW results
         ## Only upload fabric benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'nzhao/latency-result-superset-export' && steps.check-data.outputs.has_benchmark_data == 'true' }}
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -100,7 +100,7 @@ jobs:
           path: /work
       - name: Upload latency data
         ## Only upload fabric latency data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'nzhao/latency-result-superset-export' && steps.check-data.outputs.has_latency_data == 'true' }}
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_latency_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
