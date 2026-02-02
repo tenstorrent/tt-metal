@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_test ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Test ALIAS ttnn_op_experimental_test)
 
-target_precompile_headers(ttnn_op_experimental_test REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_test REUSE_FROM TTNN::PCH)
 
 set_target_properties(
     ttnn_op_experimental_test
