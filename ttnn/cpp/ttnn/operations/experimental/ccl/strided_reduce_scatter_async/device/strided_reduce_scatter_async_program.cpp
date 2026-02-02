@@ -431,7 +431,15 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
     const uint32_t input_tensor_B,
     const uint32_t slice_B,
     const uint32_t slice_C,
-    const uint32_t normalized_dim) {
+    const uint32_t normalized_dim,
+    const uint32_t M_blocks_per_core,
+    const uint32_t mm_N_blocks_per_slice,
+    const uint32_t mm_block_ht,
+    const uint32_t mm_cores_y,
+    const uint32_t N_block_wt,
+    const uint32_t chunk_width_in_tiles,
+    const uint32_t chunks_per_mm_N_block,
+    const uint32_t slice_Wt) {
     if (normalized_dim == 0) {
         return {
             input_cb_index,           // input_cb_id
@@ -443,13 +451,20 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
         };
     }
     return {
-        input_cb_index,           //         input_cb_id
+        input_cb_index,           // input_cb_id
         intermediate_cb_index,    // intermediate_cb
         compute_output_cb_index,  // output_cb
         tile_granularity,         // tile_granularity
         ring_size,                // ring_size
         input_tensor_B,           // input_tensor_B
-        slice_C,                  // slice_C
+        M_blocks_per_core,        // M_blocks_per_core
+        mm_N_blocks_per_slice,    // mm_N_blocks_per_slice
+        mm_block_ht,              // mm_block_ht
+        mm_cores_y,               // mm_cores_y
+        N_block_wt,               // N_block_wt
+        chunk_width_in_tiles,     // chunk_width_in_tiles
+        chunks_per_mm_N_block,    // chunks_per_mm_N_block
+        slice_Wt,                 // slice_Wt
     };
 }
 
@@ -1167,7 +1182,15 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             input_tensor_B,
             slice_B,
             slice_C,
-            normalized_dim);
+            normalized_dim,
+            M_blocks_per_core,
+            mm_N_blocks_per_slice,
+            mm_block_ht_val,
+            mm_cores_y_val,
+            mm_N_block_wt_val,
+            chunk_width_in_tiles_val,
+            chunks_per_mm_N_block_val,
+            slice_Wt);
 
     std::string sender_reduce_kernel_path =
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
@@ -1300,7 +1323,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                 std::vector<uint32_t> reduce_rt_args = {
                     start_tiles_read,     // start_tiles_read
                     start_tiles_to_read,  // start_tiles_to_read
-                    dir};                 // dir
+                    dir,                  // direction
+                    worker_id,            // worker_id
+                    num_workers};         // num_workers
                 tt::tt_metal::SetRuntimeArgs(program, sender_reduce_kernel_id, {core}, reduce_rt_args);
             }
         }

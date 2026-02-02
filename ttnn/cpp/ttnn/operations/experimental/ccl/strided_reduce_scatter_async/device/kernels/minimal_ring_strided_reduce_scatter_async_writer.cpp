@@ -313,12 +313,15 @@ void kernel_main() {
                                 last_mm_core_idx,
                                 effective_chunk_piece_size,
                                 effective_chunk_width_in_tiles);
+                            DPRINT << "tiles_to_read: " << tiles_to_read << ENDL();
 
                             while (tiles_to_read > 0) {
                                 uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                                 tiles_to_read -= tiles_to_read_in_this_step;
 
+                                DPRINT << "Waiting for tiles in the output buffer" << ENDL();
                                 cb_wait_front(cb_output_id, tile_granularity);
+                                DPRINT << "OK done waiting for tiles in the output buffer" << ENDL();
                                 size_t l1_read_addr = get_read_ptr(cb_output_id);
 
                                 for (uint32_t k = 0; k < tiles_to_read_in_this_step; ++k) {
@@ -367,6 +370,7 @@ void kernel_main() {
                                 }
                                 noc_async_write_barrier();
                                 cb_pop_front(cb_output_id, tile_granularity);
+                                DPRINT << "tiles_read" << ENDL();
                             }
 
                             // Signal reader after all tiles for this chunk_piece_idx are written
@@ -379,6 +383,7 @@ void kernel_main() {
                                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                                 noc_async_writes_flushed();
                             } else {
+                                // probably not needed
                                 noc_async_write_barrier();
                             }
                             DPRINT << "chunk_piece_idx: " << chunk_piece_idx << " done" << ENDL();
