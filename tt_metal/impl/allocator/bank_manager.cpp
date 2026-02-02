@@ -576,9 +576,9 @@ Statistics BankManager::get_statistics(BankManager::AllocatorDependencies::Alloc
     return alloc ? alloc->get_statistics() : Statistics();
 }
 
-void BankManager::begin_high_water_mark_tracking() {
+void BankManager::begin_high_water_mark_tracking(DeviceAddr initial_high_water_mark) {
     tracking_high_water_mark_ = true;
-    high_water_mark_ = 0;
+    high_water_mark_ = initial_high_water_mark;
 }
 
 DeviceAddr BankManager::end_high_water_mark_tracking() {

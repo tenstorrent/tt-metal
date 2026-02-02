@@ -125,7 +125,7 @@ public:
     void reset_size(AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
 
     // High water mark tracking for bottom-up allocations
-    void begin_high_water_mark_tracking();
+    void begin_high_water_mark_tracking(DeviceAddr initial_high_water_mark = 0);
     DeviceAddr end_high_water_mark_tracking();
     DeviceAddr get_high_water_mark() const;
 

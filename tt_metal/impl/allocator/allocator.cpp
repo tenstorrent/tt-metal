@@ -359,7 +359,18 @@ void AllocatorImpl::mark_allocations_safe() {
 
 void AllocatorImpl::begin_dram_high_water_mark_tracking() {
     std::lock_guard<std::mutex> lock(mutex_);
-    dram_manager_->begin_high_water_mark_tracking();
+
+    // Calculate the initial high water mark from existing bottom-up DRAM buffers
+    DeviceAddr initial_high_water_mark = 0;
+    for (const auto* buffer : allocated_buffers_) {
+        if (buffer->buffer_type() == BufferType::DRAM && buffer->bottom_up()) {
+            // Calculate end address: address + size_per_bank
+            DeviceAddr end_address = buffer->address() + buffer->aligned_size_per_bank();
+            initial_high_water_mark = std::max(initial_high_water_mark, end_address);
+        }
+    }
+
+    dram_manager_->begin_high_water_mark_tracking(initial_high_water_mark);
 }
 
 DeviceAddr AllocatorImpl::end_dram_high_water_mark_tracking() {
