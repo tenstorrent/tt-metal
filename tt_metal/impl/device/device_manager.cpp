@@ -661,7 +661,6 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
                 i);
         }
     }
-    */
 
         if (this->using_fast_dispatch_ && !devices_to_activate.empty()) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs_);
