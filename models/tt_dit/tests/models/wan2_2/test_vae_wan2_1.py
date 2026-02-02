@@ -1039,12 +1039,14 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         ((1, 8), 0, 1, 1),
         ((1, 4), 1, 0, 1),
         ((4, 8), 0, 1, 4),
+        ((4, 32), 0, 1, 2),
     ],
     ids=[
         "2x4_h0_w1",
         "1x8_h0_w1",
         "1x4_h1_w0",
         "4x8_h0_w1",
+        "bh_quad_4x32_h0_w1",
     ],
     indirect=["mesh_device"],
 )

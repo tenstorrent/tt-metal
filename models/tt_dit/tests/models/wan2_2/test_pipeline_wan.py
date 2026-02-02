@@ -23,12 +23,14 @@ from ....utils.test import line_params, ring_params
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
         "2x4sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
+        "bh_quad_4x32_sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -91,6 +93,7 @@ def test_pipeline_inference(
     )
 
     # Run inference
+    seed = 42
     with torch.no_grad():
         result = pipeline(
             prompt=prompt,
@@ -98,6 +101,7 @@ def test_pipeline_inference(
             width=width,
             num_frames=num_frames,
             num_inference_steps=num_inference_steps,
+            seed=seed,
         )
 
     # Check output
@@ -120,7 +124,14 @@ def test_pipeline_inference(
     # Remove batch dimension
     frames = frames[0]
     try:
-        export_to_video(frames, "wan_output_video.mp4", fps=16)
+        import os
+
+        if os.environ.get("OMPI_COMM_WORLD_RANK") is not None and os.environ.get("OMPI_COMM_WORLD_RANK") != "0":
+            print(
+                f"In an MPI environment and my rank {os.environ.get('OMPI_COMM_WORLD_RANK')} != 0, skipping video export"
+            )
+        else:
+            export_to_video(frames, "wan_output_video.mp4", fps=16)
+            print("✓ Saved video to: wan_output_video.mp4")
     except AttributeError as e:
         print(f"AttributeError: {e}")
-    print("✓ Saved video to: wan_output_video.mp4")

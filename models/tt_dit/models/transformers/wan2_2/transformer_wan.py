@@ -730,6 +730,17 @@ class WanTransformer3DModel:
             proj_out_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
         )
 
-        spatial_1BNI_torch = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BNI)[0])
+        # spatial_1BNI_torch = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BNI)[0])
 
+        mesh_device = spatial_1BNI.device()
+        view = mesh_device.get_view() if ttnn.using_distributed_env() else None
+        coords = list(spatial_1BNI.tensor_topology().mesh_coords())
+        device_tensors = ttnn.get_device_tensors(spatial_1BNI)
+
+        for coord, device_tensor in zip(coords, device_tensors):
+            if view is None or view.is_local(coord):
+                spatial_1BNI_torch = ttnn.to_torch(device_tensor)
+                break
+
+        assert spatial_1BNI_torch is not None, "Failed to get spatial output tensor"
         return spatial_1BNI_torch
