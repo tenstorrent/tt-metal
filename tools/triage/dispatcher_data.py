@@ -59,7 +59,7 @@ class DispatcherCoreData:
     # New watcher/mailbox fields (verbose=1)
     dispatch_mode: str | None = triage_field("Dispatch Mode", verbose=1)
     brisc_noc_id: int | None = triage_field("BRISC NOC", verbose=1)
-    enables: int | None = triage_field("Enables", hex_serializer, verbose=1)
+    enables: str | None = triage_field("Enables", verbose=1)
     subordinate_sync: str | None = triage_field("Subordinate Sync", verbose=1)
     watcher_enabled: bool | None = triage_field("Watcher Enabled", verbose=1)
 
@@ -402,12 +402,33 @@ class DispatcherData:
         try:
             brisc_noc_id = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.brisc_noc_id)
         except Exception:
-            pass
+            log_check_location(
+                location,
+                False,
+                f"failed to read brisc noc id from launch message. {MAILBOX_CORRUPTED_MESSAGE}",
+            )
 
         try:
-            enables = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.enables)
+            enables_val = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.enables)
+            # Format enables like watcher: uppercase = enabled, lowercase = disabled
+            # Tensix: "BNT" (B=BRISC, N=NCRISC, T=TRISC)
+            # ETH Blackhole: "EE" (2 ERISCs)
+            # ETH Wormhole: "E" (1 ERISC)
+            if location.device.get_block_type(location) == "functional_workers":
+                symbols = "BNT"
+            elif location.device.is_blackhole():
+                symbols = "EE"
+            else:
+                symbols = "E"
+            enables = ""
+            for i, sym in enumerate(symbols):
+                enables += sym if (enables_val & (1 << i)) else sym.lower()
         except Exception:
-            pass
+            log_check_location(
+                location,
+                False,
+                f"failed to read enables from launch message. {MAILBOX_CORRUPTED_MESSAGE}",
+            )
 
         try:
             watcher_enable_val = mailboxes.watcher.enable
@@ -427,7 +448,11 @@ class DispatcherData:
                 sync_val = int(mailboxes.subordinate_sync.map[sync_idx])
                 subordinate_sync = self._sync_states.get(sync_val, str(sync_val))
         except Exception:
-            pass
+            log_check_location(
+                location,
+                False,
+                f"failed to read subordinate sync from mailboxes. {MAILBOX_CORRUPTED_MESSAGE}",
+            )
 
         # Construct the firmware path from the build_env instead of relative paths
         # This ensures we get the correct firmware path for this device and build config
