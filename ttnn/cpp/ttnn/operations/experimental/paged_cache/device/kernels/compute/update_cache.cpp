@@ -33,8 +33,11 @@ void kernel_main() {
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
-    // Untilize input (single row, no uninit needed)
-    compute_kernel_lib::untilize<Wt, in_cb, untilized_in_cb, true, false>(1);
+    using namespace compute_kernel_lib::tilize;
+    using namespace compute_kernel_lib::untilize;
+
+    // Untilize input (standalone operation)
+    compute_kernel_lib::untilize<Wt, in_cb, untilized_in_cb>(1);
 
     reconfig_data_format_srca(in_cb, cache_cb);
     pack_reconfig_data_format(untilized_in_cb, untilized_cache_cb);
@@ -45,15 +48,16 @@ void kernel_main() {
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-        // Wait on writer to update block. Tilize.
-        compute_kernel_lib::tilize<true, true, false, true>(
-            untilized_cache2_cb,  // new_cb (input)
-            Wt,                   // block_w
-            out_cb,               // output CB
-            1,                    // num_blocks (1 iteration)
-            1,                    // subblock_h (default)
-            cache_cb              // old_cb (for DT restoration)
-        );
+        // Wait on writer to update block. Tilize with DT reconfiguration.
+        compute_kernel_lib::tilize<
+            Wt,                   // block_width_tiles
+            untilized_cache2_cb,  // input_cb
+            out_cb,               // output_cb
+            InitUninitMode::InitAndUninit,
+            WaitMode::Wait,
+            TilizeSpeedMode::Standard,
+            cache_cb>(  // reconfig_from_cb (for DT restoration)
+            1);         // num_blocks
 
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }

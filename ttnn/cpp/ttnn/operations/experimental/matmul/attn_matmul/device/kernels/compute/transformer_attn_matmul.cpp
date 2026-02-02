@@ -71,14 +71,15 @@ void kernel_main() {
                 pack_reconfig_data_format(cb_intermed1, out_cb_id);
 
                 // tilize CB::intermed2 and write to CBIndex::c_16
-                compute_kernel_lib::tilize<true, true, false, true>(
-                    cb_intermed2,  // new_cb (input)
-                    onetile,       // block_w (1 tile)
-                    out_cb_id,     // output CB
-                    1,             // num_blocks (1 iteration)
-                    1,             // subblock_h (default)
-                    cb_in1         // old_cb (for DT restoration)
-                );
+                using namespace compute_kernel_lib::tilize;
+                compute_kernel_lib::tilize<
+                    onetile,
+                    cb_intermed2,
+                    out_cb_id,
+                    InitUninitMode::InitAndUninit,
+                    WaitMode::Wait,
+                    TilizeSpeedMode::Standard,
+                    cb_in1>(1);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);

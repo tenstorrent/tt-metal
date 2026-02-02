@@ -20,17 +20,29 @@
 #define DEBUG_PRINT 0
 
 #ifdef SPLIT_READER
-template <bool init_tilize = true, bool uninit_tilize = true>
+template <
+    uint32_t in_block_w,
+    uint32_t in_cb_id,
+    uint32_t out_cb_id,
+    compute_kernel_lib::tilize::InitUninitMode init_uninit_mode =
+        compute_kernel_lib::tilize::InitUninitMode::InitAndUninit>
 __attribute__((noinline)) void tilize_in(
 #else
-template <bool init_tilize = true, bool uninit_tilize = true>
+template <
+    uint32_t in_block_w,
+    uint32_t in_cb_id,
+    uint32_t out_cb_id,
+    compute_kernel_lib::tilize::InitUninitMode init_uninit_mode =
+        compute_kernel_lib::tilize::InitUninitMode::InitAndUninit>
 void tilize_in(
 #endif
-    uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
+    uint32_t in_num_subblocks) {
     // Replaced manual tilize loop with unified helper function
     // This uses fast tilize with DT variant (fast_tilize_init_with_dt)
-    compute_kernel_lib::tilize<init_tilize, uninit_tilize, true, true>(
-        in_cb_id, in_block_w, out_cb_id, in_num_subblocks);
+    using namespace compute_kernel_lib::tilize;
+    compute_kernel_lib::
+        tilize<in_block_w, in_cb_id, out_cb_id, init_uninit_mode, WaitMode::Wait, TilizeSpeedMode::Fast>(
+            in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
@@ -273,12 +285,18 @@ void kernel_main() {
                             pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                             pack_reconfig_l1_acc(0);
                         }
-                        tilize_in<true, !split_reader || split_reader_cb_shared>(
-                            in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+                        using namespace compute_kernel_lib::tilize;
+                        constexpr auto mode1 = (split_reader && !split_reader_cb_shared)
+                                                   ? InitUninitMode::InitOnly
+                                                   : InitUninitMode::InitAndUninit;
+                        tilize_in<in0_block_w, in0_pretilize_cb_id, tilized_in0_cb_id, mode1>(in0_num_subblocks_read);
 
                         if constexpr (split_reader && !split_reader_cb_shared) {
-                            tilize_in<false, true>(
-                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+                            tilize_in<
+                                in0_block_w,
+                                in0_cb_second_reader_id,
+                                tilized_in0_cb_id,
+                                InitUninitMode::UninitOnly>(in0_num_subblocks_read_last);
                         }
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
@@ -303,14 +321,19 @@ void kernel_main() {
                     }
 
                     if constexpr (!activation_reuse) {
-                        tilize_in<true, !split_reader>(
-                            in0_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+                        using namespace compute_kernel_lib::tilize;
+                        constexpr auto mode2 = split_reader ? InitUninitMode::InitOnly : InitUninitMode::InitAndUninit;
+                        tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, mode2>(in0_num_subblocks_read);
                     }
 
                     if constexpr (split_reader) {
                         if constexpr (!activation_reuse) {
-                            tilize_in<false, true>(
-                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+                            using namespace compute_kernel_lib::tilize;
+                            tilize_in<
+                                in0_block_w,
+                                in0_cb_second_reader_id,
+                                tilized_in0_cb_id,
+                                InitUninitMode::UninitOnly>(in0_num_subblocks_read_last);
                         } else {
                             PACK((get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr = tilized_cb_start_address));
                             tilize_in_reuse_split_reader<

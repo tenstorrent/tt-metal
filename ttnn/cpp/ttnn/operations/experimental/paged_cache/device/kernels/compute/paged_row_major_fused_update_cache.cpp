@@ -40,14 +40,15 @@ void kernel_main() {
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
         // Wait on writer to update block. Tilize.
-        compute_kernel_lib::tilize<true, true, false, true>(
-            untilized_cache2_cb,  // new_cb (input)
-            Wt,                   // block_w
-            out_cb,               // output CB
-            1,                    // num_blocks (1 iteration)
-            1,                    // subblock_h (default)
-            cache_cb              // old_cb (for DT restoration)
-        );
+        using namespace compute_kernel_lib::tilize;
+        compute_kernel_lib::tilize<
+            Wt,
+            untilized_cache2_cb,
+            out_cb,
+            InitUninitMode::InitAndUninit,
+            WaitMode::Wait,
+            TilizeSpeedMode::Standard,
+            cache_cb>(1);
 
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }

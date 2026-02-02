@@ -10,17 +10,19 @@
 
 /**
  * @file untilize_helpers.hpp
- * @brief Single unified untilize function with automatic dispatch
+ * @brief Single unified untilize function with improved type-safe API
  *
- * Provides ONE function that handles all untilize operations:
- * - Small widths (≤ DEST limit): Uses pack_untilize (hardware-accelerated, preferred)
- * - Large widths (> DEST limit) with integer types: Uses block-based pack_untilize (hardware-accelerated)
- * - Large widths (> DEST limit) with non-integer types: Uses standard untilize (fallback)
+ * This library provides a unified untilize function with:
+ * - Compile-time type safety via template parameters for CB IDs
+ * - Descriptive enum-based configuration instead of boolean flags
+ * - Simplified runtime parameters (only num_blocks)
+ * - Automatic dispatch based on width and data format
  *
- * DEST register capacity is automatically detected via dest_helpers.hpp.
- *
- * Data format is automatically detected from JIT-generated header:
- * - unpack_dst_format[cb_id] contains the DataFormat enum value
+ * Dispatch logic:
+ * - block_width_tiles <= DEST capacity: Pack untilize (hardware-accelerated, single-pass)
+ * - block_width_tiles > DEST capacity AND integer type: Block-based pack untilize (multi-pass)
+ * - block_width_tiles > DEST capacity AND non-integer: Standard untilize (fallback for floats)
+ * - WaitMode::WaitUpfront: Always use standard untilize (pack_untilize doesn't support this)
  *
  * IMPORTANT: Requires compute kernel hardware initialization.
  * Call compute_kernel_hw_startup() before using.
@@ -30,19 +32,50 @@
  *
  *   compute_kernel_hw_startup(cb_in, cb_out);
  *
- *   // Small width - automatically uses pack_untilize (hardware-accelerated)
- *   compute_kernel_lib::untilize<4>(cb_in, cb_out, num_rows);
+ *   // Simple untilize
+ *   compute_kernel_lib::untilize<4, cb_in, cb_out>(num_rows);
  *
- *   // Large width with integer - automatically uses block-based pack_untilize (hardware-accelerated)
- *   compute_kernel_lib::untilize<32>(cb_in, cb_out, num_rows);
- *
- *   // Large width with float - automatically uses standard untilize (fallback)
- *   compute_kernel_lib::untilize<32>(cb_in, cb_out, num_rows);
+ *   // With wait upfront (GroupNorm pattern)
+ *   using namespace compute_kernel_lib::untilize;
+ *   compute_kernel_lib::untilize<10, cb_in, cb_out,
+ *       InitUninitMode::InitAndUninit,
+ *       WaitMode::WaitUpfront>(num_rows);
  */
 
 namespace compute_kernel_lib {
 
 // get_dest_limit() and DEST_AUTO_LIMIT are provided by dest_helpers.hpp
+
+// Nested namespace for untilize-specific types to avoid conflicts
+namespace untilize {
+
+/**
+ * @brief Controls init/uninit behavior for untilize operations
+ *
+ * Use InitAndUninit for standalone operations (default).
+ * Use InitOnly/UninitOnly/Neither when chaining multiple untilize calls.
+ */
+enum class InitUninitMode : uint8_t {
+    InitAndUninit,  // Default - standalone operation (calls both init and uninit)
+    InitOnly,       // First in a sequence (calls init only)
+    UninitOnly,     // Last in a sequence (calls uninit only)
+    Neither         // Middle of a sequence (calls neither)
+};
+
+/**
+ * @brief Controls input synchronization (wait strategy) for untilize operations
+ *
+ * Wait (default) - wait per block/row (standard behavior)
+ * WaitUpfront - wait for all tiles upfront before processing (GroupNorm pattern)
+ * NoWait - caller manages synchronization (currently unused, reserved for future)
+ */
+enum class WaitMode : uint8_t {
+    Wait,         // Default - wait per block/row
+    WaitUpfront,  // Wait for all tiles upfront before processing
+    NoWait        // Caller manages synchronization (reserved for future use)
+};
+
+}  // namespace untilize
 
 // =============================================================================
 // Data Format Detection - Automatic Detection
@@ -79,7 +112,7 @@ constexpr bool is_integer_format() {
 #else
     // If header not available, assume integer for wide widths (conservative for pack_untilize)
     // This ensures wide integer tensors get hardware acceleration
-    return true;  // Changed to true - prefer pack_untilize block-based path
+    return false;  // Prefer pack_untilize block-based path
 #endif
 }
 
@@ -106,208 +139,80 @@ constexpr uint32_t compute_num_blocks(uint32_t total_width, uint32_t max_block_w
     return total_width;  // fallback: 1 tile per block
 }
 
-// =============================================================================
-// Unified Init/Uninit Functions
-// =============================================================================
-
 /**
- * @brief Initialize untilize - automatically dispatches based on width and data format
- *
- * @tparam tile_width Width in tiles
- * @param icb Input circular buffer ID
- * @param ocb Output circular buffer ID (only used for pack path)
- */
-template <uint32_t tile_width, uint32_t icb, uint32_t ocb = 0>
-ALWI void untilize_init() {
-    constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
-    constexpr bool is_integer = is_integer_format<icb>();
-
-    if constexpr (tile_width > dest_limit && is_integer) {
-        // Integer with wide width - use block-based pack_untilize
-        constexpr uint32_t num_blocks = compute_num_blocks(tile_width, dest_limit);
-        constexpr uint32_t block_width = tile_width / num_blocks;
-        pack_untilize_init<block_width, tile_width>(icb, ocb);
-    } else if constexpr (tile_width > dest_limit) {
-        // Non-integer with wide width - use standard untilize
-        ::untilize_init(icb);
-    } else {
-        // Narrow width - use pack_untilize
-        pack_untilize_init<tile_width, tile_width>(icb, ocb);
-    }
-}
-
-/**
- * @brief Uninitialize untilize - automatically dispatches based on width and data format
- *
- * @tparam tile_width Width in tiles
- * @param icb Input circular buffer ID (only used for standard path)
- * @param ocb Output circular buffer ID (only used for pack path)
- */
-template <uint32_t tile_width, uint32_t icb = 0, uint32_t ocb = 0>
-ALWI void untilize_uninit() {
-    constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
-    constexpr bool is_integer = is_integer_format<icb>();
-
-    if constexpr (tile_width > dest_limit && !is_integer) {
-        // Non-integer with wide width - standard untilize path
-        ::untilize_uninit(icb);
-    } else {
-        // Pack untilize path (for narrow widths or wide integers)
-        pack_untilize_uninit(ocb);
-    }
-}
-
-// =============================================================================
-// Single Unified Untilize Function
-// =============================================================================
-
-/**
- * @brief Unified untilize function - automatically dispatches based on width, data format, and pattern
+ * @brief Unified untilize function with type-safe API and automatic dispatch
  *
  * This is the ONLY untilize function you need. Provide the tile width and CB IDs,
  * and the optimal implementation is selected at compile time based on:
  * 1. Auto-detected DEST register capacity
  * 2. Auto-detected data format (integer vs non-integer)
  * 3. Width constraints
+ * 4. Wait mode (per-row vs upfront)
  *
  * Dispatch logic:
- * - tile_width <= DEST capacity: Pack untilize (hardware-accelerated, single-pass)
- * - tile_width > DEST capacity AND integer type: Block-based pack untilize (hardware-accelerated, multi-pass)
- * - tile_width > DEST capacity AND non-integer: Standard untilize (fallback for float types)
- * - wait_upfront=true: Always use standard untilize (pack_untilize doesn't support this pattern)
+ * - block_width_tiles <= DEST capacity: Pack untilize (hardware-accelerated, single-pass)
+ * - block_width_tiles > DEST capacity AND integer type: Block-based pack untilize (multi-pass)
+ * - block_width_tiles > DEST capacity AND non-integer: Standard untilize (fallback for floats)
+ * - WaitMode::WaitUpfront: Always use standard untilize (pack_untilize doesn't support this)
  *
  * Integer data types (Int8, UInt8, UInt16, Int32, UInt32) can use block-based pack_untilize
  * even for wide widths, providing hardware acceleration by splitting the row into blocks
  * that each fit within DEST register limits.
  *
- * @tparam tile_width Width in tiles (number of tiles per row)
- * @tparam icb_id Input circular buffer ID (tiled data) - must be compile-time constant
- * @tparam ocb_id Output circular buffer ID (row-major data) - must be compile-time constant
- * @tparam init Call init before processing (default: true)
- * @tparam uninit Call uninit after processing (default: true)
- * @tparam wait_upfront Wait for all tiles upfront instead of per-row (default: false)
- *                      Used by GroupNorm and similar operations.
- *                      Forces use of standard untilize path.
+ * @tparam block_width_tiles Width in tiles (number of tiles per row) - FIRST template param
+ * @tparam input_cb Input circular buffer ID (tiled data) - must be compile-time constant
+ * @tparam output_cb Output circular buffer ID (row-major data) - must be compile-time constant
+ * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
+ * @tparam wait_mode Controls input synchronization strategy (default: Wait)
  *
- * @param num_rows Number of rows to process
- * @param block_rt_dim Row height per block in tiles (default: 1)
- *                     Only used in pack_untilize path for multi-row blocks.
- *                     Standard path always processes single-row blocks.
- * @param total_tiles Total tiles to wait for when wait_upfront=true (default: 0 = auto-compute)
+ * @param num_blocks Number of rows/blocks to process
  *
  * @example
- *   // Width 4 - uses pack_untilize (hardware-accelerated, single-pass)
+ *   // Simple untilize (width 4, auto-dispatches to pack_untilize)
  *   untilize<4, cb_in, cb_out>(10);
  *
  * @example
- *   // Width 32 with INT32 - automatically uses block-based pack_untilize (hardware-accelerated)
+ *   // Width 32 with INT32 - automatically uses block-based pack_untilize
  *   untilize<32, cb_in, cb_out>(1);
  *
  * @example
- *   // Width 32 with Float16 - automatically uses standard untilize (fallback)
+ *   // Width 32 with Float16 - automatically uses standard untilize
  *   untilize<32, cb_in, cb_out>(10);
  *
  * @example
- *   // Wait-upfront pattern (forces standard untilize regardless of width/type)
- *   untilize<10, cb_in, cb_out, true, true, true>(num_rows, 1, total_tiles);
+ *   // Wait-upfront pattern (GroupNorm) - forces standard untilize
+ *   using namespace compute_kernel_lib::untilize;
+ *   untilize<10, cb_in, cb_out,
+ *            InitUninitMode::InitAndUninit,
+ *            WaitMode::WaitUpfront>(num_rows);
+ *
+ * @example
+ *   // Init only (first in sequence)
+ *   using namespace compute_kernel_lib::untilize;
+ *   untilize<width, cb_in, cb_out,
+ *            InitUninitMode::InitOnly>(num_blocks);
+ *
+ * @example
+ *   // Neither init nor uninit (middle of sequence)
+ *   using namespace compute_kernel_lib::untilize;
+ *   untilize<width, cb_in, cb_out,
+ *            InitUninitMode::Neither>(num_blocks);
+ *
+ * @example
+ *   // Uninit only (last in sequence)
+ *   using namespace compute_kernel_lib::untilize;
+ *   untilize<width, cb_in, cb_out,
+ *            InitUninitMode::UninitOnly>(num_blocks);
  */
 template <
-    uint32_t tile_width,
-    uint32_t icb_id,
-    uint32_t ocb_id,
-    bool init = true,
-    bool uninit = true,
-    bool wait_upfront = false>
-ALWI void untilize(uint32_t num_rows, uint32_t block_rt_dim = 1, uint32_t total_tiles = 0) {
-    constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
-    constexpr bool is_integer = is_integer_format<icb_id>();
-
-    // wait_upfront pattern always uses standard path because pack_untilize doesn't support it
-    if constexpr (wait_upfront || (tile_width > dest_limit && !is_integer)) {
-        // =================================================================
-        // STANDARD UNTILIZE PATH
-        // Used when:
-        // - wait_upfront=true (GroupNorm pattern)
-        // - Width exceeds DEST AND non-integer type (float fallback)
-        // =================================================================
-
-        if constexpr (init) {
-            ::untilize_init(icb_id);
-        }
-
-        if constexpr (wait_upfront) {
-            // Wait for all tiles upfront
-            uint32_t wait_amount = (total_tiles > 0) ? total_tiles : (tile_width * num_rows);
-            cb_wait_front(icb_id, wait_amount);
-        }
-
-        for (uint32_t r = 0; r < num_rows; ++r) {
-            if constexpr (!wait_upfront) {
-                cb_wait_front(icb_id, tile_width);
-            }
-            cb_reserve_back(ocb_id, tile_width);
-            untilize_block(icb_id, tile_width, ocb_id);
-            cb_push_back(ocb_id, tile_width);
-            cb_pop_front(icb_id, tile_width);
-        }
-
-        if constexpr (uninit) {
-            ::untilize_uninit(icb_id);
-        }
-
-    } else if constexpr (tile_width > dest_limit && is_integer) {
-        // =================================================================
-        // BLOCK-BASED PACK UNTILIZE PATH
-        // Used for integer types with width exceeding DEST limit
-        // Splits wide rows into multiple blocks that each fit in DEST
-        // Provides hardware acceleration for wide integer tensors
-        // =================================================================
-
-        constexpr uint32_t num_blocks = compute_num_blocks(tile_width, dest_limit);
-        constexpr uint32_t block_width = tile_width / num_blocks;
-
-        if constexpr (init) {
-            pack_untilize_init<block_width, tile_width>(icb_id, ocb_id);
-        }
-
-        for (uint32_t r = 0; r < num_rows; ++r) {
-            cb_reserve_back(ocb_id, tile_width);
-            for (uint32_t b = 0; b < num_blocks; ++b) {
-                cb_wait_front(icb_id, block_width);
-                pack_untilize_block<block_width, tile_width>(icb_id, 1, ocb_id, b);
-                cb_pop_front(icb_id, block_width);
-            }
-            cb_push_back(ocb_id, tile_width);
-        }
-
-        if constexpr (uninit) {
-            pack_untilize_uninit(ocb_id);
-        }
-
-    } else {
-        // =================================================================
-        // PACK UNTILIZE PATH (SINGLE-PASS)
-        // Used when width fits in DEST (optimal for all data types)
-        // =================================================================
-
-        if constexpr (init) {
-            pack_untilize_init<tile_width, tile_width>(icb_id, ocb_id);
-        }
-
-        const uint32_t tiles_per_row = tile_width * block_rt_dim;
-
-        for (uint32_t r = 0; r < num_rows; ++r) {
-            cb_wait_front(icb_id, tiles_per_row);
-            cb_reserve_back(ocb_id, tiles_per_row);
-            pack_untilize_block<tile_width, tile_width>(icb_id, block_rt_dim, ocb_id, 0);
-            cb_pop_front(icb_id, tiles_per_row);
-            cb_push_back(ocb_id, tiles_per_row);
-        }
-
-        if constexpr (uninit) {
-            pack_untilize_uninit(ocb_id);
-        }
-    }
-}
+    uint32_t block_width_tiles,
+    uint32_t input_cb,
+    uint32_t output_cb,
+    untilize::InitUninitMode init_uninit_mode = untilize::InitUninitMode::InitAndUninit,
+    untilize::WaitMode wait_mode = untilize::WaitMode::Wait>
+ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib
+
+// Include implementation
+#include "untilize_helpers.inl"

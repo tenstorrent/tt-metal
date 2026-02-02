@@ -198,16 +198,9 @@ void kernel_main() {
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                             // Tilize row-major patches with variable row alignment
                             // Reader produces row pages, which may not be tile aligned
-                            compute_kernel_lib::tilize(
-                                cb_vol2col_rm,     // Input CB (row-major)
-                                matmul_K_t,        // Block width (tiles per output row)
-                                cb_vol2col_tiled,  // Output CB (tiled)
-                                matmul_M_t,        // Number of tile rows to produce
-                                1,                 // subblock_h (default)
-                                0,                 // old_icb (not used)
-                                0,                 // input_count (use variable row mode)
-                                num_patches        // total_rows (enables variable row alignment)
-                            );
+                            compute_kernel_lib::tilize<matmul_K_t, cb_vol2col_rm, cb_vol2col_tiled>(
+                                matmul_M_t,
+                                compute_kernel_lib::tilize::NonTileAlignedCBWaitConfig::total_batched(num_patches));
 
                             // Apply matmul blocks
                             cb_wait_front(cb_vol2col_tiled, patch_tiles);
@@ -263,9 +256,10 @@ void kernel_main() {
                                 }
 
                                 // After reduction (if any), untilize result using helper
-                                compute_kernel_lib::
-                                    untilize<matmul_N_t, cb_matmul_interm_tiled, cb_matmul_result_rm, true, true, true>(
-                                        matmul_M_t, 1, output_tiles);
+                                compute_kernel_lib::untilize<matmul_N_t, cb_matmul_interm_tiled, cb_matmul_result_rm>(
+                                    matmul_M_t,
+                                    compute_kernel_lib::untilize::InitUninitMode::InitAndUninit,
+                                    compute_kernel_lib::untilize::WaitMode::WaitUpfront);
                             }
                         }
                     }
