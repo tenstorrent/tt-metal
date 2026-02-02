@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Aggregator kernel for reduce_to_all operation
-// Replaces heavyweight mux with lightweight packet forwarding.
+// forwarder kernel for reduce_to_all operation
+// Replaces mux with lightweight packet forwarding.
 //
 // Design:
 // - Single direction-agnostic kernel, same code for BRISC (FWD) and NCRISC (BWD)
@@ -11,13 +11,13 @@
 // - BRISC and NCRISC run on same core but access different L1 regions (via buffer_offset)
 // - Non-blocking: forwards packets as soon as they arrive (no batching)
 //
-// Memory layout per aggregator core:
+// Memory layout per forwarder core:
 // - BRISC region (offset 0): [slot0][slot1][slot2][slot3] (R1 + R2 slots interleaved)
 // - NCRISC region (offset N*slot_size): same layout for opposite direction
 //
 // Semaphore protocol (bit-packed):
 // - Single semaphore per direction, each client signals with (1 << slot_idx)
-// - Aggregator polls semaphore and forwards any ready slots immediately
+// - forwarder polls semaphore and forwards any ready slots immediately
 // - Maximum 32 clients per direction (limited by 32-bit semaphore width)
 //
 // Workflow:
@@ -42,7 +42,7 @@ static constexpr uint32_t ct_slot_size = get_compile_time_arg_val(1);    // Byte
 static constexpr uint32_t ct_all_sent_mask = (1u << ct_total_slots) - 1;
 
 // Maximum clients is 32 (one bit per client in 32-bit semaphore)
-static_assert(ct_total_slots <= 32, "Aggregator supports at most 32 slots (limited by 32-bit semaphore)");
+static_assert(ct_total_slots <= 32, "forwarder supports at most 32 slots (limited by 32-bit semaphore)");
 
 void kernel_main() {
     // =========================================================================
@@ -78,7 +78,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
     uint32_t sent_mask = 0;
 
-    DPRINT << "Aggregator started: buffer_base=" << buffer_base << ", offset=" << buffer_offset << ", sem=" << sem_addr
+    DPRINT << "forwarder started: buffer_base=" << buffer_base << ", offset=" << buffer_offset << ", sem=" << sem_addr
            << ", total_slots=" << ct_total_slots << ", all_sent_mask=" << ct_all_sent_mask << ENDL();
 
     {
@@ -95,7 +95,7 @@ void kernel_main() {
                 uint32_t slot = __builtin_ctz(pending);
                 uint32_t slot_addr = my_buffer_base + (slot * ct_slot_size);
 
-                DPRINT << "Aggregator forwarding slot " << slot << " at addr " << slot_addr << ENDL();
+                DPRINT << "forwarder forwarding slot " << slot << " at addr " << slot_addr << ENDL();
 
                 fabric_connection.wait_for_empty_write_slot();
                 fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, ct_slot_size);
@@ -106,7 +106,7 @@ void kernel_main() {
         } while (sent_mask != ct_all_sent_mask);
     }
 
-    DPRINT << "Aggregator complete: sent_mask=" << sent_mask << ENDL();
+    DPRINT << "forwarder complete: sent_mask=" << sent_mask << ENDL();
 
     // =========================================================================
     // Cleanup

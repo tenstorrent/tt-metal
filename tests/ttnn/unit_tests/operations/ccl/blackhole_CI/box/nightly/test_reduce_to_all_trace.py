@@ -146,8 +146,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     layout = ttnn.TILE_LAYOUT
     tile = ttnn.Tile((8, 32))
 
-    # mux cores (aggregator uses only 2 cores - 1 per link)
-    mux_cores = [ttnn.CoreCoord(6, 8), ttnn.CoreCoord(6, 9)]
+    # forwarder uses only 2 cores - 1 per link
+    forwarder_cores = [ttnn.CoreCoord(6, 8), ttnn.CoreCoord(6, 9)]
 
     # Shard config
     shard_grid = ttnn.CoreRangeSet(
@@ -268,8 +268,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
         mesh_mapper=mesh_mapper2,
     )
 
-    # Create aggregator scratch tensor for aggregator cores
-    # The aggregator needs 8 slots per core (4 FWD + 4 BWD), each slot = header + L + MS packed
+    # Create forwarder scratch tensor for forwarder cores
+    # The forwarder needs 8 slots per core (4 FWD + 4 BWD), each slot = header + L + MS packed
     # Slot layout: [header (256B reserved)] [L payload] [MS payload]
     # - Header: 256B reserved (actual header is smaller, but generous padding avoids overflow)
     # - L: 4 tiles * 256B = 1024B (128 elements width / 32 tile_width = 4 tiles)
@@ -281,21 +281,19 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
     # - Payload: 160 * 4 = 640 columns (L+MS per slot * 4 slots per round direction * 2 rounds)
     # - Header padding: 256B * 8 slots / 2 bytes = 1024 elements = 128 columns (at 8 rows)
     # Total shard width: 640 + 128 = 768 columns
-    aggregator_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(mux_cores[0], mux_cores[1])})
-    aggregator_shard_spec = ttnn.ShardSpec(
-        aggregator_shard_grid, [8, 160 * 4 + 256 * 4], ttnn.ShardOrientation.ROW_MAJOR
+    forwarder_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(forwarder_cores[0], forwarder_cores[1])})
+    forwarder_shard_spec = ttnn.ShardSpec(forwarder_shard_grid, [8, 160 * 4 + 256 * 4], ttnn.ShardOrientation.ROW_MAJOR)
+    forwarder_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, forwarder_shard_spec
     )
-    aggregator_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, aggregator_shard_spec
-    )
-    aggregator_scratch_shape = [8, (160 * 4 + 256 * 4) * 2]  # shard_width * 2 cores
-    aggregator_scratch_tensor = ttnn.from_torch(
-        torch.zeros(aggregator_scratch_shape, dtype=torch.bfloat16),
+    forwarder_scratch_shape = [8, (160 * 4 + 256 * 4) * 2]  # shard_width * 2 cores
+    forwarder_scratch_tensor = ttnn.from_torch(
+        torch.zeros(forwarder_scratch_shape, dtype=torch.bfloat16),
         device=submesh_device,
         layout=layout,
         tile=tile,
         dtype=dtype,
-        memory_config=aggregator_mem_config,
+        memory_config=forwarder_mem_config,
         mesh_mapper=mesh_mapper2,
     )
 
@@ -344,8 +342,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
         bw_intermediate_tensor=bw_intermediate,
         coord_intermediate_tensor=coord_intermediate,
         topology=topology,
-        input_mux_cores=mux_cores,
-        aggregator_scratch_tensor=aggregator_scratch_tensor,
+        input_forwarder_cores=forwarder_cores,
+        forwarder_scratch_tensor=forwarder_scratch_tensor,
     )
     ttnn.synchronize_device(submesh_device)
 
@@ -382,8 +380,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
             bw_intermediate_tensor=bw_intermediate,
             coord_intermediate_tensor=coord_intermediate,
             topology=topology,
-            input_mux_cores=mux_cores,
-            aggregator_scratch_tensor=aggregator_scratch_tensor,
+            input_forwarder_cores=forwarder_cores,
+            forwarder_scratch_tensor=forwarder_scratch_tensor,
         )
         if use_barrier:
             _ = ttnn.experimental.all_gather_async(
@@ -416,8 +414,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device, use_barrier):
             bw_intermediate_tensor=bw_intermediate,
             coord_intermediate_tensor=coord_intermediate,
             topology=topology,
-            input_mux_cores=mux_cores,
-            aggregator_scratch_tensor=aggregator_scratch_tensor,
+            input_forwarder_cores=forwarder_cores,
+            forwarder_scratch_tensor=forwarder_scratch_tensor,
         )
         if use_barrier:
             _ = ttnn.experimental.all_gather_async(

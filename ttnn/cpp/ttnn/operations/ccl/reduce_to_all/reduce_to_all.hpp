@@ -23,8 +23,8 @@ struct ExecuteReduceToAll {
         const std::optional<ttnn::Tensor>& optional_fw_intermediate_tensor = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_bw_intermediate_tensor = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_coord_intermediate_tensor = std::nullopt,
-        const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_aggregator_scratch_tensor = std::nullopt);
+        const std::optional<std::vector<ttnn::CoreCoord>>& input_forwarder_cores = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_forwarder_scratch_tensor = std::nullopt);
 };
 
 ttnn::TensorSpec reduce_to_all_tensor_spec(
@@ -32,7 +32,7 @@ ttnn::TensorSpec reduce_to_all_tensor_spec(
     const ttnn::Tensor& input_tensor_ms,  // Combined: col 0 = max, col 1 = sum
     float scale_fp32,
     tt::tt_fabric::Topology topology,
-    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores);
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_forwarder_cores);
 
 }  // namespace operations::ccl
 

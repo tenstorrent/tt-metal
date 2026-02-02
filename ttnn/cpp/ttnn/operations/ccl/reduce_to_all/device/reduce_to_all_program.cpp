@@ -1,26 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-///
-// Simplified reduce_to_all program factory.
 //
-// KEY SIMPLIFICATIONS:
-// 1. Only 2 dataflow kernels (reader + writer) instead of 4
-// 2. All kernels run on shard cores only (no extra worker cores needed)
-// 3. Full zero-copy for input, neighbor data, and output via CB aliasing
-// 4. Single compute kernel handles both R1 and R2 reductions
-//
-// ARCHITECTURE:
-// - Each shard core runs: reader, compute, writer
-// - Reader: signals local input ready, waits for neighbor data
-// - Compute: R1 reduction, then R2 reduction, then final normalization
-// - Writer: sends local data to R1 neighbor, sends R1 result to R2 neighbor
-//
-// ZERO-COPY DATA PATHS:
-// - Local input: CB aliased to input tensor shard (no memcpy on read)
-// - R1 neighbor: CB aliased to R1 MeshBuffer (direct fabric write)
-// - R2 neighbor: CB aliased to R2 MeshBuffer (direct fabric write)
-// - Final output: CB aliased to output tensor shard (no memcpy on write)
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -67,7 +48,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // These are MeshDevice tensors created ONCE at the mesh level, so they have
     // the SAME L1 address on ALL devices. This is critical for fabric sends!
     //
-    // For the simplified 2-kernel design:
     // - R1 receive buffer: Use fw_intermediate_tensor (for R1 neighbor data)
     // - R2 receive buffer: Use bw_intermediate_tensor (for R2 neighbor data)
     //
@@ -145,7 +125,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_l.dtype());
 
     // =========================================================================
-    // Define CB indices (combined MS format)
+    // Define CB indices
     // =========================================================================
     // R1 local input (aliased to input tensor shard)
     constexpr auto cb_local_l = tt::CBIndex::c_0;
@@ -177,7 +157,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     constexpr auto cb_sync_writer_done = tt::CBIndex::c_12;
 
     // =========================================================================
-    // Create Circular Buffers (combined MS format)
+    // Create Circular Buffers
     // =========================================================================
     // Local input CBs - ALIASED to input tensor shards
     tt::tt_metal::CircularBufferConfig cb_local_l_config =
@@ -289,12 +269,12 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     CreateCircularBuffer(program, shard_grid, cb_sync_writer_done_config);
 
     // =========================================================================
-    // Setup aggregator cores and config
+    // Setup forwarder cores and config
     // =========================================================================
-    // Aggregator replaces heavyweight mux with lightweight packet forwarding.
-    // - 2 aggregator cores (1 per link) instead of 4 mux cores
-    // - Each aggregator core runs BRISC (FWD) and NCRISC (BWD)
-    // - Workers write complete packets to aggregator slots, aggregator forwards via fabric
+    // forwarder replaces mux with lightweight packet forwarding.
+    // - 2 forwarder cores (1 per link)
+    // - Each forwarder core runs BRISC (FWD) and NCRISC (BWD)
+    // - Workers write complete packets to forwarder slots, forwarder forwards via fabric
     constexpr auto num_links = 2;
     const uint32_t num_workers_per_link = num_shard_cores / num_links;
 
@@ -303,16 +283,17 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // packets_per_round = workers of same type per link = num_workers_per_link / 2
     const uint32_t packets_per_round = num_workers_per_link / 2;
 
-    // Use first 2 cores from input_mux_cores (renamed to aggregator cores) or default
-    std::vector<CoreCoord> aggregator_cores = {CoreCoord(2, 0), CoreCoord(2, 1)};
-    if (operation_attributes.input_mux_cores.has_value() && operation_attributes.input_mux_cores.value().size() >= 2) {
-        // Use first 2 cores only (aggregator needs 2, not 4 like mux)
-        aggregator_cores = {
-            operation_attributes.input_mux_cores.value()[0], operation_attributes.input_mux_cores.value()[1]};
+    // Use first 2 cores from input_forwarder_cores (renamed to forwarder cores) or default
+    std::vector<CoreCoord> forwarder_cores = {CoreCoord(2, 0), CoreCoord(2, 1)};
+    if (operation_attributes.input_forwarder_cores.has_value() &&
+        operation_attributes.input_forwarder_cores.value().size() == 2) {
+        forwarder_cores = {
+            operation_attributes.input_forwarder_cores.value()[0],
+            operation_attributes.input_forwarder_cores.value()[1]};
     }
-    CoreRangeSet aggregator_core_range_set = CoreRangeSet(aggregator_cores);
+    CoreRangeSet forwarder_core_range_set = CoreRangeSet(forwarder_cores);
 
-    // Aggregator buffer layout per core (68KB total, shared by BRISC and NCRISC):
+    // forwarder buffer layout per core (68KB total, shared by BRISC and NCRISC):
     // - BRISC region (offset 0): [FWD R1 slots][FWD R2 slots] - 4 slots total
     // - NCRISC region (offset 4*slot_size): [BWD R1 slots][BWD R2 slots] - 4 slots total
     // Each slot = packet header + L + S + M (slot_size already computed and L1-aligned above)
@@ -320,40 +301,40 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     const uint32_t brisc_buffer_size = slots_per_direction * slot_size;
     const uint32_t ncrisc_buffer_offset = brisc_buffer_size;  // NCRISC starts after BRISC region
 
-    // Allocate aggregator buffer in L1 on aggregator cores
+    // Allocate forwarder buffer in L1 on forwarder cores
     // Use scratch tensor if provided (preferred - decouples from semaphore allocations)
     // Otherwise fall back to l1_unreserved_base_address (legacy behavior)
-    uint32_t aggregator_buffer_base = 0;
-    if (tensor_args.optional_aggregator_scratch_tensor.has_value()) {
-        const auto& scratch_tensor = tensor_args.optional_aggregator_scratch_tensor.value();
-        aggregator_buffer_base = scratch_tensor.buffer()->address();
+    uint32_t forwarder_buffer_base = 0;
+    if (tensor_args.optional_forwarder_scratch_tensor.has_value()) {
+        const auto& scratch_tensor = tensor_args.optional_forwarder_scratch_tensor.value();
+        forwarder_buffer_base = scratch_tensor.buffer()->address();
     } else {
         const uint32_t l1_unreserved_base_address =
             mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-        aggregator_buffer_base = l1_unreserved_base_address;
+        forwarder_buffer_base = l1_unreserved_base_address;
     }
 
-    // Create semaphores for aggregator synchronization (2 per aggregator core)
+    // Create semaphores for forwarder synchronization (2 per forwarder core)
     // Non-blocking design: Each semaphore is bit-packed (1 << slot_idx) per worker.
-    // Aggregator polls mask, forwards ready slots immediately without blocking per-round.
+    // forwarder polls mask, forwards ready slots immediately without blocking per-round.
     // Layout: [link0_fwd, link0_bwd, link1_fwd, link1_bwd]
     // Maximum 32 slots per direction (limited by 32-bit semaphore width).
-    std::vector<uint32_t> aggregator_sem_addrs;
+    std::vector<uint32_t> forwarder_sem_addrs;
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
-        CoreCoord agg_core = aggregator_cores[link_idx];
-        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd
-        aggregator_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd
+        CoreCoord agg_core = forwarder_cores[link_idx];
+        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd
+        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd
     }
 
-    // Aggregator compile-time args (non-blocking design)
-    // Aggregator polls bit-packed semaphore and forwards any ready slots immediately.
-    std::vector<uint32_t> aggregator_ct_args = {
+    // forwarder compile-time args (non-blocking design)
+    // forwarder polls bit-packed semaphore and forwards any ready slots immediately.
+    std::vector<uint32_t> forwarder_ct_args = {
         slots_per_direction,  // 0: Total slots per direction (R1 + R2 combined)
         slot_size,            // 1: Total packet size (header + L + MS)
     };
 
     // =========================================================================
-    // Create kernel compile-time args (combined MS format)
+    // Create kernel compile-time args
     // =========================================================================
 
     // Reader compile-time args
@@ -374,9 +355,9 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         ms_tile_size_bytes,     // 11 - size of MS data to copy
     };
 
-    // Writer compile-time args (simplified for aggregator - no mux config needed)
-    // The writer builds packets and writes them to aggregator slots via NoC,
-    // then increments aggregator semaphore. Much simpler than mux client protocol.
+    // Writer compile-time args
+    // The writer builds packets and writes them to forwarder slots via NoC,
+    // then increments forwarder semaphore.
     std::vector<uint32_t> writer_ct_args = {
         Sq_chunk_t,             // 0
         vDHt,                   // 1
@@ -388,12 +369,12 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         l1_alignment,           // 7
         input_page_size_bytes,  // 8
         cb_sync,                // 9: Compute -> Writer (R1 ready)
-        slot_size,              // 10: Aggregator slot size (L1-aligned)
+        slot_size,              // 10: forwarder slot size (L1-aligned)
         cb_sync_writer_done,    // 11: Writer -> Compute (done reading R1 results)
     };
 
     // Compute compile-time args (15 total for optimized compute)
-    // Layout matches compute_optimized.cpp expectations:
+    // Layout matches compute.cpp expectations:
     // - 0-1: Local input CBs (L, MS)
     // - 2-3: R1 neighbor CBs
     // - 4-5: R1 result CBs
@@ -429,13 +410,13 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/writer_aggregator.cpp",
+        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/writer.cpp",
         shard_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
     [[maybe_unused]] auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute_optimized.cpp",
+        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/compute.cpp",
         shard_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
@@ -445,28 +426,28 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             .compile_args = compute_ct_args,
         });
 
-    // Create aggregator kernels (BRISC for FWD, NCRISC for BWD)
+    // Create forwarder kernels (BRISC for FWD, NCRISC for BWD)
     // Both use the same kernel code - direction is implicit in fabric connection rt args
-    auto aggregator_brisc_kernel = tt::tt_metal::CreateKernel(
+    auto forwarder_brisc_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/aggregator.cpp",
-        aggregator_core_range_set,
+        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/forwarder.cpp",
+        forwarder_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
-            .compile_args = aggregator_ct_args,
+            .compile_args = forwarder_ct_args,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
-    auto aggregator_ncrisc_kernel = tt::tt_metal::CreateKernel(
+    auto forwarder_ncrisc_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/aggregator.cpp",
-        aggregator_core_range_set,
+        "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/forwarder.cpp",
+        forwarder_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
-            .compile_args = aggregator_ct_args,
+            .compile_args = forwarder_ct_args,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
     // =========================================================================
@@ -481,49 +462,49 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     std::vector<CoreCoord> cores_link_1(shard_cores.begin(), shard_cores.begin() + cores_per_link);
     std::vector<CoreCoord> cores_link_2(shard_cores.begin() + cores_per_link, shard_cores.end());
 
-    // Set aggregator runtime args (BRISC for FWD, NCRISC for BWD)
+    // Set forwarder runtime args (BRISC for FWD, NCRISC for BWD)
     // Non-blocking design: single semaphore per direction (bit-packed by workers)
     const auto src_node_id = mesh_device->get_fabric_node_id(device_coordinate);
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
-        CoreCoord agg_core = aggregator_cores[link_idx];
+        CoreCoord agg_core = forwarder_cores[link_idx];
 
-        // Semaphore addresses for this aggregator core (2 per core: fwd, bwd)
-        uint32_t fwd_sem = aggregator_sem_addrs[link_idx * 2 + 0];
-        uint32_t bwd_sem = aggregator_sem_addrs[link_idx * 2 + 1];
+        // Semaphore addresses for this forwarder core (2 per core: fwd, bwd)
+        uint32_t fwd_sem = forwarder_sem_addrs[link_idx * 2 + 0];
+        uint32_t bwd_sem = forwarder_sem_addrs[link_idx * 2 + 1];
 
         // BRISC runtime args (FWD direction)
         // buffer_offset = 0 (BRISC uses first region)
         std::vector<uint32_t> brisc_rt_args = {
-            aggregator_buffer_base,  // 0: buffer_base
-            0,                       // 1: buffer_offset (BRISC uses offset 0)
-            fwd_sem,                 // 2: semaphore (bit-packed by workers)
+            forwarder_buffer_base,  // 0: buffer_base
+            0,                      // 1: buffer_offset (BRISC uses offset 0)
+            fwd_sem,                // 2: semaphore (bit-packed by workers)
         };
         tt::tt_fabric::append_fabric_connection_rt_args(
             src_node_id, forward_node_id, link_idx, program, agg_core, brisc_rt_args);
-        tt::tt_metal::SetRuntimeArgs(program, aggregator_brisc_kernel, agg_core, brisc_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, forwarder_brisc_kernel, agg_core, brisc_rt_args);
 
         // NCRISC runtime args (BWD direction)
         // buffer_offset = ncrisc_buffer_offset (NCRISC uses second region)
         std::vector<uint32_t> ncrisc_rt_args = {
-            aggregator_buffer_base,  // 0: buffer_base
-            ncrisc_buffer_offset,    // 1: buffer_offset (NCRISC uses offset after BRISC region)
-            bwd_sem,                 // 2: semaphore (bit-packed by workers)
+            forwarder_buffer_base,  // 0: buffer_base
+            ncrisc_buffer_offset,   // 1: buffer_offset (NCRISC uses offset after BRISC region)
+            bwd_sem,                // 2: semaphore (bit-packed by workers)
         };
         tt::tt_fabric::append_fabric_connection_rt_args(
             src_node_id, backward_node_id, link_idx, program, agg_core, ncrisc_rt_args);
-        tt::tt_metal::SetRuntimeArgs(program, aggregator_ncrisc_kernel, agg_core, ncrisc_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, forwarder_ncrisc_kernel, agg_core, ncrisc_rt_args);
     }
 
     // Set kernel runtime args per worker core
     std::vector<CoreCoord> all_cores;
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
         const auto& cores_for_link = (link_idx == 0) ? cores_link_1 : cores_link_2;
-        CoreCoord agg_core = aggregator_cores[link_idx];
+        CoreCoord agg_core = forwarder_cores[link_idx];
         CoreCoord agg_core_noc = mesh_device->worker_core_from_logical_core(agg_core);
 
-        // Semaphore addresses for this aggregator core (2 per core: fwd, bwd)
-        uint32_t fwd_sem = aggregator_sem_addrs[link_idx * 2 + 0];
-        uint32_t bwd_sem = aggregator_sem_addrs[link_idx * 2 + 1];
+        // Semaphore addresses for this forwarder core (2 per core: fwd, bwd)
+        uint32_t fwd_sem = forwarder_sem_addrs[link_idx * 2 + 0];
+        uint32_t bwd_sem = forwarder_sem_addrs[link_idx * 2 + 1];
 
         // Track slot indices for R1 and R2 within each direction
         // Each direction has slots_per_direction slots: [R1 slots: 0..ppr-1][R2 slots: ppr..2*ppr-1]
@@ -568,11 +549,9 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                 r2_dst_node_id = forward_node_id;
             }
 
-            // Calculate aggregator slot addresses based on direction
-            uint32_t r1_slot_base =
-                is_type_a ? aggregator_buffer_base : (aggregator_buffer_base + ncrisc_buffer_offset);
-            uint32_t r2_slot_base =
-                is_type_a ? (aggregator_buffer_base + ncrisc_buffer_offset) : aggregator_buffer_base;
+            // Calculate forwarder slot addresses based on direction
+            uint32_t r1_slot_base = is_type_a ? forwarder_buffer_base : (forwarder_buffer_base + ncrisc_buffer_offset);
+            uint32_t r2_slot_base = is_type_a ? (forwarder_buffer_base + ncrisc_buffer_offset) : forwarder_buffer_base;
 
             // Calculate actual slot addresses (R1 slots first, then R2 slots in each region)
             // Type A R1: FWD region slot r1_slot_idx
@@ -603,14 +582,14 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                 r2_recv_sem.address(),                // 9: R2 neighbor semaphore
                 core_noc.x,                           // 10: current_core_x
                 core_noc.y,                           // 11: current_core_y
-                // Aggregator-specific args
-                agg_core_noc.x,  // 12: aggregator_core_x
-                agg_core_noc.y,  // 13: aggregator_core_y
-                r1_slot_addr,    // 14: R1 aggregator slot address
-                r1_agg_sem,      // 15: R1 aggregator semaphore
+                // forwarder-specific args
+                agg_core_noc.x,  // 12: forwarder_core_x
+                agg_core_noc.y,  // 13: forwarder_core_y
+                r1_slot_addr,    // 14: R1 forwarder slot address
+                r1_agg_sem,      // 15: R1 forwarder semaphore
                 r1_slot_idx,     // 16: R1 slot index (for bit-packed signaling: 1 << r1_slot_idx)
-                r2_slot_addr,    // 17: R2 aggregator slot address
-                r2_agg_sem,      // 18: R2 aggregator semaphore
+                r2_slot_addr,    // 17: R2 forwarder slot address
+                r2_agg_sem,      // 18: R2 forwarder semaphore
                 r2_slot_idx,     // 19: R2 slot index (for bit-packed signaling: 1 << r2_slot_idx)
             };
 
@@ -649,7 +628,7 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        // Get the input tensors (combined MS format)
+        // Get the input tensors
         const auto& input_tensor_l = tensor_args.input_tensor_l;
         const auto& input_tensor_ms = tensor_args.input_tensor_ms;
 
@@ -658,7 +637,7 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
         const auto& intermediate_tensors = tensor_return_value[0];
 
         for (const auto& core : shared_variables.worker_cores) {
-            // Simplified reader runtime args:
+            // reader runtime args:
             // 0: R1 neighbor semaphore, 1: R2 neighbor semaphore
             // 2: R1 receive buffer, 3: R2 receive buffer
             auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel);
@@ -668,13 +647,13 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
             reader_runtime_args[2] = intermediate_tensors[0].buffer()->address();  // R1 recv buffer
             reader_runtime_args[3] = intermediate_tensors[1].buffer()->address();  // R2 recv buffer
 
-            // Simplified writer runtime args layout (combined MS format):
+            // writer runtime args layout:
             // 0: input L, 1: input MS
             // 2: R1 mesh_id (static), 3: R1 chip_id (static)
             // 4: R1 dest addr, 5: R1 sem addr
             // 6: R2 mesh_id (static), 7: R2 chip_id (static)
             // 8: R2 dest addr, 9: R2 sem addr
-            // 10-19: aggregator args (static)
+            // 10-19: forwarder args (static)
             auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel);
             auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
             writer_runtime_args[0] = input_tensor_l.buffer()->address();

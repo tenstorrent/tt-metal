@@ -18,8 +18,8 @@ ttnn::Tensor ExecuteReduceToAll::invoke(
     const std::optional<ttnn::Tensor>& optional_fw_intermediate_tensor,
     const std::optional<ttnn::Tensor>& optional_bw_intermediate_tensor,
     const std::optional<ttnn::Tensor>& optional_coord_intermediate_tensor,
-    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
-    const std::optional<ttnn::Tensor>& optional_aggregator_scratch_tensor) {
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_forwarder_cores,
+    const std::optional<ttnn::Tensor>& optional_forwarder_scratch_tensor) {
     // Returns normalized L tensor (L/S division is fused in compute kernel)
     // Extract final output tensor from [1][0] (second array = final outputs, first tensor = L)
     auto result = ttnn::prim::reduce_to_all(
@@ -31,8 +31,8 @@ ttnn::Tensor ExecuteReduceToAll::invoke(
         optional_fw_intermediate_tensor,
         optional_bw_intermediate_tensor,
         optional_coord_intermediate_tensor,
-        input_mux_cores,
-        optional_aggregator_scratch_tensor);
+        input_forwarder_cores,
+        optional_forwarder_scratch_tensor);
     return result.at(1).at(0);  // Final outputs [1], normalized L [0]
 }
 
@@ -41,9 +41,9 @@ ttnn::TensorSpec reduce_to_all_tensor_spec(
     const ttnn::Tensor& input_tensor_ms,  // Combined: col 0 = max, col 1 = sum
     const float scale_fp32,
     const tt::tt_fabric::Topology topology,
-    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_forwarder_cores) {
     ReduceToAllOp::operation_attributes_t attrs{
-        scale_fp32, topology, input_mux_cores, {input_tensor_l.tensor_spec(), input_tensor_ms.tensor_spec()}};
+        scale_fp32, topology, input_forwarder_cores, {input_tensor_l.tensor_spec(), input_tensor_ms.tensor_spec()}};
     ReduceToAllOp::tensor_args_t tensors{input_tensor_l, input_tensor_ms, std::nullopt};
 
     // Extract final output spec from [1][0] (second array = final outputs, first spec = L)

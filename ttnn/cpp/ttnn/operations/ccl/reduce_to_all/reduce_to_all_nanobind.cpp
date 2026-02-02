@@ -32,7 +32,7 @@ void bind_reduce_to_all(nb::module_& mod) {
                 fw_intermediate_tensor (ttnn.Tensor, optional): Optional fw intermediate tensor.
                 bw_intermediate_tensor (ttnn.Tensor, optional): Optional bw intermediate tensor.
                 coord_intermediate_tensor (ttnn.Tensor, optional): Optional coord intermediate tensor.
-                input_mux_cores (List[ttnn.CoreCoord], optional): List of mux cores
+                input_forwarder_cores (List[ttnn.CoreCoord], optional): List of forwarder cores
 
            Returns:
                 ttnn.Tensor output_tensor_l: the normalized output tensor for values (L/S).
@@ -69,8 +69,8 @@ void bind_reduce_to_all(nb::module_& mod) {
                const std::optional<ttnn::Tensor>& fw_intermediate_tensor,
                const std::optional<ttnn::Tensor>& bw_intermediate_tensor,
                const std::optional<ttnn::Tensor>& coord_intermediate_tensor,
-               const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
-               const std::optional<ttnn::Tensor>& aggregator_scratch_tensor,
+               const std::optional<std::vector<ttnn::CoreCoord>>& input_forwarder_cores,
+               const std::optional<ttnn::Tensor>& forwarder_scratch_tensor,
                const tt::tt_fabric::Topology topology) {
                 return self(
                     input_tensor_l,
@@ -81,8 +81,8 @@ void bind_reduce_to_all(nb::module_& mod) {
                     fw_intermediate_tensor,
                     bw_intermediate_tensor,
                     coord_intermediate_tensor,
-                    input_mux_cores,
-                    aggregator_scratch_tensor);
+                    input_forwarder_cores,
+                    forwarder_scratch_tensor);
             },
             nb::arg("input_tensor_l").noconvert(),
             nb::arg("input_tensor_ms").noconvert(),
@@ -92,8 +92,8 @@ void bind_reduce_to_all(nb::module_& mod) {
             nb::arg("fw_intermediate_tensor") = nb::none(),
             nb::arg("bw_intermediate_tensor") = nb::none(),
             nb::arg("coord_intermediate_tensor") = nb::none(),
-            nb::arg("input_mux_cores") = nb::none(),
-            nb::arg("aggregator_scratch_tensor") = nb::none(),
+            nb::arg("input_forwarder_cores") = nb::none(),
+            nb::arg("forwarder_scratch_tensor") = nb::none(),
             nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Ring)});
 
     mod.def(
@@ -103,6 +103,6 @@ void bind_reduce_to_all(nb::module_& mod) {
         nb::arg("input_tensor_ms"),
         nb::arg("scale_fp32"),
         nb::arg("topology"),
-        nb::arg("input_mux_cores") = nb::none());
+        nb::arg("input_forwarder_cores") = nb::none());
 }
 }  // namespace ttnn::operations::ccl

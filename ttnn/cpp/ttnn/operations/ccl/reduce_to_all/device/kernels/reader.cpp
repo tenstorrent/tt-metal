@@ -1,9 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-///
-// Simplified reader kernel for reduce_to_all operation (combined MS format).
-// This kernel runs on SHARD CORES (data cores) - no mux connection needed.
 //
 // ZERO-COPY OPTIMIZATIONS:
 // 1. LOCAL INPUT: CB aliased to input tensor shard (set_globally_allocated_address)
@@ -18,10 +15,6 @@
 //    - CB aliasing doesn't support offsets, so MS CB is regular CB
 //    - After packet arrives, we memcpy MS from buffer to its CB
 //    - MS is tiny (~512 bytes) - negligible overhead
-//
-// WHY SEPARATE BUFFERS FOR R1 AND R2:
-//    R1 and R2 have DIFFERENT neighbors (different senders).
-//    Race condition if shared buffer (see detailed comments in original).
 
 #include "api/dataflow/dataflow_api.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
