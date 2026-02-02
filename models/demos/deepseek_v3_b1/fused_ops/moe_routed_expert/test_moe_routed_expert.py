@@ -9,7 +9,8 @@ Tests the fused operation:
 - Input: [1, 7168] tensor on sender core (outside compute grid)
 - Mcast from sender to 8 compute cores
 - Each compute core: [1, 7168] @ [7168, 32] -> [1, 32] + sigmoid
-- Output: [1, 256] width-sharded across 8 compute cores
+- Gather outputs back to sender core
+- Output: [1, 256] on sender core
 """
 
 import torch
@@ -90,14 +91,36 @@ def test_moe_routed_expert(device):
     )
     logger.info(f"Created weights tensor with shard shape ({K}, {N_per_core}) on {num_cores} cores")
 
-    # Output tensor: width-sharded across 8 cores
+    # Intermediate tensor: matmul output width-sharded across compute cores
     # Each core produces [1, N_per_core] = [1, 32]
-    output_shard_spec = ttnn.ShardSpec(
+    intermediate_shard_spec = ttnn.ShardSpec(
         compute_core_grid,
         (M, N_per_core),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, intermediate_shard_spec
+    )
+
+    torch_intermediate_zeros = torch.zeros((M, N), dtype=torch.bfloat16)
+    ttnn_intermediate = ttnn.from_torch(
+        torch_intermediate_zeros,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=intermediate_mem_config,
+        tile=tile_1x32,
+    )
+    logger.info(f"Created intermediate tensor with shard shape ({M}, {N_per_core}) on {num_cores} cores")
+
+    # Output tensor: sharded on sender core (gathered from compute cores)
+    # Full output [1, N] = [1, 256] on single core
+    output_shard_spec = ttnn.ShardSpec(
+        input_core_grid,  # Same core as input (sender core)
+        (M, N),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
     torch_output_zeros = torch.zeros((M, N), dtype=torch.bfloat16)
     ttnn_output = ttnn.from_torch(
@@ -108,13 +131,14 @@ def test_moe_routed_expert(device):
         memory_config=output_mem_config,
         tile=tile_1x32,
     )
-    logger.info(f"Created output tensor with shard shape ({M}, {N_per_core}) on {num_cores} cores")
+    logger.info(f"Created output tensor with shard shape ({M}, {N}) on sender core ({input_core.x}, {input_core.y})")
 
     # Run fused operation
     logger.info("Running MoE routed expert fused operation...")
     ttnn_result = MoeRoutedExpert.op(
         ttnn_input,
         ttnn_weights,
+        ttnn_intermediate,
         ttnn_output,
         fp32_dest_acc_en=True,
     )

@@ -5,11 +5,12 @@
 """
 MoE Routed Expert fused operation.
 
-This implements the MoE routed expert computation (will be extended with more fusions):
+This implements the MoE routed expert computation:
 - Input: [1, K] tensor on sender core (outside compute grid)
 - Mcast to N compute cores
 - Each core computes: matmul + activation
-- Output: width-sharded across compute cores
+- Gather outputs back to sender core
+- Output: [1, K*N_per_core] tensor on sender core
 """
 
 import ttnn
@@ -50,20 +51,22 @@ class MoeRoutedExpert:
     def op(
         input_tensor,
         matmul_weights_tensor,
+        intermediate_tensor,
         output_tensor,
         fp32_dest_acc_en=True,
     ):
         """
-        Execute mcast + matmul + sigmoid fused operation using generic_op.
+        Execute mcast + matmul + sigmoid + gather fused operation using generic_op.
 
         Args:
             input_tensor: Input tensor [1, K] sharded on single sender core (outside matmul grid)
             matmul_weights_tensor: Matmul weights [K, N] width-sharded on matmul cores
-            output_tensor: Pre-allocated output tensor [1, N] width-sharded on matmul cores
+            intermediate_tensor: Intermediate tensor [1, N] width-sharded on matmul cores (matmul output)
+            output_tensor: Pre-allocated output tensor [1, N] sharded on sender core
             fp32_dest_acc_en: Whether to enable FP32 accumulation (default True for precision)
 
         Returns:
-            Output tensor with mcast + matmul + sigmoid result
+            Output tensor with mcast + matmul + sigmoid + gather result
         """
         # Get tensor properties
         input_shape = input_tensor.shape
@@ -135,7 +138,8 @@ class MoeRoutedExpert:
         input_cb = 0  # Input tensor (sharded on sender core)
         matmul_input_cb = 1  # Mcast destination CB (receives input on all cores)
         matmul_weights_cb = 2  # Matmul weights (sharded on all cores)
-        matmul_output_cb = 3  # Matmul output (maps to output tensor)
+        matmul_output_cb = 3  # Matmul output (intermediate on compute cores)
+        gather_output_cb = 4  # Gathered output (tensor-backed on sender core)
 
         # CB descriptors
         # CB 0: Input tensor (sharded on sender core)
@@ -159,14 +163,42 @@ class MoeRoutedExpert:
         # CB 2: Matmul weights (sharded on all matmul cores)
         matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_weights_cb, matmul_weights_tensor)
 
-        # CB 3: Matmul output (maps to output tensor)
-        matmul_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_output_cb, output_tensor)
+        # CB 3: Matmul output (intermediate on compute cores, tensor-backed)
+        matmul_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_output_cb, intermediate_tensor)
+
+        # CB 4: Gathered output (tensor-backed on sender core)
+        gather_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gather_output_cb, output_tensor)
 
         # Mcast page counts
         mcast_src_num_pages = num_tiles_k
         mcast_dst_num_pages = num_tiles_k
 
-        # Named compile-time args for NCRISC (mcast receiver + matmul reader)
+        # Gather parameters
+        # Sender core NOC coordinates (receiver for gather)
+        sender_core_noc = device.worker_core_from_logical_core(sender_core)
+
+        # Gather data size: each compute core sends matmul_out_w tiles
+        intermediate_tile = intermediate_tensor.get_tile()
+        intermediate_tile_size = intermediate_tile.get_tile_size(data_format)
+        gather_data_size_bytes = matmul_out_w * intermediate_tile_size
+
+        # Number of senders per NOC (for semaphore counting)
+        # All compute cores are senders, split by NOC
+        # For simplicity, assume all senders use noc0 (row_major=true)
+        gather_noc0_num_senders = num_matmul_cores
+        gather_noc1_num_senders = 0
+
+        # Gather semaphore IDs
+        gather_noc0_receiver_semaphore_id = 2
+        gather_noc1_receiver_semaphore_id = 3
+
+        # Gather output: all tiles from all cores
+        gather_dst_num_pages = matmul_out_w * num_matmul_cores
+
+        # Gather receiver data address (L1 address of output tensor buffer on sender core)
+        gather_receiver_data_addr = output_tensor.buffer_address()
+
+        # Named compile-time args for NCRISC (mcast receiver + matmul reader + gather sender)
         ncrisc_named_compile_time_args = [
             # Mcast sender sharded buffer setup (for sender core)
             ("mcast_src_cb", input_cb),
@@ -180,9 +212,22 @@ class MoeRoutedExpert:
             ("matmul_in1", matmul_weights_cb),
             ("matmul_k_num_tiles", num_tiles_k),
             ("matmul_out_w", matmul_out_w),
+            # Gather sender args (compute cores send to sender core)
+            ("gather_dest_noc_x", sender_core_noc.x),
+            ("gather_dest_noc_y", sender_core_noc.y),
+            ("gather_data_size_bytes", gather_data_size_bytes),
+            ("gather_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
+            ("gather_src_cb", matmul_output_cb),
+            ("gather_src_num_pages", matmul_out_w),
+            ("gather_sender_grid_start_x", matmul_start.x),
+            ("gather_sender_grid_start_y", matmul_start.y),
+            ("gather_sender_grid_end_x", matmul_end.x),
+            ("gather_sender_grid_end_y", matmul_end.y),
+            ("gather_row_major", 0),  # Column-major grid
+            ("gather_receiver_data_addr", gather_receiver_data_addr),
         ]
 
-        # Named compile-time args for BRISC (mcast sender)
+        # Named compile-time args for BRISC (mcast sender + gather receiver)
         brisc_named_compile_time_args = [
             # Mcast sender args
             ("mcast_dest_noc_start_x", mcast_dest_noc_start_core.x),
@@ -197,6 +242,13 @@ class MoeRoutedExpert:
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_src_num_pages", mcast_src_num_pages),
             ("mcast_is_part_of_receiver_grid", mcast_is_part_of_receiver_grid),
+            # Gather receiver args (sender core receives from compute cores)
+            ("gather_noc0_num_senders", gather_noc0_num_senders),
+            ("gather_noc1_num_senders", gather_noc1_num_senders),
+            ("gather_noc0_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
+            ("gather_noc1_receiver_semaphore_id", gather_noc1_receiver_semaphore_id),
+            ("gather_dst_cb", gather_output_cb),
+            ("gather_dst_num_pages", gather_dst_num_pages),
         ]
 
         # Named compile-time args for TRISC (matmul + sigmoid compute)
@@ -222,6 +274,18 @@ class MoeRoutedExpert:
 
         mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
             id=mcast_data_receiver_semaphore_id,
+            core_ranges=full_device_grid,
+            initial_value=0,
+        )
+
+        gather_noc0_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=gather_noc0_receiver_semaphore_id,
+            core_ranges=full_device_grid,
+            initial_value=0,
+        )
+
+        gather_noc1_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=gather_noc1_receiver_semaphore_id,
             core_ranges=full_device_grid,
             initial_value=0,
         )
@@ -269,15 +333,18 @@ class MoeRoutedExpert:
                 matmul_input_cb_descriptor,
                 matmul_weights_cb_descriptor,
                 matmul_output_cb_descriptor,
+                gather_output_cb_descriptor,
             ],
             semaphores=[
                 mcast_sender_semaphore_descriptor,
                 mcast_receiver_semaphore_descriptor,
+                gather_noc0_semaphore_descriptor,
+                gather_noc1_semaphore_descriptor,
             ],
         )
 
         # Execute generic op
-        io_tensors = [input_tensor, matmul_weights_tensor, output_tensor]
+        io_tensors = [input_tensor, matmul_weights_tensor, intermediate_tensor, output_tensor]
         output = ttnn.generic_op(io_tensors, program_descriptor)
 
         return output
