@@ -43,6 +43,10 @@ class TTNNModule:
         self._model_config = model_config if model_config is not None else {}
 
     def __call__(self, *args, **kwds):
+        if self.device_state is not None and "forward_mesh" not in self.__dir__():
+            print(f"Warning: Module {self.module_name} has device state set but no forward_mesh method.")
+        elif self.device_state is not None:
+            return TENSOR_RUN_IMPLEMENTATION.module_run_mesh(self, *args, **kwds)
         return TENSOR_RUN_IMPLEMENTATION.module_run(self, *args, **kwds)
 
     def preprocess_weights(self):

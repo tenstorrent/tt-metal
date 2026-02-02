@@ -112,8 +112,9 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
                     value = getattr(current_obj, attr_name)
                 except Exception as e:
                     continue
-                if isinstance(value, TTNNModule):
-                    _initialize_module_on_device(value, device, device_init)
+                if isinstance(value, (nn.Module, TTNNModule)):
+                    if isinstance(value, TTNNModule):
+                        _initialize_module_on_device(value, device, device_init)
                     _set_device_recursive(value)
                 if isinstance(value, dict):
                     for k, v in value.items():
