@@ -16,6 +16,28 @@ import ttnn
 
 
 @dataclass
+class PerCoreCompileTimeDescriptor:
+    """
+    Descriptor for a compile-time arg with unique values per core.
+
+    Unlike UnifiedCompileTimeCoreDescriptor which uses a single value for all cores
+    in a range, this allows specifying different values for each individual core.
+
+    Use case: When each core needs a unique compile-time value (e.g., bank_id, vc)
+    that cannot be computed from grid position (e.g., scattered non-rectangular grids).
+
+    Args:
+        named_compile_time_arg: Name of the compile-time arg (string)
+        core_values: List of (CoreCoord, value) tuples specifying the value for each core
+        other_value: Value for any cores NOT in the core_values list
+    """
+
+    named_compile_time_arg: str
+    core_values: list  # List of (CoreCoord, value) tuples
+    other_value: int
+
+
+@dataclass
 class UnifiedCompileTimeCoreDescriptor:
     """
     Descriptor for a compile-time arg that varies across core ranges.
@@ -82,6 +104,7 @@ class UnifiedKernelDescriptor:
     trisc_common_runtime_args: list = field(default_factory=list)
     trisc_compute_config: Optional[ttnn.ComputeConfigDescriptor] = None
     unified_compile_time_core_descriptors: list = field(default_factory=list)
+    per_core_compile_time_descriptors: list = field(default_factory=list)  # List of PerCoreCompileTimeDescriptor
 
     def _get_core_range_set(
         self, core_range: Union[ttnn.CoreCoord, ttnn.CoreRange, ttnn.CoreRangeSet]
@@ -107,7 +130,7 @@ class UnifiedKernelDescriptor:
         Returns:
             List of KernelDescriptor objects.
         """
-        if not self.unified_compile_time_core_descriptors:
+        if not self.unified_compile_time_core_descriptors and not self.per_core_compile_time_descriptors:
             # Simple case: no per-core compile-time arg overrides
             return self._get_simple_kernel_descriptors()
 
@@ -165,20 +188,38 @@ class UnifiedKernelDescriptor:
         # Step 1: Enumerate all cores
         all_cores = ttnn.corerange_to_cores(self.core_ranges)
 
-        # Preconvert desc.core_range to CoreRangeSets for all descriptors
+        # Preconvert desc.core_range to CoreRangeSets for all unified descriptors
         desc_core_range_sets = [
             self._get_core_range_set(desc.core_range) for desc in self.unified_compile_time_core_descriptors
         ]
+
+        # Preprocess per-core descriptors into lookup dicts for fast access
+        per_core_lookup = {}  # {arg_name: {(x, y): value, ...}}
+        for desc in self.per_core_compile_time_descriptors:
+            arg_lookup = {}
+            for core_coord, value in desc.core_values:
+                arg_lookup[(core_coord.x, core_coord.y)] = value
+            per_core_lookup[desc.named_compile_time_arg] = (arg_lookup, desc.other_value)
 
         # Step 2: For each core, compute its complete named compile-time args
         core_to_args = {}
         for core_coord in all_cores:
             args = {}
+            # Process unified compile-time core descriptors (range-based)
             for desc, desc_core_range in zip(self.unified_compile_time_core_descriptors, desc_core_range_sets):
                 if desc_core_range.contains(core_coord):
                     args[desc.named_compile_time_arg] = desc.value
                 else:
                     args[desc.named_compile_time_arg] = desc.other_value
+
+            # Process per-core compile-time descriptors (individual core values)
+            core_key = (core_coord.x, core_coord.y)
+            for arg_name, (arg_lookup, other_value) in per_core_lookup.items():
+                if core_key in arg_lookup:
+                    args[arg_name] = arg_lookup[core_key]
+                else:
+                    args[arg_name] = other_value
+
             # Convert to frozen (hashable) form, use (x, y) tuple as key
             core_to_args[(core_coord.x, core_coord.y)] = tuple(sorted(args.items()))
 
