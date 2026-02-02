@@ -25,7 +25,8 @@ void DummyMeshCommandQueue::write_shard_to_device(
     const MeshCoordinate& /*device_coord*/,
     const void* /*src*/,
     const std::optional<BufferRegion>& /*region*/,
-    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/,
+    std::shared_ptr<experimental::PinnedMemory> /*pinned_memory*/) {
     // No-op for inactive rank
 }
 

@@ -54,21 +54,24 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     tt::tt_metal::MetalContext::instance().rtoptions().set_fast_dispatch(fast_dispatch_enabled_);
 
     auto& mesh_device_impl = mesh_device->impl();
-    mesh_device_impl.mesh_command_queues_.clear();
-    mesh_device_impl.mesh_command_queues_.reserve(num_hw_cqs);
+    auto active_mesh_device_impl = dynamic_cast<distributed::ActiveMeshDeviceImpl*>(&mesh_device_impl);
+    if (active_mesh_device_impl) {
+        active_mesh_device_impl->mesh_command_queues_.clear();
+        active_mesh_device_impl->mesh_command_queues_.reserve(num_hw_cqs);
 
-    auto cq_shared_state = std::make_shared<CQSharedState>();
-    cq_shared_state->sub_device_cq_owner.resize(1);
+        auto cq_shared_state = std::make_shared<CQSharedState>();
+        cq_shared_state->sub_device_cq_owner.resize(1);
 
-    for (std::size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-        mesh_device_impl.mesh_command_queues_.push_back(std::make_unique<distributed::FDMeshCommandQueue>(
-            mesh_device,
-            cq_id,
-            mesh_device_impl.dispatch_thread_pool_,
-            mesh_device_impl.reader_thread_pool_,
-            cq_shared_state,
-            std::bind(&distributed::MeshDeviceImpl::lock_api, &mesh_device_impl),
-            mesh_device_impl.active_distributed_context_));
+        for (std::size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            active_mesh_device_impl->mesh_command_queues_.push_back(std::make_unique<distributed::FDMeshCommandQueue>(
+                mesh_device,
+                cq_id,
+                active_mesh_device_impl->dispatch_thread_pool_,
+                active_mesh_device_impl->reader_thread_pool_,
+                cq_shared_state,
+                std::bind(&distributed::ActiveMeshDeviceImpl::lock_api, active_mesh_device_impl),
+                active_mesh_device_impl->active_distributed_context_));
+        }
     }
     fast_dispatch_enabled_ = true;
     num_fd_inits_++;
@@ -83,14 +86,17 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
     uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
     auto& mesh_device_impl = mesh_device->impl();
-    mesh_device_impl.mesh_command_queues_.clear();
-    mesh_device_impl.mesh_command_queues_.reserve(num_hw_cqs);
-    for (std::size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-        mesh_device_impl.mesh_command_queues_.push_back(std::make_unique<distributed::SDMeshCommandQueue>(
-            mesh_device,
-            cq_id,
-            std::bind(&distributed::MeshDeviceImpl::lock_api, &mesh_device_impl),
-            mesh_device_impl.active_distributed_context_));
+    auto active_mesh_device_impl = dynamic_cast<distributed::ActiveMeshDeviceImpl*>(&mesh_device_impl);
+    if (active_mesh_device_impl) {
+        active_mesh_device_impl->mesh_command_queues_.clear();
+        active_mesh_device_impl->mesh_command_queues_.reserve(num_hw_cqs);
+        for (std::size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            active_mesh_device_impl->mesh_command_queues_.push_back(std::make_unique<distributed::SDMeshCommandQueue>(
+                mesh_device,
+                cq_id,
+                std::bind(&distributed::ActiveMeshDeviceImpl::lock_api, active_mesh_device_impl),
+                active_mesh_device_impl->active_distributed_context_));
+        }
     }
     for (const auto& dev : active_devices) {
         for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {

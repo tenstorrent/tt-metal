@@ -30,6 +30,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/program_cache.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <umd/device/types/arch.hpp>
@@ -40,7 +41,6 @@ class Allocator;
 class HWCommandQueue;
 class SubDevice;
 class SystemMemoryManager;
-class DummyDevice;
 
 namespace experimental {
 class DispatchContext;
@@ -76,7 +76,9 @@ class DistributedContext;
 using DeviceIds = std::vector<int>;
 
 class MeshDeviceImpl : public IDevice {
-private:
+    friend class ::tt::tt_metal::experimental::DispatchContext;
+
+protected:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
     private:
@@ -115,6 +117,158 @@ private:
         const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
     };
 
+    static std::shared_ptr<MeshDevice> create_mesh_device(MeshDeviceImpl* mesh_device_impl) {
+        auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice());
+        mesh_device->pimpl_ = std::unique_ptr<MeshDeviceImpl>(mesh_device_impl);
+        return mesh_device;
+    }
+
+    // Distributed context used to synchronize operations done by all ranks on the given mesh device.
+    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+    // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
+    std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
+
+public:
+    MeshDeviceImpl() = default;
+    virtual ~MeshDeviceImpl() = default;
+
+    MeshDeviceImpl(const MeshDeviceImpl&) = delete;
+    MeshDeviceImpl& operator=(const MeshDeviceImpl&) = delete;
+
+    MeshDeviceImpl(MeshDeviceImpl&&) = delete;
+    MeshDeviceImpl& operator=(MeshDeviceImpl&&) = delete;
+
+    // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
+    // If cq_id is not provided, the current command queue is returned from the current thread
+    virtual MeshTraceId begin_mesh_trace(uint8_t cq_id) = 0;
+    virtual void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) = 0;
+    virtual void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) = 0;
+    virtual void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) = 0;
+    virtual void release_mesh_trace(const MeshTraceId& trace_id) = 0;
+    virtual std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id) = 0;
+
+    virtual bool initialize_impl(
+        MeshDevice* pimpl_wrapper,
+        uint8_t num_hw_cqs,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t worker_l1_size,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        bool minimal = false) = 0;
+    virtual bool close_impl(MeshDevice* pimpl_wrapper) = 0;
+
+    // A MeshDevice is a collection of devices arranged in a 2D grid.
+    // The type parameter allows the caller to specify how to linearize the devices in the mesh.
+
+    // Returns the devices in the mesh in row-major order.
+    virtual std::vector<IDevice*> get_devices() const = 0;
+    virtual IDevice* get_device(ChipId physical_device_id) const = 0;
+    virtual IDevice* get_device(const MeshCoordinate& coord) const = 0;
+    virtual tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const = 0;
+
+    virtual DeviceIds get_device_ids() const = 0;
+
+    virtual size_t num_devices() const = 0;
+
+    // The following methods assume 2D mesh, and throw if the mesh is not 2D.
+    // TODO: #17477 - Remove the methods that assume 2D mesh.
+    virtual size_t num_rows() const = 0;
+    virtual size_t num_cols() const = 0;
+    virtual IDevice* get_device(size_t row_idx, size_t col_idx) const = 0;
+
+    // Returns true if the coordinate is local to this mesh device.
+    // Throws if the coordinate is out of bounds of this mesh device.
+    virtual bool is_local(const MeshCoordinate& coord) const = 0;
+
+    virtual const MeshShape& shape() const = 0;
+
+    // Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
+    // Reshaping Rules:
+    // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
+    // 2. Line-to-Line Reshaping (when either dimension is 1):
+    //    - Always possible between 1xN and Nx1 shapes (e.g.: 1x8 <-> 8x1)
+    // 3. Grid-to-Grid Reshaping:
+    //    - Only possible if the devices can form a connected physical mesh in the new shape
+    //    - Must maintain physical connectivity between adjacent devices
+    // 4. Line-to-Grid Reshaping:
+    //    - Only possible if the physical devices can form a connected physical mesh in the new shape
+    //    - Example: 1x8 -> 2x4 is possible only if physical mesh permits a 2x4 configuration
+    //
+    // @throws std::runtime_error if any of the following constraints are not met:
+    // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
+    // 2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
+    virtual void reshape(const MeshShape& new_shape) = 0;
+    virtual const MeshDeviceView& get_view() const = 0;
+
+    virtual std::string to_string() const = 0;
+    virtual bool is_parent_mesh() const = 0;
+
+    virtual const std::shared_ptr<MeshDevice>& get_parent_mesh() const = 0;
+    virtual std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const = 0;
+
+    // Check if the mesh device or any of its parents have a CQ in use, and returns one of the parent mesh IDs if found.
+    virtual std::optional<int> get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const = 0;
+    // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
+    virtual std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const = 0;
+
+    /**
+     * @brief Synchronize with all devices derived from this mesh (including submeshes).
+     *
+     * Blocks until all in-flight work enqueued on every submesh derived from this mesh has completed. Use this to
+     * insert a barrier between phases that use overlapping submeshes on the same physical devices. After this call
+     * returns, it is safe to enqueue new work on this mesh or any submesh derived from this mesh that may overlap with
+     * submeshes that were previously active. All submeshes must be using the default subdevice manager when this is
+     * called.
+     */
+    virtual void quiesce_devices() = 0;
+
+    virtual std::shared_ptr<MeshDevice> create_submesh(
+        const std::shared_ptr<MeshDevice>& parent_mesh,
+        const MeshShape& submesh_shape,
+        const std::optional<MeshCoordinate>& offset = std::nullopt) = 0;
+
+    virtual std::vector<std::shared_ptr<MeshDevice>> create_submeshes(
+        const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape) = 0;
+
+    // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
+    // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
+    // If cq_id is not provided, the current command queue is returned from the current thread
+    virtual MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const = 0;
+
+    // Currently expose users to the dispatch thread pool through the MeshDevice
+    virtual void enqueue_to_thread_pool(std::function<void()>&& f) = 0;
+    virtual void wait_for_thread_pool() = 0;
+
+    static std::shared_ptr<MeshDevice> create(
+        const MeshDeviceConfig& config,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+    static std::shared_ptr<MeshDevice> create_unit_mesh(
+        int device_id,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+    static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
+        const std::vector<int>& device_ids,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+};
+
+class ActiveMeshDeviceImpl : public MeshDeviceImpl {
+private:
+    friend class ::tt::tt_metal::experimental::DispatchContext;
+
     // THREAD SAFETY: Enqueueing work on the device should be thread safe. Operations that modify state should be
     // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
     // on the device may not be thread safe.
@@ -142,11 +296,6 @@ private:
     // Recursively quiesce all submeshes.
     void quiesce_internal();
 
-    // Check if the mesh device or any of its parents have a CQ in use, and returns one of the parent mesh IDs if found.
-    std::optional<int> get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const;
-    // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
-    std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const;
-
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void mark_allocations_unsafe();
     // NOLINTNEXTLINE(readability-make-member-function-const)
@@ -156,27 +305,18 @@ private:
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
 
-    // Distributed context used to synchronize operations done by all ranks on the given mesh device.
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
-    // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
-    std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
-
-    friend class ::tt::tt_metal::experimental::DispatchContext;
-
-    std::shared_ptr<DummyDevice> dummy_reference_device_;
-
 public:
-    MeshDeviceImpl(
+    ActiveMeshDeviceImpl(
         std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::shared_ptr<MeshDevice> parent_mesh = {});
-    ~MeshDeviceImpl() override;
+    ~ActiveMeshDeviceImpl() override;
 
-    MeshDeviceImpl(const MeshDeviceImpl&) = delete;
-    MeshDeviceImpl& operator=(const MeshDeviceImpl&) = delete;
+    ActiveMeshDeviceImpl(const ActiveMeshDeviceImpl&) = delete;
+    ActiveMeshDeviceImpl& operator=(const ActiveMeshDeviceImpl&) = delete;
 
-    MeshDeviceImpl(MeshDeviceImpl&&) = delete;
-    MeshDeviceImpl& operator=(MeshDeviceImpl&&) = delete;
+    ActiveMeshDeviceImpl(ActiveMeshDeviceImpl&&) = delete;
+    ActiveMeshDeviceImpl& operator=(ActiveMeshDeviceImpl&&) = delete;
 
     // IDevice interface implementation
     tt::ARCH arch() const override;
@@ -230,12 +370,12 @@ public:
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
     // If cq_id is not provided, the current command queue is returned from the current thread
-    MeshTraceId begin_mesh_trace(uint8_t cq_id);
-    void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
-    void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
-    void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
-    void release_mesh_trace(const MeshTraceId& trace_id);
-    std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
+    MeshTraceId begin_mesh_trace(uint8_t cq_id) override;
+    void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) override;
+    void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) override;
+    void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) override;
+    void release_mesh_trace(const MeshTraceId& trace_id) override;
+    std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id) override;
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
 
@@ -254,14 +394,14 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false);
+        bool minimal = false) override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
     bool compile_fabric() override;
     void configure_fabric() override;
     void init_fabric() override;
     bool close() override;
-    bool close_impl(MeshDevice* pimpl_wrapper);
+    bool close_impl(MeshDevice* pimpl_wrapper) override;
     void enable_program_cache() override;
     void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
@@ -294,26 +434,26 @@ public:
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
 
     // Returns the devices in the mesh in row-major order.
-    std::vector<IDevice*> get_devices() const;
-    IDevice* get_device(ChipId physical_device_id) const;
-    IDevice* get_device(const MeshCoordinate& coord) const;
-    tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
+    std::vector<IDevice*> get_devices() const override;
+    IDevice* get_device(ChipId physical_device_id) const override;
+    IDevice* get_device(const MeshCoordinate& coord) const override;
+    tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const override;
 
-    DeviceIds get_device_ids() const;
+    DeviceIds get_device_ids() const override;
 
-    size_t num_devices() const;
+    size_t num_devices() const override;
 
     // The following methods assume 2D mesh, and throw if the mesh is not 2D.
     // TODO: #17477 - Remove the methods that assume 2D mesh.
-    size_t num_rows() const;
-    size_t num_cols() const;
-    IDevice* get_device(size_t row_idx, size_t col_idx) const;
+    size_t num_rows() const override;
+    size_t num_cols() const override;
+    IDevice* get_device(size_t row_idx, size_t col_idx) const override;
 
     // Returns true if the coordinate is local to this mesh device.
     // Throws if the coordinate is out of bounds of this mesh device.
-    bool is_local(const MeshCoordinate& coord) const;
+    bool is_local(const MeshCoordinate& coord) const override;
 
-    const MeshShape& shape() const;
+    const MeshShape& shape() const override;
 
     // Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
     // Reshaping Rules:
@@ -330,14 +470,19 @@ public:
     // @throws std::runtime_error if any of the following constraints are not met:
     // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
     // 2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
-    void reshape(const MeshShape& new_shape);
-    const MeshDeviceView& get_view() const;
+    void reshape(const MeshShape& new_shape) override;
+    const MeshDeviceView& get_view() const override;
 
-    std::string to_string() const;
-    bool is_parent_mesh() const;
+    std::string to_string() const override;
+    bool is_parent_mesh() const override;
 
-    const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
-    std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
+    const std::shared_ptr<MeshDevice>& get_parent_mesh() const override;
+    std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const override;
+
+    // Check if the mesh device or any of its parents have a CQ in use, and returns one of the parent mesh IDs if found.
+    std::optional<int> get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const override;
+    // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
+    std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const override;
 
     /**
      * @brief Synchronize with all devices derived from this mesh (including submeshes).
@@ -348,48 +493,206 @@ public:
      * submeshes that were previously active. All submeshes must be using the default subdevice manager when this is
      * called.
      */
-    void quiesce_devices();
+    void quiesce_devices() override;
 
     std::shared_ptr<MeshDevice> create_submesh(
         const std::shared_ptr<MeshDevice>& parent_mesh,
         const MeshShape& submesh_shape,
-        const std::optional<MeshCoordinate>& offset = std::nullopt);
+        const std::optional<MeshCoordinate>& offset = std::nullopt) override;
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(
-        const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape);
+        const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape) override;
 
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
     // If cq_id is not provided, the current command queue is returned from the current thread
-    MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const;
+    MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const override;
 
     // Currently expose users to the dispatch thread pool through the MeshDevice
-    void enqueue_to_thread_pool(std::function<void()>&& f);
-    void wait_for_thread_pool();
-    static std::shared_ptr<MeshDevice> create(
-        const MeshDeviceConfig& config,
-        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+    void enqueue_to_thread_pool(std::function<void()>&& f) override;
+    void wait_for_thread_pool() override;
+};
+
+class InactiveMeshDeviceImpl : public MeshDeviceImpl {
+private:
+    std::mutex api_mutex_;
+    int mesh_id_;
+    std::unique_ptr<MeshDeviceView> view_;
+    std::shared_ptr<MeshDevice> parent_mesh_;
+    std::unique_ptr<MeshCommandQueue> dummy_command_queue_;
+
+    program_cache::detail::ProgramCache program_cache_;
+
+    std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
+
+public:
+    InactiveMeshDeviceImpl(
+        std::unique_ptr<MeshDeviceView> mesh_device_view, std::shared_ptr<MeshDevice> parent_mesh = {});
+    ~InactiveMeshDeviceImpl() override;
+
+    InactiveMeshDeviceImpl(const InactiveMeshDeviceImpl&) = delete;
+    InactiveMeshDeviceImpl& operator=(const InactiveMeshDeviceImpl&) = delete;
+
+    InactiveMeshDeviceImpl(InactiveMeshDeviceImpl&&) = delete;
+    InactiveMeshDeviceImpl& operator=(InactiveMeshDeviceImpl&&) = delete;
+
+    // IDevice interface implementation - all no-ops
+    tt::ARCH arch() const override;
+    int id() const override;
+    ChipId build_id() const override;
+    uint8_t num_hw_cqs() const override;
+    bool is_initialized() const override;
+
+    int num_dram_channels() const override;
+    uint32_t l1_size_per_core() const override;
+    uint32_t dram_size_per_channel() const override;
+
+    CoreCoord grid_size() const override;
+    CoreCoord logical_grid_size() const override;
+    CoreCoord dram_grid_size() const override;
+    CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
+
+    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
+    std::vector<CoreCoord> ethernet_cores_from_logical_cores(
+        const std::vector<CoreCoord>& logical_cores) const override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+    CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
+    CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
+    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
+    std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
+    std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
+    bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
+    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
+    CoreCoord compute_with_storage_grid_size() const override;
+    CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
+    uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
+    const std::unique_ptr<Allocator>& allocator() const override;
+    const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl() const override;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const override;
+    CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
+    uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
+    uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
+        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
+    const std::set<CoreCoord>& ethernet_cores() const override;
+    const std::set<CoreCoord>& storage_only_cores() const override;
+    uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
+    uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
+    SystemMemoryManager& sysmem_manager() override;
+
+    // MeshTrace Internal APIs - all no-ops
+    MeshTraceId begin_mesh_trace(uint8_t cq_id) override;
+    void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) override;
+    void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) override;
+    void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) override;
+    void release_mesh_trace(const MeshTraceId& trace_id) override;
+    std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id) override;
+    uint32_t get_trace_buffers_size() const override;
+    void set_trace_buffers_size(uint32_t size) override;
+
+    // Initialization APIs - all no-ops
+    bool initialize(
+        uint8_t num_hw_cqs,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
-    static std::shared_ptr<MeshDevice> create_unit_mesh(
-        int device_id,
-        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        bool minimal = false) override;
+    bool initialize_impl(
+        MeshDevice* pimpl_wrapper,
+        uint8_t num_hw_cqs,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
-    static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
-        const std::vector<int>& device_ids,
-        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+        bool minimal = false) override;
+    void init_command_queue_host() override;
+    void init_command_queue_device() override;
+    bool compile_fabric() override;
+    void configure_fabric() override;
+    void init_fabric() override;
+    bool close() override;
+    bool close_impl(MeshDevice* pimpl_wrapper) override;
+    void enable_program_cache() override;
+    void clear_program_cache() override;
+    void disable_and_clear_program_cache() override;
+    program_cache::detail::ProgramCache& get_program_cache() override;
+    std::size_t num_program_cache_entries() override;
+    HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
+    HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
+    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
+    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
+    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
+    SubDeviceManagerId get_active_sub_device_manager_id() const override;
+    SubDeviceManagerId get_default_sub_device_manager_id() const override;
+    SubDeviceManagerId create_sub_device_manager(
+        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
+    void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
+    void clear_loaded_sub_device_manager() override;
+    CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
+    const std::vector<SubDeviceId>& get_sub_device_ids() const override;
+    const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
+    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
+    void reset_sub_device_stall_group() override;
+    uint32_t num_sub_devices() const override;
+    bool is_mmio_capable() const override;
+    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+
+    // MeshDevice-specific methods - all no-ops
+    std::vector<IDevice*> get_devices() const override;
+    IDevice* get_device(ChipId physical_device_id) const override;
+    IDevice* get_device(const MeshCoordinate& coord) const override;
+    tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const override;
+
+    DeviceIds get_device_ids() const override;
+
+    size_t num_devices() const override;
+
+    size_t num_rows() const override;
+    size_t num_cols() const override;
+    IDevice* get_device(size_t row_idx, size_t col_idx) const override;
+
+    bool is_local(const MeshCoordinate& coord) const override;
+
+    const MeshShape& shape() const override;
+
+    void reshape(const MeshShape& new_shape) override;
+    const MeshDeviceView& get_view() const override;
+
+    std::string to_string() const override;
+    bool is_parent_mesh() const override;
+
+    const std::shared_ptr<MeshDevice>& get_parent_mesh() const override;
+    std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const override;
+
+    // Check if the mesh device or any of its parents have a CQ in use, and returns one of the parent mesh IDs if found.
+    std::optional<int> get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const override;
+    // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
+    std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const override;
+
+    void quiesce_devices() override;
+
+    std::shared_ptr<MeshDevice> create_submesh(
+        const std::shared_ptr<MeshDevice>& parent_mesh,
+        const MeshShape& submesh_shape,
+        const std::optional<MeshCoordinate>& offset = std::nullopt) override;
+
+    std::vector<std::shared_ptr<MeshDevice>> create_submeshes(
+        const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape) override;
+
+    MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const override;
+
+    void enqueue_to_thread_pool(std::function<void()>&& f) override;
+    void wait_for_thread_pool() override;
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDeviceImpl& mesh_device);
