@@ -71,7 +71,6 @@ class DistributedNorm(LightweightModule):
 
         input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         if x.shape[3] == 1024:
-            # input_mem_cfg = self.args.model_config["PROBA_NORM"]
             input_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):

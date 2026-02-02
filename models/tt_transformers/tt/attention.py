@@ -301,9 +301,24 @@ class Attention(LightweightModule):
         wo_mem_config = configuration.create_dram_sharded_mem_config(
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
-        pt_wo = F.pad(pt_wo, (0, 8192 - 5376))
         self.wo = ttnn.as_tensor(
             pt_wo,
+            dtype=self.wo_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
+                mesh_shape=configuration.cluster_shape,
+            ),
+            # cache_file_name=(
+            #     cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
+            # ),
+        )
+        pt_wo_decode = F.pad(pt_wo, (0, 8192 - 5376))
+        self.wo_decode = ttnn.as_tensor(
+            pt_wo_decode,
             dtype=self.wo_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
@@ -452,7 +467,7 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-
+        self.li_qkv_decode_compute_kernel_cfg.math_fidelity = ttnn.MathFidelity.HiFi2
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -621,7 +636,7 @@ class Attention(LightweightModule):
             if self.ccl_topology == ttnn.Topology.Ring:
                 _, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
                     attn_output_cat,
-                    self.wo,
+                    self.wo_decode,
                     persistent_output_buffer=None,
                     dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
