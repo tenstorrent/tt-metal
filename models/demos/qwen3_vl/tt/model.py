@@ -13,7 +13,7 @@ from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen3_vl.tt.patch_merger import PatchMerger
 from models.demos.qwen3_vl.tt.rope import RotarySetup
 from models.demos.qwen3_vl.tt.vision_block import VisionBlock
-from models.tt_transformers.tt.common import get_rot_transformation_mat
+from models.tt_transformers.tt.common import Mode, get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
