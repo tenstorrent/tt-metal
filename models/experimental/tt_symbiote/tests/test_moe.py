@@ -33,8 +33,7 @@ class MoEDistributedConfig(DistributedConfig):
             self.tensor_config = DistributedTensorConfig(
                 mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.mesh_device, dim=-1)
             )
-        if self.ccl_manager is None:
-            self.ccl_manager = CCL
+        self.ccl_manager = CCL(self.mesh_device)
 
 
 class MoEDeviceInit(DeviceInit):

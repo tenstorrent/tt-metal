@@ -14,15 +14,15 @@ from typing import Optional
 class DeviceInit:
     DEVICE_TO_STATE_DICT = {}
 
-    @staticmethod
-    def init_state(device):
+    @classmethod
+    def init_state(cls, device):
         """Initialize device state if not already initialized."""
-        if device not in DeviceInit.DEVICE_TO_STATE_DICT:
-            DeviceInit.DEVICE_TO_STATE_DICT[device] = DeviceInit.init_state_impl(device)
-        return DeviceInit.DEVICE_TO_STATE_DICT[device]
+        if device not in cls.DEVICE_TO_STATE_DICT:
+            cls.DEVICE_TO_STATE_DICT[device] = cls.init_state_impl(device)
+        return cls.DEVICE_TO_STATE_DICT[device]
 
-    @staticmethod
-    def init_state_impl(device) -> Optional[DistributedConfig]:
+    @classmethod
+    def init_state_impl(cls, device) -> Optional[DistributedConfig]:
         """Implementation-specific device state initialization."""
         # Placeholder for actual device state initialization logic
         return None

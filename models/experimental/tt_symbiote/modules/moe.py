@@ -491,7 +491,8 @@ class TTNNGlm4MoeNaiveMoe(TTNNModule):
 
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
-
+        topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
+        topk_experts_indices = ttnn.typecast(topk_experts_indices, ttnn.uint16)
         topk_experts_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
         topk_experts_indices_rm = ttnn.reshape(
             topk_experts_indices_rm,
