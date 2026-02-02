@@ -73,6 +73,14 @@ protected:
             GTEST_SKIP() << "NOC debugging tests require fast dispatch mode";
         }
 
+        // This is a simple test with simple kernels
+        // Don't run this test if Watcher or DPrint is enabled
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() ||
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_enabled(
+                tt::llrt::RunTimeDebugFeatureDprint)) {
+            GTEST_SKIP() << "NOC debugging tests require Watcher and DPRINT to be disabled";
+        }
+
         previous_debug_dump_enabled_ =
             tt::tt_metal::MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled();
         tt::tt_metal::MetalContext::instance().rtoptions().set_experimental_noc_debug_dump_enabled(true);
