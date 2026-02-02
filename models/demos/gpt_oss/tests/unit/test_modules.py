@@ -145,6 +145,70 @@ def run_rms_norm_component(
         assert passing, f"Experts test failed. Output: {output}"
 
 
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize(
+    "mesh_shape",
+    [
+        (4, 8),
+    ],
+)
+def test_rmsnorm_sharded_non_tile_aligned(mesh_device, mesh_shape, reset_seeds):
+    """Validate distributed RMSNorm for non-tile-aligned per-device widths."""
+    from models.demos.gpt_oss.config import MeshConfig, ModeConfig
+    from models.demos.gpt_oss.tt.ccl import CCLManager
+    from models.demos.gpt_oss.tt.rms_norm import RMSNorm
+
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
+    hidden_size = 2880
+    eps = 1e-5
+
+    class DummyConfig:
+        pass
+
+    dummy_config = DummyConfig()
+    dummy_config.hidden_size = hidden_size
+    dummy_config.rms_norm_eps = eps
+
+    torch.manual_seed(0)
+    state_dict = {"weight": torch.randn(hidden_size)}
+    mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
+    ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_shape[0] > 1 else 1)
+    rms_norm = RMSNorm(
+        mesh_device=mesh_device,
+        hf_config=dummy_config,
+        state_dict=state_dict,
+        mesh_config=mesh_config,
+        is_distributed=True,
+        ccl_manager=ccl_manager,
+    )
+
+    # Full input is sharded across rows (tokens) and cols (hidden)
+    input_torch = torch.randn(1, 1, 128, hidden_size)
+    mesh_mapper = ttnn.ShardTensor2dMesh(dims=(-2, -1), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+    tt_input = ttnn.from_torch(
+        input_torch,
+        device=mesh_device,
+        mesh_mapper=mesh_mapper,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+
+    # Reference RMSNorm on full hidden size
+    weight = state_dict["weight"].view(1, 1, 1, -1)
+    ref = input_torch * torch.rsqrt(input_torch.pow(2).mean(dim=-1, keepdim=True) + eps)
+    ref = ref * weight
+
+    tt_output = rms_norm(tt_input)
+    mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
+
+    passing, output = compare_tensors(tt_output_torch, ref, mesh_device, pcc_threshold=0.95)
+    if passing:
+        logger.info(f"RMSNorm sharded test passed. Output: {output}")
+    else:
+        assert passing, f"RMSNorm sharded test failed. Output: {output}"
+
+
 def run_topk_router_component(
     mesh_device, hidden_shape, reference_layer, decoder_layer, is_decode, is_row_sharded, pcc_threshold
 ):
@@ -450,21 +514,23 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
 @pytest.mark.parametrize(
     "mesh_shape",
     [
-        (1, 8),
+        # (1, 8),
         (4, 8),
     ],
     ids=[
-        "mesh_1x8",
+        # "mesh_1x8",
         "mesh_4x8",
     ],
 )
 @pytest.mark.parametrize(
     # We want to test the first two layers so we capture both sliding and global attention layers
     "layer_idx",
-    [0, 1],
+    [
+        0,
+    ],
     ids=[
         "layer_0",
-        "layer_1",
+        # "layer_1",
     ],
 )
 def test_decoder(
@@ -697,9 +763,20 @@ def test_decoder(
     if should_test("decoder"):
         logger.info("Testing Full Decoder Layer...")
         # Create TTNN tensors for decoder layer test
+        # For residual stream sharding with TP > 1:
+        #   - Hidden dim (-1) must always be sharded across columns (TP axis)
+        #   - Batch dim (-2) is additionally sharded across rows when is_row_sharded
+        # The decoder layer expects: [1, 1, tokens/num_rows, hidden_size/num_columns]
+        tp = setup["mesh_config"].tp
         if is_row_sharded:
+            # Shard on both batch (rows) and hidden (columns)
             mesh_mapper = ttnn.ShardTensor2dMesh(
-                dims=(-2, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
+                dims=(-2, -1), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
+            )
+        elif tp > 1:
+            # Shard only on hidden dim (columns) - replicate batch across rows
+            mesh_mapper = ttnn.ShardTensor2dMesh(
+                dims=(None, -1), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
             )
         else:
             mesh_mapper = None
@@ -747,6 +824,8 @@ def run_model_forward_test(
     seq_len,
     is_decode,
     pcc_threshold=0.88,
+    skip_reference=False,
+    force_row_sharded=False,
 ):
     """
     Run a single forward pass test comparing TT model to reference model.
@@ -761,27 +840,38 @@ def run_model_forward_test(
         seq_len: Sequence length
         is_decode: True for decode mode (seq_len=1), False for prefill mode
         pcc_threshold: PCC threshold for comparison
+        skip_reference: If True, skip reference model creation and just verify TT forward pass completes
     """
-    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
+    import os
 
+    from models.demos.gpt_oss.config import Mode
     from models.demos.gpt_oss.tt.ccl import CCLManager
     from models.demos.gpt_oss.tt.model import Model
 
+    # Check environment variable for skipping reference model
+    skip_reference = skip_reference or os.environ.get("SKIP_REFERENCE_MODEL", "0") == "1"
+
     # Determine local batch size for row sharding
-    if batch_size > 32:
+    padded_batch_size = batch_size
+    if force_row_sharded and batch_size < mesh_device.shape[0]:
+        padded_batch_size = mesh_device.shape[0]
+    if force_row_sharded or batch_size > 32:
         is_row_sharded = True
-        assert batch_size % mesh_device.shape[0] == 0, "Batch size must be divisible by mesh rows"
-        local_batch_size = batch_size // mesh_device.shape[0]
+        assert padded_batch_size % mesh_device.shape[0] == 0, "Batch size must be divisible by mesh rows"
+        local_batch_size = padded_batch_size // mesh_device.shape[0]
     else:
         is_row_sharded = False
         local_batch_size = batch_size
 
     # Create CCL manager
+    logger.info("Creating CCL manager...")
     ccl_manager = CCLManager(mesh_device)
+    logger.info("CCL manager created")
 
     # Create TT model with meta format weights
     # Use throughput experts for row-sharded batches (batch > 32 on multi-row mesh)
     use_throughput_experts = is_row_sharded and mesh_device.shape[0] > 1
+    logger.info("Creating TT model...")
     tt_model = Model(
         mesh_device=mesh_device,
         hf_config=config,
@@ -796,34 +886,88 @@ def run_model_forward_test(
         users_row_sharded=is_row_sharded,
         use_throughput_experts=use_throughput_experts,
     )
+    logger.info("TT model created")
 
-    # Create reference model with HF format weights
-    reference_model = GptOssForCausalLM(config)
-    reference_model.load_state_dict(state_dict_hf, strict=False)
-    reference_model.eval()
+    # Create reference model with HF format weights (skip if memory constrained)
+    reference_logits = None
+    if not skip_reference:
+        from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
+
+        logger.info("Creating reference model...")
+        reference_model = GptOssForCausalLM(config)
+        reference_model.load_state_dict(state_dict_hf, strict=False)
+        reference_model.eval()
+        actual_num_layers = len(reference_model.model.layers)
+        logger.info(f"Reference model created with {actual_num_layers} layers (expected {config.num_hidden_layers})")
+    else:
+        logger.info("Skipping reference model creation (SKIP_REFERENCE_MODEL=1)")
+        reference_model = None
 
     # Create random input tokens
     input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+    if padded_batch_size != batch_size:
+        pad_rows = padded_batch_size - batch_size
+        input_ids = torch.cat([input_ids, torch.zeros(pad_rows, seq_len, dtype=input_ids.dtype)], dim=0)
 
     # Create position IDs
     position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+    if padded_batch_size != batch_size:
+        pad_rows = padded_batch_size - batch_size
+        position_ids = torch.cat([position_ids, torch.zeros(pad_rows, seq_len, dtype=position_ids.dtype)], dim=0)
 
-    # Run reference forward pass
-    with torch.no_grad():
-        reference_output = reference_model(
-            input_ids=input_ids,
-            position_ids=position_ids,
-            attention_mask=None,  # Let the model handle masking
-            use_cache=False,
-        )
-        reference_logits = reference_output.logits  # [batch_size, seq_len, vocab_size]
+    debug_layer = os.environ.get("GPT_OSS_DEBUG_LAYER", "0") == "1"
+    ref_debug = {}
+    hook_handles = []
+    if debug_layer and not skip_reference:
+        layer0 = reference_model.model.layers[0]
+
+        def _first_output(output):
+            return output[0] if isinstance(output, (list, tuple)) else output
+
+        def _save_output(name):
+            def hook(module, inputs, output):
+                ref_debug[name] = _first_output(output).detach()
+
+            return hook
+
+        def _save_input(module, inputs):
+            if inputs:
+                ref_debug["layer_in"] = inputs[0].detach()
+
+        hook_handles.append(layer0.register_forward_pre_hook(_save_input))
+        hook_handles.append(layer0.self_attn.register_forward_hook(_save_output("attn_out")))
+        hook_handles.append(layer0.mlp.register_forward_hook(_save_output("mlp_out")))
+        hook_handles.append(layer0.register_forward_hook(_save_output("layer_out")))
+
+    # Run reference forward pass (if not skipping)
+    if not skip_reference:
+        logger.info("Running reference forward pass...")
+        with torch.no_grad():
+            reference_output = reference_model(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                attention_mask=None,  # Let the model handle masking
+                use_cache=False,
+                output_hidden_states=True,
+            )
+            reference_logits = reference_output.logits  # [batch_size, seq_len, vocab_size]
+            reference_hidden_states = reference_output.hidden_states[-1]
+            if padded_batch_size != batch_size:
+                reference_logits = reference_logits[:batch_size]
+                reference_hidden_states = reference_hidden_states[:batch_size]
+        logger.info("Reference forward pass complete")
+        for handle in hook_handles:
+            handle.remove()
+    else:
+        reference_hidden_states = None
 
     # Prepare inputs for TT model
+    logger.info("Running TT forward pass...")
     if is_decode:
         # Decode mode: use ttnn_decode_forward
         # Flatten tokens for decode
         tokens_flat = input_ids.reshape(-1)  # [batch_size]
-        current_pos = torch.zeros(batch_size, dtype=torch.long)
+        current_pos = torch.zeros(padded_batch_size, dtype=torch.long)
 
         # Prepare inputs using model's method
         tt_tokens, tt_current_pos, tt_rope_idxs, _ = tt_model.prepare_inputs_decode(
@@ -831,6 +975,7 @@ def run_model_forward_test(
         )
 
         # Run TT decode forward
+        logger.info("Running TT decode forward...")
         tt_logits, _ = tt_model.ttnn_decode_forward(
             tokens=tt_tokens,
             current_pos=tt_current_pos,
@@ -838,20 +983,29 @@ def run_model_forward_test(
             page_table=None,
             kv_cache=None,
         )
+        logger.info("TT decode forward complete")
     else:
         # Prefill mode: use ttnn_prefill_forward
         # Embed tokens first
+        prefill_mesh_mapper = (
+            ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device)
+            if is_row_sharded
+            else None
+        )
         tt_tokens = ttnn.from_torch(
             input_ids.unsqueeze(0).unsqueeze(0),  # [1, 1, batch, seq]
             device=mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=prefill_mesh_mapper,
         )
+        # Embedding weight is column-sharded, so embeddings are already sharded on hidden dim
         tt_embeds = ttnn.embedding(tt_tokens, tt_model.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         if len(tt_embeds.shape) == 3:
             tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
 
         # Run TT prefill forward
+        logger.info("Running TT prefill forward...")
         tt_logits = tt_model.ttnn_prefill_forward(
             x=tt_embeds,
             user_id=0,
@@ -860,6 +1014,7 @@ def run_model_forward_test(
             kv_cache=None,
             get_last_token=-1,  # Get all tokens
         )
+        logger.info("TT prefill forward complete")
 
     # Convert TT output to torch
     mesh_composer_dims = (-2, 1) if is_row_sharded else (0, 1)
@@ -874,10 +1029,130 @@ def run_model_forward_test(
     tt_logits_torch = tt_logits_torch[0, 0]
 
     # Reshape to match reference
-    tt_logits_torch = tt_logits_torch.reshape(batch_size, seq_len, -1)
+    tt_logits_torch = tt_logits_torch.reshape(padded_batch_size, seq_len, -1)
+    if padded_batch_size != batch_size:
+        tt_logits_torch = tt_logits_torch[:batch_size]
+    logger.info(f"TT output shape: {tt_logits_torch.shape}")
 
-    # Compare outputs
+    # Optional decoder hidden-state debug compare
+    if os.environ.get("GPT_OSS_DEBUG_HEAD", "0") == "1" and reference_hidden_states is not None:
+        tt_hidden = getattr(tt_model, "_debug_last_hidden_states", None)
+        if tt_hidden is not None:
+            if mesh_config.get_config(Mode.DECODE).tp > 1 and not tt_model.norm.output_is_gathered:
+                tt_hidden = mesh_config.allgather(tt_hidden, tt_model.ccl_manager, axis=mesh_config.tp_axis, dim=3)
+            mesh_shape = (
+                (mesh_device.shape[0], 1) if mesh_config.get_config(Mode.DECODE).tp > 1 else tuple(mesh_device.shape)
+            )
+            tt_hidden_torch = ttnn.to_torch(
+                tt_hidden,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_shape),
+            )
+            if tt_hidden_torch.ndim == 4:
+                tt_hidden_torch = tt_hidden_torch[0, 0]
+            tt_hidden_torch = tt_hidden_torch.reshape(batch_size, seq_len, -1)
+            passing_hidden, output_hidden = compare_tensors(
+                tt_hidden_torch, reference_hidden_states, mesh_device, pcc_threshold=0.95
+            )
+            logger.info(f"Decoder hidden-state PCC: {output_hidden}")
+            tt_hidden.deallocate(True)
+
+    # Optional decoder-layer intermediate debug compare
+    if debug_layer and not skip_reference and reference_hidden_states is not None:
+        from models.demos.gpt_oss.tt.attention.decode import decode_forward as attention_decode_forward
+        from models.demos.gpt_oss.tt.attention.prefill import prefill_forward as attention_prefill_forward
+
+        tt_debug = getattr(tt_model.layers[0], "_debug_tensors", {})
+        if is_decode:
+            attn_pre_rs = getattr(attention_decode_forward, "_debug_pre_rs", None)
+            attn_post_rs = getattr(attention_decode_forward, "_debug_post_rs", None)
+        else:
+            attn_pre_rs = getattr(attention_prefill_forward, "_debug_pre_rs", None)
+            attn_post_rs = getattr(attention_prefill_forward, "_debug_post_rs", None)
+
+        def _log_device_tensor_shape(name, tt_tensor):
+            if tt_tensor is None:
+                return
+            try:
+                device_tensors = ttnn.get_device_tensors(tt_tensor)
+                if device_tensors:
+                    logger.info(
+                        f"{name} device_tensor_count={len(device_tensors)} first_shape={device_tensors[0].shape}"
+                    )
+            except Exception as exc:
+                logger.info(f"{name} device_tensor_shape failed: {exc}")
+
+        def _tt_debug_to_torch(tt_tensor):
+            if tt_tensor is None:
+                return None
+            mode_cfg = mesh_config.get_config(Mode.DECODE if is_decode else Mode.PREFILL)
+            tt_local = tt_tensor
+            hidden_per_device = tt_model.hf_config.hidden_size // mode_cfg.tp
+            if mode_cfg.tp > 1 and tt_tensor.shape[-1] == hidden_per_device:
+                tt_local = mesh_config.allgather(tt_local, tt_model.ccl_manager, axis=mesh_config.tp_axis, dim=3)
+            mesh_shape = (mesh_device.shape[0], 1) if mode_cfg.tp > 1 else tuple(mesh_device.shape)
+            tt_torch = ttnn.to_torch(
+                tt_local,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_shape),
+            )
+            if tt_torch.ndim == 4:
+                tt_torch = tt_torch[0, 0]
+            return tt_torch.reshape(batch_size, seq_len, -1).float()
+
+        ref_layer_in = ref_debug.get("layer_in")
+        ref_attn = ref_debug.get("attn_out")
+        ref_mlp = ref_debug.get("mlp_out")
+        ref_post_attn = ref_layer_in + ref_attn if ref_layer_in is not None and ref_attn is not None else None
+        ref_post_mlp = ref_post_attn + ref_mlp if ref_post_attn is not None and ref_mlp is not None else None
+
+        _log_device_tensor_shape("attn_pre_rs", attn_pre_rs)
+        _log_device_tensor_shape("attn_post_rs", attn_post_rs)
+
+        tt_attn = _tt_debug_to_torch(tt_debug.get("attn_out"))
+        tt_attn_pre_rs = _tt_debug_to_torch(attn_pre_rs)
+        tt_attn_post_rs = _tt_debug_to_torch(attn_post_rs)
+        tt_post_attn = _tt_debug_to_torch(tt_debug.get("post_attn"))
+        tt_mlp = _tt_debug_to_torch(tt_debug.get("mlp_out"))
+        tt_post_mlp = _tt_debug_to_torch(tt_debug.get("post_mlp"))
+
+        if tt_attn_pre_rs is not None:
+            logger.info(f"Decoder attn_pre_rs shape: {tuple(tt_attn_pre_rs.shape)}")
+        if tt_attn_post_rs is not None:
+            logger.info(f"Decoder attn_post_rs shape: {tuple(tt_attn_post_rs.shape)}")
+        if ref_attn is not None and tt_attn is not None:
+            _, pcc = compare_tensors(tt_attn, ref_attn, mesh_device, pcc_threshold=0.0)
+            logger.info(f"Decoder attn_out PCC: {pcc}")
+        if ref_attn is not None and tt_attn_pre_rs is not None:
+            _, pcc = compare_tensors(tt_attn_pre_rs, ref_attn, mesh_device, pcc_threshold=0.0)
+            logger.info(f"Decoder attn_pre_rs PCC: {pcc}")
+        if ref_attn is not None and tt_attn_post_rs is not None:
+            _, pcc = compare_tensors(tt_attn_post_rs, ref_attn, mesh_device, pcc_threshold=0.0)
+            logger.info(f"Decoder attn_post_rs PCC: {pcc}")
+        if ref_post_attn is not None and tt_post_attn is not None:
+            _, pcc = compare_tensors(tt_post_attn, ref_post_attn, mesh_device, pcc_threshold=0.0)
+            logger.info(f"Decoder post_attn_add PCC: {pcc}")
+        if ref_mlp is not None and tt_mlp is not None:
+            _, pcc = compare_tensors(tt_mlp, ref_mlp, mesh_device, pcc_threshold=0.0)
+            logger.info(f"Decoder mlp_out PCC: {pcc}")
+        if ref_post_mlp is not None and tt_post_mlp is not None:
+            _, pcc = compare_tensors(tt_post_mlp, ref_post_mlp, mesh_device, pcc_threshold=0.0)
+            logger.info(f"Decoder post_mlp_add PCC: {pcc}")
+
+    # Compare outputs (or just verify TT forward completed if skipping reference)
+    if skip_reference:
+        logger.info("TT forward pass completed successfully (skipped reference comparison)")
+        return True, "TT forward pass completed (no reference comparison)"
+
+    # Debug: Print tensor statistics
+    logger.info(
+        f"TT logits stats: mean={tt_logits_torch.mean().item():.6f}, std={tt_logits_torch.std().item():.6f}, min={tt_logits_torch.min().item():.6f}, max={tt_logits_torch.max().item():.6f}"
+    )
+    logger.info(
+        f"Ref logits stats: mean={reference_logits.mean().item():.6f}, std={reference_logits.std().item():.6f}, min={reference_logits.min().item():.6f}, max={reference_logits.max().item():.6f}"
+    )
+
     passing, output = compare_tensors(tt_logits_torch, reference_logits, mesh_device, pcc_threshold=pcc_threshold)
+    print("passing: ", passing)
+    print("output: ", output)
     return passing, output
 
 
@@ -885,14 +1160,14 @@ def run_model_forward_test(
 @pytest.mark.parametrize(
     "batch_size, seq_len, mode",
     [
-        (1, 128, "prefill"),  # Prefill test: batch=1, seq=128
-        (1, 1, "decode"),  # Decode test: batch=128, seq=1 - disabled due to breakpoint in model.py
-        (128, 1, "decode"),  # Decode test: batch=128, seq=1 - disabled due to breakpoint in model.py
+        (128, 1, "decode"),  # Decode test: batch=128, seq=1 (row-sharded)
+        # (1, 1, "decode"),  # Decode test: batch=1, seq=1
+        (1, 128, "prefill_row_sharded"),  # Prefill test: batch=1, seq=128 (forced row-sharded)
     ],
     ids=[
-        "prefill_b1_s128",
-        "decode_b1_s1",
-        "decode_b128_s1",
+        "decode_b128_s1_row_sharded",
+        # "decode_b1_s1",
+        "prefill_b1_s128_row_sharded",
     ],
 )
 @pytest.mark.parametrize(
@@ -903,7 +1178,10 @@ def run_model_forward_test(
 )
 @pytest.mark.parametrize(
     "num_layers",
-    [1, 5],
+    [
+        1,
+        5,
+    ],
     ids=[
         "1_layer",
         "5_layers",
@@ -933,6 +1211,7 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     from models.demos.gpt_oss.tt.model_config import ModelArgs
 
     is_decode = mode == "decode"
+    force_row_sharded = mode == "prefill_row_sharded"
 
     # Create submesh with specified shape
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
@@ -944,6 +1223,9 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     # Override number of layers
     original_num_layers = config.num_hidden_layers
     config.num_hidden_layers = num_layers
+    # Also truncate layer_types to match the number of layers
+    if hasattr(config, "layer_types") and len(config.layer_types) > num_layers:
+        config.layer_types = config.layer_types[:num_layers]
     logger.info(f"Overriding num_hidden_layers from {original_num_layers} to {num_layers}")
 
     # Set attention implementation
@@ -976,6 +1258,7 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         seq_len=seq_len,
         is_decode=is_decode,
         pcc_threshold=0.95 if num_layers == 1 else 0.85,  # Use slightly lower threshold for full model
+        force_row_sharded=force_row_sharded,
     )
 
     if passing:

@@ -85,6 +85,7 @@ def decode_forward(
     combine_config: AllToAllCombineConfig,
     program_config: ThroughputProgramConfig,
     mesh_device,
+    ccl_manager=None,
 ) -> ttnn.Tensor:
     """Decode forward pass with all_to_all dispatch and combine.
 
@@ -380,21 +381,21 @@ def decode_forward(
     output = ttnn.sum(weighted_output, dim=0, keepdim=True)
     ttnn.deallocate(weighted_output)
 
-    # All-reduce across columns (cluster_axis=1) to aggregate expert outputs
-    # Why this is needed:
-    # 1. Experts are sharded across ALL devices in 2D (rows x cols)
-    # 2. all_to_all_dispatch/combine on axis=0 handles row-wise redistribution
-    # 3. But tokens may route to experts in different COLUMNS
-    # 4. After combine, each device has partial results from experts in its column
-    # 5. We need to sum these partials across columns to get complete expert outputs
-    output_all_reduced = ttnn.all_reduce(
+    # Reduce-scatter across columns (cluster_axis=1) to aggregate expert outputs
+    # and keep residual stream sharded across TP axis.
+    if ccl_manager is None:
+        raise RuntimeError("ccl_manager is required for reduce_scatter in throughput experts")
+    output_scattered = ttnn.experimental.reduce_scatter_minimal_async(
         output,
-        num_links=1,
-        topology=ttnn.Topology.Ring,
-        cluster_axis=1,
+        dim=3,
+        multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+        num_links=ccl_manager.num_links,
         memory_config=memory_config,
+        topology=ccl_manager.topology,
+        cluster_axis=1,
+        barrier_semaphore=ccl_manager.get_barrier_semaphore(),
     )
     ttnn.deallocate(output)
 
-    # Final shape: [1, 1, tokens_per_device, H] (tokens on dim -2)
-    return output_all_reduced
+    # Final shape: [1, 1, tokens_per_device, H/num_columns] (tokens on dim -2)
+    return output_scattered

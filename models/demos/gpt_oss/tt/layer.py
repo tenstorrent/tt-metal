@@ -30,12 +30,19 @@ class DecoderLayer:
         users_row_sharded=False,
         use_throughput_experts=False,
     ):
+        # Enable distributed RMS norm when activations are WIDTH sharded across TP dimension
+        # This avoids all_gather by computing local stats and gathering them instead
+        # Reference: llama3_70b_galaxy uses this pattern for TP > 1
+        use_distributed_norm = (mesh_config is not None and mesh_config.tp > 1) or users_row_sharded
+
         self.input_layernorm = RMSNorm(
             mesh_device,
             hf_config,
             substate(state_dict, "input_layernorm"),
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "input_layernorm"),
             mesh_config=mesh_config,
+            is_distributed=use_distributed_norm,
+            ccl_manager=ccl_manager,
         )
         self.post_attention_layernorm = RMSNorm(
             mesh_device,
@@ -43,6 +50,8 @@ class DecoderLayer:
             substate(state_dict, "post_attention_layernorm"),
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "post_attention_layernorm"),
             mesh_config=mesh_config,
+            is_distributed=use_distributed_norm,
+            ccl_manager=ccl_manager,
         )
         self.mlp = MLP(
             mesh_device,
@@ -56,6 +65,7 @@ class DecoderLayer:
         )
 
         self.attention_type = hf_config.layer_types[layer_idx]
+        self.layer_idx = layer_idx
 
         # Create attention configuration
         attention_config = AttentionConfig(
@@ -99,11 +109,23 @@ class DecoderLayer:
     ):
         # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
-        residual = hidden_states
+
+        # CRITICAL FIX: Create an explicit copy of residual to prevent buffer corruption
+        # from async operations like allgather that may share underlying memory.
+        # Without this clone, the allgather on hidden_states_post_norm can corrupt
+        # the residual tensor if they share the same underlying buffer.
+        residual = ttnn.clone(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         hidden_states_post_norm = self.input_layernorm(hidden_states)
 
-        # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
-        # hidden_states_post_norm: [1, 1, tokens/num_rows, hidden_size]
+        # All-gather over TP axis before attention (skip if norm already gathered)
+        if self.self_attn.mesh_config.tp > 1 and not self.input_layernorm.output_is_gathered:
+            hidden_states_post_norm = self.self_attn.mesh_config.allgather(
+                hidden_states_post_norm,
+                self.self_attn.ccl_manager,
+                axis=self.self_attn.mesh_config.tp_axis,
+                dim=3,
+            )
+
         hidden_states = self.self_attn(
             hidden_states_post_norm,
             rope_mats=position_embeddings,
@@ -118,14 +140,23 @@ class DecoderLayer:
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
-        residual = hidden_states
-        hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
-        # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
 
+        # CRITICAL FIX: Create an explicit copy of residual to prevent buffer corruption
+        # from async operations like allgather that may share underlying memory.
+        residual = ttnn.clone(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
+
+        # All-gather over TP axis before MLP (skip if norm already gathered)
+        if self.self_attn.mesh_config.tp > 1 and not self.post_attention_layernorm.output_is_gathered:
+            hidden_states_post_norm = self.self_attn.mesh_config.allgather(
+                hidden_states_post_norm,
+                self.self_attn.ccl_manager,
+                axis=self.self_attn.mesh_config.tp_axis,
+                dim=3,
+            )
         hidden_states = self.mlp(hidden_states_post_norm, is_decode=is_decode)  # diff with llama: router scores
         hidden_states_post_norm.deallocate(True)
 
-        # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
 

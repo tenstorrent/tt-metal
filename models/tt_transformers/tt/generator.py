@@ -311,7 +311,8 @@ class Generator:
         for idx, user_id in enumerate(empty_slots):
             # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
-            group_user_id = user_id % local_batch_size if page_table is None else 0
+            # Use per-row user id for row-sharded users even with page_table.
+            group_user_id = user_id % local_batch_size
             seq_len = int(prompt_lens[idx])  # Full length of the current prompt
             num_cached_tokens = int(start_pos[idx]) if start_pos is not None else 0
             last_token_idx = seq_len - 1  # Last token index of the current full prompt, including the cached tokens

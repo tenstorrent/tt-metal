@@ -12,7 +12,7 @@ from .operations import (
     apply_routing_weights,
     apply_sequence_parallel_allgather,
     apply_swiglu,
-    apply_tensor_parallel_allreduce,
+    apply_tensor_parallel_reduce_scatter,
     reduce_experts,
 )
 from .weights import ExpertWeights
@@ -269,7 +269,7 @@ def prefill_forward(
 
     # Tensor parallel communication
     if tp > 1:
-        next_states = apply_tensor_parallel_allreduce(
+        next_states = apply_tensor_parallel_reduce_scatter(
             next_states,
             mesh_config,
             mesh_device,
@@ -278,16 +278,25 @@ def prefill_forward(
             seq_len_global,
             tp,
         )
+        # After reduce_scatter, hidden dimension is sharded across TP devices
+        output_hidden_size = config.hidden_size // tp
+    else:
+        output_hidden_size = config.hidden_size
 
     # Sequence parallel all-gather
     if sp > 1:
         next_states = apply_sequence_parallel_allgather(next_states, mesh_config, ccl_manager)
 
     # Final reshape
+    # Physical shape must be tile-aligned (pad to multiple of 32)
+    import math
+
+    padded_hidden_size = math.ceil(output_hidden_size / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
     next_states = ttnn.reshape(
         next_states,
-        (1, batch_size, seq_len_global, config.hidden_size),
-        (1, batch_size, max(32, seq_len_global), config.hidden_size),
+        (1, batch_size, seq_len_global, output_hidden_size),
+        (1, batch_size, max(32, seq_len_global), padded_hidden_size),
     )
 
     return next_states

@@ -104,6 +104,27 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, ccl_manage
     return tensor_allreduced
 
 
+def apply_tensor_parallel_reduce_scatter(tensor, mesh_config, mesh_device, ccl_manager, activation_dtype, seq_len, tp):
+    """
+    Apply tensor parallel reduce-scatter communication.
+
+    Handles dtype conversion for reduce-scatter and converts back if needed.
+    """
+    # Synchronize for prefill
+    if seq_len > 1:
+        ttnn.synchronize_device(mesh_device)
+
+    tensor_scattered = mesh_config.reduce_scatter(
+        tensor,
+        ccl_manager,
+        axis=mesh_config.tp_axis,
+        dim=3,
+    )
+    tensor.deallocate(True)
+
+    return tensor_scattered
+
+
 def apply_sequence_parallel_allgather(tensor, mesh_config, ccl_manager):
     """Apply sequence parallel allgather communication."""
     return mesh_config.allgather(tensor, ccl_manager, axis=mesh_config.sp_axis, dim=-2)

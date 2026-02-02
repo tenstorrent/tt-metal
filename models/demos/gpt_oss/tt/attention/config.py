@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from dataclasses import dataclass
 
 import ttnn
@@ -77,6 +78,12 @@ class ProgramConfig:
     prefill_out_in0_block_w: int = 1
     prefill_out_out_subblock_h: int = 1
     prefill_out_out_subblock_w: int = 1
+
+    # DRAM sharded matmul config (for decode attention projections)
+    # Set use_dram_sharded=True to enable DRAM sharded matmuls for decode
+    use_dram_sharded: bool = False
+    dram_sharded_num_cores: int = 8  # Number of cores for DRAM sharded matmul
+    tile_size: int = 32  # TTNN tile size
 
     def __post_init__(self):
         """Validate configuration on creation"""
@@ -216,3 +223,64 @@ class ProgramConfig:
             self.prefill_out_out_subblock_h,
             self.prefill_out_out_subblock_w,
         )
+
+    def _build_dram_sharded_config(
+        self, m: int, k: int, n: int, num_cores: int | None = None
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
+        """Build DRAM sharded matmul program config.
+
+        This config is optimized for large weight matrices stored in DRAM.
+        Reference: llama3_70b_galaxy/tt/model_config.py
+
+        Args:
+            m: Number of rows in output (typically batch * seq_len)
+            k: Inner dimension (input features)
+            n: Number of columns in output (output features)
+            num_cores: Number of cores to use. If None, uses dram_sharded_num_cores.
+
+        Returns:
+            MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+        """
+        if num_cores is None:
+            num_cores = self.dram_sharded_num_cores
+
+        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=math.ceil(k / (self.tile_size * num_cores)),
+            per_core_M=math.ceil(m / self.tile_size),
+            per_core_N=math.ceil(n / (self.tile_size * num_cores)),
+            fused_activation=None,
+        )
+
+    def get_decode_qkv_dram_sharded_config(
+        self, m: int, k: int, n: int
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig | None:
+        """Get DRAM sharded program config for decode QKV projection.
+
+        Args:
+            m: Batch size (tile-padded)
+            k: Hidden size
+            n: QKV output size (num_heads + 2*num_kv_heads) * head_dim
+
+        Returns:
+            DRAM sharded config if use_dram_sharded=True, else None
+        """
+        if not self.use_dram_sharded:
+            return None
+        return self._build_dram_sharded_config(m, k, n)
+
+    def get_decode_out_dram_sharded_config(
+        self, m: int, k: int, n: int
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig | None:
+        """Get DRAM sharded program config for decode output projection.
+
+        Args:
+            m: Batch size (tile-padded)
+            k: num_heads * head_dim (after concat heads)
+            n: Hidden size
+
+        Returns:
+            DRAM sharded config if use_dram_sharded=True, else None
+        """
+        if not self.use_dram_sharded:
+            return None
+        return self._build_dram_sharded_config(m, k, n)

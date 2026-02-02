@@ -7,7 +7,7 @@ import ttnn
 from models.demos.gpt_oss.config import Mode
 
 from .config import ExpertConfig, ProgramConfig
-from .operations import apply_expert_parallel_allreduce, apply_swiglu, apply_tensor_parallel_allreduce
+from .operations import apply_expert_parallel_allreduce, apply_swiglu, apply_tensor_parallel_reduce_scatter
 from .weights import ExpertWeights
 
 
@@ -144,17 +144,25 @@ def decode_forward(
 
     # Tensor parallel communication
     if tp > 1:
-        # Note: apply_tensor_parallel_allreduce already handles deallocating the input tensor
-        next_states = apply_tensor_parallel_allreduce(
+        # Note: apply_tensor_parallel_reduce_scatter already handles deallocating the input tensor
+        next_states = apply_tensor_parallel_reduce_scatter(
             next_states, mesh_config, mesh_device, ccl_manager, activation_dtype, seq_len, tp
         )
+        # After reduce_scatter, hidden dimension is sharded across TP devices
+        output_hidden_size = config.hidden_size // tp
+    else:
+        output_hidden_size = config.hidden_size
 
     # Final reshape
+    # Physical shape must be tile-aligned (pad to multiple of 32)
+    import math
+
+    padded_hidden_size = math.ceil(output_hidden_size / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
     # Note: reshape typically returns a view, so we don't deallocate the original
     next_states = ttnn.reshape(
         next_states,
-        (1, batch_size, seq_len, config.hidden_size),
-        (1, batch_size, max(32, seq_len), config.hidden_size),
+        (1, batch_size, seq_len, output_hidden_size),
+        (1, batch_size, max(32, seq_len), padded_hidden_size),
     )
 
     return next_states

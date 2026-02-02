@@ -61,6 +61,7 @@ class MLP:
                 dispatch_cluster_axis=0,
                 decode_memory_config=ttnn.L1_MEMORY_CONFIG,  # L1 for better decode throughput
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                ccl_manager=ccl_manager,
             )
         else:
             # Create expert config from HF config

@@ -165,6 +165,24 @@ class MeshConfig:
             gathered = gathered_sliced
         return gathered
 
+    def reduce_scatter(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3):
+        """
+        Reduce-scatter operation for tensor parallel communication.
+
+        Note: Caller should check if communication is needed before calling.
+        """
+        memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+        return ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            dim=dim,
+            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+            num_links=ccl_manager.num_links,
+            memory_config=memory_config,
+            topology=ccl_manager.topology,
+            cluster_axis=axis,
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        )
+
     def allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3, linear=False):
         """
         All-gather operation for tensor parallel communication

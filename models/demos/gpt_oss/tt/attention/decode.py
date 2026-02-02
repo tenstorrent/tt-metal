@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
-from .operations import apply_allreduce, apply_rope
+from .operations import apply_reduce_scatter, apply_rope
 from .weights import AttentionWeights
 
 
@@ -129,10 +131,8 @@ def decode_forward(
             scale=config.scaling,
             program_config=program_config.get_decode_sdpa_config(mesh_device),
             compute_kernel_config=program_config.get_compute_kernel_config(),
-            # memory_config=height_sharded_mem_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=height_sharded_mem_config,  # Changed from DRAM to L1 for better decode throughput
         )
-        tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     else:
         tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
             tt_q,
@@ -159,7 +159,6 @@ def decode_forward(
 
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-    tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
     tt_out = ttnn.reshape(
         tt_out,
         (1, 1, batch_size, hidden_size),
@@ -167,8 +166,18 @@ def decode_forward(
     )
     # tt_out = ttnn.unsqueeze(tt_out, 0)
 
-    # Tensor parallel allreduce
-    # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
+    # Tensor parallel reduce-scatter to keep residual stream sharded
+    if os.getenv("GPT_OSS_DEBUG_LAYER", "0") == "1":
+        try:
+            decode_forward._debug_pre_rs = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
+        except Exception as exc:
+            print(f"[GPT_OSS_DEBUG_LAYER] attn_pre_rs failed: {exc}")
+    tt_out = apply_reduce_scatter(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
+    tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
+    if os.getenv("GPT_OSS_DEBUG_LAYER", "0") == "1":
+        try:
+            decode_forward._debug_post_rs = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
+        except Exception as exc:
+            print(f"[GPT_OSS_DEBUG_LAYER] attn_post_rs failed: {exc}")
 
     return tt_out

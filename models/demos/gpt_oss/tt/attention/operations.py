@@ -116,9 +116,9 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
     return out
 
 
-def apply_allreduce(tensor, mesh_config, ccl_manager, batch_size: int, seq_len: int, hidden_size: int):
+def apply_reduce_scatter(tensor, mesh_config, ccl_manager, batch_size: int, seq_len: int, hidden_size: int):
     """
-    Apply tensor parallel allreduce if needed.
+    Apply tensor parallel reduce-scatter if needed.
 
     Args:
         tensor: Input tensor
@@ -129,12 +129,10 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, batch_size: int, seq_len: 
         hidden_size: Hidden size for final reshape
 
     Returns:
-        Tensor after allreduce (if TP > 1) or original tensor
+        Tensor after reduce-scatter (if TP > 1) or original tensor
     """
     if mesh_config.tp > 1:
-        # tensor = ttnn.unsqueeze(tensor, 0)
-        tensor = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
-        # tensor = ttnn.reshape(tensor, (batch_size, seq_len, hidden_size))
+        tensor = mesh_config.reduce_scatter(tensor, ccl_manager, axis=mesh_config.tp_axis, dim=3)
     return tensor
 
 

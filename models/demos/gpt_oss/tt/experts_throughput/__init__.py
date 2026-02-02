@@ -98,6 +98,7 @@ class ThroughputExperts:
         dispatch_cluster_axis: Optional[int] = None,
         decode_memory_config: ttnn.MemoryConfig = None,
         prefill_memory_config: ttnn.MemoryConfig = None,
+        ccl_manager=None,
     ):
         """
         Initialize throughput experts.
@@ -122,6 +123,7 @@ class ThroughputExperts:
         self.mesh_device = mesh_device
         self.config = config
         self.program_config = program_config or ThroughputProgramConfig()
+        self.ccl_manager = ccl_manager
 
         # Memory configurations
         decode_memory_config = decode_memory_config or ttnn.L1_MEMORY_CONFIG
@@ -243,6 +245,7 @@ class ThroughputExperts:
             combine_config=self.combine_config_decode,
             program_config=self.program_config,
             mesh_device=self.mesh_device,
+            ccl_manager=self.ccl_manager,
         )
 
     def forward_prefill(
@@ -277,6 +280,7 @@ class ThroughputExperts:
             program_config=self.program_config,
             mesh_device=self.mesh_device,
             chunk_size=chunk_size,
+            ccl_manager=self.ccl_manager,
         )
 
     @classmethod

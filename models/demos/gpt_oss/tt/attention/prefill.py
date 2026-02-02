@@ -5,9 +5,9 @@ import ttnn
 
 from .config import AttentionConfig, ProgramConfig
 from .operations import (
-    apply_allreduce,
     apply_output_projection,
     apply_qkv_projection,
+    apply_reduce_scatter,
     apply_rope,
     concat_heads,
     split_qkv_heads_prefill,
@@ -92,8 +92,13 @@ def prefill_forward(
         page_len = page_table.shape[1] * block_size
         tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
         tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
-        ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=user_id)
-        ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=user_id)
+        # For single-user prefill (page_table batch dim = 1), use batch_idx=0
+        # because paged_fill_cache indexes into page_table's batch dimension.
+        # The user_id only determines where in the KV cache batch this user's
+        # data is written, and the page_table tells which physical blocks to use.
+        page_table_batch_idx = 0 if page_table.shape[0] == 1 else user_id
+        ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=page_table_batch_idx)
+        ttnn.experimental.paged_fill_cache(v_cache, tt_v_sliced, page_table, batch_idx=page_table_batch_idx)
 
     else:
         # Non-paged attention
@@ -124,7 +129,9 @@ def prefill_forward(
     # Note: apply_output_projection already deallocates its input tensor internally
     # tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, hidden_size))
 
-    # Tensor parallel allreduce
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
+    # Tensor parallel reduce-scatter to keep residual stream sharded
+    tt_out = apply_reduce_scatter(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
+    # Match decode: keep reduce-scatter in bf16, then cast to bfp8 for residual stream
+    tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
 
     return tt_out

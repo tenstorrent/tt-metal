@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 
 import ttnn
@@ -142,8 +144,9 @@ class Model:
             dtype=ttnn.bfloat16,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
+            # cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
         self.layers = [
             DecoderLayer(
@@ -164,13 +167,19 @@ class Model:
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
+        # Enable distributed RMS norm when TP > 1 or users are row sharded
+        # This matches the logic in DecoderLayer
+        use_distributed_norm = (self.mesh_config is not None and self.mesh_config.tp > 1) or users_row_sharded
         self.norm = RMSNorm(
             mesh_device,
             hf_config,
             substate(state_dict, "model.norm"),
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "norm"),
             mesh_config=self.mesh_config,
+            is_distributed=use_distributed_norm,
+            ccl_manager=ccl_manager,
         )
+        self.torch_norm_weight = substate(state_dict, "model.norm")["weight"].detach().clone()
         self.lm_head_weight = ttnn.as_tensor(
             substate(state_dict, "lm_head")["weight"].transpose(0, 1),
             device=mesh_device,
@@ -180,6 +189,7 @@ class Model:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
+        self.torch_lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1).detach().clone()
 
     @classmethod
     def create_transformer_compatible(
@@ -261,6 +271,7 @@ class Model:
                 is_decode=is_decode,
                 user_id=user_id,
             )
+
         logits = hidden_states
 
         if get_last_token != -1:
@@ -273,19 +284,70 @@ class Model:
             hidden_states = logits
 
         # Final norm and lm_head
+        debug_head = os.getenv("GPT_OSS_DEBUG_HEAD", "0") == "1"
+        if debug_head:
+            debug_input = hidden_states
+            # Preserve decoder output before final norm for debug comparison.
+            self._debug_last_hidden_states = ttnn.clone(hidden_states)
         hidden_states = self.norm(hidden_states)
+        config = self.mesh_config.get_config(mode)
+        # All-gather over TP axis before lm_head when using distributed norm
+        # (hidden_states is per-device, lm_head expects full hidden_size)
+        # Skip if norm already gathered (for non-tile-aligned per-device sizes)
+        if config.tp > 1 and not self.norm.output_is_gathered:
+            hidden_states = self.mesh_config.allgather(
+                hidden_states, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=3
+            )
+        if debug_head:
+            debug_input_gathered = debug_input
+            if config.tp > 1 and not self.norm.output_is_gathered:
+                debug_input_gathered = self.mesh_config.allgather(
+                    debug_input, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=3
+                )
+            # After TP all-gather, columns are replicated; only concat rows.
+            mesh_shape = (self.mesh_device.shape[0], 1) if config.tp > 1 else tuple(self.mesh_device.shape)
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=mesh_shape)
+            input_torch = ttnn.to_torch(debug_input_gathered, mesh_composer=mesh_composer).float()
+            norm_torch = ttnn.to_torch(hidden_states, mesh_composer=mesh_composer).float()
+            weight = self.torch_norm_weight.float().view(1, 1, 1, -1)
+            eps = self.norm.eps
+            ref = input_torch * torch.rsqrt(input_torch.pow(2).mean(dim=-1, keepdim=True) + eps)
+            ref = ref * weight
+            pcc = self._pcc(ref, norm_torch)
+            print(f"[GPT_OSS_DEBUG_HEAD] final_norm PCC: {pcc:.6f}")
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
-        # TP all-gather if using tensor parallelism
-        config = self.mesh_config.get_config(mode)
+        # TP all-gather after lm_head to assemble full logits
         if config.tp > 1:
             logits_gathered = self.mesh_config.allgather(
                 logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=-1
             )
             logits.deallocate(True)
             logits = logits_gathered
+        if debug_head:
+            mesh_shape = (self.mesh_device.shape[0], 1) if config.tp > 1 else tuple(self.mesh_device.shape)
+            mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=mesh_shape)
+            logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer).float()
+            ref_logits = input_torch @ self.torch_lm_head_weight.float()
+            pcc = self._pcc(ref_logits, logits_torch)
+            print(f"[GPT_OSS_DEBUG_HEAD] lm_head PCC: {pcc:.6f}")
 
         return logits
+
+    @staticmethod
+    def _pcc(a, b):
+        a = a.reshape(-1)
+        b = b.reshape(-1)
+        if a.numel() == 0 or b.numel() == 0:
+            return float("nan")
+        a = a.float()
+        b = b.float()
+        a = a - a.mean()
+        b = b - b.mean()
+        denom = torch.sqrt((a * a).sum() * (b * b).sum())
+        if denom == 0:
+            return float("nan")
+        return (a * b).sum().div(denom).item()
 
     def ttnn_decode_forward(
         self,
@@ -301,7 +363,7 @@ class Model:
         Decode forward pass - processes single tokens.
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
         """
-        # Embed tokens
+        # Embed tokens (embedding weight is column-sharded, so output is already sharded)
         input_embeds = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         input_embeds = ttnn.unsqueeze(input_embeds, 0)
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
@@ -566,7 +628,6 @@ class Model:
             return concat_out[:B, 0]  # [batch_size]
 
         torch_out = concat_out[:, 0, :, :]  # [1, 1, B, vocab_size]
-        # TODO: this view is dangerous, forces bad tensor shapes to work but we get garbage outputs if they're wrong
         return torch_out.view(B, S, -1)
 
     def concat_device_output(self, tt_out):
@@ -580,8 +641,23 @@ class Model:
             return ttnn.to_torch(tt_output_tensor)
 
     def process_output_prefill(self, tt_out, last_token_idx):
-        """Process prefill output and extract last token logits"""
+        """Process prefill output and extract last token logits.
+
+        Note: The model's _forward_layers_and_head slices the output to 32 tokens starting
+        at (last_token_idx // 32) * 32. So we need to use the relative index within this
+        32-token window, which is last_token_idx % 32.
+        """
         tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
         torch_output = ttnn.to_torch(tt_output_tensor)
-        result = torch_output[..., last_token_idx, : self.vocab_size]
-        return result
+
+        # The model slices output to 32 tokens starting at (last_token_idx // 32) * 32.
+        # So the relative index within the sliced tensor is last_token_idx % 32.
+        seq_len = torch_output.shape[-2]
+        if seq_len <= 32:
+            # Output was sliced by the model - use relative index
+            relative_idx = last_token_idx % 32
+        else:
+            # Output was not sliced - use original index
+            relative_idx = last_token_idx
+
+        return torch_output[..., relative_idx, : self.vocab_size]
