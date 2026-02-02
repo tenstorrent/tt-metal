@@ -558,6 +558,39 @@ class NormalRun:
         DispatchManager.set_current_module_name(None)
         return result
 
+    def module_run_mesh(self, *args, **kwds):
+        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
+        assert self.device is not None, "Device must be set for TTNN module execution."
+        transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+        func_args = tree_map(transform, args)
+        # TODO: fix kwds not being passed correctly
+        other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
+        func_kwargs = tree_map(transform, other_kwargs)
+        func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
+        begin = time.time()
+        self.preprocess_weights()
+        end = time.time()
+        DispatchManager.set_current_module_name(self.module_name)
+        DispatchManager.record_timing(
+            "TTNN", self.module_name, self.__class__.__name__ + "_preprocess_weights", {}, end - begin
+        )
+        begin = time.time()
+        self.move_weights_to_device()
+        end = time.time()
+        DispatchManager.record_timing(
+            "TTNN", self.module_name, self.__class__.__name__ + "_move_weights_to_device", {}, end - begin
+        )
+        if NormalRun.signpost_mode is not None:
+            signpost(f"{self.module_name}", f"{self.__class__.__name__}")
+        begin = time.time()
+        result = post_process_ttnn_module_output(self, self.forward_mesh(*func_args, **func_kwargs))
+        end = time.time()
+        DispatchManager.record_timing(
+            "TTNN", self.module_name, self.__class__.__name__ + "_forward_mesh", {}, end - begin
+        )
+        DispatchManager.set_current_module_name(None)
+        return result
+
 
 class LightweightRun(NormalRun):
     @staticmethod
