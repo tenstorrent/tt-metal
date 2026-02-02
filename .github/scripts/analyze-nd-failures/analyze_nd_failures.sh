@@ -23,7 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROMPT_FILE="${SCRIPT_DIR}/analysis_prompt.md"
 DOWNLOAD_SCRIPT="${SCRIPT_DIR}/download_job_logs.sh"
 REPO_ROOT="${SCRIPT_DIR}/../../.."
-BASE_OUTPUT_DIR="${REPO_ROOT}/build_nd_analysis"
+BASE_OUTPUT_DIR="${REPO_ROOT}/build_ND_analysis"  # Fixed location, ignored by git via build_* pattern
 
 # User for running Claude CLI when script runs as root
 CLAUDE_USER="claude-runner"
@@ -427,7 +427,6 @@ main() {
     # Configuration variables
     local urls=()
     local urls_file=""
-    local custom_output_dir=""
     local claude_model="sonnet"
     local skip_download=false
     local keep_output=false
@@ -443,11 +442,7 @@ main() {
                 urls_file=$2
                 shift 2
                 ;;
-            --output-dir|-o)
-                custom_output_dir=$2
-                shift 2
-                ;;
-            --name|-n)
+            --name|-n|-o)
                 USER_PROVIDED_NAME=$2
                 shift 2
                 ;;
@@ -482,12 +477,14 @@ Usage: analyze_nd_failures.sh [OPTIONS] <job_url> [job_url_2] ...
 
 Analyze non-deterministic failures from GitHub Actions jobs using Claude.
 
+Output is saved to: build_ND_analysis/<name>/
+
 OPTIONS:
-  --name, -n <name>       Human-readable name for output folder
-                          Example: --name "vit-timeout-issue"
+  --name, -n, -o <name>   Name for the output subfolder
+                          Example: -o "vit-timeout-issue"
+                          Default: auto-generated from job name and error type
   --model, -m <model>     Claude model: haiku, sonnet, sonnet-1M, opus (default: sonnet)
   --file, -f <file>       Read job URLs from file (one per line)
-  --output-dir, -o <dir>  Output directory (default: <repo>/build_nd_analysis)
   --skip-download         Skip log download, use existing logs
   --keep-output           Don't clean up temporary files
   --no-overwrite          Create numbered folders instead of overwriting
@@ -496,11 +493,11 @@ OPTIONS:
   --help, -h              Show this help
 
 EXAMPLES:
-  # Basic analysis
+  # Basic analysis (auto-named folder)
   ./analyze_nd_failures.sh https://github.com/tenstorrent/tt-metal/actions/runs/123/job/456
 
   # With custom folder name
-  ./analyze_nd_failures.sh --name "vit-demo-timeout" <job_url>
+  ./analyze_nd_failures.sh -o "vit-demo-timeout" <job_url>
 
   # Batch analysis with Opus
   ./analyze_nd_failures.sh --file failed_jobs.txt --model opus
@@ -521,8 +518,7 @@ EOF
         esac
     done
 
-    # Set output directory
-    [[ -n "$custom_output_dir" ]] && BASE_OUTPUT_DIR="$custom_output_dir"
+    # Create output directory
     mkdir -p "$BASE_OUTPUT_DIR"
 
     # Read URLs from file if provided
