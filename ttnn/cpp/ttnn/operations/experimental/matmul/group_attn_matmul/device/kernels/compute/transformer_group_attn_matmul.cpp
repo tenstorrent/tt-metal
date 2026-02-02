@@ -54,10 +54,6 @@ void kernel_main() {
     constexpr uint32_t num_rows_in_one_tile = 32;
     constexpr uint32_t in0_num_blocks_w = 1; // TODO: Generalize
 
-    // Config for re-tilizing accumulated rows back to tile format for output
-    using RetilizeAccumulatedRows = TilizeConfig<
-        InputCB<cb_intermed1>, OutputCB<out_cb_id>, TilizeFlags::DT_RECONFIG, PreviousCB<cb_in1>>;
-
     // need switching between ColMajor and RowMajor for at least 32 times, inefficient
     #ifdef ARCH_GRAYSKULL
     mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
@@ -156,12 +152,20 @@ void kernel_main() {
                 }  // in1_num_blocks loop
             } // in0_num_blocks_w
 
-            // Reader has accumulated rows into cb_intermed1 (row-major)
+            // cb_intermed1 comes from reader; untilized row-major tile
             reconfig_data_format_srca(cb_in1, cb_intermed1);
             pack_reconfig_data_format(cb_intermed0, out_cb_id);
 
-            // Re-tilize accumulated rows to tile format for output
-            compute_kernel_lib::tilize<RetilizeAccumulatedRows>(out_num_tiles, 1);
+            // tilize CB::intermed1 and write to CBIndex::c_16
+            compute_kernel_lib::tilize<
+                cb_intermed1,
+                out_cb_id,
+                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
+                cb_in1>(
+                out_num_tiles,
+                1);
 
             cb_pop_front(cb_in0, in0_block_num_tiles);
         } // Mt loop

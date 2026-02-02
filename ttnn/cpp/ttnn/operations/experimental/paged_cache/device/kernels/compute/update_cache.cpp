@@ -35,32 +35,28 @@ void kernel_main() {
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
-    // Config for untilizing new input tokens (skip uninit since we only do this once)
-    using UntilizeNewToken =
-        UntilizeConfig<WidthInTiles<Wt>, InputCB<in_cb>, OutputCB<untilized_in_cb>, UntilizeFlags::SKIP_UNINIT>;
-
-    // Config for untilizing existing cache blocks
-    using UntilizeCacheBlock = UntilizeConfig<WidthInTiles<Wt>, InputCB<cache_cb>, OutputCB<untilized_cache_cb>>;
-
-    // Config for re-tilizing the updated cache (with data format reconfig)
-    using RetilizeUpdatedCache =
-        TilizeConfig<InputCB<untilized_cache2_cb>, OutputCB<out_cb>, TilizeFlags::DT_RECONFIG, PreviousCB<cache_cb>>;
-
-    // Untilize the new input token
-    compute_kernel_lib::untilize<UntilizeNewToken>(1);
+    // Untilize input (standalone operation)
+    compute_kernel_lib::untilize<Wt, in_cb, untilized_in_cb>(1);
 
     reconfig_data_format_srca(in_cb, cache_cb);
     pack_reconfig_data_format(untilized_in_cb, untilized_cache_cb);
-
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        // Untilize cache block to be updated
-        compute_kernel_lib::untilize<UntilizeCacheBlock>(1);
+        // Untilize a block from the cache - DEST limit auto-detected
+        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
 
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-        // Writer updates the untilized cache with new token. Re-tilize the result.
-        compute_kernel_lib::tilize<RetilizeUpdatedCache>(Wt, 1);
+        // Wait on writer to update block. Tilize with DT reconfiguration.
+        compute_kernel_lib::tilize<
+            untilized_cache2_cb,  // input_cb
+            out_cb,               // output_cb
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
+            cache_cb>(  // reconfig_from_cb (for DT restoration)
+            Wt,         // block_width_tiles
+            1);         // num_blocks
 
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }
