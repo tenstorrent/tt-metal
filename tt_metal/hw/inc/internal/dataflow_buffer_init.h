@@ -10,6 +10,7 @@
 #include "internal/circular_buffer_interface.h"  // for cb_addr_shift
 #ifndef COMPILE_FOR_TRISC
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
+#include "internal/tt-2xx/quasar/overlay/remapper_api.hpp"
 #endif
 
 #include "api/debug/dprint.h"
@@ -17,6 +18,7 @@
 // Global DFB interface array - defined in firmware, declared here for use by setup functions
 // For kernels (NCRISC/BRISC/TRISC), provide a definition since they're compiled separately
 extern thread_local ::experimental::LocalDFBInterface g_dfb_interface[32];
+extern RemapperAPI g_remapper_configurator;
 
 namespace experimental {
 
@@ -28,6 +30,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     uint32_t num_dfbs =
         local_dfb_mask;  // kernel config holds local_cb_mask but it gets hijacked to hold number of dfbs
     volatile uint8_t* base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
+
+    bool enable_remapper = false;  // if remapper used once then needs to be globally set
 
     for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
         // Read dfb_initializer_t (shared config)
@@ -50,8 +54,6 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
             DPRINT << "risc_index: " << static_cast<uint32_t>(risc_index) << ENDL();
 
-            // uint32_t override_stride = risc_index == 0 ? 1024 : 4096;
-
             // Copy per-risc fields
             for (uint8_t i = 0; i < 4; i++) {
                 dfb_interface.base_addr[i] = per_risc_ptr->base_addr[i] >> cb_addr_shift;
@@ -72,8 +74,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             DPRINT << "entry_size: " << static_cast<uint32_t>(dfb_interface.entry_size) << ENDL();
             dfb_interface.stride_size = init_ptr->stride_size;
             DPRINT << "stride_size: " << static_cast<uint32_t>(dfb_interface.stride_size) << ENDL();
-            dfb_interface.remapper_pair_index = init_ptr->remapper_pair_index;
-            DPRINT << "remapper_pair_index: " << static_cast<uint32_t>(dfb_interface.remapper_pair_index) << ENDL();
+
             dfb_interface.num_txn_ids = init_ptr->num_txn_ids;
             for (uint8_t i = 0; i < 4; i++) {
                 dfb_interface.txn_ids[i] = init_ptr->txn_ids[i];
@@ -81,9 +82,12 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             dfb_interface.num_entries_per_txn_id = init_ptr->num_entries_per_txn_id;
             dfb_interface.num_entries_per_txn_id_per_tc = init_ptr->num_entries_per_txn_id_per_tc;
 
+            dfb_interface.remapper_pair_index = per_risc_ptr->flags.remapper_pair_index;
+            DPRINT << "remapper_pair_index: " << static_cast<uint32_t>(dfb_interface.remapper_pair_index) << ENDL();
+
 #ifndef COMPILE_FOR_TRISC
-            // Initialize TCs - only the RISC marked as responsible should do this
-            if (per_risc_ptr->should_init_tc) {  //
+            // Initialize TCs - only the RISC marked as responsible should do this (producer)
+            if (per_risc_ptr->flags.should_init_tc) {  //
                 for (uint8_t tc = 0; tc < per_risc_ptr->num_tcs_to_rr; tc++) {
                     PackedTileCounter ptc = per_risc_ptr->packed_tile_counter[tc];
                     uint8_t tensix_id = get_tensix_id(ptc);
@@ -95,6 +99,35 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     llk_intf_reset(tensix_id, tc_id);
                     llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
                 }
+
+                if (dfb_interface.remapper_pair_index != 0xFF) {
+                    enable_remapper = true;
+                    uint8_t remapper_consumer_mask = init_ptr->remapper_consumer_mask;
+                    uint8_t num_clientRs = __builtin_popcount(remapper_consumer_mask);
+                    uint8_t clientR_valid_mask = (1u << num_clientRs) - 1;
+                    g_remapper_configurator.set_pair_index(dfb_interface.remapper_pair_index);
+                    g_remapper_configurator.configure_clientL_all_fields(
+                        risc_index,                                            // id_L
+                        get_counter_id(per_risc_ptr->packed_tile_counter[0]),  // in SxB mode, producers have 1 TC
+                        clientR_valid_mask,
+                        1,  // is_producer
+                        1,  // group mode
+                        0   // distribute mode
+                    );
+                    // explore each consumer programming their R slot rather than producer doing all
+                    for (uint8_t clientR_idx = 0; clientR_idx < num_clientRs; clientR_idx++) {
+                        uint8_t mask = remapper_consumer_mask;
+                        for (uint8_t i = 0; i < clientR_idx; i++) {
+                            mask &= mask - 1;
+                        }
+                        uint8_t id_R = __builtin_ctz(mask);
+                        uint8_t tc_R = (per_risc_ptr->consumer_tcs >> (clientR_idx * 5)) &
+                                       0x1F;  // TC can be value between 0 and 31
+                        g_remapper_configurator.set_clientR_slot(clientR_idx, id_R, tc_R);
+                    }
+                    g_remapper_configurator.write_all_configs();
+                }
+
                 init_ptr->risc_mask_bits.tc_initialized = 1;
             }
 #endif
@@ -122,6 +155,11 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
             base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
         }
+    }
+
+    // all DFBs were initialized, safe to enable remapper if used
+    if (enable_remapper) {
+        g_remapper_configurator.enable_remapper();
     }
 }
 

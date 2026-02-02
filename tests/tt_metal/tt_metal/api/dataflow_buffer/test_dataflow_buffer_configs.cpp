@@ -218,6 +218,88 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2S) {
     run_dfb_program(this->devices_.at(0), config);
 }
 
+TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4B) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x1E,
+        .num_consumers = 4,
+        .cap = ::experimental::AccessPattern::BLOCKED,
+        .enable_implicit_sync = false};
+
+    run_dfb_program(this->devices_.at(0), config);
+}
+
+TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1B) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .num_producers = 4,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .num_consumers = 1,
+        .cap = ::experimental::AccessPattern::BLOCKED,
+        .enable_implicit_sync = false};
+
+    run_dfb_program(this->devices_.at(0), config);
+}
+
+TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4B) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .num_producers = 4,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .num_consumers = 4,
+        .cap = ::experimental::AccessPattern::BLOCKED,
+        .enable_implicit_sync = false};
+
+    run_dfb_program(this->devices_.at(0), config);
+}
+
+TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2B) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .num_producers = 4,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .num_consumers = 2,
+        .cap = ::experimental::AccessPattern::BLOCKED,
+        .enable_implicit_sync = false};
+
+    run_dfb_program(this->devices_.at(0), config);
+}
+
+TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4B) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .num_producers = 2,
+        .pap = ::experimental::AccessPattern::STRIDED,
+        .num_consumers = 4,
+        .cap = ::experimental::AccessPattern::BLOCKED,
+        .enable_implicit_sync = false};
+
+    run_dfb_program(this->devices_.at(0), config);
+}
+
 //
 // just config -- add actual checks
 //
@@ -228,8 +310,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4SConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
+        .producer_risc_mask = 0x1,
         .num_producers = 1,
         .pap = ::experimental::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
@@ -246,8 +330,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx1SConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
+        .producer_risc_mask = 0xF,
         .num_producers = 4,
         .pap = ::experimental::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x10,
         .num_consumers = 1,
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
@@ -264,8 +350,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx4SConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
+        .producer_risc_mask = 0xF,
         .num_producers = 4,
         .pap = ::experimental::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
@@ -282,8 +370,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB2Sx4SConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
+        .producer_risc_mask = 0x3,
         .num_producers = 2,
         .pap = ::experimental::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
@@ -300,8 +390,10 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB4Sx2SConfig) {
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
+        .producer_risc_mask = 0xF,
         .num_producers = 4,
         .pap = ::experimental::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x30,
         .num_consumers = 2,
         .cap = ::experimental::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
@@ -318,6 +410,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx1BConfig) {  // update this to not u
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
+        .producer_risc_mask = 0x1,
         .num_producers = 1,
         .pap = ::experimental::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x2,
@@ -340,6 +433,7 @@ TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx4BConfig) {
         .producer_risc_mask = 0x1,
         .num_producers = 1,
         .pap = ::experimental::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
         .cap = ::experimental::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};

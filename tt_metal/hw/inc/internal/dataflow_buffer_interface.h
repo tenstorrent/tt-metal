@@ -37,7 +37,7 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(const Pac
     | dfb_initializer_per_risc_t | risc 0
     | dfb_initializer_per_risc_t | risc 1
     ...
-    (24 + (40 * 12)) * 16 = 8064 bytes
+    (24 + (44 * 12)) * 16 = 8320 bytes
 */
 struct dfb_initializer_t {  // 24 bytes
     uint32_t logical_id;
@@ -50,19 +50,25 @@ struct dfb_initializer_t {  // 24 bytes
         uint16_t reserved : 3;        // bits 12-14: unused
         uint16_t tc_initialized : 1;  // bit 15: tile counter initialized flag
     } risc_mask_bits;
-    uint8_t remapper_pair_index;
     uint8_t num_txn_ids;
     uint8_t txn_ids[4];
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
+    uint8_t remapper_consumer_mask;  // used to program remapper, for a L:R mapping, indicates which riscs make up R
 } __attribute__((packed));
 
-struct dfb_initializer_per_risc_t {  // 40 bytes
+struct dfb_initializer_per_risc_t {  // 44 bytes
     uint32_t base_addr[4];
     uint32_t limit[4];
     PackedTileCounter packed_tile_counter[4];
     uint8_t num_tcs_to_rr;
-    uint8_t should_init_tc;  // 1 = this RISC should initialize tile counters
+    struct {
+        uint8_t remapper_pair_index : 6;  // bits 0-5: 0..63
+        uint8_t reserved : 1;             // bit 6
+        uint8_t should_init_tc : 1;  // bit 7: 1 = this RISC should initialize tile counters and program the remapper
+    } __attribute__((packed)) flags;
+    uint32_t consumer_tcs;  // used to program remapper, for a L:R mapping contains all the TCs on the consumer side
+                            // (R). TC can be value between 0 and 31
     uint8_t padding[2];
 } __attribute__((packed));
 
@@ -95,7 +101,7 @@ struct LocalDFBInterface {
         num_entries_per_txn_id;  // shared across riscs so can be factored out and put into sep initialization struct
     uint8_t num_entries_per_txn_id_per_tc;  // shared across riscs so can be factored out and put into sep
                                             // initialization struct
-    uint8_t remapper_pair_index;  // shared across riscs so can be factored out and put into sep initialization struct
+    uint8_t remapper_pair_index;
     uint8_t num_tcs_to_rr;
     uint8_t num_txn_ids;  // shared across riscs so can be factored out and put into sep initialization struct
 
