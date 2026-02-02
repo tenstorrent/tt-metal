@@ -13,7 +13,7 @@ jobs:
     steps:
       - name: Auto-approve PR
         env:
-          GH_TOKEN: ${{ secrets.WILDER_PAT }}
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
         run: |
           echo "🔍 Finding PR in llk-submodule-uplift branch..."
 
