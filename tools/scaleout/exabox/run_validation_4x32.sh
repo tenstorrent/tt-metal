@@ -18,7 +18,7 @@ fi
 HOSTS="$1"
 DOCKER_IMAGE="$2"
 # Default output directory based on hosts
-DEFAULT_OUTPUT="validation_output-$(echo $HOSTS | sed 's/bh-glx-//g' | tr ',' '_')"
+DEFAULT_OUTPUT="validation_output-$(echo "$HOSTS" | sed 's/bh-glx-//g' | tr ',' '_')"
 # Optional output path
 OUTPUT_PATH="${3:-$DEFAULT_OUTPUT}"
 echo "Using hosts: $HOSTS"
