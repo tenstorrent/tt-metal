@@ -1582,8 +1582,8 @@ void sdpa_inner_loop(
              *  cur_max = max(qk, dim=-1)
              */
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
-                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
+                alias_cur_max, alias_prev_max, processed_k_chunks > 0);
 
             /**
              * sub_exp fuses a few operations.
@@ -1676,8 +1676,8 @@ void sdpa_inner_loop(
             //    This compares the previous max with the sink logit
             reconfig_data_format(cb_attention_sink, cb_identity_scale_in);
 
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_attention_sink, cb_identity_scale_in, Sq_chunk_t>(
-                alias_cur_max, alias_prev_max, 1, true);
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_attention_sink, cb_identity_scale_in, Sq_chunk_t, 1>(
+                alias_cur_max, alias_prev_max, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
