@@ -612,7 +612,11 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
         # Matmul based upsample
         logger.debug(f"y shape: {y.shape}")
-        y = ttnn.reshape(y, (y.shape[0], 128, 256, y.shape[3]))
+        assert y.shape[1] == current_h and y.shape[2] == current_w, (
+            f"Final upsample reshape mismatch: "
+            f"tensor has {y.shape[1]}x{y.shape[2]}, "
+            f"but tracked dims are {current_h}x{current_w}"
+        )
         signpost("FINAL_UPSAMPLE_SEMSEG_START")
         y = self.final_upsample(y)
         signpost("FINAL_UPSAMPLE_SEMSEG_END")
