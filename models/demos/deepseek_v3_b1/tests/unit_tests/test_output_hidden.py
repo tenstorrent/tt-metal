@@ -68,7 +68,10 @@ def test_output_hidden(device, M, K, N, in0_dtype, in1_dtype):
     torch_weights = torch.randn((K, N), dtype=torch.bfloat16)
 
     # Compute reference output using PyTorch
-    torch_expected = OutputHidden.golden(torch_input.float(), torch_weights.float()).bfloat16()
+    # Note: Each core gets the same [1, 8192] input, so we compute golden reference
+    # using only the first row (M=1), not the full [96, 8192] tensor
+    torch_input_single = torch_input[0:1, :]  # Take first row: [1, 8192]
+    torch_expected = OutputHidden.golden(torch_input_single.float(), torch_weights.float()).bfloat16()
 
     # ========================================================================
     # Create input tensor (height-sharded across matmul cores)
