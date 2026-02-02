@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t row_width = get_compile_time_arg_val(1);
     constexpr uint32_t num_cores_total = get_compile_time_arg_val(2);
     constexpr uint32_t datum_size = get_compile_time_arg_val(3);
-    constexpr auto src_tensor_args = TensorAccessorArgs<2>();
+    constexpr auto src_tensor_args = TensorAccessorArgs<4>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t height_per_core = get_arg_val<uint32_t>(1);
@@ -39,17 +39,16 @@ void kernel_main() {
         // Reserve space in circular buffer for 1024 datums (one tile)
         cb_reserve_back(cb_id_out, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_id_out);
+        uint64_t offset = tile_col * tile_width_bytes;
 
         // Inner loop for 32 rows (tile_height)
         for (uint32_t tile_row = 0; tile_row < tt::constants::TILE_HEIGHT; tile_row++) {
-            noc_async_read(noc_addrs[tile_row] + tile_col * tile_width_bytes, l1_write_addr, tile_width_bytes);
+            noc_async_read(noc_addrs[tile_row] + offset, l1_write_addr, tile_width_bytes);
 
             l1_write_addr += tile_width_bytes;
         }
 
         noc_async_read_barrier();
-        tt::data_movement::common::print_bf16_pages(l1_write_addr, 1024, 1);
         cb_push_back(cb_id_out, 1);
-        core_number++;
     }
 }

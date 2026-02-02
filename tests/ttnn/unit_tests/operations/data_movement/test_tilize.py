@@ -50,10 +50,8 @@ def test_tilize_fp32_truncation(device, shape, use_multicore):
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-# @pytest.mark.parametrize("tensor_shape", [[32, 256 * 64]])  # Original: 32 x 16384
-# @pytest.mark.parametrize("shard_shape", [[32, 256]])
-@pytest.mark.parametrize("tensor_shape", [[32, 32 * 64]])  # Smaller for debugging: 32 x 2048
-@pytest.mark.parametrize("shard_shape", [[32, 32]])
+@pytest.mark.parametrize("tensor_shape", [[32, 256 * 64]])
+@pytest.mark.parametrize("shard_shape", [[32, 256]])
 @pytest.mark.parametrize(
     "shard_core_grid", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})]
 )  # 64 cores in an 8x8 grid
@@ -66,20 +64,19 @@ def test_tilize_row_major_to_width_sharded(device, dtype, tensor_shape, shard_sh
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
     # Create test data with sequential values from 1 to n for debugging
-    # for _ in range(30):
-    total_elements = tensor_shape[0] * tensor_shape[1]
-    # input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
-    input_torch_tensor = torch.arange(1, total_elements + 1, dtype=torch.bfloat16).reshape(tensor_shape)
-    # Convert to ttnn tensor with row major layout and width sharding
-    input_ttnn_tensor = ttnn.from_torch(
-        input_torch_tensor,
-        dtype=dtype,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=input_memory_config,
-    )
-    ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config)
-    output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
-    # print(input_torch_tensor)
-    # print(output_torch_tensor)
-    assert torch.equal(input_torch_tensor, output_torch_tensor)
+    for _ in range(30):
+        total_elements = tensor_shape[0] * tensor_shape[1]
+        input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+
+        # Convert to ttnn tensor with row major layout and width sharding
+        input_ttnn_tensor = ttnn.from_torch(
+            input_torch_tensor,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_memory_config,
+        )
+        ttnn_output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config)
+        output_torch_tensor = ttnn.to_torch(ttnn_output_tensor)
+
+        assert torch.equal(input_torch_tensor, output_torch_tensor)
