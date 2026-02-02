@@ -1,0 +1,34 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "{{ operation_name }}_pybind.hpp"
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "ttnn-pybind/decorators.hpp"
+#include "{{ operation_name }}.hpp"
+
+namespace ttnn::operations::{{ operation_name }} {
+
+namespace py = pybind11;
+
+void py_bind_{{ operation_name }}(py::module& module) {
+    const auto doc = R"doc({{ docstring }})doc";
+
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::{{ operation_name }},
+        doc,
+        ttnn::pybind_arguments_t{
+{% for tensor in input_tensors %}
+            py::arg("{{ tensor.name }}"),
+{% endfor %}
+{% for param in parameters %}
+            py::arg("{{ param.name }}"){% if param.default %} = {{ param.default }}{% endif %},
+{% endfor %}
+            py::arg("memory_config") = std::nullopt});
+}
+
+}  // namespace ttnn::operations::{{ operation_name }}

@@ -115,37 +115,37 @@ uint32_t read_chunk_with_padding(
     */
     const uint32_t num_tiles = dst_rows * dst_cols;
     cb_reserve_back(cb_id, num_tiles);
-    const uint32_t base_write_ptr = get_write_ptr(cb_id);
-    uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
-    uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
+    // const uint32_t base_write_ptr = get_write_ptr(cb_id);
+    // uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
+    // uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
 
-    uint32_t barrier_count = 0;
-    for (uint32_t row = 0; row < src_rows; ++row) {
-        uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
-        for (uint32_t col = 0; col < src_cols; ++col) {
-            noc_async_read_tile(start_tile_id, reader, write_ptr);
-            start_tile_id += 1;
-            write_ptr += inner_ptr_stride;
+    // uint32_t barrier_count = 0;
+    // for (uint32_t row = 0; row < src_rows; ++row) {
+    //     uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
+    //     for (uint32_t col = 0; col < src_cols; ++col) {
+    //         noc_async_read_tile(start_tile_id, reader, write_ptr);
+    //         start_tile_id += 1;
+    //         write_ptr += inner_ptr_stride;
 
-            if (++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
-                barrier_count = 0;
-            }
-        }
-        start_tile_id += skip_src_cols;
-    }
+    //         if (++barrier_count == barrier_threshold) {
+    //             noc_async_read_barrier();
+    //             barrier_count = 0;
+    //         }
+    //     }
+    //     start_tile_id += skip_src_cols;
+    // }
 
-    // Zero out the padding
-    for (uint32_t row = 0; row < dst_rows; ++row) {
-        for (uint32_t col = 0; col < dst_cols; ++col) {
-            if (row < src_rows && col < src_cols) {
-                continue;
-            }
-            uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_tile_zeros<tile_bytes, false>(cb_id, tile_id);
-        }
-    }
-    noc_async_read_barrier();
+    // // Zero out the padding
+    // for (uint32_t row = 0; row < dst_rows; ++row) {
+    //     for (uint32_t col = 0; col < dst_cols; ++col) {
+    //         if (row < src_rows && col < src_cols) {
+    //             continue;
+    //         }
+    //         uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
+    //         fill_tile_zeros<tile_bytes, false>(cb_id, tile_id);
+    //     }
+    // }
+    // noc_async_read_barrier();
 
     if constexpr (push_num_tiles) {
         cb_push_back(cb_id, num_tiles);

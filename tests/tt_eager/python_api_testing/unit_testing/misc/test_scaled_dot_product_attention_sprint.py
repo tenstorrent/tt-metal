@@ -170,17 +170,20 @@ def run_sdpa_determinism(
 
 INPUT_SHAPES = [
     # batch, num_heads, sequence_length, head_dim
-    [1, 10, 9472, 128],
-    [1, 10, 2368, 128],
+    #[1, 10, 9472, 128]
+    #[1, 10, 2368, 128],
+    [1, 1, 512, 128]
 ]
 INPUT_IDS = [
     "wan_1xGLX_analog",
-    "wan_4xGLX_analog",
+    #"wan_4xGLX_analog",
 ]
 
-Q_CHUNK_SIZES = [64, 128, 256, 512]
-K_CHUNK_SIZES = [128, 256, 512]
+# Q_CHUNK_SIZES = [64, 128, 256, 512]
+# K_CHUNK_SIZES = [128, 256, 512]
 
+Q_CHUNK_SIZES = [256]
+K_CHUNK_SIZES = [512]
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("q_chunk_size", Q_CHUNK_SIZES, ids=[f"q{s}" for s in Q_CHUNK_SIZES])

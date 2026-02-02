@@ -1,0 +1,32 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "{{ operation_name }}_nanobind.hpp"
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+
+#include "ttnn-nanobind/decorators.hpp"
+#include "{{ operation_name }}.hpp"
+
+namespace ttnn::operations::{{ operation_name }} {
+
+void bind_{{ operation_name }}_operation(nb::module_& mod) {
+    const auto doc = R"doc({{ docstring }})doc";
+
+    bind_registered_operation(
+        mod,
+        ttnn::{{ operation_name }},
+        doc,
+        ttnn::nanobind_arguments_t{
+{% for tensor in input_tensors %}
+            nb::arg("{{ tensor.name }}"),
+{% endfor %}
+{% for param in parameters %}
+            nb::arg("{{ param.name }}"){% if param.default %} = {{ param.default }}{% endif %},
+{% endfor %}
+            nb::arg("memory_config") = std::nullopt});
+}
+
+}  // namespace ttnn::operations::{{ operation_name }}
