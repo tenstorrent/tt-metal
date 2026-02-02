@@ -66,12 +66,12 @@ struct DynamicInfo {
 
 struct StaticInfo {
     uint16_t mesh_id;
-    uint8_t device_id;
-    uint8_t direction;
     uint16_t neighbor_mesh_id;
-    uint32_t fabric_config;
-    DynamicStatistics supported_stats;
+    uint8_t device_id;
     uint8_t neighbor_device_id;
+    uint8_t direction;
+    DynamicStatistics supported_stats;
+    uint32_t fabric_config;
 };
 
 struct FabricTelemetryStaticOnly {
