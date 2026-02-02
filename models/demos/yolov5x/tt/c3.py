@@ -43,7 +43,7 @@ class TtnnC3:
             self.conv_pt.cv3.conv,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=shard_layout,
-            auto_shard=False,
+            auto_shard=True if use_block_shard else False,
         )
 
         self.m = [
