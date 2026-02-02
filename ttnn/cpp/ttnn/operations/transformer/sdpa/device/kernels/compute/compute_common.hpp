@@ -22,6 +22,8 @@
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 
+#include <tools/profiler/kernel_profiler.hpp>
+
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, true /*transpose within 16x16 face*/, cbid)));
@@ -1516,26 +1518,36 @@ void sdpa_inner_loop(
 
             KV_chunks_processed_in_iter++;
 
+            // MATH(DPRINT << "Hello!" << ENDL());
+            // MATH(DPRINT << "Sq_chunk_t=" << Sq_chunk_t << " Sk_chunk_t=" << Sk_chunk_t << ENDL());
+
             /**
              * QK = Q_CHUNK @ K_CHUNK
              *
              * matmul_blocks internally waits on both inputs
              */
-            pack_reconfig_data_format(cb_qk_im);
-            matmul_blocks(
-                cb_q_in,
-                cb_k_in,
-                cb_qk_im,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                DHt,
-                qk_num_blocks,
-                qk_in0_num_subblocks,
-                qk_in1_num_subblocks,
-                qk_in0_block_w,
-                qk_subblock_h,
-                qk_subblock_w,
-                true /*transpose*/);
+             {
+                DeviceZoneScopedN("matmul_blocks (Q * K^T)");
+                pack_reconfig_data_format(cb_qk_im);
+                MATH(DPRINT << "matmul_blocks: cb_q_in=" << cb_q_in << " cb_k_in=" << cb_k_in << " cb_qk_im=" << cb_qk_im << ENDL());
+                MATH(DPRINT << "matmul_blocks: Sq_chunk_t=" << Sq_chunk_t << " Sk_chunk_t=" << Sk_chunk_t << " DHt=" << DHt << ENDL());
+                MATH(DPRINT << "matmul_blocks: qk_num_blocks=" << qk_num_blocks << " qk_in0_num_subblocks=" << qk_in0_num_subblocks << " qk_in1_num_subblocks=" << qk_in1_num_subblocks << ENDL());
+                MATH(DPRINT << "matmul_blocks: qk_in0_block_w=" << qk_in0_block_w << " qk_subblock_h=" << qk_subblock_h << " qk_subblock_w=" << qk_subblock_w << " transpose=" << (int)true << ENDL());
+                matmul_blocks(
+                    cb_q_in,
+                    cb_k_in,
+                    cb_qk_im,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    DHt,
+                    qk_num_blocks,
+                    qk_in0_num_subblocks,
+                    qk_in1_num_subblocks,
+                    qk_in0_block_w,
+                    qk_subblock_h,
+                    qk_subblock_w,
+                    true /*transpose*/);
+            }
 
             /**
              * Note
@@ -1582,9 +1594,12 @@ void sdpa_inner_loop(
              * else:
              *  cur_max = max(qk, dim=-1)
              */
-            reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
-                alias_cur_max, alias_prev_max, processed_k_chunks > 0);
+            {
+                DeviceZoneScopedN("reduce_c");
+                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
+                    alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+            }
 
             /**
              * sub_exp fuses a few operations.
@@ -1596,55 +1611,63 @@ void sdpa_inner_loop(
              * Partial reduce_sum is used to push the final row_reduction within a tile
              * outside of the loop over K chunks.
              */
-            sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
-                alias_cur_max, alias_cur_sum, Sk_chunk_t);
-
-            /* OUT_IM = QK @ V_CHUNK */
-            matmul_blocks(
-                cb_qk_im,
-                cb_v_in,
-                alias_mm2_cur_out,
-                Sq_chunk_t,
-                vDHt,
-                Sk_chunk_t,
-                out_num_blocks,
-                out_in0_num_subblocks,
-                out_in1_num_subblocks,
-                out_in0_block_w,
-                out_subblock_h,
-                out_subblock_w,
-                false /*transpose*/);
-
-            cb_pop_front(cb_qk_im, qk_chunk_tiles);
-            reconfig_data_format(alias_prev_max, alias_cur_max);
-
-            /* OUT_ACC += OUT_IM */
-            if (processed_k_chunks > 0) {
-                /**
-                 * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
-                 * Scale is fused into exp again since max is the max of unscaled scores.
-                 */
-                sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                cb_pop_front(alias_prev_max, Sq_chunk_t);
-
-                /**
-                 * cb_prev_sum *= cb_exp_max_diff
-                 * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
-                 * reduction, containing the sum of tiles in dim=-1 of QK.
-                 */
-                mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
-
-                /* cb_cur_sum += cb_prev_sum */
-                add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
-
-                /**
-                 * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
-                 * This uses L1 accumulation to accumulate onto mm2_cur_out.
-                 */
-                mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
-                    alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+            {
+                DeviceZoneScopedN("sub_exp_block_bcast_cols_inplace");
+                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
+                    alias_cur_max, alias_cur_sum, Sk_chunk_t);
             }
 
+            {
+                DeviceZoneScopedN("matmul_blocks (softmax * V)");
+                /* OUT_IM = QK @ V_CHUNK */
+                matmul_blocks(
+                    cb_qk_im,
+                    cb_v_in,
+                    alias_mm2_cur_out,
+                    Sq_chunk_t,
+                    vDHt,
+                    Sk_chunk_t,
+                    out_num_blocks,
+                    out_in0_num_subblocks,
+                    out_in1_num_subblocks,
+                    out_in0_block_w,
+                    out_subblock_h,
+                    out_subblock_w,
+                    false /*transpose*/);
+            }
+
+            {
+                DeviceZoneScopedN("rescale & accumulate");
+                cb_pop_front(cb_qk_im, qk_chunk_tiles);
+                reconfig_data_format(alias_prev_max, alias_cur_max);
+
+                /* OUT_ACC += OUT_IM */
+                if (processed_k_chunks > 0) {
+                    /**
+                    * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
+                    * Scale is fused into exp again since max is the max of unscaled scores.
+                    */
+                    sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    cb_pop_front(alias_prev_max, Sq_chunk_t);
+
+                    /**
+                    * cb_prev_sum *= cb_exp_max_diff
+                    * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
+                    * reduction, containing the sum of tiles in dim=-1 of QK.
+                    */
+                    mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+
+                    /* cb_cur_sum += cb_prev_sum */
+                    add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+
+                    /**
+                    * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
+                    * This uses L1 accumulation to accumulate onto mm2_cur_out.
+                    */
+                    mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
+                        alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+                }
+            }
             // Swap CB handles to prepare for next iteration
             std::swap(alias_prev_sum, alias_cur_sum);
             std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
