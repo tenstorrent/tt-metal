@@ -2,10 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 import ttnn
 
+import models.experimental.ops.descriptors as descriptors
+import models.experimental.ops.descriptors.composite as composite
 from tests.ttnn.utils_for_testing import assert_allclose
 
 
@@ -185,14 +186,14 @@ def test_deepseek_v3_q_kv_rms_norm(device):
     kv_tensors = create_kv_norm_tensors(device)
 
     # Create branches
-    q_branch = ttnn.experimental.programs.rms_norm(
+    q_branch = descriptors.rms_norm(
         q_tensors["input"],
         epsilon=1e-5,
         weight=q_tensors["weight"],
         memory_config=q_tensors["memory_config"],
         core_range_set=q_tensors["cores"],
     )
-    kv_branch = ttnn.experimental.programs.rms_norm(
+    kv_branch = descriptors.rms_norm(
         kv_tensors["input"],
         epsilon=1e-5,
         weight=kv_tensors["weight"],
@@ -200,14 +201,14 @@ def test_deepseek_v3_q_kv_rms_norm(device):
         core_range_set=kv_tensors["cores"],
     )
 
-    # Run composite
-    q_output, kv_output = ttnn.experimental.launch_composite([q_branch, kv_branch])
+    # Run composite (returns list of output lists, one per op descriptor)
+    outputs = composite.launch([q_branch, kv_branch])
 
-    # Verify outputs
+    # Verify outputs (extract first output tensor from each op's output list)
     assert_outputs_are_close(
         torch_inputs=[q_tensors["torch_input"], kv_tensors["torch_input"]],
         torch_weights=[q_tensors["torch_weight"], kv_tensors["torch_weight"]],
-        ttnn_outputs=[q_output, kv_output],
+        ttnn_outputs=[outputs[0][0], outputs[1][0]],
     )
 
 
@@ -337,25 +338,25 @@ def test_composite_rms_heavy(device):
     tensors = create_compute_heavy_tensors(device)
 
     # Create programs
-    left_branch = ttnn.experimental.programs.rms_norm(
+    left_branch = descriptors.rms_norm(
         tensors["left"]["input"],
         core_range_set=tensors["left"]["cores"],
         epsilon=1e-5,
         weight=tensors["left"]["weight"],
     )
-    right_branch = ttnn.experimental.programs.rms_norm(
+    right_branch = descriptors.rms_norm(
         tensors["right"]["input"],
         core_range_set=tensors["right"]["cores"],
         epsilon=1e-5,
         weight=tensors["right"]["weight"],
     )
 
-    # Run composite
-    left_output, right_output = ttnn.experimental.launch_composite([left_branch, right_branch])
+    # Run composite (returns list of output lists, one per op descriptor)
+    outputs = composite.launch([left_branch, right_branch])
 
-    # Verify outputs
+    # Verify outputs (extract first output tensor from each op's output list)
     assert_outputs_are_close(
         torch_inputs=[tensors["left"]["torch_input"], tensors["right"]["torch_input"]],
         torch_weights=[tensors["left"]["torch_weight"], tensors["right"]["torch_weight"]],
-        ttnn_outputs=[left_output, right_output],
+        ttnn_outputs=[outputs[0][0], outputs[1][0]],
     )
