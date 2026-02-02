@@ -67,9 +67,13 @@ def run_test_linear_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
+    M = torch_input.shape[2] if use_non_fused else torch_input.shape[0]
+    N = torch_input.shape[3] if use_non_fused else torch_input.shape[1]
+    # per_device_M = M/device.shape[sp_axis]
     if use_persistent_buffers:
         persistent_output_buffers = [
             ttnn.from_torch(
+                #                torch.zeros(1, 1, per_device_M, K) if use_non_fused else torch.zeros(per_device_M,K),
                 torch.zeros_like(torch_input),
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
@@ -185,13 +189,13 @@ def run_test_linear_impl(
                 tt_device_output = tt_output[
                     :,
                     :,
-                    i * torch_output.shape[sp_axis + 2] : (i + 1) * torch_output.shape[sp_axis + 2],
-                    j * torch_output.shape[tp_axis + 2] : (j + 1) * torch_output.shape[tp_axis + 2],
+                    i * per_device_M : (i + 1) * per_device_M,
+                    j * N : (j + 1) * N,
                 ]
             else:
                 tt_device_output = tt_output[
-                    i * torch_output.shape[sp_axis] : (i + 1) * torch_output.shape[sp_axis],
-                    j * torch_output.shape[tp_axis] : (j + 1) * torch_output.shape[tp_axis],
+                    i * per_device_M : (i + 1) * per_device_M,
+                    j * N : (j + 1) * N,
                 ]
             check_result.append(assert_quality(torch_output, tt_device_output))
 
@@ -292,7 +296,7 @@ def run_test_linear(
     "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis",
     [
         [
-            (1, 8),
+            (2, 4),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
             ttnn.Topology.Ring,
             1,
@@ -329,7 +333,7 @@ def run_test_linear(
         ],
     ],
     ids=[
-        "1x8links1",
+        "2x4links1",
         "8x4links1",
         "8x4links2",
         "8x4links4",
