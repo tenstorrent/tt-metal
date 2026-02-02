@@ -39,7 +39,7 @@ def get_cluster_dims(replication_axis, mesh_shape):
         assert replication_axis == -1
         replication_dim = 1
         replication_group = mesh_shape[0] * mesh_shape[1]
-    return replication_dim, replication_group, mesh_shape[0]*mesh_shape[1]
+    return replication_dim, replication_group, mesh_shape[0] * mesh_shape[1]
 
 
 def get_batch_cluster_idxr(replication_axis, batch):
@@ -81,7 +81,6 @@ def get_input_sparse_contribs(
         expert_idxr = lambda d, local_idx: d * experts_per_device + local_idx
 
     input_contribs_tensor = torch.zeros([expert_dim, batch, seq, hidden_size])
-    batch_idxr = get_batch_cluster_idxr(axis, batch)
 
     token_expert_count = 0
     for d in range(devices):

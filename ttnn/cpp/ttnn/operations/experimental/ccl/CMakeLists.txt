@@ -29,11 +29,8 @@ file(
     slice_reshard_async/device/kernels/*
     deepseek_minimal_broadcast/device/kernels/*
     deepseek_minimal_all_reduce/device/kernels/*
-<<<<<<< HEAD
     deepseek_moe_reduce_scatter/device/kernels/*
-=======
     moe/selective_reduce_combine/device/kernels/*
->>>>>>> e892cd44a1 (docs, move to experimental namespace, test fixes, clean up)
 )
 
 target_sources(
