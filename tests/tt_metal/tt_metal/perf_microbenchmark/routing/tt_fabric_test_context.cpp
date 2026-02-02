@@ -173,12 +173,13 @@ LatencyResultsManager::LatencyWorkerLocation TestContext::get_latency_receiver_l
 
 void TestContext::initialize_latency_results_csv_file() {
     TT_FATAL(latency_test_manager_, "Latency manager not initialized");
-    latency_test_manager_->initialize_latency_results_csv_file();
+    latency_test_manager_->initialize_results_csv_file(true);
 }
 
 void TestContext::generate_latency_summary() {
     TT_FATAL(latency_test_manager_, "Latency manager not initialized");
-    latency_test_manager_->generate_latency_summary();
+    latency_test_manager_->load_golden_csv();
+    latency_test_manager_->generate_summary();
     if (latency_test_manager_->has_failures()) {
         has_test_failures_ = true;
     }
@@ -301,7 +302,7 @@ void TestContext::generate_bandwidth_summary() {
 
 void TestContext::initialize_bandwidth_results_csv_file() {
     TT_FATAL(bandwidth_results_manager_, "Bandwidth results manager not initialized");
-    bandwidth_results_manager_->initialize_bandwidth_csv_file(this->telemetry_enabled_);
+    bandwidth_results_manager_->initialize_results_csv_file(this->telemetry_enabled_);
 }
 
 void TestContext::compile_programs() {

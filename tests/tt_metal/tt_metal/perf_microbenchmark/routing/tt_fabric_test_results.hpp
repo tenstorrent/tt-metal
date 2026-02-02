@@ -162,18 +162,14 @@ struct LatencyResult {
 
 struct LatencyResultSummary {
     std::string test_name;
-    uint32_t num_iterations{};
     std::string ftype;
     std::string ntype;
     std::string topology;
+    uint32_t num_devices{};
     uint32_t num_links{};
-    uint32_t num_packets{};
-    std::vector<uint32_t> num_devices;
-    uint32_t packet_size{};
-    std::vector<double> cycles_vector;
-    std::vector<double> packets_per_second_vector;
-    std::vector<double> statistics_vector;  // Stores the calculated statistics for each test
-    uint32_t max_packet_size{};             // Max packet size for router (always set explicitly)
+    uint32_t num_samples{};
+    uint32_t payload_size{};
+
     // Statistics for net latency (raw - responder) - MOST IMPORTANT METRIC
     double net_min_ns{};
     double net_max_ns{};
@@ -315,6 +311,8 @@ protected:
     std::vector<U> results_summary_;
     std::filesystem::path csv_summary_file_path_;
     std::filesystem::path csv_summary_upload_file_path_;
+    std::filesystem::path csv_file_path_;
+    std::filesystem::path diff_csv_file_path_;
 
 public:
     std::string get_perf_metric_name() const { return PerformanceMetricString.at(performance_t); }
@@ -322,7 +320,13 @@ public:
     void generate_summary_csv();
     void populate_upload_metadata_fields();
     void generate_summary_upload_csv();
+    std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices) const;
+    std::ofstream init_diff_csv_file(
+        std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type);
+    virtual void generate_summary() = 0;
     virtual void write_summary_csv_to_file(const std::filesystem::path& csv_path, bool include_upload_columns) = 0;
+    virtual void initialize_results_csv_file(bool telemetry_enabled = false) = 0;
+    virtual void load_golden_csv() = 0;
     virtual ~ResultsManager() = default;
 };
 
@@ -330,15 +334,15 @@ class BandwidthResultsManager : public ResultsManager<BandwidthResult, Bandwidth
 public:
     BandwidthResultsManager() { performance_t = PerformanceMetric::Bandwidth; };
 
-    void initialize_bandwidth_csv_file(bool telemetry_enabled);
     void add_result(const TestConfig& config, const BandwidthResult& result);
     void add_summary(const TestConfig& config, const BandwidthResultSummary& summary);
     void append_to_csv(const TestConfig& config, const BandwidthResult& result);
-    void load_golden_csv();
-    void generate_summary();
     void validate_against_golden();
     void setup_ci_artifacts();
     bool has_failures() const;
+    void load_golden_csv() override;
+    void initialize_results_csv_file(bool telemetry_enabled_) override;
+    void generate_summary() override;
     std::vector<std::string> get_failed_tests() const;
 
 private:
@@ -349,15 +353,12 @@ private:
     std::vector<BandwidthStatistics> stat_order_;
 
     // Paths
-    std::filesystem::path csv_file_path_;
-    std::filesystem::path diff_csv_file_path_;
     std::filesystem::path comparison_statistics_csv_file_path_;
 
     bool telemetry_enabled_ = false;
     bool has_failures_ = false;
 
     // Helpers
-    std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices) const;
     std::vector<GoldenCsvEntry>::iterator fetch_corresponding_golden_entry(const BandwidthResultSummary& test_result);
     ComparisonResult create_comparison_result(const BandwidthResultSummary& test_result);
     void set_comparison_statistics_csv_file_path();
@@ -381,8 +382,6 @@ private:
         ComparisonResult& comp_result,
         std::vector<GoldenCsvEntry>::iterator golden_it,
         const std::vector<GoldenCsvEntry>::iterator& golden_end);
-    std::ofstream init_diff_csv_file(
-        std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type);
     void compare_summary_results_with_golden();
 
     // Iteration grouping
@@ -412,16 +411,17 @@ public:
     void collect_latency_results(std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
     void report_latency_results(const TestConfig& config, std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
 
-    void initialize_latency_results_csv_file();
+    void generate_summary() override;
+    void initialize_results_csv_file(bool telemetry_enabled_) override;
+    void load_golden_csv() override;
     void write_summary_csv_to_file(const std::filesystem::path& csv_path, bool include_upload_columns) override;
-    bool load_golden_latency_csv();
     void compare_latency_results_with_golden();
     void generate_latency_summary();
     void setup_ci_artifacts();
 
     bool has_failures() const { return has_failures_; }
     std::vector<std::string> get_failed_tests() const { return all_failed_latency_tests_; }
-    const std::vector<LatencyResult>& get_latency_results() const { return latency_results_; }
+    const std::vector<LatencyResult>& get_latency_results() const { return results_; }
 
     void reset_state();
 
@@ -439,21 +439,14 @@ private:
         GoldenIterType golden_end,
         double golden_tolerance_default = 1.0);
 
-    std::ofstream init_diff_csv_file(
-        std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type);
-
     void validate_against_golden();
 
     TestFixture& fixture_;
     SenderMemoryMap& sender_memory_map_;
 
-    std::vector<LatencyResult> latency_results_;
     std::vector<GoldenLatencyEntry> golden_latency_entries_;
     std::vector<LatencyComparisonResult> latency_comparison_results_;
     std::vector<std::string> all_failed_latency_tests_;
-
-    std::filesystem::path latency_csv_file_path_;
-    std::filesystem::path latency_diff_csv_file_path_;
 
     bool has_failures_ = false;
 };
