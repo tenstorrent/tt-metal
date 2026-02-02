@@ -9,7 +9,13 @@ from models.experimental.panoptic_deeplab.tt.tt_stem import TtStem
 from models.experimental.panoptic_deeplab.tt.tt_bottleneck import TtBottleneck
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
-from tracy import signpost
+
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*_args, **_kwargs):
+        pass
 
 
 class TtResNet(LightweightModule):

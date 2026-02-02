@@ -8,7 +8,13 @@ from loguru import logger
 from models.experimental.panoptic_deeplab.tt.tt_semseg import TtDeepLabV3PlusHead
 from models.experimental.panoptic_deeplab.tt.tt_upsample import BilinearUpsampleMatmulTTNN as TtBilinearUpsample
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
-from tracy import signpost
+
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*_args, **_kwargs):
+        pass
 
 
 class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):

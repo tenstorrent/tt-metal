@@ -6,7 +6,13 @@ from loguru import logger
 
 from models.tt_cnn.tt.builder import TtConv2d, TtMaxPool2d
 from models.common.lightweightmodule import LightweightModule
-from tracy import signpost
+
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*_args, **_kwargs):
+        pass
 
 
 class TtStem(LightweightModule):
