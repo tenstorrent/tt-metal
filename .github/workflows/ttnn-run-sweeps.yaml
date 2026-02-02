@@ -880,13 +880,7 @@ jobs:
     # The output matrix is consumed by ttnn-run-sweeps-batch to spawn parallel jobs
     needs: ttnn-generate-sweeps
     if: |
-      always() &&
-      (needs.ttnn-generate-sweeps.result == 'success' || needs.ttnn-generate-sweeps.result == 'failure') &&
-      (github.event_name == 'schedule' ||
-       github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' ||
-       github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' ||
-       github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' ||
-       github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)')
+      if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' }}
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
