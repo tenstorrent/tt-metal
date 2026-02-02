@@ -241,7 +241,7 @@ inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, state->targ_addr_mid);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, state->packet_tag);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, state->at_data);
-    state->ret_addr_mid = 0;  // WH does not have ret_addr_mid register
+    state->ret_addr_mid = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_MID);
 }
 
 // Returns number of read transactions issued on this noc.

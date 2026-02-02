@@ -195,9 +195,7 @@ inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
     state->packet_tag = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_PACKET_TAG);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, 0);
     state->at_data = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_DATA);
-#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
-    state->ret_addr_mid = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_MID);
-#endif
+    state->ret_addr_mid = 0;  // WH does not have ret_addr_mid register
 }
 
 // Restores cmd_buf from state; waits for cmd_buf ready before writing.
