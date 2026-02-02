@@ -260,9 +260,8 @@ void append_fabric_connection_rt_args(
     }
 }
 
-std::vector<eth_chan_directions> get_neighbour_eth_directions(
-    const FabricNodeId& src_fabric_node_id,
-    const FabricNodeId& dst_fabric_node_id) {
+std::vector<eth_chan_directions> get_neighbor_eth_directions(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     std::vector<eth_chan_directions> directions;
     for (const auto& direction : FabricContext::routing_directions) {
@@ -298,7 +297,7 @@ uint32_t append_routing_plane_connection_manager_rt_args(
             "Multiple ethernet cores in the same direction ({}) are not currently supported. "
             "This restriction will be removed in a future update when proper multi-core routing is implemented.",
             routing_direction);
-
+        used_directions.insert(routing_direction);
         auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, routing_direction);
 
         if (!neighbors.empty()) {
