@@ -35,7 +35,6 @@ file(
     deepseek_moe_reduce_scatter/device/kernels/*
     deepseek_b1_reduce_to_one/device/kernels/*
     moe/selective_reduce_combine/device/kernels/*
-
 )
 
 target_sources(
