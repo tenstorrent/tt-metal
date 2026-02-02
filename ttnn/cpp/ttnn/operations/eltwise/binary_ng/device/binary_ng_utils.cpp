@@ -368,7 +368,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 return {"add_int_tile_init();", "add_int32_tile"};
             } else if (dtype == DataType::UINT32) {
                 return {"add_int_tile_init();", "add_uint32_tile"};
-            } else if (dtype == DataType::UINT16) {
+            } else if (dtype == DataType::UINT16 || dtype == DataType::UINT8) {
                 return {"add_int_tile_init();", "add_uint16_tile"};
             } else {
                 return {"add_binary_tile_init();", "add_binary_tile"};
@@ -378,13 +378,13 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 return {"sub_int_tile_init();", "sub_int32_tile"};
             } else if (dtype == DataType::UINT32) {
                 return {"sub_int_tile_init();", "sub_uint32_tile"};
-            } else if (dtype == DataType::UINT16) {
+            } else if (dtype == DataType::UINT16 || dtype == DataType::UINT8) {
                 return {"sub_int_tile_init();", "sub_uint16_tile"};
             } else {
                 return {"sub_binary_tile_init();", "sub_binary_tile"};
             }
         case MUL:
-            if (dtype == DataType::UINT16) {
+            if (dtype == DataType::UINT16 || dtype == DataType::UINT8) {
                 return {"mul_int_tile_init();", "mul_uint16_tile"};
             } else if (dtype == DataType::INT32) {
                 return {"mul_int32_tile_init();", "mul_int32_tile"};
@@ -409,7 +409,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 return {"rsub_int_tile_init();", "rsub_int32_tile"};
             } else if (dtype == DataType::UINT32) {
                 return {"rsub_int_tile_init();", "rsub_uint32_tile"};
-            } else if (dtype == DataType::UINT16) {
+            } else if (dtype == DataType::UINT16 || dtype == DataType::UINT8) {
                 return {"rsub_int_tile_init();", "rsub_uint16_tile"};
             } else {
                 return {"rsub_binary_tile_init();", "rsub_binary_tile"};
@@ -419,7 +419,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case LEFT_SHIFT:
             if (dtype == DataType::UINT32) {
                 return {"binary_shift_tile_init();", "binary_left_shift_tile<DataFormat::UInt32>"};
-            } else if (dtype == DataType::UINT16) {
+            } else if (dtype == DataType::UINT16 || dtype == DataType::UINT8) {
                 return {"binary_shift_tile_init();", "binary_left_shift_tile<DataFormat::UInt16>"};
             } else {
                 return {"binary_shift_tile_init();", "binary_left_shift_tile<DataFormat::Int32>"};
@@ -427,7 +427,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case RIGHT_SHIFT:
             if (dtype == DataType::UINT32) {
                 return {"binary_shift_tile_init();", "binary_right_shift_tile<DataFormat::UInt32>"};
-            } else if (dtype == DataType::UINT16) {
+            } else if (dtype == DataType::UINT16 || dtype == DataType::UINT8) {
                 return {"binary_shift_tile_init();", "binary_right_shift_tile<DataFormat::UInt16>"};
             } else {
                 return {"binary_shift_tile_init();", "binary_right_shift_tile<DataFormat::Int32>"};
@@ -441,7 +441,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 return {"binary_shift_tile_init();", "binary_logical_right_shift_tile"};
             }
         case BITWISE_AND:
-            if (dtype == DataType::UINT16) {
+            if (dtype == DataType::UINT16 || dtype == DataType::UINT8) {
                 return {"binary_bitwise_tile_init();", "bitwise_and_uint16_binary_tile"};
             } else if (dtype == DataType::UINT32) {
                 return {"binary_bitwise_tile_init();", "bitwise_and_uint32_binary_tile"};
@@ -449,7 +449,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 return {"binary_bitwise_tile_init();", "bitwise_and_binary_tile"};
             }
         case BITWISE_OR:
-            if (dtype == DataType::UINT16) {
+            if (dtype == DataType::UINT16 || dtype == DataType::UINT8) {
                 return {"binary_bitwise_tile_init();", "bitwise_or_uint16_binary_tile"};
             } else if (dtype == DataType::UINT32) {
                 return {"binary_bitwise_tile_init();", "bitwise_or_uint32_binary_tile"};
@@ -457,7 +457,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 return {"binary_bitwise_tile_init();", "bitwise_or_binary_tile"};
             }
         case BITWISE_XOR:
-            if (dtype == DataType::UINT16) {
+            if (dtype == DataType::UINT16 || dtype == DataType::UINT8) {
                 return {"binary_bitwise_tile_init();", "bitwise_xor_uint16_binary_tile"};
             } else if (dtype == DataType::UINT32) {
                 return {"binary_bitwise_tile_init();", "bitwise_xor_uint32_binary_tile"};
