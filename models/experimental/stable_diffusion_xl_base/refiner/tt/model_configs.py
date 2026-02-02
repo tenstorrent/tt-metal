@@ -345,17 +345,17 @@ class RefinerModelOptimisations(ModelOptimisations):
                 # # # GEGLU # # #
                 "2D_GEGLU_LINEAR_768_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=3,
+                    in0_block_w=2,
                     per_core_M=16,
                     per_core_N=20,
                     out_subblock_h=1,
-                    out_subblock_w=5,
+                    out_subblock_w=4,
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_768_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=3,
+                    in0_block_w=2,
                     per_core_M=16,
                     per_core_N=20,
                     out_subblock_h=1,
@@ -474,7 +474,7 @@ class RefinerModelOptimisations(ModelOptimisations):
                 ),
                 "2D_TM_OUT_LINEAR_768": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=3,
+                    in0_block_w=1,
                     per_core_M=16,
                     per_core_N=5,
                     out_subblock_h=1,
@@ -551,7 +551,7 @@ class RefinerModelOptimisations(ModelOptimisations):
                 # # # ATTENTION OUT # # #
                 "2D_ATTN_OUT_LINEAR_768": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=2,
+                    in0_block_w=1,
                     per_core_M=16,
                     per_core_N=5,
                     out_subblock_h=1,
@@ -956,7 +956,7 @@ class RefinerModelOptimisations(ModelOptimisations):
             if "down_blocks.2" in module_path or "up_blocks.1" in module_path or "mid_block" in module_path:
                 return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
             else:
-                return ttnn.DRAM_MEMORY_CONFIG
+                return ttnn.L1_MEMORY_CONFIG
         if "ff.net.2" in module_path:
             return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
 

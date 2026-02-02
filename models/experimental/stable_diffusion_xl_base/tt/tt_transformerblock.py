@@ -6,6 +6,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_attention import TtAttention
 from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 
 
 class TtBasicTransformerBlock(LightweightModule):
@@ -22,6 +23,7 @@ class TtBasicTransformerBlock(LightweightModule):
         super().__init__()
 
         self.module_path = module_path
+        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
 
         self.attn1 = TtAttention(
             device,
@@ -111,7 +113,12 @@ class TtBasicTransformerBlock(LightweightModule):
         )
 
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
-        hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
+        if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
+            hidden_states = ttnn.add(
+                hidden_states, attn_hidden_states, use_legacy=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+        else:
+            hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
 
         attn_hidden_states = ttnn.layer_norm(
             hidden_states,
