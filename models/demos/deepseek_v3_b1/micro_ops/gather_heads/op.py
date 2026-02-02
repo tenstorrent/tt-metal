@@ -109,15 +109,38 @@ class GatherHeads:
         head_elements = qnope_elements + qrope_head_elements  # 576
         head_stride_bytes = head_elements * element_size_bytes  # 576 * 2 = 1152 bytes
 
-        # Number of qnope columns (for offset calculation in kernel)
-        qnope_cols = 8  # Qnope grid is 8 columns
+        # Compute qnope columns from qnope grid
+        qnope_core_ranges = list(qnope_core_grid.ranges())
+        qnope_grid_start_x = min(r.start.x for r in qnope_core_ranges)
+        qnope_grid_end_x = max(r.end.x for r in qnope_core_ranges)
+        qnope_cols = qnope_grid_end_x - qnope_grid_start_x + 1
+
+        # Compute sender and receiver grid dimensions
+        sender_grid_end_y = max(r.end.y for r in sender_core_ranges)
+        sender_grid_height = sender_grid_end_y - sender_grid_start_y + 1
+        receiver_core_ranges = list(receiver_core_grid.ranges())
+        receiver_grid_start_x = min(r.start.x for r in receiver_core_ranges)
+        receiver_grid_start_y = min(r.start.y for r in receiver_core_ranges)
+        receiver_grid_end_x = max(r.end.x for r in receiver_core_ranges)
+        receiver_cols = receiver_grid_end_x - receiver_grid_start_x + 1
+
+        # Build sender row to receiver core mapping dynamically
+        # Pattern: receiver at (rx, ry) gets data from sender row = rx if ry==0, else rx + receiver_cols
+        sender_row_to_target_core = {}
+        receiver_cores_list = ttnn.corerange_to_cores(receiver_core_grid, row_wise=True)
+        for receiver_core in receiver_cores_list:
+            rx = receiver_core.x - receiver_grid_start_x
+            ry = receiver_core.y - receiver_grid_start_y
+            sender_row = rx if ry == 0 else (rx + receiver_cols)
+            if sender_row < sender_grid_height:
+                sender_row_to_target_core[sender_row] = receiver_core
 
         # Convert sender grid to list of cores
         sender_cores_list = ttnn.corerange_to_cores(sender_core_grid, row_wise=True)
 
         # Get target NOC coordinates for each row (convert logical to physical/NOC coordinates)
         target_noc_coords = {}
-        for row, target_logical_core in GatherHeads.SENDER_ROW_TO_TARGET_CORE.items():
+        for row, target_logical_core in sender_row_to_target_core.items():
             target_noc_core = device.worker_core_from_logical_core(target_logical_core)
             target_noc_coords[row] = (target_noc_core.x, target_noc_core.y)
 
@@ -127,8 +150,8 @@ class GatherHeads:
         noc1_sender_cores = []
 
         # Track per-receiver counts for each NOC (each receiver corresponds to one sender row)
-        noc0_senders_per_receiver = {row: 0 for row in range(8)}
-        noc1_senders_per_receiver = {row: 0 for row in range(8)}
+        noc0_senders_per_receiver = {row: 0 for row in range(sender_grid_height)}
+        noc1_senders_per_receiver = {row: 0 for row in range(sender_grid_height)}
 
         if noc is not None:
             # User specified NOC, use it for all cores
@@ -157,9 +180,10 @@ class GatherHeads:
             total_noc1_hops = 0
             for core in sender_cores_list:
                 row_idx = core.y - sender_grid_start_y
-                target_core = GatherHeads.SENDER_ROW_TO_TARGET_CORE[row_idx]
-                total_noc0_hops += device.get_worker_noc_hop_distance(core, target_core, ttnn.NOC.NOC_0)
-                total_noc1_hops += device.get_worker_noc_hop_distance(core, target_core, ttnn.NOC.NOC_1)
+                if row_idx in sender_row_to_target_core:
+                    target_core = sender_row_to_target_core[row_idx]
+                    total_noc0_hops += device.get_worker_noc_hop_distance(core, target_core, ttnn.NOC.NOC_0)
+                    total_noc1_hops += device.get_worker_noc_hop_distance(core, target_core, ttnn.NOC.NOC_1)
 
             # Use the NOC with lower total hop count
             if total_noc0_hops <= total_noc1_hops:
@@ -201,7 +225,7 @@ class GatherHeads:
 
         # Number of pages
         src_num_pages = 1  # Each sender has one page (its shard)
-        dst_num_pages = sender_grid_width  # Each receiver gets 12 pages (one per sender in the row)
+        dst_num_pages = sender_grid_width  # Each receiver gets pages (one per sender in the row)
 
         # Get output tensor's buffer address for receiver data address
         receiver_data_addr = output_tensor.buffer_address()
@@ -217,13 +241,15 @@ class GatherHeads:
         # All senders use the SAME semaphore (noc0_receiver_semaphore_id) for simplicity
         # ========================================================================
         # Dummy receiver args (needed for constexpr evaluation even in non-receiver code paths)
+        # Kernel expects args for all 8 rows (hardcoded array size), so always pass all 8
         dummy_receiver_args = [
             ("noc0_receiver_semaphore_id", noc0_receiver_semaphore_id),
             ("noc1_receiver_semaphore_id", noc1_receiver_semaphore_id),
             ("out_cb", out_cb),
             ("dst_num_pages", dst_num_pages),
-            ("receiver_grid_start_x", 0),
-            ("receiver_grid_start_y", 0),
+            ("receiver_grid_start_x", receiver_grid_start_x),
+            ("receiver_grid_start_y", receiver_grid_start_y),
+            ("receiver_cols", receiver_cols),
         ]
         for row in range(8):
             dummy_receiver_args.append((f"noc0_senders_row{row}", 0))
@@ -251,11 +277,16 @@ class GatherHeads:
                 # Semaphore - ALL senders use the same semaphore for unified synchronization
                 ("receiver_semaphore_id", noc0_receiver_semaphore_id),
             ]
-            # Add target NOC coordinates for each row (8 pairs)
+            # Add target NOC coordinates for each row (packed: x in lower 16 bits, y in upper 16 bits)
+            # Kernel expects args for all 8 rows (hardcoded array size), so always pass all 8
             for row in range(8):
-                noc_x, noc_y = target_noc_coords[row]
-                args.append((f"target_noc_x_row{row}", noc_x))
-                args.append((f"target_noc_y_row{row}", noc_y))
+                if row in target_noc_coords:
+                    noc_x, noc_y = target_noc_coords[row]
+                    packed_coords = noc_x | (noc_y << 16)
+                    args.append((f"target_noc_coords_row{row}", packed_coords))
+                else:
+                    # Fill missing rows with dummy coordinates (0,0)
+                    args.append((f"target_noc_coords_row{row}", 0))
             # Add dummy receiver args for constexpr evaluation
             args.extend(dummy_receiver_args)
             return args
@@ -361,12 +392,6 @@ class GatherHeads:
         # 1. Receiver cores that are NOC0 senders: sender on NCRISC, receiver on BRISC
         # 2. Receiver cores that are NOC1 senders: sender on BRISC, receiver on NCRISC
 
-        # Get receiver grid range for row index computation
-        receiver_core_ranges = list(receiver_core_grid.ranges())
-        receiver_grid_range = receiver_core_ranges[0]
-        receiver_grid_start_x = receiver_grid_range.start.x
-        receiver_grid_start_y = receiver_grid_range.start.y
-
         def create_receiver_named_compile_time_args(is_noc0_sender):
             """Create receiver compile-time args with sender type flags."""
             args = [
@@ -382,11 +407,13 @@ class GatherHeads:
                 ("sender_grid_width", sender_grid_width),
                 ("receiver_grid_start_x", receiver_grid_start_x),
                 ("receiver_grid_start_y", receiver_grid_start_y),
+                ("receiver_cols", receiver_cols),
             ]
             # Add per-row sender counts for NOC0 and NOC1
+            # Kernel expects args for all 8 rows (hardcoded array size), so always pass all 8
             for row in range(8):
-                args.append((f"noc0_senders_row{row}", noc0_senders_per_receiver[row]))
-                args.append((f"noc1_senders_row{row}", noc1_senders_per_receiver[row]))
+                args.append((f"noc0_senders_row{row}", noc0_senders_per_receiver.get(row, 0)))
+                args.append((f"noc1_senders_row{row}", noc1_senders_per_receiver.get(row, 0)))
             return args
 
         # NOC0 sender + receiver cores: sender on NCRISC, receiver on BRISC

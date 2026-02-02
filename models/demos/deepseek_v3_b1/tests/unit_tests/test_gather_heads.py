@@ -4,23 +4,22 @@
 
 """
 TTNN Gather Heads Test
-Tests gather heads operation from 12x8 sender cores to 4x2 receiver cores.
+Tests gather heads operation from 6x4 sender cores to 2x2 receiver cores.
 
 Sender layout:
-  - Qnope cores (cols 0-7): 8x8 = 64 cores, [1, 512] per core
-  - Qrope cores (cols 8-11): 4x8 = 32 cores, [2, 64] per core (2 heads of 64 elements each)
+  - Qnope cores (cols 0-3): 4x4 = 16 cores, [1, 512] per core
+  - Qrope cores (cols 4-5): 2x4 = 8 cores, [2, 64] per core (2 heads of 64 elements each)
 
 Each receiver core at (rx, ry) collects from sender row:
-  - ry=1: rows 0-3 (rx=0→row0, rx=1→row1, etc.)
-  - ry=2: rows 4-7 (rx=0→row4, rx=1→row5, etc.)
+  - ry=1: rows 0-1 (rx=0→row0, rx=1→row1)
+  - ry=2: rows 2-3 (rx=0→row2, rx=1→row3)
 
-Per-receiver data layout (8 heads per receiver):
-  - Head 0: qnope[col=0] (512) + qrope[col=8, head0] (64) = 576 elements
-  - Head 1: qnope[col=1] (512) + qrope[col=8, head1] (64) = 576 elements
-  - Head 2: qnope[col=2] (512) + qrope[col=9, head0] (64) = 576 elements
-  - ...
-  - Head 7: qnope[col=7] (512) + qrope[col=11, head1] (64) = 576 elements
-  - Total: 8 * 576 = 4608 elements per receiver
+Per-receiver data layout (4 heads per receiver):
+  - Head 0: qnope[col=0] (512) + qrope[col=4, head0] (64) = 576 elements
+  - Head 1: qnope[col=1] (512) + qrope[col=4, head1] (64) = 576 elements
+  - Head 2: qnope[col=2] (512) + qrope[col=5, head0] (64) = 576 elements
+  - Head 3: qnope[col=3] (512) + qrope[col=5, head1] (64) = 576 elements
+  - Total: 4 * 576 = 2304 elements per receiver
 """
 
 import pytest
@@ -36,23 +35,23 @@ def golden_gather_heads(qnope_input, qrope_input, qnope_grid, qrope_grid, receiv
     PyTorch reference implementation of gather heads.
 
     Args:
-        qnope_input: (8, 4096) tensor - BLOCK_SHARDED across 8x8 grid with shard (1, 512)
-        qrope_input: (16, 256) tensor - BLOCK_SHARDED across 8x4 grid with shard (2, 64)
-        qnope_grid: 8x8 grid
-        qrope_grid: 4x8 grid
-        receiver_grid: 4x2 grid
+        qnope_input: (4, 2048) tensor - BLOCK_SHARDED across 4x4 grid with shard (1, 512)
+        qrope_input: (8, 128) tensor - BLOCK_SHARDED across 4x2 grid with shard (2, 64)
+        qnope_grid: 4x4 grid
+        qrope_grid: 2x4 grid
+        receiver_grid: 2x2 grid
 
     Returns:
-        Output tensor with gathered data for each receiver (8 heads each of 576 elements)
+        Output tensor with gathered data for each receiver (4 heads each of 576 elements)
     """
     # Extract dimensions
-    qnope_rows = qnope_grid.end.y - qnope_grid.start.y + 1  # 8
-    qnope_cols = qnope_grid.end.x - qnope_grid.start.x + 1  # 8
-    qrope_rows = qrope_grid.end.y - qrope_grid.start.y + 1  # 8
-    qrope_cols = qrope_grid.end.x - qrope_grid.start.x + 1  # 4
+    qnope_rows = qnope_grid.end.y - qnope_grid.start.y + 1  # 4
+    qnope_cols = qnope_grid.end.x - qnope_grid.start.x + 1  # 4
+    qrope_rows = qrope_grid.end.y - qrope_grid.start.y + 1  # 4
+    qrope_cols = qrope_grid.end.x - qrope_grid.start.x + 1  # 2
 
     receiver_rows = receiver_grid.end.y - receiver_grid.start.y + 1  # 2
-    receiver_cols = receiver_grid.end.x - receiver_grid.start.x + 1  # 4
+    receiver_cols = receiver_grid.end.x - receiver_grid.start.x + 1  # 2
 
     # Per-core shard sizes (from tensor shapes and grid)
     qnope_shard_h = qnope_input.shape[0] // qnope_rows  # 1
@@ -66,8 +65,8 @@ def golden_gather_heads(qnope_input, qrope_input, qnope_grid, qrope_grid, receiv
     # Per-head size = qnope (512) + qrope (64) = 576
     head_elements = qnope_elements + qrope_elements_per_head  # 576
 
-    # Per-receiver: 8 heads
-    num_heads_per_receiver = 8
+    # Per-receiver: 4 heads (qnope_cols)
+    num_heads_per_receiver = qnope_cols
 
     # For BLOCK_SHARDED with shard (shard_h, shard_w) on grid (rows, cols):
     # Tensor is (rows * shard_h, cols * shard_w)
@@ -76,25 +75,25 @@ def golden_gather_heads(qnope_input, qrope_input, qnope_grid, qrope_grid, receiv
     #   cols: [c * shard_w, (c+1) * shard_w)
 
     # Create output tensor in BLOCK_SHARDED layout
-    # For BLOCK_SHARDED with shard (8, 576) on 4x2 grid:
-    # - Tensor shape: (2*8, 4*576) = (16, 2304)
-    # - Each receiver's shard is 8 rows x 576 cols
+    # For BLOCK_SHARDED with shard (4, 576) on 2x2 grid:
+    # - Tensor shape: (2*4, 2*576) = (8, 1152)
+    # - Each receiver's shard is 4 rows x 576 cols
     # - Head N is at row N within the shard (row N, cols 0-575)
     output = torch.zeros(receiver_rows * num_heads_per_receiver, receiver_cols * head_elements, dtype=qnope_input.dtype)
 
     # Gather: each receiver gets data from one sender row
-    # Receiver grid is ROW_MAJOR: (0,1), (1,1), (2,1), (3,1), (0,2), (1,2), (2,2), (3,2)
-    # These map to sender rows 0, 1, 2, 3, 4, 5, 6, 7
+    # Receiver grid is ROW_MAJOR: (0,1), (1,1), (0,2), (1,2)
+    # These map to sender rows 0, 1, 2, 3
     for ry_idx in range(receiver_rows):
         for rx_idx in range(receiver_cols):
             # Receiver at grid position (rx_idx, ry_idx)
-            # Sender row mapping: (ry_idx == 0) ? rx_idx : (rx_idx + 4)
-            sender_row = rx_idx if ry_idx == 0 else (rx_idx + 4)
+            # Sender row mapping: (ry_idx == 0) ? rx_idx : (rx_idx + 2)
+            sender_row = rx_idx if ry_idx == 0 else (rx_idx + 2)
 
-            # Build 8 heads for this receiver
+            # Build 4 heads for this receiver
             for head_idx in range(num_heads_per_receiver):
-                qnope_col = head_idx  # 0-7
-                qrope_col = head_idx // 2  # 0-3 (each qrope col serves 2 heads)
+                qnope_col = head_idx  # 0-3
+                qrope_col = head_idx // 2  # 0-1 (each qrope col serves 2 heads)
                 qrope_head = head_idx % 2  # 0 or 1
 
                 # Get qnope data for this head from shard at (sender_row, qnope_col)
@@ -131,19 +130,19 @@ def golden_gather_heads(qnope_input, qrope_input, qnope_grid, qrope_grid, receiv
     ],
 )
 def test_gather_heads(device, qnope_shard_shape, qrope_shard_shape, noc):
-    """Test TTNN gather heads operation from 12x8 cores to 4x2 cores"""
+    """Test TTNN gather heads operation from 6x4 cores to 2x2 cores"""
     # Define grids
-    # Qnope: 8 columns x 8 rows (cols 0-7)
-    qnope_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))
-    # Qrope: 4 columns x 8 rows (cols 8-11)
-    qrope_grid = ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 7))
-    # Receiver: 4 columns x 2 rows at (0-3, 1-2)
-    receiver_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(3, 2))
+    # Qnope: 4 columns x 4 rows (cols 0-3)
+    qnope_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))
+    # Qrope: 2 columns x 4 rows (cols 4-5)
+    qrope_grid = ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(5, 3))
+    # Receiver: 2 columns x 2 rows at (0-1, 1-2)
+    receiver_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 2))
 
     # Check device grid size
     device_grid = device.compute_with_storage_grid_size()
-    if device_grid.x < 12 or device_grid.y < 8:
-        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 12x8 sender grid")
+    if device_grid.x < 6 or device_grid.y < 4:
+        pytest.skip(f"Device grid {device_grid.x}x{device_grid.y} too small for 6x4 sender grid")
 
     # Calculate dimensions
     qnope_rows = qnope_grid.end.y - qnope_grid.start.y + 1  # 8
@@ -163,15 +162,15 @@ def test_gather_heads(device, qnope_shard_shape, qrope_shard_shape, noc):
 
     # Head size = qnope (512) + qrope (64) = 576 elements
     head_elements = qnope_elements_per_core + qrope_elements_per_head  # 576
-    num_heads_per_receiver = 8  # 8 heads per receiver
+    num_heads_per_receiver = qnope_cols  # Number of heads per receiver equals number of qnope columns
 
     # For BLOCK_SHARDED, tensor shape = (grid_rows * shard_height, grid_cols * shard_width)
-    # Qnope tensor: 8 rows x 8 cols, shard (1, 512) → tensor shape (8, 4096)
+    # Qnope tensor: 4 rows x 4 cols, shard (1, 512) → tensor shape (4, 2048)
     qnope_tensor_shape = (qnope_rows * qnope_shard_shape[0], qnope_cols * qnope_shard_shape[1])
-    # Qrope tensor: 8 rows x 4 cols, shard (2, 64) → tensor shape (16, 256)
+    # Qrope tensor: 4 rows x 2 cols, shard (2, 64) → tensor shape (8, 128)
     qrope_tensor_shape = (qrope_rows * qrope_shard_shape[0], qrope_cols * qrope_shard_shape[1])
-    # Output tensor: 2 rows x 4 cols, shard (8, 576) → tensor shape (16, 2304)
-    output_shard_shape = (num_heads_per_receiver, head_elements)  # (8, 576)
+    # Output tensor: 2 rows x 2 cols, shard (4, 576) → tensor shape (8, 1152)
+    output_shard_shape = (num_heads_per_receiver, head_elements)  # (4, 576)
     output_tensor_shape = (receiver_rows * output_shard_shape[0], receiver_cols * output_shard_shape[1])
 
     logger.info(f"Qnope: {num_qnope_cores} cores, {qnope_shard_shape} per core, tensor shape {qnope_tensor_shape}")
@@ -192,7 +191,7 @@ def test_gather_heads(device, qnope_shard_shape, qrope_shard_shape, noc):
     logger.info(f"Expected output shape: {torch_expected.shape}")
     logger.info(f"Expected output tensor shape for comparison: {output_tensor_shape}")
 
-    # Create qnope tensor sharded on 8x8 grid
+    # Create qnope tensor sharded on 4x4 grid
     qnope_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({qnope_grid}),
         qnope_shard_shape,
@@ -209,7 +208,7 @@ def test_gather_heads(device, qnope_shard_shape, qrope_shard_shape, noc):
         tile=tile,
     )
 
-    # Create qrope tensor sharded on 4x8 grid
+    # Create qrope tensor sharded on 2x4 grid
     qrope_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({qrope_grid}),
         qrope_shard_shape,

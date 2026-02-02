@@ -53,9 +53,8 @@ struct GatherHeads {
         uint32_t src_num_pages;
         // Semaphore
         uint32_t receiver_semaphore_id;
-        // Target NOC coordinates (8 rows)
-        uint32_t target_noc_x[8];
-        uint32_t target_noc_y[8];
+        // Target NOC coordinates (8 rows, packed: lower 16 bits = x, upper 16 bits = y)
+        uint32_t target_noc_coords[8];
         // Runtime arg - destination address
         uint32_t receiver_data_addr;
     };
@@ -131,9 +130,10 @@ struct GatherHeads {
             // Get source address from CB
             uint32_t src_addr = get_read_ptr(src_cb);
 
-            // Get target NOC coordinates based on row
-            uint32_t target_noc_x = args.target_noc_x[my_row];
-            uint32_t target_noc_y = args.target_noc_y[my_row];
+            // Get target NOC coordinates based on row (unpacked from uint32)
+            uint32_t packed_coords = args.target_noc_coords[my_row];
+            uint32_t target_noc_x = packed_coords & 0xFFFF;          // Lower 16 bits
+            uint32_t target_noc_y = (packed_coords >> 16) & 0xFFFF;  // Upper 16 bits
 
             // Get receiver semaphore address
             uint32_t receiver_semaphore_addr = get_semaphore(args.receiver_semaphore_id);

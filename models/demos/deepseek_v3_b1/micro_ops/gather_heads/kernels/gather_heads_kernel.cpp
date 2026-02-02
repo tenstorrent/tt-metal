@@ -71,24 +71,14 @@ void kernel_main() {
             get_named_compile_time_arg_val("src_num_pages"),
             get_named_compile_time_arg_val("receiver_semaphore_id"),
             {
-                get_named_compile_time_arg_val("target_noc_x_row0"),
-                get_named_compile_time_arg_val("target_noc_x_row1"),
-                get_named_compile_time_arg_val("target_noc_x_row2"),
-                get_named_compile_time_arg_val("target_noc_x_row3"),
-                get_named_compile_time_arg_val("target_noc_x_row4"),
-                get_named_compile_time_arg_val("target_noc_x_row5"),
-                get_named_compile_time_arg_val("target_noc_x_row6"),
-                get_named_compile_time_arg_val("target_noc_x_row7"),
-            },
-            {
-                get_named_compile_time_arg_val("target_noc_y_row0"),
-                get_named_compile_time_arg_val("target_noc_y_row1"),
-                get_named_compile_time_arg_val("target_noc_y_row2"),
-                get_named_compile_time_arg_val("target_noc_y_row3"),
-                get_named_compile_time_arg_val("target_noc_y_row4"),
-                get_named_compile_time_arg_val("target_noc_y_row5"),
-                get_named_compile_time_arg_val("target_noc_y_row6"),
-                get_named_compile_time_arg_val("target_noc_y_row7"),
+                get_named_compile_time_arg_val("target_noc_coords_row0"),
+                get_named_compile_time_arg_val("target_noc_coords_row1"),
+                get_named_compile_time_arg_val("target_noc_coords_row2"),
+                get_named_compile_time_arg_val("target_noc_coords_row3"),
+                get_named_compile_time_arg_val("target_noc_coords_row4"),
+                get_named_compile_time_arg_val("target_noc_coords_row5"),
+                get_named_compile_time_arg_val("target_noc_coords_row6"),
+                get_named_compile_time_arg_val("target_noc_coords_row7"),
             },
             receiver_data_addr,
         };
@@ -118,9 +108,10 @@ void kernel_main() {
         };
         constexpr uint32_t receiver_grid_start_x = get_named_compile_time_arg_val("receiver_grid_start_x");
         constexpr uint32_t receiver_grid_start_y = get_named_compile_time_arg_val("receiver_grid_start_y");
+        constexpr uint32_t receiver_cols = get_named_compile_time_arg_val("receiver_cols");
         uint32_t rx = my_logical_x_ - receiver_grid_start_x;
         uint32_t ry = my_logical_y_ - receiver_grid_start_y;
-        uint32_t sender_row = (ry == 0) ? rx : (rx + 4);
+        uint32_t sender_row = (ry == 0) ? rx : (rx + receiver_cols);
 
         deepseek_b1_ops::GatherHeads::ReceiverArgs gather_heads_args{
             get_named_compile_time_arg_val("noc0_receiver_semaphore_id"),
@@ -157,24 +148,14 @@ void kernel_main() {
             get_named_compile_time_arg_val("src_num_pages"),
             get_named_compile_time_arg_val("receiver_semaphore_id"),
             {
-                get_named_compile_time_arg_val("target_noc_x_row0"),
-                get_named_compile_time_arg_val("target_noc_x_row1"),
-                get_named_compile_time_arg_val("target_noc_x_row2"),
-                get_named_compile_time_arg_val("target_noc_x_row3"),
-                get_named_compile_time_arg_val("target_noc_x_row4"),
-                get_named_compile_time_arg_val("target_noc_x_row5"),
-                get_named_compile_time_arg_val("target_noc_x_row6"),
-                get_named_compile_time_arg_val("target_noc_x_row7"),
-            },
-            {
-                get_named_compile_time_arg_val("target_noc_y_row0"),
-                get_named_compile_time_arg_val("target_noc_y_row1"),
-                get_named_compile_time_arg_val("target_noc_y_row2"),
-                get_named_compile_time_arg_val("target_noc_y_row3"),
-                get_named_compile_time_arg_val("target_noc_y_row4"),
-                get_named_compile_time_arg_val("target_noc_y_row5"),
-                get_named_compile_time_arg_val("target_noc_y_row6"),
-                get_named_compile_time_arg_val("target_noc_y_row7"),
+                get_named_compile_time_arg_val("target_noc_coords_row0"),
+                get_named_compile_time_arg_val("target_noc_coords_row1"),
+                get_named_compile_time_arg_val("target_noc_coords_row2"),
+                get_named_compile_time_arg_val("target_noc_coords_row3"),
+                get_named_compile_time_arg_val("target_noc_coords_row4"),
+                get_named_compile_time_arg_val("target_noc_coords_row5"),
+                get_named_compile_time_arg_val("target_noc_coords_row6"),
+                get_named_compile_time_arg_val("target_noc_coords_row7"),
             },
             receiver_data_addr,
         };
@@ -204,9 +185,10 @@ void kernel_main() {
         };
         constexpr uint32_t receiver_grid_start_x = get_named_compile_time_arg_val("receiver_grid_start_x");
         constexpr uint32_t receiver_grid_start_y = get_named_compile_time_arg_val("receiver_grid_start_y");
+        constexpr uint32_t receiver_cols = get_named_compile_time_arg_val("receiver_cols");
         uint32_t rx = my_logical_x_ - receiver_grid_start_x;
         uint32_t ry = my_logical_y_ - receiver_grid_start_y;
-        uint32_t sender_row = (ry == 0) ? rx : (rx + 4);
+        uint32_t sender_row = (ry == 0) ? rx : (rx + receiver_cols);
 
         deepseek_b1_ops::GatherHeads::ReceiverArgs gather_heads_args{
             get_named_compile_time_arg_val("noc0_receiver_semaphore_id"),

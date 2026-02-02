@@ -48,6 +48,13 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     QNOPE_GRID_COLS = 8  # 8 Qnope cores per row (1 head each)
     QROPE_GRID_COLS = 4  # 4 Qrope cores per row (2 heads each)
     TOTAL_COLS = QNOPE_GRID_COLS + QROPE_GRID_COLS  # 12 columns required
+
+    # Skip test on P100 devices (which have 11 columns instead of 12)
+    if device_grid_size.x < TOTAL_COLS:
+        pytest.skip(
+            f"Device grid {device_grid_size.x}x{device_grid_size.y} too small for {TOTAL_COLS} columns required (P100 has 11 columns)"
+        )
+
     matmul2_grid_x = min(TOTAL_COLS, device_grid_size.x)  # Must be exactly 12 for correct sharding
     matmul2_grid_y = 8
 

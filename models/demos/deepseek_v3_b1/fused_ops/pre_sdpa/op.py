@@ -223,6 +223,10 @@ class PreSDPA:
         matmul2_weights_shard_width = matmul2_weights_shard_shape[1]  # Width dimension
         matmul2_out_w = matmul2_weights_shard_width // matmul2_weights_tile.tile_shape[1]  # Per-core width in tiles
 
+        # Extract matmul3 weights core grid (for inferring QNOPE grid dimensions)
+        matmul3_weights_memory_config = matmul3_weights_tensor.memory_config()
+        matmul3_weights_core_grid = matmul3_weights_memory_config.shard_spec.grid
+
         # ========================================================================
         # Qnope/Qrope grid configuration (for interleaved Q head layout)
         # With shuffled weights, matmul2 output is interleaved by row groups:
@@ -235,9 +239,16 @@ class PreSDPA:
         #   ...
         #   Row 7: Qnope heads 56-63 (cols 0-7), Qrope heads 56-63 (cols 8-11)
         # ========================================================================
-        QNOPE_GRID_COLS = 8  # 8 Qnope cores per row (1 head each)
-        QROPE_GRID_COLS = 4  # 4 Qrope cores per row (2 heads each)
-        HEAD_GRID_ROWS = 8  # 8 rows total
+        # Get grid dimensions from first range (assuming contiguous rectangular grids)
+        matmul2_grid_ranges = list(matmul2_weights_core_grid.ranges())
+        matmul3_grid_ranges = list(matmul3_weights_core_grid.ranges())
+        matmul2_grid_size = matmul2_grid_ranges[0].grid_size()
+        matmul3_grid_size = matmul3_grid_ranges[0].grid_size()
+
+        # Infer dimensions from grids
+        HEAD_GRID_ROWS = matmul2_grid_size.y  # Number of rows (same for both grids)
+        QNOPE_GRID_COLS = matmul3_grid_size.x  # QNOPE columns (from matmul3 grid width)
+        QROPE_GRID_COLS = matmul2_grid_size.x - matmul3_grid_size.x  # QROPE columns (remaining columns)
 
         # Qnope grid: columns 0-7, rows 0-7 (64 cores total)
         qnope_grid = ttnn.CoreRangeSet(
@@ -575,26 +586,17 @@ class PreSDPA:
         )  # 8 * 576 / 32 = 144 tiles of 1x32
 
         # BRISC sender compile-time args (QNOPE/QROPE -> SDPA Input)
-        # NOC coordinates for each row's target SDPA Input core (need both X and Y per row)
+        # Pack NOC coordinates for each row's target SDPA Input core (x in lower 16 bits, y in upper 16 bits)
         gather_heads_brisc_named_compile_time_args = [
-            # X coordinates for each source row's target (4 unique values in 4×2 grid)
-            ("target_noc_x_row0", sdpa_input_noc_coords[0][0]),
-            ("target_noc_x_row1", sdpa_input_noc_coords[1][0]),
-            ("target_noc_x_row2", sdpa_input_noc_coords[2][0]),
-            ("target_noc_x_row3", sdpa_input_noc_coords[3][0]),
-            ("target_noc_x_row4", sdpa_input_noc_coords[4][0]),
-            ("target_noc_x_row5", sdpa_input_noc_coords[5][0]),
-            ("target_noc_x_row6", sdpa_input_noc_coords[6][0]),
-            ("target_noc_x_row7", sdpa_input_noc_coords[7][0]),
-            # Y coordinates for each source row's target
-            ("target_noc_y_row0", sdpa_input_noc_coords[0][1]),
-            ("target_noc_y_row1", sdpa_input_noc_coords[1][1]),
-            ("target_noc_y_row2", sdpa_input_noc_coords[2][1]),
-            ("target_noc_y_row3", sdpa_input_noc_coords[3][1]),
-            ("target_noc_y_row4", sdpa_input_noc_coords[4][1]),
-            ("target_noc_y_row5", sdpa_input_noc_coords[5][1]),
-            ("target_noc_y_row6", sdpa_input_noc_coords[6][1]),
-            ("target_noc_y_row7", sdpa_input_noc_coords[7][1]),
+            # Packed coordinates (x | (y << 16)) for each source row's target
+            ("target_noc_coords_row0", sdpa_input_noc_coords[0][0] | (sdpa_input_noc_coords[0][1] << 16)),
+            ("target_noc_coords_row1", sdpa_input_noc_coords[1][0] | (sdpa_input_noc_coords[1][1] << 16)),
+            ("target_noc_coords_row2", sdpa_input_noc_coords[2][0] | (sdpa_input_noc_coords[2][1] << 16)),
+            ("target_noc_coords_row3", sdpa_input_noc_coords[3][0] | (sdpa_input_noc_coords[3][1] << 16)),
+            ("target_noc_coords_row4", sdpa_input_noc_coords[4][0] | (sdpa_input_noc_coords[4][1] << 16)),
+            ("target_noc_coords_row5", sdpa_input_noc_coords[5][0] | (sdpa_input_noc_coords[5][1] << 16)),
+            ("target_noc_coords_row6", sdpa_input_noc_coords[6][0] | (sdpa_input_noc_coords[6][1] << 16)),
+            ("target_noc_coords_row7", sdpa_input_noc_coords[7][0] | (sdpa_input_noc_coords[7][1] << 16)),
             ("head_stride_bytes", head_stride_bytes),
             ("qnope_data_size_bytes", qnope_data_size_bytes),
             ("qrope_data_size_bytes", qrope_data_size_bytes),
