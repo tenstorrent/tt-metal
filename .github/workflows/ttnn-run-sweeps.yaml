@@ -1072,7 +1072,15 @@ jobs:
       - ttnn-generate-sweeps
       - build-artifact
       - ttnn-compute-module-matrix
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' }}
+    if: |
+      always() &&
+      needs.build-artifact.result == 'success' &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      (github.event_name == 'schedule' ||
+       github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' ||
+       github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' ||
+       github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' ||
+       github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)')
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
