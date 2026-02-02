@@ -24,6 +24,16 @@ def torch_rms_norm(x, gamma, eps=1e-5):
     return x_normed.to(x.dtype)
 
 
+def torch_layer_norm(x, gamma, eps=1e-5):
+    """Reference layer norm implementation in PyTorch."""
+    mean = torch.mean(x.float(), dim=-1, keepdim=True)
+    var = torch.var(x.float(), dim=-1, keepdim=True, unbiased=False)
+    x_normed = (x.float() - mean) / torch.sqrt(var + eps)
+    if gamma is not None:
+        x_normed = x_normed * gamma.float()
+    return x_normed.to(x.dtype)
+
+
 def assert_outputs_are_close(torch_inputs, torch_weights, ttnn_outputs, rtol=1e-2, atol=2.5e-2):
     for torch_input, torch_weight, ttnn_output in zip(torch_inputs, torch_weights, ttnn_outputs):
         # Compute expected output
@@ -212,139 +222,136 @@ def test_deepseek_v3_q_kv_rms_norm(device):
     )
 
 
-def test_composite_rms_heavy(device):
+def _create_compute_heavy_tensors(device):
     """
-    Test a heavy compute load, where each core processes
-    multiple tiles
+    Create two sets of compute-heavy tensors for left_half and right_half norm operations.
 
-    Uses large tensors split across the 8x8 grid:
-    - Left half: (0,0)-(3,7) = 32 cores
-    - Right half: (4,0)-(7,7) = 32 cores
+    Each half uses 32 cores (4x8 grid) with width sharding.
+    Tensor dimensions are chosen to be compute-heavy:
+    - Large width (many tiles per core for reduction)
+    - Multiple rows (more work per core)
 
-    Each core processes [128, 256] elements = 32,768 elements
-    Total per half: 32 cores * 32,768 = 1,048,576 elements
+    Left half: cores (0,0)-(3,7) = 32 cores
+    Right half: cores (4,0)-(7,7) = 32 cores
     """
+    torch.manual_seed(42)
 
-    def create_compute_heavy_tensors(device):
-        """
-        Create two sets of compute-heavy tensors for left_half and right_half RMS norm.
+    # Left half: cores (0,0) to (3,7) = 4 columns x 8 rows = 32 cores
+    left_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))])
+    num_left_cores = 32
 
-        Each half uses 32 cores (4x8 grid) with width sharding.
-        Tensor dimensions are chosen to be compute-heavy:
-        - Large width (many tiles per core for reduction)
-        - Multiple rows (more work per core)
+    # Right half: cores (4,0) to (7,7) = 4 columns x 8 rows = 32 cores
+    right_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 7))])
 
-        Left half: cores (0,0)-(3,7) = 32 cores
-        Right half: cores (4,0)-(7,7) = 32 cores
-        """
-        torch.manual_seed(42)
+    # Make it compute-heavy: larger shard width and multiple tile rows
+    # Each core processes a shard of [num_rows, shard_width]
+    # Total width = num_cores * shard_width
+    num_tile_rows = 4  # 4 tile rows = 128 rows
+    shard_width_tiles = 8  # 8 tiles per core = 256 elements per row per core
+    shard_width = shard_width_tiles * 32  # 256 elements
+    shard_height = num_tile_rows * 32  # 128 rows
 
-        # Left half: cores (0,0) to (3,7) = 4 columns x 8 rows = 32 cores
-        left_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))])
-        num_left_cores = 32
+    total_width = num_left_cores * shard_width  # 32 * 256 = 8192 elements
+    total_height = shard_height  # 128 rows
 
-        # Right half: cores (4,0) to (7,7) = 4 columns x 8 rows = 32 cores
-        right_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 7))])
+    # Create tensors with shape [1, 1, height, width]
+    shape = (1, 1, total_height, total_width)
+    weight_shape = (1, 1, 1, total_width)
 
-        # Make it compute-heavy: larger shard width and multiple tile rows
-        # Each core processes a shard of [num_rows, shard_width]
-        # Total width = num_cores * shard_width
-        num_tile_rows = 4  # 4 tile rows = 128 rows
-        shard_width_tiles = 8  # 8 tiles per core = 256 elements per row per core
-        shard_width = shard_width_tiles * 32  # 256 elements
-        shard_height = num_tile_rows * 32  # 128 rows
+    torch_left_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_left_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
 
-        total_width = num_left_cores * shard_width  # 32 * 256 = 8192 elements
-        total_height = shard_height  # 128 rows
+    torch_right_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_right_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
 
-        # Create tensors with shape [1, 1, height, width]
-        shape = (1, 1, total_height, total_width)
-        weight_shape = (1, 1, 1, total_width)
+    # Create sharded memory configs
+    left_shard_spec = ttnn.ShardSpec(left_cores, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
+    left_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=left_shard_spec,
+    )
 
-        torch_left_input = torch.rand(shape, dtype=torch.bfloat16)
-        torch_left_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
+    right_shard_spec = ttnn.ShardSpec(right_cores, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
+    right_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=right_shard_spec,
+    )
 
-        torch_right_input = torch.rand(shape, dtype=torch.bfloat16)
-        torch_right_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
+    # Convert to TTNN tensors
+    left_input = ttnn.from_torch(
+        torch_left_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=left_mem_config,
+    )
+    left_weight = ttnn.from_torch(
+        torch_left_weight,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
 
-        # Create sharded memory configs
-        left_shard_spec = ttnn.ShardSpec(left_cores, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
-        left_mem_config = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
-            shard_spec=left_shard_spec,
-        )
+    right_input = ttnn.from_torch(
+        torch_right_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=right_mem_config,
+    )
+    right_weight = ttnn.from_torch(
+        torch_right_weight,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
 
-        right_shard_spec = ttnn.ShardSpec(right_cores, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
-        right_mem_config = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
-            shard_spec=right_shard_spec,
-        )
+    return {
+        "left": {
+            "input": left_input,
+            "weight": left_weight,
+            "torch_input": torch_left_input,
+            "torch_weight": torch_left_weight,
+            "cores": left_cores,
+            "mem_config": left_mem_config,
+        },
+        "right": {
+            "input": right_input,
+            "weight": right_weight,
+            "torch_input": torch_right_input,
+            "torch_weight": torch_right_weight,
+            "cores": right_cores,
+            "mem_config": right_mem_config,
+        },
+        "config": {
+            "shape": shape,
+            "shard_shape": [shard_height, shard_width],
+        },
+    }
 
-        # Convert to TTNN tensors
-        left_input = ttnn.from_torch(
-            torch_left_input,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=left_mem_config,
-        )
-        left_weight = ttnn.from_torch(
-            torch_left_weight,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
 
-        right_input = ttnn.from_torch(
-            torch_right_input,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=right_mem_config,
-        )
-        right_weight = ttnn.from_torch(
-            torch_right_weight,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
+def _run_heavy_composite_norm_test(device, norm_fn, torch_norm_fn):
+    """
+    Common test logic for heavy composite norm operations.
 
-        return {
-            "left": {
-                "input": left_input,
-                "weight": left_weight,
-                "torch_input": torch_left_input,
-                "torch_weight": torch_left_weight,
-                "cores": left_cores,
-                "mem_config": left_mem_config,
-            },
-            "right": {
-                "input": right_input,
-                "weight": right_weight,
-                "torch_input": torch_right_input,
-                "torch_weight": torch_right_weight,
-                "cores": right_cores,
-                "mem_config": right_mem_config,
-            },
-            "config": {
-                "shape": shape,
-                "shard_shape": [shard_height, shard_width],
-            },
-        }
-
+    Args:
+        device: The TTNN device
+        norm_fn: The descriptor norm function (descriptors.rms_norm or descriptors.layer_norm)
+        torch_norm_fn: The PyTorch reference implementation (torch_rms_norm or torch_layer_norm)
+    """
     # Create tensors
-    tensors = create_compute_heavy_tensors(device)
+    tensors = _create_compute_heavy_tensors(device)
 
     # Create programs
-    left_branch = descriptors.rms_norm(
+    left_branch = norm_fn(
         tensors["left"]["input"],
         core_range_set=tensors["left"]["cores"],
         epsilon=1e-5,
         weight=tensors["left"]["weight"],
     )
-    right_branch = descriptors.rms_norm(
+    right_branch = norm_fn(
         tensors["right"]["input"],
         core_range_set=tensors["right"]["cores"],
         epsilon=1e-5,
@@ -355,8 +362,254 @@ def test_composite_rms_heavy(device):
     outputs = composite.launch([left_branch, right_branch])
 
     # Verify outputs (extract first output tensor from each op's output list)
-    assert_outputs_are_close(
-        torch_inputs=[tensors["left"]["torch_input"], tensors["right"]["torch_input"]],
-        torch_weights=[tensors["left"]["torch_weight"], tensors["right"]["torch_weight"]],
-        ttnn_outputs=[outputs[0][0], outputs[1][0]],
+    for torch_input, torch_weight, ttnn_output in zip(
+        [tensors["left"]["torch_input"], tensors["right"]["torch_input"]],
+        [tensors["left"]["torch_weight"], tensors["right"]["torch_weight"]],
+        [outputs[0][0], outputs[1][0]],
+    ):
+        expected = torch_norm_fn(torch_input, torch_weight)
+        actual = ttnn.to_torch(ttnn.from_device(ttnn_output))
+        assert_allclose(expected, actual, rtol=1e-2, atol=2.5e-2)
+
+
+def test_composite_rms_heavy(device):
+    """
+    Test a heavy compute load with RMS norm, where each core processes
+    multiple tiles
+
+    Uses large tensors split across the 8x8 grid:
+    - Left half: (0,0)-(3,7) = 32 cores
+    - Right half: (4,0)-(7,7) = 32 cores
+
+    Each core processes [128, 256] elements = 32,768 elements
+    Total per half: 32 cores * 32,768 = 1,048,576 elements
+    """
+    _run_heavy_composite_norm_test(device, descriptors.rms_norm, torch_rms_norm)
+
+
+def test_composite_layer_norm_heavy(device):
+    """
+    Test a heavy compute load with layer norm, where each core processes
+    multiple tiles
+
+    Uses large tensors split across the 8x8 grid:
+    - Left half: (0,0)-(3,7) = 32 cores
+    - Right half: (4,0)-(7,7) = 32 cores
+
+    Each core processes [128, 256] elements = 32,768 elements
+    Total per half: 32 cores * 32,768 = 1,048,576 elements
+    """
+    _run_heavy_composite_norm_test(device, descriptors.layer_norm, torch_layer_norm)
+
+
+def test_composite_mixed_norm(device):
+    """
+    Test composite with mixed normalization types.
+
+    Left half uses RMS norm, right half uses layer norm.
+    This tests that different operation types can be composed together.
+    """
+    # Create tensors
+    tensors = _create_compute_heavy_tensors(device)
+
+    # Create branches with different norm types
+    left_branch = descriptors.rms_norm(
+        tensors["left"]["input"],
+        core_range_set=tensors["left"]["cores"],
+        epsilon=1e-5,
+        weight=tensors["left"]["weight"],
     )
+    right_branch = descriptors.layer_norm(
+        tensors["right"]["input"],
+        core_range_set=tensors["right"]["cores"],
+        epsilon=1e-5,
+        weight=tensors["right"]["weight"],
+    )
+
+    # Run composite
+    outputs = composite.launch([left_branch, right_branch])
+
+    # Verify left output (RMS norm)
+    expected_left = torch_rms_norm(tensors["left"]["torch_input"], tensors["left"]["torch_weight"])
+    actual_left = ttnn.to_torch(ttnn.from_device(outputs[0][0]))
+    assert_allclose(expected_left, actual_left, rtol=1e-2, atol=2.5e-2)
+
+    # Verify right output (layer norm)
+    expected_right = torch_layer_norm(tensors["right"]["torch_input"], tensors["right"]["torch_weight"])
+    actual_right = ttnn.to_torch(ttnn.from_device(outputs[1][0]))
+    assert_allclose(expected_right, actual_right, rtol=1e-2, atol=2.5e-2)
+
+
+def test_composite_non_sharded(device):
+    """
+    Test composite operations with non-sharded (DRAM interleaved) inputs.
+
+    Uses two operations on separate core ranges with DRAM interleaved tensors.
+    """
+    torch.manual_seed(42)
+
+    # Define non-overlapping core ranges
+    left_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
+    right_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 3))])
+
+    # Create tensor shapes
+    shape = (1, 1, 32, 1024)
+    weight_shape = (1, 1, 1, 1024)
+
+    # Create torch tensors
+    torch_left_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_left_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
+    torch_right_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_right_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
+
+    # Convert to TTNN with DRAM interleaved memory
+    left_input = ttnn.from_torch(
+        torch_left_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    left_weight = ttnn.from_torch(
+        torch_left_weight,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    right_input = ttnn.from_torch(
+        torch_right_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    right_weight = ttnn.from_torch(
+        torch_right_weight,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Create branches (core_range_set is required for non-sharded inputs)
+    left_branch = descriptors.rms_norm(
+        left_input,
+        core_range_set=left_cores,
+        epsilon=1e-5,
+        weight=left_weight,
+    )
+    right_branch = descriptors.layer_norm(
+        right_input,
+        core_range_set=right_cores,
+        epsilon=1e-5,
+        weight=right_weight,
+    )
+
+    # Run composite
+    outputs = composite.launch([left_branch, right_branch])
+
+    # Verify outputs
+    expected_left = torch_rms_norm(torch_left_input, torch_left_weight)
+    actual_left = ttnn.to_torch(ttnn.from_device(outputs[0][0]))
+    assert_allclose(expected_left, actual_left, rtol=1e-2, atol=2.5e-2)
+
+    expected_right = torch_layer_norm(torch_right_input, torch_right_weight)
+    actual_right = ttnn.to_torch(ttnn.from_device(outputs[1][0]))
+    assert_allclose(expected_right, actual_right, rtol=1e-2, atol=2.5e-2)
+
+
+def test_composite_8_ops_random_cores(device):
+    """
+    Test composite with 8 operations on random non-overlapping core ranges.
+
+    Uses a mix of RMS norm and layer norm operations to test:
+    - Many operations in a single composite
+    - Random core placement
+    - Mixed operation types
+    """
+    torch.manual_seed(123)
+
+    # Define 8 non-overlapping core ranges across the grid
+    # Use 2x2 blocks
+    core_ranges = [
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),  # 4 cores
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 1))]),  # 4 cores
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(5, 1))]),  # 4 cores
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(7, 1))]),  # 4 cores
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(1, 3))]),  # 4 cores
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(3, 3))]),  # 4 cores
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 2), ttnn.CoreCoord(5, 3))]),  # 4 cores
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(6, 2), ttnn.CoreCoord(7, 3))]),  # 4 cores
+    ]
+
+    # Use width sharding - 4 cores per operation, each core gets a shard
+    num_cores_per_op = 4
+    shard_width = 64  # 2 tiles per core
+    total_width = num_cores_per_op * shard_width  # 256
+
+    # Create tensor shapes (same for all ops)
+    shape = (1, 1, 32, total_width)  # 1 tile row, distributed across width
+    weight_shape = (1, 1, 1, total_width)
+
+    # Create tensors and branches for all 8 operations
+    torch_inputs = []
+    torch_weights = []
+    branches = []
+    norm_fns = []  # Track which norm function to use for verification
+
+    for i, cores in enumerate(core_ranges):
+        # Create torch tensors
+        torch_input = torch.rand(shape, dtype=torch.bfloat16)
+        torch_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
+        torch_inputs.append(torch_input)
+        torch_weights.append(torch_weight)
+
+        # Create sharded memory config
+        shard_spec = ttnn.ShardSpec(cores, [32, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
+        sharded_mem_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+            shard_spec=shard_spec,
+        )
+
+        # Convert to TTNN with sharded memory
+        ttnn_input = ttnn.from_torch(
+            torch_input,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=sharded_mem_config,
+        )
+        ttnn_weight = ttnn.from_torch(
+            torch_weight,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Alternate between RMS norm and layer norm
+        if i % 2 == 0:
+            branch = descriptors.rms_norm(
+                ttnn_input,
+                core_range_set=cores,
+                epsilon=1e-5,
+                weight=ttnn_weight,
+            )
+            norm_fns.append(torch_rms_norm)
+        else:
+            branch = descriptors.layer_norm(
+                ttnn_input,
+                core_range_set=cores,
+                epsilon=1e-5,
+                weight=ttnn_weight,
+            )
+            norm_fns.append(torch_layer_norm)
+
+        branches.append(branch)
+
+    # Run composite with all 8 operations
+    outputs = composite.launch(branches)
+
+    # Verify all outputs
+    for i, (torch_input, torch_weight, output, norm_fn) in enumerate(
+        zip(torch_inputs, torch_weights, outputs, norm_fns)
+    ):
+        expected = norm_fn(torch_input, torch_weight)
+        actual = ttnn.to_torch(ttnn.from_device(output[0]))
+        assert_allclose(expected, actual, rtol=1e-2, atol=2.5e-2)
