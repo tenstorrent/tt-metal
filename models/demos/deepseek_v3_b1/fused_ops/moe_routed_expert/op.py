@@ -10,7 +10,8 @@ This implements the MoE routed expert computation:
 - Mcast to N compute cores
 - Each core computes: matmul + activation
 - Gather outputs back to sender core
-- Output: [1, K*N_per_core] tensor on sender core
+- Gate: top-8 expert selection with normalized scores
+- Output: top8 scores [1, 16] + top8 indices [1, 16] on sender core
 """
 
 import ttnn
@@ -31,42 +32,63 @@ class MoeRoutedExpert:
     ACTIVATION_SILU = 2
 
     @staticmethod
-    def golden(input_tensor, matmul_weights_tensor):
+    def golden(input_tensor, matmul_weights_tensor, bias_tensor):
         """
         PyTorch reference implementation for validation.
 
         Args:
             input_tensor: Input tensor (torch.Tensor) [1, K]
             matmul_weights_tensor: Matmul weights (torch.Tensor) [K, N]
+            bias_tensor: Gate bias tensor (torch.Tensor) [1, N] or [16, 16]
 
         Returns:
-            Output tensor with matmul + sigmoid: [1, N]
+            Tuple of (top8_scores, top8_indices) tensors
         """
         import torch
 
-        result = input_tensor @ matmul_weights_tensor
-        return torch.sigmoid(result)
+        # Matmul + sigmoid
+        logits = input_tensor @ matmul_weights_tensor
+        scores = torch.sigmoid(logits)
+
+        # Add bias
+        scores_with_bias = scores.view(-1) + bias_tensor.view(-1)
+
+        # Top-8 selection
+        top8_scores, top8_indices = torch.topk(scores_with_bias, k=8)
+
+        # Normalize scores (softmax over top-8)
+        top8_scores = torch.softmax(top8_scores.float(), dim=-1)
+
+        return top8_scores, top8_indices
 
     @staticmethod
     def op(
         input_tensor,
         matmul_weights_tensor,
         intermediate_tensor,
-        output_tensor,
+        gate_input_tensor,
+        gate_bias_tensor,
+        gate_indices_tensor,
+        gate_output_scores_tensor,
+        gate_output_indices_tensor,
         fp32_dest_acc_en=True,
     ):
         """
-        Execute mcast + matmul + sigmoid + gather fused operation using generic_op.
+        Execute mcast + matmul + sigmoid + gather + gate fused operation using generic_op.
 
         Args:
             input_tensor: Input tensor [1, K] sharded on single sender core (outside matmul grid)
             matmul_weights_tensor: Matmul weights [K, N] width-sharded on matmul cores
             intermediate_tensor: Intermediate tensor [1, N] width-sharded on matmul cores (matmul output)
-            output_tensor: Pre-allocated output tensor [1, N] sharded on sender core
+            gate_input_tensor: Gate input tensor [16, 16] on sender core (receives gathered matmul output)
+            gate_bias_tensor: Gate bias tensor [16, 16] on sender core
+            gate_indices_tensor: Gate indices tensor [16, 16] on sender core
+            gate_output_scores_tensor: Gate output scores tensor [1, 16] on sender core
+            gate_output_indices_tensor: Gate output indices tensor [1, 16] on sender core
             fp32_dest_acc_en: Whether to enable FP32 accumulation (default True for precision)
 
         Returns:
-            Output tensor with mcast + matmul + sigmoid + gather result
+            Tuple of (gate_output_scores_tensor, gate_output_indices_tensor)
         """
         # Get tensor properties
         input_shape = input_tensor.shape
@@ -139,7 +161,11 @@ class MoeRoutedExpert:
         matmul_input_cb = 1  # Mcast destination CB (receives input on all cores)
         matmul_weights_cb = 2  # Matmul weights (sharded on all cores)
         matmul_output_cb = 3  # Matmul output (intermediate on compute cores)
-        gather_output_cb = 4  # Gathered output (tensor-backed on sender core)
+        gate_input_cb = 4  # Gate input (gathered output, tensor-backed on sender core)
+        gate_bias_cb = 5  # Gate bias (tensor-backed on sender core)
+        gate_indices_cb = 6  # Gate indices (tensor-backed on sender core)
+        gate_output_cb = 7  # Gate output scores (tensor-backed on sender core)
+        gate_output_indices_cb = 8  # Gate output indices (tensor-backed on sender core)
 
         # CB descriptors
         # CB 0: Input tensor (sharded on sender core)
@@ -166,8 +192,22 @@ class MoeRoutedExpert:
         # CB 3: Matmul output (intermediate on compute cores, tensor-backed)
         matmul_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_output_cb, intermediate_tensor)
 
-        # CB 4: Gathered output (tensor-backed on sender core)
-        gather_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gather_output_cb, output_tensor)
+        # CB 4: Gate input (gathered matmul output, tensor-backed on sender core)
+        gate_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gate_input_cb, gate_input_tensor)
+
+        # CB 5: Gate bias (tensor-backed on sender core)
+        gate_bias_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gate_bias_cb, gate_bias_tensor)
+
+        # CB 6: Gate indices (tensor-backed on sender core)
+        gate_indices_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gate_indices_cb, gate_indices_tensor)
+
+        # CB 7: Gate output scores (tensor-backed on sender core)
+        gate_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gate_output_cb, gate_output_scores_tensor)
+
+        # CB 8: Gate output indices (tensor-backed on sender core)
+        gate_output_indices_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            gate_output_indices_cb, gate_output_indices_tensor
+        )
 
         # Mcast page counts
         mcast_src_num_pages = num_tiles_k
@@ -192,11 +232,11 @@ class MoeRoutedExpert:
         gather_noc0_receiver_semaphore_id = 2
         gather_noc1_receiver_semaphore_id = 3
 
-        # Gather output: all tiles from all cores
-        gather_dst_num_pages = matmul_out_w * num_matmul_cores
+        # Gather output: 1 tile of 16x16 (same 256 elements as 8 tiles of 1x32)
+        gather_dst_num_pages = 1
 
-        # Gather receiver data address (L1 address of output tensor buffer on sender core)
-        gather_receiver_data_addr = output_tensor.buffer_address()
+        # Gather receiver data address (L1 address of gate input tensor buffer on sender core)
+        gather_receiver_data_addr = gate_input_tensor.buffer_address()
 
         # Named compile-time args for NCRISC (mcast receiver + matmul reader + gather sender)
         ncrisc_named_compile_time_args = [
@@ -225,6 +265,10 @@ class MoeRoutedExpert:
             ("gather_sender_grid_end_y", matmul_end.y),
             ("gather_row_major", 0),  # Column-major grid
             ("gather_receiver_data_addr", gather_receiver_data_addr),
+            # Gate reader args (sender core)
+            ("gate_input_cb", gate_input_cb),
+            ("gate_bias_cb", gate_bias_cb),
+            ("gate_input_indices_cb", gate_indices_cb),
         ]
 
         # Named compile-time args for BRISC (mcast sender + gather receiver)
@@ -247,11 +291,22 @@ class MoeRoutedExpert:
             ("gather_noc1_num_senders", gather_noc1_num_senders),
             ("gather_noc0_receiver_semaphore_id", gather_noc0_receiver_semaphore_id),
             ("gather_noc1_receiver_semaphore_id", gather_noc1_receiver_semaphore_id),
-            ("gather_dst_cb", gather_output_cb),
+            ("gather_dst_cb", gate_input_cb),
             ("gather_dst_num_pages", gather_dst_num_pages),
+            # Gate writer args (sender core)
+            ("gate_output_cb", gate_output_cb),
+            ("gate_output_indices_cb", gate_output_indices_cb),
         ]
 
-        # Named compile-time args for TRISC (matmul + sigmoid compute)
+        # Gate parameters (eps and scaling_factor as uint32 bit patterns)
+        # Use little-endian format to match float_to_uint32 in utils.py
+        import struct
+
+        gate_eps = int.from_bytes(struct.pack("f", 1e-20), byteorder="little")
+        gate_scaling_factor = int.from_bytes(struct.pack("f", 2.5), byteorder="little")
+        gate_enable_sigmoid = 0  # Sigmoid already done in matmul
+
+        # Named compile-time args for TRISC (matmul + sigmoid compute + gate compute)
         trisc_named_compile_time_args = [
             ("matmul_in0", matmul_input_cb),
             ("matmul_in1", matmul_weights_cb),
@@ -259,6 +314,15 @@ class MoeRoutedExpert:
             ("matmul_k_num_tiles", num_tiles_k),
             ("matmul_out_w", matmul_out_w),
             ("matmul_fused_activation", MoeRoutedExpert.ACTIVATION_SIGMOID),
+            # Gate compute args (sender core)
+            ("gate_input_cb", gate_input_cb),
+            ("gate_bias_cb", gate_bias_cb),
+            ("gate_input_indices_cb", gate_indices_cb),
+            ("gate_output_cb", gate_output_cb),
+            ("gate_output_indices_cb", gate_output_indices_cb),
+            ("gate_eps", gate_eps),
+            ("gate_scaling_factor", gate_scaling_factor),
+            ("gate_enable_sigmoid", gate_enable_sigmoid),
         ]
 
         # Semaphore descriptors
@@ -300,8 +364,9 @@ class MoeRoutedExpert:
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
-                fp32_dest_acc_en=fp32_dest_acc_en,
-                dst_full_sync_en=fp32_dest_acc_en,
+                # fp32_dest_acc_en disabled because gate's transpose doesn't support it
+                fp32_dest_acc_en=False,
+                dst_full_sync_en=False,
             ),
             unified_compile_time_core_descriptors=[
                 UnifiedCompileTimeCoreDescriptor(
@@ -333,7 +398,11 @@ class MoeRoutedExpert:
                 matmul_input_cb_descriptor,
                 matmul_weights_cb_descriptor,
                 matmul_output_cb_descriptor,
-                gather_output_cb_descriptor,
+                gate_input_cb_descriptor,
+                gate_bias_cb_descriptor,
+                gate_indices_cb_descriptor,
+                gate_output_cb_descriptor,
+                gate_output_indices_cb_descriptor,
             ],
             semaphores=[
                 mcast_sender_semaphore_descriptor,
@@ -344,7 +413,16 @@ class MoeRoutedExpert:
         )
 
         # Execute generic op
-        io_tensors = [input_tensor, matmul_weights_tensor, intermediate_tensor, output_tensor]
-        output = ttnn.generic_op(io_tensors, program_descriptor)
+        io_tensors = [
+            input_tensor,
+            matmul_weights_tensor,
+            intermediate_tensor,
+            gate_input_tensor,
+            gate_bias_tensor,
+            gate_indices_tensor,
+            gate_output_scores_tensor,
+            gate_output_indices_tensor,
+        ]
+        ttnn.generic_op(io_tensors, program_descriptor)
 
-        return output
+        return gate_output_scores_tensor, gate_output_indices_tensor
