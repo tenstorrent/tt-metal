@@ -670,7 +670,7 @@ jobs:
   display-workflow-options:
     name: 📋 Display workflow options
     runs-on: ubuntu-22.04
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
       - name: Display selected workflow options
         run: |
@@ -678,18 +678,20 @@ jobs:
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│                    TTNN Run Sweeps Configuration            │"
           echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Sweep Name:           ${{ github.event.inputs.sweep_name || 'ALL SWEEPS (Nightly)' }}"
-          echo "│ Suite Name:           ${{ github.event.inputs.suite_name || 'Not specified' }}"
-          echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
-          echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
-          echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
-          echo "│ Measure E2E Perf:     ${{ github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
-          echo "│ Measure Memory:       ${{ github.event.inputs.measure_memory == 'true' && 'true' || 'false' }}"
+          echo "│ Trigger:              ${{ github.event_name }}"
+          echo "│ Sweep Name:           ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name || 'ALL SWEEPS (Nightly)') || (github.event_name == 'schedule' && (github.event.schedule == '30 4 * * 0,1,2,4,5' && 'ALL SWEEPS (Nightly)' || github.event.schedule == '0 4 * * 3,6' && 'ALL SWEEPS (Comprehensive)' || github.event.schedule == '0 3 * * *' && 'ALL SWEEPS (Model Traced)' || github.event.schedule == '0 2 * * *' && 'ALL SWEEPS (Lead Models)' || format('scheduled ({0})', github.event.schedule)) || 'ALL SWEEPS (Nightly)' }}"
+          echo "│ Suite Name:           ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.suite_name || 'Not specified') || 'Not specified' }}"
+          echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') || 'false') }}"
+          echo "│ Upload Results:       ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.upload_results == 'true' && 'true' || 'false') || 'false') }}"
+          echo "│ Measure Device Perf:  ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_device_perf == 'true' && 'true' || 'false') || 'false') }}"
+          echo "│ Measure E2E Perf:     ${{ github.event_name == 'schedule' && 'false' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false') || 'false') }}"
+          echo "│ Measure Memory:       ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_memory == 'true' && 'true' || 'false') || 'false') }}"
           echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
           echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
           echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
-          echo "│ Use Database:         ${{ github.event.inputs.use_database == 'true' && 'true' || 'false' }}"
+          echo "│ Use Database:         ${{ github.event_name == 'schedule' && ((github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && 'true' || 'false') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.use_database == 'true' && 'true' || 'false') || 'false') }}"
           echo "│ Mesh Shape Filter:    ${{ github.event.inputs.mesh_shape || 'none' }}"
+          echo "│ Cron (if scheduled): ${{ github.event.schedule || 'N/A' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
 
