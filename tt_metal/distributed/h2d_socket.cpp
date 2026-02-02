@@ -141,6 +141,23 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
                              ->get_chip(recv_device_id)
                              ->get_tlb_manager()
                              ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
+    auto arch = MetalContext::instance().hal().get_arch();
+    if (arch == tt::ARCH::BLACKHOLE) {
+        // Entire device address space for Blackhole is statically mapped.
+        // Safe to use static TLBs without requiring the driver to do a reconfig.
+        pcie_writer = [&](void* data, uint32_t num_bytes, uint64_t device_addr) {
+            receiver_core_tlb_->write_block(device_addr, data, num_bytes);
+        };
+    } else if (arch == tt::ARCH::WORMHOLE_B0) {
+        // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
+        // since the device address space is not statically mapped.
+        pcie_writer = [&](void* data, uint32_t num_bytes, uint64_t device_addr) {
+            const auto& cluster = MetalContext::instance().get_cluster();
+            cluster.write_core(data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr);
+        };
+    } else {
+        TT_THROW("Unsupported architecture: {}", arch);
+    }
 }
 
 H2DSocket::H2DSocket(
@@ -161,6 +178,7 @@ H2DSocket::H2DSocket(
 
     const uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIE-aligned.");
+    TT_FATAL(buffer_type_ == BufferType::L1, "H2D sockets currently only support data buffers in SRAM.");
 
     auto bytes_acked_info = init_bytes_acked_buffer(mesh_device, recv_device_range_set);
 
@@ -181,6 +199,7 @@ H2DSocket::H2DSocket(
 void H2DSocket::reserve_bytes(uint32_t num_bytes) {
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
     while (bytes_free < num_bytes) {
+        tt_driver_atomics::mfence();
         volatile uint32_t bytes_acked_value = bytes_acked_buffer_->at(0);
         bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
         bytes_acked_ = bytes_acked_value;
@@ -236,7 +255,7 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
     this->reserve_bytes(num_bytes);
 
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
-        receiver_core_tlb_->write_block(data_addr, data, num_bytes);
+        pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
         uint32_t* data_ptr = host_data_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
