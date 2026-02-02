@@ -9,7 +9,7 @@ from tracy import signpost
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize("batch_size", [32])
@@ -143,7 +143,6 @@ def test_deepseek_v3_mla_pad_trace_mode(
         torch_output_from_tt.shape == torch_output_tensor.shape
     ), f"Shape mismatch: {torch_output_from_tt.shape} != {torch_output_tensor.shape}"
 
-    # Use PCC for comparison (pad should preserve values exactly in non-padded regions)
-    assert_with_pcc(torch_output_tensor, torch_output_from_tt, 0.9999)
+    assert_equal(torch_output_tensor, torch_output_from_tt)
 
     logger.info(f"✓ Trace mode {op_name} test passed with correct output")

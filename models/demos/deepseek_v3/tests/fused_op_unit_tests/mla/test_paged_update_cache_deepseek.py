@@ -9,7 +9,7 @@ from tracy import signpost
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 def create_paged_cache(device, num_users, max_seq_len, head_dim, num_blocks, block_size):
@@ -250,8 +250,7 @@ def test_deepseek_v3_mla_paged_update_cache_trace_mode(
         cache_slice = torch_cache_updated[0, 0, pos_idx, :]
         ref_slice = torch_ref_cache[0, 0, pos_idx, :]
 
-        # Use PCC to verify (should be high since we're just copying values)
-        passing, pcc = assert_with_pcc(ref_slice, cache_slice, 0.99)
-        logger.info(f"PCC for updated cache position: {pcc}")
+        passing, _ = assert_equal(ref_slice, cache_slice)
+        logger.info(f"Equal for updated cache position: {passing}")
 
     logger.info(f"✓ Trace mode {op_name} test passed")

@@ -8,7 +8,9 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import nearest_y
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def create_paged_kvpe_cache(device, num_users, max_seq_len, head_dim, num_blocks, block_size):
@@ -45,6 +47,36 @@ def create_page_table(device, num_users, num_blocks):
     )
 
     return tt_page_table, page_table
+
+
+def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_len, scale, is_causal=True):
+    b, nh, _, _ = Q.shape  # b, nh, 1, d
+    _, nkv, _, _ = K.shape
+
+    attn_mask = None
+    if is_causal:
+        attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
+        for i in range(b):
+            start_idx = start_indices[i]
+            attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+    else:
+        assert False, "Non-causal attention is not supported in this function."
+
+    Q_slice = Q[:, :nh, :, :]  # b, nh, 1, d
+    K_slice = K[:, :nkv, :padded_layer_len, :]  # b, nkv, S, d
+    K_slice = torch.cat(
+        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # b, nh, d, S
+    V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
+    V_slice = torch.cat(
+        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # b, nh, d, S
+    attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
+    out = torch.nn.functional.scaled_dot_product_attention(
+        Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
+    )  # b, nh, 1, d
+
+    return out
 
 
 @pytest.mark.parametrize("batch_size", [32])
@@ -183,6 +215,7 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     # Program config
     q_chunk_size = 0  # Unused in decode mode
     k_chunk_size = 128
+    padded_layer_len = nearest_y(max_seq_len // 2 + 1, k_chunk_size)
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=q_chunk_size,
@@ -276,12 +309,25 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     signpost("stop")
     ttnn.synchronize_device(device)
 
-    # Verify output shape
+    # Verify output shape and correctness against PyTorch reference.
+    # KVPE cache is used as both K and V in MLA; V uses first kv_lora_rank dims.
+    # Use first user only to match Q batch size 1; output head_dim is kv_lora_rank (512).
     tt_output = ttnn.from_device(tt_output)
-    torch_output = ttnn.to_torch(tt_output)
+    tt_output = ttnn.to_torch(tt_output)
+    torch_output = scaled_dot_product_attention_reference(
+        torch_q,
+        torch_kvpe_cache,  # K: first user, full head_dim 576
+        torch_kvpe_cache[..., :512],  # V: first user, kv_lora_rank 512
+        position_idxs,
+        padded_layer_len,
+        scale,
+    )
+    print(tt_output.shape)  # torch.Size([1, 4, 128, 512])
+    print(torch_output.shape)  # torch.Size([4, 4, 128, 512])
+    torch_output = torch_output[3:4, :, :, :]
 
-    assert list(torch_output.shape) == output_shape, f"Shape mismatch: {list(torch_output.shape)} != {output_shape}"
+    assert list(tt_output.shape) == output_shape, f"Shape mismatch: {list(tt_output.shape)} != {output_shape}"
+    assert_with_pcc(tt_output, torch_output, pcc=0.99)
 
-    # Note: Full PCC check would require a reference PyTorch flash attention implementation
-    # For now, we verify the operation runs successfully and produces output of correct shape
+    # PCC check allows for bfloat16 / accumulation differences vs PyTorch reference
     logger.info(f"✓ Trace mode {op_name} test passed with correct output shape")

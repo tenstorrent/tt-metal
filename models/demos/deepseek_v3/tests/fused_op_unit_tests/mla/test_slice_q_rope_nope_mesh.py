@@ -12,7 +12,7 @@ from models.common.utility_functions import nearest_y
 from models.demos.deepseek_v3.utils.config_dataclass import SliceConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize("batch_size", [32])
@@ -158,5 +158,5 @@ def test_deepseek_v3_mla_slice_q_rope_nope_trace_mode(
     # Verify correctness
     for i, t in enumerate(ttnn.get_device_tensors(tt_output_tensor)):
         output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-        assert_with_pcc(output_tensor, torch_output_tensor, 0.99)
+        assert_equal(output_tensor, torch_output_tensor)
     logger.info(f"✓ Trace mode {slice_type} test passed with correct output for device {i}")

@@ -9,6 +9,7 @@ from tracy import signpost
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 def create_rope_tensors(device, qk_rope_head_dim=64, max_seq_len=2048, bsz=32):
@@ -83,6 +84,9 @@ def create_rope_tensors(device, qk_rope_head_dim=64, max_seq_len=2048, bsz=32):
         "cos_matrix": tt_cos,
         "sin_matrix": tt_sin,
         "trans_matrix": tt_trans,
+        "torch_cos": cos_matrix,
+        "torch_sin": sin_matrix,
+        "torch_trans": trans_matrix,
     }
 
 
@@ -439,6 +443,32 @@ def test_deepseek_v3_mla_norm_and_rope_sequence_trace_mode(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # pytorch reference
+    torch_variance = torch_q.pow(2).mean(-1, keepdim=True)
+    torch_q *= torch.rsqrt(torch_variance + 1e-6) * q_norm_gamma
+    torch_q_out = torch_q
+    torch_variance = torch_kv_nope.pow(2).mean(-1, keepdim=True)
+    torch_kv_nope *= torch.rsqrt(torch_variance + 1e-6) * kv_norm_gamma
+    torch_kv_nope_out = torch.nn.functional.rms_norm(torch_kv_nope, weight=kv_norm_gamma, eps=1e-6)
+    torch_kv_rope_out = torch.nn.functional.rotary_embedding_llama(
+        torch_kv_rope,
+        rope_tensors["cos_matrix"],
+        rope_tensors["sin_matrix"],
+        rope_tensors["trans_matrix"],
+        is_decode_mode=True,
+    )
+    torch_kvpe = torch.cat([torch_kv_nope_out, torch_kv_rope_out], dim=-1)
+    torch_kvpe = torch.nn.functional.pad(torch_kvpe, (0, 0, 0, 0, 0, 0, 0, ttnn.TILE_SIZE - 1))
+    torch_kvpe = torch.permute(torch_kvpe, (0, 2, 1, 3))
+    torch_kvpe = torch.to_memory_config(torch_kvpe, kvpe_sharded_mem_config)
+    torch_kvpe = torch.permute(torch_kvpe, (0, 2, 1, 3))
+    torch_kvpe = torch.pad(torch_kvpe, (0, 0, 0, 0, 0, 0, 0, ttnn.TILE_SIZE - 1))
+    torch_kvpe = torch.permute(torch_kvpe, (0, 2, 1, 3))
+    torch_kvpe = torch.to_memory_config(torch_kvpe, kvpe_sharded_mem_config)
+    torch_kvpe = torch.permute(torch_kvpe, (0, 2, 1, 3))
+    torch_kvpe = torch.pad(torch_kvpe, (0, 0, 0, 0, 0, 0, 0, ttnn.TILE_SIZE - 1))
+    torch_kvpe = torch.permute(torch_kvpe, (0, 2, 1, 3))
+
     # Create RoPE tensors
     rope_tensors = create_rope_tensors(device, qk_rope_head_dim=64, bsz=batch_size)
 
@@ -481,6 +511,8 @@ def test_deepseek_v3_mla_norm_and_rope_sequence_trace_mode(
         assert (
             list(tt_kvpe_output.shape) == kvpe_output_shape
         ), f"KVPE shape mismatch: {list(tt_kvpe_output.shape)} != {kvpe_output_shape}"
+        assert_equal(torch_q_out, tt_q_output)
+        assert_equal(torch_kvpe, tt_kvpe_output)
 
         logger.info("✓ norm_and_rope sequence trace mode test passed with correct output shapes")
 

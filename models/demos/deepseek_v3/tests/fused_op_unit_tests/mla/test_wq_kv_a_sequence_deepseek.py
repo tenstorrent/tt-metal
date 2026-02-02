@@ -234,7 +234,7 @@ def run_wq_kv_a_sequence_with_trace(
     "device_params",
     [
         {
-            "trace_region_size": 2129920,
+            "trace_region_size": 2154500,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }

@@ -60,7 +60,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "device_params",
     [
         {
-            "trace_region_size": 694272,
+            "trace_region_size": 704600,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],

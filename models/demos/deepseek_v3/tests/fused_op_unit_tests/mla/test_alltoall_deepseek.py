@@ -9,6 +9,7 @@ from tracy import signpost
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 
 
 def run_alltoall_deepseek_with_trace(
@@ -270,5 +271,9 @@ def test_deepseek_v3_mla_wq_a2a_all_to_all_trace_mode(
     # Just verify it's the right rank and has reasonable dimensions
     assert len(actual_shape) == 4, f"Expected 4D tensor, got {len(actual_shape)}D"
     assert actual_shape[0] == num_devices, f"Expected first dim to be {num_devices}, got {actual_shape[0]}"
+    # Verify correctness
+    tt_output_torch = tt_output_torch.reshape(input_tensor.shape)
+    eq, output = comp_equal(tt_output_torch, input_tensor)
+    assert eq, f"Output mismatch: {output}"
 
     logger.info("✓ All-to-all trace mode test passed")
