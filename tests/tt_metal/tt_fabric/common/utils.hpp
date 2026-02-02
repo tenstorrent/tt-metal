@@ -39,7 +39,7 @@ std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping
 bool compare_asic_mapping_files(const std::filesystem::path& generated_file, const std::filesystem::path& golden_file);
 
 // Helper function to check generated ASIC mapping files against golden files
-// Only checks on rank 0 (for multi-host tests) or rank 0 (for single-host tests)
+// Checks on the current rank (each rank compares its own generated file)
 void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name = "");
 
 }  // namespace tt::tt_fabric::fabric_router_tests
