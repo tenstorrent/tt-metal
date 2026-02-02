@@ -395,43 +395,39 @@ create_analysis_prompt() {
     # Start with the base prompt
     cat "$PROMPT_FILE" > "$output_file"
 
-    # Add failure metadata instead of full logs
+    # List available log files for Claude to read
     cat >> "$output_file" <<EOF
 
 ---
 
-## Failure Metadata
+## Available Log Files
 
-The following information was extracted from the failed GitHub Actions job logs.
-Use this information to locate and analyze the relevant code files in the repository.
+The following GitHub Actions job log files are available in the repository for you to analyze:
 
 EOF
 
-    # Extract and include only failure metadata
+    # List the log files
     for log_file in "${context_dir}"/logs/*.log; do
         [[ ! -f "$log_file" ]] && continue
         local log_name=$(basename "$log_file")
-        local metadata
-        metadata=$(extract_failure_metadata "$log_file" 2>/dev/null)
-
-        if [[ -n "$metadata" ]]; then
-            cat >> "$output_file" <<EOF
-
-### Failure Information from: $log_name
-
-\`\`\`
-$metadata
-\`\`\`
-
+        # Get the relative path from REPO_ROOT
+        local relative_path=$(realpath --relative-to="$REPO_ROOT" "$log_file" 2>/dev/null || echo "$log_file")
+        cat >> "$output_file" <<EOF
+- \`$relative_path\` (Job ID: ${log_name%.log})
 EOF
-        fi
     done
 
     cat >> "$output_file" <<EOF
 
 ---
 
-**Note**: you should be tracking exactly what is being done as the test reaches the failure to determine the root instability. Make sure to look through the codebase to figure out what went wrong.
+## Your Task
+
+Read the log files above to understand what tests failed and why. Track exactly what is being done as the test reaches the failure to determine the root instability. Use the codebase to investigate the failure paths.
+
+Produce a complete analysis document following the exact format specified earlier, starting with "## Failure Summary". Include specific file paths, line numbers, and code excerpts from the repository.
+
+Begin your analysis now:
 
 EOF
 
@@ -483,10 +479,10 @@ run_claude_analysis() {
     # Use -p flag for non-interactive/pipe mode (print and exit)
     # Use --dangerously-skip-permissions to allow Claude to read source files
     if [[ $(id -u) -eq 0 ]]; then
-        # Running as root - run claude directly
+        # Running as root - run claude directly (without --dangerously-skip-permissions, as root doesn't need it)
         if command -v timeout &> /dev/null; then
             log_info "Using timeout (10 minute limit)"
-            if ! timeout 600 bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
+            if ! timeout 600 bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p" 2>&1 | tee "$temp_output"; then
                 exit_code=$?
             fi
 
@@ -498,7 +494,7 @@ run_claude_analysis() {
             fi
         else
             # No timeout available
-            if ! bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
+            if ! bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p" 2>&1 | tee "$temp_output"; then
                 exit_code=$?
             fi
         fi
@@ -678,9 +674,15 @@ main() {
     # Process each downloaded job directory
     local job_dirs=()
     if [[ -d "$temp_log_dir" ]]; then
-        while IFS= read -r job_dir; do
-            [[ -d "$job_dir" ]] && job_dirs+=("$job_dir")
-        done < <(find "$temp_log_dir" -type d -name "run_*" -maxdepth 1 2>/dev/null || true)
+        # Check if temp_log_dir itself contains downloaded_logs (user pointed to analysis directory directly)
+        if [[ -d "$temp_log_dir/downloaded_logs" ]]; then
+            job_dirs+=("$temp_log_dir/downloaded_logs")
+        else
+            # Look for run_* directories (from fresh downloads)
+            while IFS= read -r job_dir; do
+                [[ -d "$job_dir" ]] && job_dirs+=("$job_dir")
+            done < <(find "$temp_log_dir" -type d -name "run_*" -maxdepth 1 2>/dev/null || true)
+        fi
     fi
 
     if [[ ${#job_dirs[@]} -eq 0 ]]; then
@@ -695,24 +697,35 @@ main() {
     for job_dir in "${job_dirs[@]}"; do
         log_info "Processing: $(basename "$job_dir")"
 
-        # Create run-specific directory name
-        local base_dir_name
-        base_dir_name=$(create_run_directory_name "$job_dir")
+        # Determine output structure based on whether we're re-analyzing existing logs
+        local run_output_dir
+        local run_log_dir
 
-        # Ensure unique name if --no-overwrite is set
-        local run_dir_name
-        run_dir_name=$(ensure_unique_directory_name "$base_dir_name" "$no_overwrite")
+        if [[ "$skip_download" == true ]] && [[ -d "$BASE_OUTPUT_DIR/downloaded_logs" ]]; then
+            # Re-analyzing existing logs - output to same directory structure
+            run_output_dir="${BASE_OUTPUT_DIR}/analysis_output"
+            run_log_dir="$job_dir"
+            log_info "Re-analyzing existing logs in: $BASE_OUTPUT_DIR"
+        else
+            # Fresh analysis from downloads - create new run-specific directory
+            local base_dir_name
+            base_dir_name=$(create_run_directory_name "$job_dir")
 
-        # Create the run-specific directory structure
-        local run_output_dir="${BASE_OUTPUT_DIR}/${run_dir_name}/analysis_output"
-        local run_log_dir="${BASE_OUTPUT_DIR}/${run_dir_name}/downloaded_logs"
+            # Ensure unique name if --no-overwrite is set
+            local run_dir_name
+            run_dir_name=$(ensure_unique_directory_name "$base_dir_name" "$no_overwrite")
+
+            # Create the run-specific directory structure
+            run_output_dir="${BASE_OUTPUT_DIR}/${run_dir_name}/analysis_output"
+            run_log_dir="${BASE_OUTPUT_DIR}/${run_dir_name}/downloaded_logs"
+
+            # Move/copy logs to the run-specific directory
+            log_info "Organizing logs into: ${BASE_OUTPUT_DIR}/${run_dir_name}/"
+            cp -r "$job_dir"/* "$run_log_dir/" 2>/dev/null || true
+        fi
 
         mkdir -p "$run_output_dir"
         mkdir -p "$run_log_dir"
-
-        # Move/copy logs to the run-specific directory
-        log_info "Organizing logs into: ${BASE_OUTPUT_DIR}/${run_dir_name}/"
-        cp -r "$job_dir"/* "$run_log_dir/" 2>/dev/null || true
 
         # Set OUTPUT_DIR and LOG_DIR for this run
         OUTPUT_DIR="$run_output_dir"
