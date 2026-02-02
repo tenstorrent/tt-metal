@@ -24,6 +24,7 @@ jobs:
       - name: Determine if notification should be sent
         id: check
         env:
+          # Required for `gh api` to fetch workflow run details when triggered via workflow_dispatch
           GH_TOKEN: ${{ github.token }}
         run: |
           # Default values

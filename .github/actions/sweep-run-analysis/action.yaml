@@ -43,7 +43,7 @@ runs:
         python ${{ github.action_path }}/scripts/extract_sweep_results.py
       continue-on-error: true
 
-    - name: Fallback - Download artifacts
+    - name: Fallback - Download run result artifact
       if: steps.query-db.outcome == 'failure'
       uses: actions/download-artifact@v4
       with:
