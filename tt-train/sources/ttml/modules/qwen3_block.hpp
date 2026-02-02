@@ -26,20 +26,6 @@ public:
     Qwen3MLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob = 0.0F);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input);
-
-    // Getters for accessing sub-modules
-    [[nodiscard]] std::shared_ptr<LinearLayer> get_w1() const {
-        return m_w1;
-    }
-    [[nodiscard]] std::shared_ptr<LinearLayer> get_w2() const {
-        return m_w2;
-    }
-    [[nodiscard]] std::shared_ptr<LinearLayer> get_w3() const {
-        return m_w3;
-    }
-    [[nodiscard]] std::shared_ptr<DropoutLayer> get_dropout() const {
-        return m_dropout;
-    }
 };
 
 // Qwen3 Block - supports explicit head_dim specification with Q/K normalization

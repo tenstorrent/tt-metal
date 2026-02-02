@@ -53,25 +53,6 @@ public:
         std::shared_ptr<ttml::models::common::transformer::KvCache> kv_cache,
         const uint32_t layer_idx,
         const uint32_t new_tokens);
-
-    [[nodiscard]] std::shared_ptr<LinearLayer> get_q_linear() const {
-        return m_q_linear;
-    }
-    [[nodiscard]] std::shared_ptr<LinearLayer> get_k_linear() const {
-        return m_k_linear;
-    }
-    [[nodiscard]] std::shared_ptr<LinearLayer> get_v_linear() const {
-        return m_v_linear;
-    }
-    [[nodiscard]] std::shared_ptr<LinearLayer> get_out_linear() const {
-        return m_out_linear;
-    }
-    [[nodiscard]] std::shared_ptr<RMSNormLayer> get_q_norm() const {
-        return m_q_norm;
-    }
-    [[nodiscard]] std::shared_ptr<RMSNormLayer> get_k_norm() const {
-        return m_k_norm;
-    }
 };
 
 }  // namespace ttml::modules
