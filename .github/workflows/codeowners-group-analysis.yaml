@@ -1121,40 +1121,40 @@ jobs:
               fi
             done
 
-            # Format approver names
-            direct_approved=""
-            shared_approved=""
+            # Only format approver names if all files are approved (to avoid unnecessary API calls)
+            if [ "$all_files_approved" = true ] && { [ -n "$direct_approvers_set" ] || [ -n "$shared_approvers_set" ]; }; then
+              direct_approved=""
+              shared_approved=""
 
-            if [ -n "$direct_approvers_set" ]; then
-              IFS=',' read -ra DIRECT_ARRAY <<< "$direct_approvers_set"
-              for member in "${DIRECT_ARRAY[@]}"; do
-                [ -z "$member" ] && continue
-                USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
-                USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
-                direct_approved="$direct_approved$USER_NAME, "
-              done
-              direct_approved=$(echo "$direct_approved" | sed 's/, $//')
-            fi
+              if [ -n "$direct_approvers_set" ]; then
+                IFS=',' read -ra DIRECT_ARRAY <<< "$direct_approvers_set"
+                for member in "${DIRECT_ARRAY[@]}"; do
+                  [ -z "$member" ] && continue
+                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                  [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
+                  direct_approved="$direct_approved$USER_NAME, "
+                done
+                direct_approved=$(echo "$direct_approved" | sed 's/, $//')
+              fi
 
-            if [ -n "$shared_approvers_set" ]; then
-              IFS=',' read -ra SHARED_ARRAY <<< "$shared_approvers_set"
-              for member in "${SHARED_ARRAY[@]}"; do
-                [ -z "$member" ] && continue
-                USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
-                USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
-                shared_approved="$shared_approved$USER_NAME, "
-              done
-              shared_approved=$(echo "$shared_approved" | sed 's/, $//')
-            fi
+              if [ -n "$shared_approvers_set" ]; then
+                IFS=',' read -ra SHARED_ARRAY <<< "$shared_approvers_set"
+                for member in "${SHARED_ARRAY[@]}"; do
+                  [ -z "$member" ] && continue
+                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                  [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
+                  shared_approved="$shared_approved$USER_NAME, "
+                done
+                shared_approved=$(echo "$shared_approved" | sed 's/, $//')
+              fi
 
-            approved_names=""
-            [ -n "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$direct_approved, $shared_approved (shared)"
-            [ -n "$direct_approved" ] && [ -z "$shared_approved" ] && approved_names="$direct_approved"
-            [ -z "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$shared_approved (shared)"
+              approved_names=""
+              [ -n "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$direct_approved, $shared_approved (shared)"
+              [ -n "$direct_approved" ] && [ -z "$shared_approved" ] && approved_names="$direct_approved"
+              [ -z "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$shared_approved (shared)"
 
-            if [ "$all_files_approved" = true ] && [ -n "$approved_names" ]; then
               GROUP_IS_APPROVED["$key"]="true"
               GROUP_APPROVED_BY["$key"]="$approved_names"
             else
