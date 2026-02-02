@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <iostream>
 #include <tt-metalium/host_api.hpp>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "debug_tools_fixture.hpp"
@@ -13,6 +13,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace ll_api;
+using namespace std::string_view_literals;
 
 struct DPrintStringInfo {
     std::uint32_t format_string_ptr;
@@ -24,7 +25,7 @@ class NewDPrintFormatUpdatesFixture : public NewDPrintFixture {
 public:
     void TestFormatUpdate(
         const std::string& kernel_path,
-        const std::string& expected_format_message,
+        stl::Span<std::string_view> expected_format_messages,
         stl::Span<const uint32_t> runtime_args = {}) {
         const std::string elf_file_path = CompileKernel(kernel_path, runtime_args);
 
@@ -46,24 +47,53 @@ public:
         DPrintStringInfo* info_ptr = reinterpret_cast<DPrintStringInfo*>(format_strings_info_bytes.data());
         size_t num_messages = format_strings_info_bytes.size() / sizeof(DPrintStringInfo);
 
-        for (size_t i = 0; i < num_messages; ++i) {
-            const DPrintStringInfo& info = info_ptr[i];
-            const char* format_string = reinterpret_cast<const char*>(
-                format_strings_bytes.data() + (info.format_string_ptr - format_strings_address));
-            std::string format_str(format_string);
-            const char* file_string =
-                reinterpret_cast<const char*>(format_strings_bytes.data() + (info.file - format_strings_address));
-            std::string file_str(file_string);
-            if (format_str == expected_format_message && file_str.ends_with(kernel_path)) {
-                // Found expected format string
-                return;
+        for (const auto& expected_format_message : expected_format_messages) {
+            bool found = false;
+            for (size_t i = 0; i < num_messages; ++i) {
+                const DPrintStringInfo& info = info_ptr[i];
+                const char* format_string = reinterpret_cast<const char*>(
+                    format_strings_bytes.data() + (info.format_string_ptr - format_strings_address));
+                std::string_view format_str(format_string);
+                const char* file_string =
+                    reinterpret_cast<const char*>(format_strings_bytes.data() + (info.file - format_strings_address));
+                std::string_view file_str(file_string);
+                if (format_str == expected_format_message && file_str.ends_with(kernel_path)) {
+                    // Found expected format string
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                FAIL() << "Expected format string not found: " << expected_format_message;
             }
         }
-        FAIL() << "Expected format string not found: " << expected_format_message;
     }
 };
 
-TEST_F(NewDPrintFormatUpdatesFixture, PrintOneInt) {
+TEST_F(NewDPrintFormatUpdatesFixture, PrintSingleUintArg) {
+    std::vector<std::string_view> messages = {
+        "Printing uint32_t from arg: {0:I}"sv,
+    };
+
     TestFormatUpdate(
-        "tests/tt_metal/tt_metal/test_kernels/new_dprint/print_one_int.cpp", "Printing int from arg: {0:I}");
+        "tests/tt_metal/tt_metal/test_kernels/new_dprint/print_single_uint_arg.cpp", ttsl::make_span(messages));
+}
+
+TEST_F(NewDPrintFormatUpdatesFixture, PrintBasicTypes) {
+    std::vector<std::string_view> messages = {
+        "int8_t: {0:b}"sv,
+        "uint8_t: {0:B}"sv,
+        "int16_t: {0:h}"sv,
+        "uint16_t: {0:H}"sv,
+        "int32_t: {0:i}"sv,
+        "uint32_t: {0:I}"sv,
+        "int64_t: {0:q}"sv,
+        "uint64_t: {0:Q}"sv,
+        "float: {0:f}"sv,
+        "double: {0:d}"sv,
+        "bool: {0:?}"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/new_dprint/print_basic_types.cpp", ttsl::make_span(messages));
 }
