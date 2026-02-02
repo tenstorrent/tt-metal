@@ -152,7 +152,10 @@ std::shared_ptr<MeshTraceBuffer> MeshTrace::create_empty_mesh_trace_buffer() {
 }
 
 void MeshTrace::populate_mesh_buffer(
-    MeshCommandQueue& mesh_cq, std::shared_ptr<MeshTraceBuffer>& trace_buffer, DeviceAddr dram_high_water_mark) {
+    MeshCommandQueue& mesh_cq,
+    std::shared_ptr<MeshTraceBuffer>& trace_buffer,
+    DeviceAddr dram_allocation_high_water_mark,
+    DeviceAddr dram_deletion_high_water_mark) {
     uint64_t unpadded_size = trace_buffer->desc->total_trace_size;
     size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
         unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
@@ -194,15 +197,44 @@ void MeshTrace::populate_mesh_buffer(
         MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
 
     // In dynamic allocation mode, validate that trace buffer doesn't overlap with allocations during trace
+    DeviceAddr dram_high_water_mark = std::max(dram_allocation_high_water_mark, dram_deletion_high_water_mark);
     if (trace_region_size == 0 && dram_high_water_mark > 0) {
         // Get the address of the trace buffer (it's allocated top-down, so we check the start address)
         DeviceAddr trace_buffer_address = trace_buffer->mesh_buffer->address();
-        TT_FATAL(
-            trace_buffer_address >= dram_high_water_mark,
-            "Trace buffer at address {} overlaps with allocations made during trace (high water mark: {}). "
-            "Reduce allocations during trace capture or set a non-zero trace_region_size.",
-            trace_buffer_address,
-            dram_high_water_mark);
+        if (trace_buffer_address < dram_high_water_mark) {
+            // Determine which high water mark caused the overlap for a more specific error message
+            bool allocation_overlap = dram_allocation_high_water_mark > 0 && 
+                                      trace_buffer_address < dram_allocation_high_water_mark;
+            bool deletion_overlap = dram_deletion_high_water_mark > 0 && 
+                                    trace_buffer_address < dram_deletion_high_water_mark;
+            
+            if (allocation_overlap && deletion_overlap) {
+                TT_FATAL(
+                    false,
+                    "Trace buffer at address {} overlaps with DRAM activity during trace capture. "
+                    "Allocation high water mark: {}, Deletion high water mark: {}. "
+                    "Reduce allocations during trace capture or set a non-zero trace_region_size.",
+                    trace_buffer_address,
+                    dram_allocation_high_water_mark,
+                    dram_deletion_high_water_mark);
+            } else if (deletion_overlap) {
+                TT_FATAL(
+                    false,
+                    "Trace buffer at address {} overlaps with buffers deallocated during trace capture "
+                    "(deletion high water mark: {}). "
+                    "Avoid deallocating DRAM buffers during trace capture or set a non-zero trace_region_size.",
+                    trace_buffer_address,
+                    dram_deletion_high_water_mark);
+            } else {
+                TT_FATAL(
+                    false,
+                    "Trace buffer at address {} overlaps with buffers allocated during trace capture "
+                    "(allocation high water mark: {}). "
+                    "Reduce allocations during trace capture or set a non-zero trace_region_size.",
+                    trace_buffer_address,
+                    dram_allocation_high_water_mark);
+            }
+        }
     }
 
     std::unordered_map<MeshCoordinateRange, uint32_t> write_offset_per_device_range = {};
