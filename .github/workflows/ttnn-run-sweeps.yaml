@@ -667,89 +667,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  test-database-connection:
-    name: 🔍 Test Database Connection
-    runs-on:  tt-ubuntu-2204-large-stable
-    steps:
-      - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y netcat-openbsd postgresql-client
-
-      - name: Test 1 - Port connection by hostname
-        id: test1
-        continue-on-error: true
-        run: |
-          echo "Testing port connection to metal-pgsql.yyz2.tenstorrent.com:5432..."
-          timeout 10 nc -zv metal-pg-civ2.yyz2.tenstorrent.com 5432 || {
-            echo "❌ Port connection by hostname failed"
-            exit 1
-          }
-          echo "✅ Port connection by hostname successful"
-
-      - name: Test 2 - Port connection by IP
-        id: test2
-        continue-on-error: true
-        env:
-          TTNN_OPS_TEST_DB_IP: ${{ secrets.TTNN_OPS_TEST_DB_IP }}
-        run: |
-          echo "Testing port connection to IP:5432..."
-          if [ -z "$TTNN_OPS_TEST_DB_IP" ]; then
-            echo "❌ ERROR: TTNN_OPS_TEST_DB_IP secret is not set"
-            exit 1
-          fi
-          timeout 10 nc -zv "$TTNN_OPS_TEST_DB_IP" 5432 || {
-            echo "❌ Port connection by IP failed"
-            exit 1
-          }
-          echo "✅ Port connection by IP successful"
-
-      - name: Test 3 - Database connection
-        id: test3
-        continue-on-error: true
-        env:
-          TTNN_OPS_TEST_DB_URL: ${{ secrets.TTNN_OPS_TEST_DB_URL }}
-        run: |
-          echo "Testing database connection..."
-          if [ -z "$TTNN_OPS_TEST_DB_URL" ]; then
-            echo "❌ ERROR: TTNN_OPS_TEST_DB_URL secret is not set"
-            exit 1
-          fi
-          psql "$TTNN_OPS_TEST_DB_URL" -c "SELECT version();" || {
-            echo "❌ Database connection failed"
-            exit 1
-          }
-          echo "✅ Database connection successful"
-
-      - name: Test 4 - Query table
-        id: test4
-        continue-on-error: true
-        env:
-          TTNN_OPS_TEST_DB_URL: ${{ secrets.TTNN_OPS_TEST_DB_URL }}
-        run: |
-          echo "Testing table query..."
-          psql "$TTNN_OPS_TEST_DB_URL" -c "SELECT COUNT(*) FROM sweep_run;" || {
-            echo "❌ Table query failed (table may not exist yet)"
-            exit 1
-          }
-          echo "✅ Table query successful"
-
-      - name: Summary and fail if any test failed
-        run: |
-          echo "=== Test Results Summary ==="
-          echo "Test 1 (Port by hostname): ${{ steps.test1.outcome }}"
-          echo "Test 2 (Port by IP):       ${{ steps.test2.outcome }}"
-          echo "Test 3 (DB connection):    ${{ steps.test3.outcome }}"
-          echo "Test 4 (Query table):      ${{ steps.test4.outcome }}"
-          echo "============================"
-
-          if [[ "${{ steps.test1.outcome }}" == "failure" || \
-                "${{ steps.test2.outcome }}" == "failure" || \
-                "${{ steps.test3.outcome }}" == "failure" || \
-                "${{ steps.test4.outcome }}" == "failure" ]]; then
-            echo "❌ One or more tests failed"
-            exit 1
-          fi
-          echo "✅ All tests passed"
-
   display-workflow-options:
     name: 📋 Display workflow options
     runs-on: ubuntu-22.04
@@ -785,7 +702,6 @@ jobs:
           echo "Branch/Ref: ${{ github.ref_name }}"
           echo "::endgroup::"
   build-artifact:
-    needs: test-database-connection
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -798,7 +714,6 @@ jobs:
       tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
   generate-master-json-from-db:
     name: 🗄️ Generate Master JSON from Database
-    needs: test-database-connection
     runs-on: ubuntu-latest
     if: |
       github.event.inputs.use_database == 'true' ||
