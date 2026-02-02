@@ -252,36 +252,19 @@ extract_job_name() {
     echo "${job_name:-unknown-job}"
 }
 
-# Creates a directory name for analysis output.
+# Auto-generates a directory name from job metadata.
 # Format: <job-name>--<error-type> (e.g., "demo-tests-vit--device-timeout")
-# If USER_PROVIDED_NAME is set, uses that instead.
 create_run_directory_name() {
     local job_dir=$1
 
-    # If user provided a name via --name, use it
-    if [[ -n "${USER_PROVIDED_NAME:-}" ]]; then
-        # Sanitize user-provided name
-        local clean_name
-        clean_name=$(echo "$USER_PROVIDED_NAME" | tr '[:upper:]' '[:lower:]')
-        clean_name=$(echo "$clean_name" | sed 's/[^[:alnum:]]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
-        echo "${clean_name:-analysis}"
-        return 0
-    fi
-
-    # Auto-generate name from job metadata
     local job_name
     job_name=$(extract_job_name "$job_dir")
 
-    local error_type
+    local error_type="unknown"
     local log_file
     log_file=$(find "$job_dir" -name "*.log" -type f 2>/dev/null | head -1)
-    if [[ -n "$log_file" ]]; then
-        error_type=$(extract_primary_error "$log_file")
-    else
-        error_type="unknown"
-    fi
+    [[ -n "$log_file" ]] && error_type=$(extract_primary_error "$log_file")
 
-    # Combine with double-dash separator for readability
     echo "${job_name}--${error_type}"
 }
 
@@ -583,88 +566,61 @@ EOF
 
     log_info "Found ${#job_dirs[@]} job directory(ies) to analyze"
 
-    # Prepare context and analyze each job
-    local analysis_results=()
+    # Determine output directory name
+    local run_dir_name
+    if [[ -n "$USER_PROVIDED_NAME" ]]; then
+        # User provided a name - use it directly
+        run_dir_name=$(echo "$USER_PROVIDED_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^[:alnum:]]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+        run_dir_name=$(ensure_unique_directory_name "$run_dir_name" "$no_overwrite")
+    else
+        # Auto-generate from first job directory
+        run_dir_name=$(create_run_directory_name "${job_dirs[0]}")
+        run_dir_name=$(ensure_unique_directory_name "$run_dir_name" "$no_overwrite")
+    fi
+
+    # Set up output directories
+    local run_output_dir="${BASE_OUTPUT_DIR}/${run_dir_name}/analysis_output"
+    local run_log_dir="${BASE_OUTPUT_DIR}/${run_dir_name}/downloaded_logs"
+    mkdir -p "$run_output_dir"
+    mkdir -p "$run_log_dir/logs"
+
+    # Consolidate all logs from all job directories into one place
+    log_info "Consolidating logs into: ${BASE_OUTPUT_DIR}/${run_dir_name}/"
     for job_dir in "${job_dirs[@]}"; do
-        log_info "Processing: $(basename "$job_dir")"
-
-        # Determine output structure based on whether we're re-analyzing existing logs
-        local run_output_dir
-        local run_log_dir
-
-        if [[ "$skip_download" == true ]] && [[ -d "$BASE_OUTPUT_DIR/downloaded_logs" ]]; then
-            # Re-analyzing existing logs - output to same directory structure
-            run_output_dir="${BASE_OUTPUT_DIR}/analysis_output"
-            run_log_dir="$job_dir"
-            log_info "Re-analyzing existing logs in: $BASE_OUTPUT_DIR"
-        else
-            # Fresh analysis from downloads - create new run-specific directory
-            local base_dir_name
-            base_dir_name=$(create_run_directory_name "$job_dir")
-
-            # Ensure unique name if --no-overwrite is set
-            local run_dir_name
-            run_dir_name=$(ensure_unique_directory_name "$base_dir_name" "$no_overwrite")
-
-            # Create the run-specific directory structure
-            run_output_dir="${BASE_OUTPUT_DIR}/${run_dir_name}/analysis_output"
-            run_log_dir="${BASE_OUTPUT_DIR}/${run_dir_name}/downloaded_logs"
-
-            # Move/copy logs to the run-specific directory
-            log_info "Organizing logs into: ${BASE_OUTPUT_DIR}/${run_dir_name}/"
-            cp -r "$job_dir"/* "$run_log_dir/" 2>/dev/null || true
+        log_info "  Adding logs from: $(basename "$job_dir")"
+        # Copy logs
+        if [[ -d "${job_dir}/logs" ]]; then
+            cp -r "${job_dir}/logs"/* "$run_log_dir/logs/" 2>/dev/null || true
         fi
-
-        mkdir -p "$run_output_dir"
-        mkdir -p "$run_log_dir"
-
-        # Set OUTPUT_DIR and LOG_DIR for this run
-        OUTPUT_DIR="$run_output_dir"
-        LOG_DIR="$run_log_dir"
-
-        # Prepare analysis context
-        local context_dir
-        context_dir=$(prepare_analysis_context "$run_log_dir")
-
-        # Create full prompt
-        local prompt_file
-        prompt_file=$(create_analysis_prompt "$context_dir")
-
-        # Run analysis
-        local output_file="${context_dir}/analysis_result.md"
-        run_claude_analysis "$prompt_file" "$output_file" "$claude_model"
-
-        analysis_results+=("$output_file")
+        # Copy artifacts
+        if [[ -d "${job_dir}/artifacts" ]]; then
+            mkdir -p "$run_log_dir/artifacts"
+            cp -r "${job_dir}/artifacts"/* "$run_log_dir/artifacts/" 2>/dev/null || true
+        fi
+        # Copy any JSON metadata files
+        find "$job_dir" -maxdepth 1 -name "*.json" -exec cp {} "$run_log_dir/" \; 2>/dev/null || true
     done
+
+    # Set OUTPUT_DIR for analysis
+    OUTPUT_DIR="$run_output_dir"
+
+    # Prepare analysis context
+    local context_dir
+    context_dir=$(prepare_analysis_context "$run_log_dir")
+
+    # Create full prompt
+    local prompt_file
+    prompt_file=$(create_analysis_prompt "$context_dir")
+
+    # Run single analysis on all consolidated logs
+    local output_file="${context_dir}/analysis_result.md"
+    run_claude_analysis "$prompt_file" "$output_file" "$claude_model"
+
+    local analysis_results=("$output_file")
 
     # Clean up temp directory if it exists and we're not keeping output
     if [[ "$keep_output" == false && -d "$temp_log_dir" && "$temp_log_dir" == "${BASE_OUTPUT_DIR}/.temp_downloads" ]]; then
         rm -rf "$temp_log_dir"
-    fi
-
-    # Create combined analysis if multiple jobs
-    if [[ ${#analysis_results[@]} -gt 1 ]]; then
-        log_info "Creating combined analysis for ${#analysis_results[@]} jobs..."
-        # Use the first run's output directory for combined analysis
-        local first_run_dir=$(dirname "$(dirname "${analysis_results[0]}")")
-        local combined_output="${first_run_dir}/combined_analysis.md"
-        {
-            echo "# Combined Non-Deterministic Failure Analysis"
-            echo ""
-            echo "This analysis combines findings from ${#analysis_results[@]} failed job(s)."
-            echo ""
-            echo "Generated: $(date)"
-            echo ""
-            for result_file in "${analysis_results[@]}"; do
-                echo "---"
-                echo ""
-                echo "## Analysis for $(basename "$(dirname "$result_file")")"
-                echo ""
-                cat "$result_file"
-                echo ""
-            done
-        } > "$combined_output"
-        log_info "Combined analysis saved to: $combined_output"
     fi
 
     # Calculate and display total duration
