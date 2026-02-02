@@ -100,20 +100,24 @@ class WorkflowRun:
     jobs: list[JobResult]
 
 
-def run_gh_command(args: list[str]) -> dict | list:
-    """Run a gh CLI command and return parsed JSON."""
+def run_gh_command(args: list[str]) -> Optional[dict | list]:
+    """Run a gh CLI command and return parsed JSON, or None on error/empty output."""
     cmd = ["gh"] + args
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"Error running: {' '.join(cmd)}", file=sys.stderr)
         print(result.stderr, file=sys.stderr)
-        return {}
-    return json.loads(result.stdout) if result.stdout.strip() else {}
+        return None
+    if not result.stdout.strip():
+        return None
+    return json.loads(result.stdout)
 
 
 def get_run_jobs(run_id: int) -> list[JobResult]:
     """Get all jobs for a workflow run."""
     data = run_gh_command(["run", "view", str(run_id), "--json", "jobs"])
+    if not data or not isinstance(data, dict):
+        return []
     jobs = data.get("jobs", [])
     return [
         JobResult(
@@ -142,7 +146,7 @@ def get_latest_run(workflow_file: str, branch: str) -> Optional[WorkflowRun]:
         ]
     )
 
-    if not data:
+    if not data or not isinstance(data, list) or len(data) == 0:
         return None
 
     run = data[0]
@@ -205,10 +209,13 @@ def compare_runs(branch_run: WorkflowRun, main_run: Optional[WorkflowRun]) -> di
             continue
 
         branch_passed = branch_job.conclusion == "success"
-        main_passed = main_job.conclusion == "success" if main_job.conclusion else None
+        if main_job.conclusion is None:
+            main_passed = None
+        else:
+            main_passed = main_job.conclusion == "success"
 
         # Handle skipped as "neutral" - not a failure
-        if branch_job.conclusion == "skipped" or (main_job and main_job.conclusion == "skipped"):
+        if branch_job.conclusion == "skipped" or main_job.conclusion == "skipped":
             result["same_success"].append(name)
             continue
 
@@ -293,12 +300,6 @@ def main():
         default="all",
         help="Filter workflows by category",
     )
-    parser.add_argument(
-        "--skip-missing",
-        action="store_true",
-        default=True,
-        help="Skip workflows without runs on the branch (default: true)",
-    )
     args = parser.parse_args()
 
     # Check prerequisites
@@ -311,6 +312,14 @@ def main():
     else:
         result = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True)
         branch = result.stdout.strip()
+        if result.returncode != 0 or not branch:
+            print(
+                "❌ Failed to determine current git branch. "
+                "You may be in a detached HEAD state or not in a git repository.",
+                file=sys.stderr,
+            )
+            print('   Specify the branch explicitly with "--branch <name>".', file=sys.stderr)
+            sys.exit(1)
 
     print(f"🔍 Comparing workflow runs: {branch} vs main\n")
 
@@ -371,13 +380,9 @@ def main():
 
         branch_run = get_latest_run(workflow, branch)
         if not branch_run:
-            if args.skip_missing:
-                print("skipped (no run on branch)")
-                skipped_workflows.append(workflow)
-                continue
-            else:
-                print("no run found on branch")
-                continue
+            print("skipped (no run on branch)")
+            skipped_workflows.append(workflow)
+            continue
 
         main_run = get_latest_run(workflow, "main")
         print("done")
