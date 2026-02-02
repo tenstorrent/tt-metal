@@ -8,6 +8,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3.tests.fused_op_unit_tests.mla.test_rope_deepseek import apply_rotary_pos_emb_torch
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.ttnn.utils_for_testing import assert_equal
 
@@ -443,13 +444,20 @@ def test_deepseek_v3_mla_norm_and_rope_sequence_trace_mode(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # Create RoPE tensors
+    rope_tensors = create_rope_tensors(device, qk_rope_head_dim=64, bsz=batch_size)
+
     # pytorch reference
     torch_variance = torch_q.pow(2).mean(-1, keepdim=True)
     torch_q *= torch.rsqrt(torch_variance + 1e-6) * q_norm_gamma
     torch_q_out = torch_q
     torch_variance = torch_kv_nope.pow(2).mean(-1, keepdim=True)
     torch_kv_nope *= torch.rsqrt(torch_variance + 1e-6) * kv_norm_gamma
-    torch_kv_nope_out = torch.nn.functional.rms_norm(torch_kv_nope, weight=kv_norm_gamma, eps=1e-6)
+    torch_kv_rope_out = torch_kv_rope.permute(0, 2, 1, 3)
+    torch_kv_rope_out = apply_rotary_pos_emb_torch(
+        torch_kv_rope_out, rope_tensors["cos_matrix"], rope_tensors["sin_matrix"], rope_tensors["trans_matrix"]
+    )
+
     torch_kv_rope_out = torch.nn.functional.rotary_embedding_llama(
         torch_kv_rope,
         rope_tensors["cos_matrix"],
@@ -468,9 +476,6 @@ def test_deepseek_v3_mla_norm_and_rope_sequence_trace_mode(
     torch_kvpe = torch.permute(torch_kvpe, (0, 2, 1, 3))
     torch_kvpe = torch.pad(torch_kvpe, (0, 0, 0, 0, 0, 0, 0, ttnn.TILE_SIZE - 1))
     torch_kvpe = torch.permute(torch_kvpe, (0, 2, 1, 3))
-
-    # Create RoPE tensors
-    rope_tensors = create_rope_tensors(device, qk_rope_head_dim=64, bsz=batch_size)
 
     profiler = BenchmarkProfiler()
 
