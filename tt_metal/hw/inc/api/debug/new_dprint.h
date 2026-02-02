@@ -383,87 +383,92 @@ constexpr std::size_t count_placeholders(const char (&format)[N]) {
 
 namespace formatting {
 
-// Type-to-character mapping for format strings
+struct dprint_type_info {
+    char type_char;
+    uint32_t size_in_bytes;
+};
+
+// Type-to-info mapping for format strings and serialization
 template <typename T>
-struct dprint_type_to_char {
-    static constexpr char value = '#';  // Unknown type default
+struct dprint_type {
+    static constexpr dprint_type_info value = {'#', 0};  // Unknown type default
 };
 
 // Specializations for different types
 template <>
-struct dprint_type_to_char<std::int8_t> {
-    static constexpr char value = 'b';
+struct dprint_type<std::int8_t> {
+    static constexpr dprint_type_info value = {'b', sizeof(std::int8_t)};
 };
 template <>
-struct dprint_type_to_char<std::uint8_t> {
-    static constexpr char value = 'B';
+struct dprint_type<std::uint8_t> {
+    static constexpr dprint_type_info value = {'B', sizeof(std::uint8_t)};
 };
 template <>
-struct dprint_type_to_char<std::int16_t> {
-    static constexpr char value = 'h';
+struct dprint_type<std::int16_t> {
+    static constexpr dprint_type_info value = {'h', sizeof(std::int16_t)};
 };
 template <>
-struct dprint_type_to_char<std::uint16_t> {
-    static constexpr char value = 'H';
+struct dprint_type<std::uint16_t> {
+    static constexpr dprint_type_info value = {'H', sizeof(std::uint16_t)};
 };
 template <>
-struct dprint_type_to_char<std::int32_t> {
-    static constexpr char value = 'i';
+struct dprint_type<std::int32_t> {
+    static constexpr dprint_type_info value = {'i', sizeof(std::int32_t)};
 };
 template <>
-struct dprint_type_to_char<std::uint32_t> {
-    static constexpr char value = 'I';
+struct dprint_type<std::uint32_t> {
+    static constexpr dprint_type_info value = {'I', sizeof(std::uint32_t)};
 };
 template <>
-struct dprint_type_to_char<std::int64_t> {
-    static constexpr char value = 'q';
+struct dprint_type<std::int64_t> {
+    static constexpr dprint_type_info value = {'q', sizeof(std::int64_t)};
 };
 template <>
-struct dprint_type_to_char<std::uint64_t> {
-    static constexpr char value = 'Q';
+struct dprint_type<std::uint64_t> {
+    static constexpr dprint_type_info value = {'Q', sizeof(std::uint64_t)};
 };
 template <>
-struct dprint_type_to_char<float> {
-    static constexpr char value = 'f';
+struct dprint_type<float> {
+    static constexpr dprint_type_info value = {'f', sizeof(float)};
 };
 template <>
-struct dprint_type_to_char<double> {
-    static constexpr char value = 'd';
+struct dprint_type<double> {
+    static constexpr dprint_type_info value = {'d', sizeof(double)};
 };
 template <>
-struct dprint_type_to_char<bool> {
-    static constexpr char value = '?';
+struct dprint_type<bool> {
+    static constexpr dprint_type_info value = {'?', 1};
 };
 
 // Pointer types (including strings)
 template <typename T>
-struct dprint_type_to_char<T*> {
-    static constexpr char value = 'p';
+struct dprint_type<T*> {
+    static constexpr dprint_type_info value = {'p', sizeof(T*)};
 };
 template <>
-struct dprint_type_to_char<char*> {
-    static constexpr char value = 's';
+struct dprint_type<char*> {
+    static constexpr dprint_type_info value = {'s', sizeof(char*)};
 };
 template <>
-struct dprint_type_to_char<const char*> {
-    static constexpr char value = 's';
+struct dprint_type<const char*> {
+    static constexpr dprint_type_info value = {'s', sizeof(const char*)};
 };
 
 // Array types (treat as strings)
 template <std::size_t N>
-struct dprint_type_to_char<char[N]> {
-    static constexpr char value = 's';
+struct dprint_type<char[N]> {
+    static constexpr dprint_type_info value = {'s', sizeof(const char*)};
 };
 template <std::size_t N>
-struct dprint_type_to_char<const char[N]> {
-    static constexpr char value = 's';
+struct dprint_type<const char[N]> {
+    static constexpr dprint_type_info value = {'s', sizeof(const char*)};
 };
 
 // Helper to get type character for a single type, removing cv-qualifiers and references
 template <typename T>
-constexpr char get_type_char() {
+constexpr dprint_type_info get_type_info() {
     using base_type = std::remove_cv_t<std::remove_reference_t<T>>;
-    return dprint_type_to_char<base_type>::value;
+    return dprint_type<base_type>::value;
 }
 
 // Main function to update format string with type information
@@ -481,7 +486,7 @@ constexpr auto update_format_string(const char (&format)[N]) {
 
     helpers::static_string<result_len> result;
 
-    constexpr char type_chars[] = {get_type_char<Args>()...};
+    constexpr dprint_type_info type_infos[] = {get_type_info<Args>()...};
     std::size_t type_index = 0;
 
     for (std::size_t i = 0; i < format_len;) {
@@ -511,7 +516,7 @@ constexpr auto update_format_string(const char (&format)[N]) {
 
             // Add colon and type character
             result.push_back(':');
-            result.push_back(type_chars[arg_index]);
+            result.push_back(type_infos[arg_index].type_char);
             result.push_back('}');
         } else {
             // Regular character
