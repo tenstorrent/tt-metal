@@ -26,7 +26,6 @@ void kernel_main() {
     constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
     compute_kernel_hw_startup(src_cb_id, out_cb_id);
     pack_untilize_init<block_ct_dim, full_ct_dim>(src_cb_id, out_cb_id);
-
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
         cb_reserve_back(out_cb_id, full_ct_dim);
         for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
