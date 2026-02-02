@@ -397,7 +397,11 @@ class DispatcherData:
             else:
                 dispatch_mode = str(mode_val)
         except Exception:
-            pass
+            log_check_location(
+                location,
+                False,
+                f"failed to read dispatch mode from launch message. {MAILBOX_CORRUPTED_MESSAGE}",
+            )
 
         try:
             brisc_noc_id = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.brisc_noc_id)
