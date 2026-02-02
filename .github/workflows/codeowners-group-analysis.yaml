@@ -1042,26 +1042,6 @@ jobs:
             done
           fi
 
-          # Helper function to check if two file lists have any overlap
-          files_have_overlap() {
-            local files1="$1"
-            local files2="$2"
-            if [ -z "$files1" ] || [ -z "$files2" ]; then
-              return 1
-            fi
-            # Convert comma-separated lists to arrays and check for any common file
-            IFS=',' read -ra FILES1_ARRAY <<< "$files1"
-            IFS=',' read -ra FILES2_ARRAY <<< "$files2"
-            for file1 in "${FILES1_ARRAY[@]}"; do
-              for file2 in "${FILES2_ARRAY[@]}"; do
-                if [ "$file1" = "$file2" ]; then
-                  return 0  # Found overlap
-                fi
-              done
-            done
-            return 1  # No overlap
-          }
-
           # Check approvals per-file to ensure correct ownership matching
           for key in "${GROUP_KEYS[@]}"; do
             files="${GROUP_FILES[$key]}"
