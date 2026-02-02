@@ -208,7 +208,7 @@ struct NocCmdBufState {
     uint32_t ret_addr_mid;
 };
 
-// Saves all cmd_buf registers into state; clears reserved NOC_CTRL bits and NOC_PACKET_TAG.
+// Saves all cmd_buf registers into state; clears reserved NOC_CTRL bits in the saved state.
 inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
     uint32_t noc, uint32_t cmd_buf, NocCmdBufState* state) {
     state->ctrl = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CTRL);
@@ -222,9 +222,13 @@ inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
     state->targ_addr_coord = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE);
     state->targ_addr_mid = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_MID);
     state->packet_tag = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_PACKET_TAG);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, 0);
     state->at_data = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_DATA);
     state->ret_addr_mid = NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_MID);
+}
+
+// Clears NOC_PACKET_TAG register for the specified cmd_buf.
+inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t noc, uint32_t cmd_buf) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, 0);
 }
 
 // Restores cmd_buf from state; waits for cmd_buf ready before writing.

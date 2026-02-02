@@ -234,6 +234,8 @@ struct NocRegisterStateSave {
 
     inline __attribute__((always_inline)) NocRegisterStateSave() {
         noc_cmd_buf_save_state(noc_index, write_cmd_buf, &state);
+        // Clear packet tag to avoid using stale transaction IDs in profiler writes
+        noc_clear_packet_tag(noc_index, write_cmd_buf);
     }
 
     inline __attribute__((always_inline)) ~NocRegisterStateSave() {
