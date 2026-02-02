@@ -302,9 +302,9 @@ void socket_notify_sender(const SocketReceiverInterface& socket) {
         uint32_t local_bytes_acked_addr = socket.config_addr + offsetof(receiver_socket_md, bytes_acked);
         uint64_t pcie_addr = (static_cast<uint64_t>(socket.h2d.bytes_acked_addr_hi) << 32) |
                              static_cast<uint64_t>(socket.h2d.bytes_acked_addr_lo);
-        noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
-        noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-            NOC_0, local_bytes_acked_addr, socket.h2d.pcie_xy_enc, pcie_addr, 4, 1);
+        noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
+        noc_wwrite_with_state<DM_DEDICATED_NOC, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            noc_index, local_bytes_acked_addr, socket.h2d.pcie_xy_enc, pcie_addr, sizeof(socket.bytes_acked));
     } else {
         auto upstream_bytes_acked_noc_addr =
             get_noc_addr(socket.d2d.upstream_noc_x, socket.d2d.upstream_noc_y, socket.d2d.upstream_bytes_acked_addr);
