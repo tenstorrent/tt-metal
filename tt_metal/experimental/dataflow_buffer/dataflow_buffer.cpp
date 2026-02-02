@@ -32,6 +32,14 @@ namespace detail {
     return static_cast<::experimental::PackedTileCounter>((tensix_id << 5) | tc_id);
 }
 
+uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
+    uint8_t idx = next_index_[core_coord]++;
+    TT_FATAL(idx < 64, "Out of remapper pairs for core ({}, {})", core_coord.x, core_coord.y);
+    return idx;
+}
+
+void RemapperIndexAllocator::reset() { next_index_.clear(); }
+
 uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_producer) {
     if (config.cap == ::experimental::AccessPattern::BLOCKED) {
         return is_producer ? 1 : config.num_producers;
@@ -109,13 +117,13 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
     init.risc_mask_bits.tensix_mask = (this->risc_mask >> 8) & 0x0F;
     init.risc_mask_bits.reserved = 0;
     init.risc_mask_bits.tc_initialized = 0;  // set by device after init
-    init.remapper_pair_index = this->remapper_pair_index;
     init.num_txn_ids = this->num_txn_ids;
     for (int i = 0; i < 4; i++) {
         init.txn_ids[i] = this->txn_ids[i];
     }
     init.num_entries_per_txn_id = this->num_entries_per_txn_id;
     init.num_entries_per_txn_id_per_tc = this->num_entries_per_txn_id_per_tc;
+    init.remapper_consumer_mask = this->remapper_consumer_mask;
 
     log_info(
         tt::LogMetal,
@@ -129,13 +137,13 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
     log_info(tt::LogMetal, "Stride size: {}", this->stride_size);
     log_info(tt::LogMetal, "Capacity: {}", this->capacity);
     log_info(tt::LogMetal, "Risc mask: 0x{:x}", this->risc_mask);
-    log_info(tt::LogMetal, "Remapper pair index: {}", this->remapper_pair_index);
     log_info(tt::LogMetal, "Num txn ids: {}", this->num_txn_ids);
     for (int i = 0; i < 4; i++) {
         log_info(tt::LogMetal, "Txn id {}: {}", i, this->txn_ids[i]);
     }
     log_info(tt::LogMetal, "Num entries per txn id: {}", this->num_entries_per_txn_id);
     log_info(tt::LogMetal, "Num entries per txn id per tc: {}", this->num_entries_per_txn_id_per_tc);
+    log_info(tt::LogMetal, "Remapper consumer mask: 0x{:x}", this->remapper_consumer_mask);
 
     const auto* init_bytes = reinterpret_cast<const uint8_t*>(&init);
     data.insert(data.end(), init_bytes, init_bytes + sizeof(init));
@@ -156,8 +164,11 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
         }
         per_risc.num_tcs_to_rr = rc.config.num_tcs_to_rr;
         log_info(tt::LogMetal, "Num tcs to rr: {}", per_risc.num_tcs_to_rr);
-        per_risc.should_init_tc = rc.config.should_init_tc ? 1 : 0;
-        log_info(tt::LogMetal, "Should init tc: {}", per_risc.should_init_tc);
+        per_risc.flags.remapper_pair_index = static_cast<uint8_t>(rc.config.remapper_pair_index) & 0x3F;
+        per_risc.flags.reserved = 0;
+        per_risc.flags.should_init_tc = rc.config.should_init_tc;
+        per_risc.consumer_tcs = rc.config.consumer_tcs;
+        log_info(tt::LogMetal, "Should init tc: {}", rc.config.should_init_tc);
 
         const auto* cfg_bytes = reinterpret_cast<const uint8_t*>(&per_risc);
         data.insert(data.end(), cfg_bytes, cfg_bytes + sizeof(per_risc));
@@ -295,6 +306,10 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     dfb->capacity = capacity;
     log_info(tt::LogMetal, "Capacity: {}", capacity);
 
+    if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+        dfb->remapper_consumer_mask = config.consumer_risc_mask & 0xFF;
+    }
+
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
 
@@ -387,6 +402,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     }
 
     // Create producer risc_configs and assign TCs from groups
+    CoreCoord core = dfb->core_ranges.ranges()[0].start_coord;
     for (size_t producer_idx = 0; producer_idx < producer_risc_ids.size(); producer_idx++) {
         uint8_t risc_id = producer_risc_ids[producer_idx];
 
@@ -407,6 +423,16 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                 (uint32_t)::experimental::get_counter_id(risc_config.config.packed_tile_counter[tc]));
         }
         risc_config.config.num_tcs_to_rr = num_producer_tcs;
+
+        if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+            risc_config.config.remapper_pair_index = remapper_index_allocator_.allocate(core);
+            const TileCounterGroup& group = tc_groups[producer_idx][0];
+            uint32_t packed = 0;
+            for (size_t i = 0; i < group.consumer_tcs.size() && i < 4; i++) {
+                packed |= (::experimental::get_counter_id(group.consumer_tcs[i]) & 0x1F) << (i * 5);
+            }
+            risc_config.config.consumer_tcs = packed;
+        }
 
         dfb->risc_configs.push_back(risc_config);
     }
@@ -562,10 +588,13 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         base_addr = static_cast<uint32_t>(computed_addr);
         for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
             for (auto& rc : dfb->risc_configs) {
-                if (!rc.is_producer && tc < rc.config.num_tcs_to_rr) {
-                    rc.config.base_addr[tc] = base_addr;
-                    rc.config.limit[tc] =
-                        rc.config.base_addr[tc] + ((entry_size * max_prod_cons) * (dfb->capacity - 1)) + entry_size;
+                if (rc.is_producer) {
+                    continue;
+                }
+                rc.config.base_addr[tc] = base_addr;
+                rc.config.limit[tc] =
+                    rc.config.base_addr[tc] + ((entry_size * max_prod_cons) * (dfb->capacity - 1)) + entry_size;
+                if (dfb->config.cap == ::experimental::AccessPattern::STRIDED && tc < rc.config.num_tcs_to_rr) {
                     base_addr += entry_size;
                 }
             }
