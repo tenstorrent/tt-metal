@@ -187,7 +187,6 @@ def run_test_linear_impl(
     )
     check_result = []
 
-    breakpoint()
     for i in range(device.shape[0]):
         for j in range(device.shape[1]):
             if use_non_fused:
