@@ -906,19 +906,8 @@ jobs:
         run: |
           # Create final vectors directory
           mkdir -p /tmp/vectors
-          # Move all JSON files from subdirectories to /tmp/vectors (if directory exists)
-          if [ -d "/tmp/vectors-download" ]; then
-            find /tmp/vectors-download -name "*.json" -exec mv {} /tmp/vectors/ \;
-            echo "Found and merged vector files from /tmp/vectors-download"
-          else
-            echo "No vector artifacts downloaded (directory does not exist)"
-          fi
-          # Check if we have any vectors
-          VECTOR_COUNT=$(find /tmp/vectors -name "*.json" 2>/dev/null | wc -l)
-          echo "Total vector files: $VECTOR_COUNT"
-          if [ "$VECTOR_COUNT" -eq 0 ]; then
-            echo "WARNING: No vector files found!"
-          fi
+          # Move all JSON files from subdirectories to /tmp/vectors
+          find /tmp/vectors-download -name "*.json" -exec mv {} /tmp/vectors/ \;
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           clean: false
