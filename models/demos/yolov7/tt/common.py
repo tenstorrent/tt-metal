@@ -225,11 +225,17 @@ class TtYOLOv7Matmul:
             # which converts [out_channels, in_channels, H, W] to tiled 2D format
             pass
 
-            weights_torch = ttnn.to_torch(self.weights)
-
-            # Ensure weights are in ROW_MAJOR layout for conversion
+            # On mesh device, weights are replicated; use first shard for to_torch (no mesh_composer for replicate)
+            if device.get_num_devices() > 1:
+                weight_shards = ttnn.get_device_tensors(self.weights)
+                weights_torch = ttnn.to_torch(weight_shards[0])
+            else:
+                weights_torch = ttnn.to_torch(self.weights)
             if self.weights.layout != ttnn.ROW_MAJOR_LAYOUT:
-                weights_torch = ttnn.to_torch(ttnn.to_layout(self.weights, ttnn.ROW_MAJOR_LAYOUT))
+                if device.get_num_devices() > 1:
+                    weights_torch = ttnn.to_torch(ttnn.to_layout(weight_shards[0], ttnn.ROW_MAJOR_LAYOUT))
+                else:
+                    weights_torch = ttnn.to_torch(ttnn.to_layout(self.weights, ttnn.ROW_MAJOR_LAYOUT))
 
             # Get original shape - weights are conv format [out_channels, in_channels, H, W]
             if len(weights_torch.shape) == 4:
@@ -259,8 +265,12 @@ class TtYOLOv7Matmul:
 
         if not self._bias_processed:
             # Convert bias to tiled layout - ensure operations happen on host
-            # Convert to torch first
-            bias_torch = ttnn.to_torch(self.bias)
+            # On mesh device, bias is replicated; use first shard for to_torch
+            if device.get_num_devices() > 1:
+                bias_shards = ttnn.get_device_tensors(self.bias)
+                bias_torch = ttnn.to_torch(bias_shards[0])
+            else:
+                bias_torch = ttnn.to_torch(self.bias)
             # Convert to ttnn tensor on host first
             self.bias = ttnn.from_torch(
                 bias_torch,
