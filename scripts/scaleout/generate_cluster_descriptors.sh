@@ -32,8 +32,8 @@ OPTIONS:
     --base-name <name>            Base name for cluster descriptor files (required)
     --rank-bindings-file <file>   Rank bindings YAML file (with @ prefix) - sets env vars per rank
     --rankfile <file>              MPI rankfile (with @ prefix) - maps ranks to hosts/slots (required)
-    --topology-tool <path>        Path to topology tool (required)
-    --mpi-launcher <cmd>          MPI launcher command (required)
+    --topology-tool <path>        Path to topology tool (default: auto-detect)
+    --mpi-launcher <cmd>          MPI launcher command (default: mpirun)
     --dry-run                     Show what would be executed without running
     -h, --help                    Show this help message
 
@@ -105,9 +105,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required arguments
-if [[ -z "$MAPPING_FILE" ]] || [[ -z "$OUTPUT_DIR" ]] || [[ -z "$BASE_NAME" ]] || [[ -z "$MPI_LAUNCHER" ]]; then
-    echo -e "${RED}Error: --mapping-file, --output-dir, --base-name, and --mpi-launcher are required${NC}" >&2
+if [[ -z "$MAPPING_FILE" ]] || [[ -z "$OUTPUT_DIR" ]] || [[ -z "$BASE_NAME" ]]; then
+    echo -e "${RED}Error: --mapping-file, --output-dir, and --base-name are required${NC}" >&2
     usage
+fi
+
+# Set default MPI launcher if not provided
+if [[ -z "$MPI_LAUNCHER" ]]; then
+    MPI_LAUNCHER="mpirun"
 fi
 
 # Require rankfile
@@ -130,10 +135,18 @@ if [[ -n "$RANK_BINDINGS_FILE" ]]; then
 fi
 RANKFILE=$(remove_at_prefix "$RANKFILE")
 
-# Require topology tool to be explicitly provided
+# Find topology tool if not provided
 if [[ -z "$TOPOLOGY_TOOL" ]]; then
-    echo -e "${RED}Error: --topology-tool is required${NC}" >&2
-    usage
+    if [[ -f "./build/tools/umd/topology" ]]; then
+        TOPOLOGY_TOOL="./build/tools/umd/topology"
+    elif [[ -f "../build/tools/umd/topology" ]]; then
+        TOPOLOGY_TOOL="../build/tools/umd/topology"
+    elif command -v topology &> /dev/null; then
+        TOPOLOGY_TOOL="topology"
+    else
+        echo -e "${RED}Error: topology tool not found. Please specify with --topology-tool${NC}" >&2
+        exit 1
+    fi
 fi
 
 if [[ ! -f "$TOPOLOGY_TOOL" ]] && ! command -v "$TOPOLOGY_TOOL" &> /dev/null; then
