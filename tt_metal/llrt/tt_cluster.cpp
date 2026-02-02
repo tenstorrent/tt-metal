@@ -25,7 +25,6 @@
 #include "common/executor.hpp"
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
@@ -1246,9 +1245,9 @@ void Cluster::release_ethernet_cores_for_fabric_routers() {
     this->initialize_ethernet_sockets();
 }
 
-std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(ChipId chip_id) const {
+std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(
+    const tt::tt_fabric::ControlPlane& control_plane, ChipId chip_id) const {
     std::set<tt_fabric::chan_id_t> fabric_ethernet_channels;
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& active_eth_cores = control_plane.get_active_ethernet_cores(chip_id, false);
     for (const auto& eth_core : active_eth_cores) {
         if (!this->is_ethernet_link_up(chip_id, eth_core)) {
@@ -1351,7 +1350,9 @@ CoreCoord Cluster::get_virtual_eth_core_from_channel(ChipId chip_id, int channel
 
 // TODO: ALLAN Can change to write one bit
 void Cluster::set_internal_routing_info_for_ethernet_cores(
-    bool enable_internal_routing, const std::vector<ChipId>& target_mmio_devices) const {
+    const tt::tt_fabric::ControlPlane& control_plane,
+    bool enable_internal_routing,
+    const std::vector<ChipId>& target_mmio_devices) const {
     log_debug(tt::LogDevice, "Set internal routing bit {}", enable_internal_routing);
     // TODO: initialize devices if user does not
     // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
@@ -1367,7 +1368,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(
     for (auto chip_id : this->driver_->get_target_remote_device_ids()) {
         non_mmio_devices.emplace_back(chip_id);
     }
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
     auto dev_msgs_factory = hal_.get_dev_msgs_factory(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     if (enable_internal_routing) {
         auto routing_info_enabled = dev_msgs_factory.create<tt_metal::dev_msgs::routing_info_t>();
