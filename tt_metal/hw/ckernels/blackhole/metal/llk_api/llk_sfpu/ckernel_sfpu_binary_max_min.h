@@ -20,6 +20,19 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     uint offset1 = (dst_index_in1 * 32) << 1;
     uint offset2 = (dst_index_out * 32) << 1;
 
+    // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
+    //
+    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
+    //
+    // t | Load | Simple              | MAD | Round     | Store   |
+    // - | ---- | ------------------- | --- | --------- | ------- |
+    // 0 | [a]  |                     |     |           |         |
+    // 1 |  b   |                     |     |           |         |
+    // 2 | [c]  | swap_minmax([a], b) |     |           |         |
+    // 0 | ...  |                     |     |           |         |
+    // 1 | ...  |                     |     | L16 = [a] |         |
+    // 2 | ...  |                     |     |           | [c] L16 |
+
     constexpr int a0 = p_sfpu::LREG0;
     constexpr int a1 = p_sfpu::LREG1;
     constexpr int b = p_sfpu::LREG2;
@@ -57,6 +70,23 @@ inline void calculate_binary_max_min_int32(
     uint offset0 = (dst_index_in0 * 32) << 1;
     uint offset1 = (dst_index_in1 * 32) << 1;
     uint offset2 = (dst_index_out * 32) << 1;
+
+    // This uses SFPLOADMACRO to achieve a throughput of 5 cycles per input row.
+    //
+    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
+    //
+    // t | Load | Simple                | MAD | Round     | Store   |
+    // - | ---- | --------------------- | --- | --------- | ------- |
+    // 0 | [a0] |                       |     |           |         |
+    // 1 | [b0] |                       |     |           |         |
+    // 2 |      | setcc  a1  (<0 or ≥0) |     |           |         |
+    // 3 |      | encc                  |     |           |         |
+    // 4 | [c]  | swap_minmax([a0], b0) |     |           |         |
+    // 0 | ...  |                       |     |           |         |
+    // 1 | ...  | setcc [b0] (<0 or ≥0) |     | L16 = [a] |         |
+    // 2 | ...  | setcc  a0  (<0 or ≥0) |     |           |         |
+    // 3 | ...  | encc                  |     | L16 = [b] |         |
+    // 4 | ...  |                       |     |           | [c] L16 |
 
     constexpr int a0 = p_sfpu::LREG0;
     constexpr int b0 = p_sfpu::LREG1;
