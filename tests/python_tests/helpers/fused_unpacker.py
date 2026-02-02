@@ -516,7 +516,7 @@ class UnpackerTilizeA(Unpacker):
                 f"    {{\n"
                 f"        for (uint32_t j = 0; j < {block_ct_dim}; j++)\n"
                 f"        {{\n"
-                f"            _llk_unpack_tilize_(L1_ADDRESS(buffer_A{stage}[i * {block_rt_dim}]), j, unpack_a_src_format{stage});\n"
+                f"            _llk_unpack_tilize_(L1_ADDRESS(buffer_A{stage}[i * {block_rt_dim}]), j, unpack_a_src_format{stage}, unpack_a_dst_format{stage});\n"
                 f"        }}\n"
                 f"    }}\n"
             )
@@ -528,7 +528,7 @@ class UnpackerTilizeA(Unpacker):
                 f"    {{\n"
                 f"        for (uint32_t j = 0; j < {block_ct_dim}; j++)\n"
                 f"        {{\n"
-                f"            _llk_unpack_tilize_(L1_ADDRESS(buffer_A{stage}[i * {block_rt_dim}]), j, unpack_a_src_format{stage}, {block_ct_dim}, {face_r_dim}, {num_faces}, false);\n"
+                f"            _llk_unpack_tilize_(L1_ADDRESS(buffer_A{stage}[i * {block_rt_dim}]), j, unpack_a_src_format{stage}, unpack_a_dst_format{stage}, {block_ct_dim}, {face_r_dim}, {num_faces}, false);\n"
                 f"        }}\n"
                 f"    }}\n"
             )

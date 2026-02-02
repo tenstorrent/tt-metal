@@ -51,6 +51,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
                 tile_row_addr,
                 col,
                 formats.unpack_src,
+                formats.unpack_dst,
                 block_ct_dim,
                 FACE_R_DIM,
                 num_faces,
