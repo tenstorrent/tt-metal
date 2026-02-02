@@ -839,13 +839,17 @@ jobs:
            (github.event_name == 'schedule' && github.event.schedule == '0 3 * * *')) &&
           (matrix.generate_mode == 'non_ccl' || matrix.generate_mode == 'ccl_only')
         run: |
+          echo "Running Model Traced sweep generation for generate_mode=${{ matrix.generate_mode }}"
+
           # Determine which modules to skip based on generate_mode
           SKIP_MODULES_FLAG=""
           if [[ "${{ matrix.generate_mode }}" == "non_ccl" ]]; then
             # Skip all CCL modules when generating on N150
+            echo "Mode: non_ccl - Skipping CCL modules"
             SKIP_MODULES_FLAG="--skip-modules ccl.generality.all_broadcast,ccl.generality.all_gather,ccl.generality.all_reduce,ccl.generality.all_to_all_combine,ccl.generality.all_to_all_dispatch,ccl.generality.all_to_all,ccl.generality.point_to_point,ccl.generality.reduce_scatter"
           elif [[ "${{ matrix.generate_mode }}" == "ccl_only" ]]; then
             # Generate only CCL modules on n300-llmbox by skipping all non-CCL modules
+            echo "Mode: ccl_only - Skipping non-CCL modules"
             NON_CCL_MODULES=$(python3 -c "import pathlib; sweeps_dir = pathlib.Path('tests/sweep_framework/sweeps'); all_modules = [str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') for py_file in sorted(sweeps_dir.glob('**/*.py')) if '__init__' not in str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') and not str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.').startswith('ccl.')]; print(','.join(all_modules))") || {
               echo "Error: Failed to compute non-CCL modules"
               exit 1
@@ -857,20 +861,28 @@ jobs:
             SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
           fi
 
+          echo "Running: python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced all --tag ci-main $SKIP_MODULES_FLAG"
           python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced all --tag ci-main $SKIP_MODULES_FLAG
+
+          echo "Generation complete. Checking output directory..."
+          ls -la /work/tests/sweep_framework/vectors_export/ || echo "vectors_export directory does not exist"
       - name: Run ttnn sweeps generation (all sweeps - lead models)
         if: |
           ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)') ||
            (github.event_name == 'schedule' && github.event.schedule == '0 2 * * *')) &&
           (matrix.generate_mode == 'non_ccl' || matrix.generate_mode == 'ccl_only')
         run: |
+          echo "Running Lead Models sweep generation for generate_mode=${{ matrix.generate_mode }}"
+
           # Determine which modules to skip based on generate_mode
           SKIP_MODULES_FLAG=""
           if [[ "${{ matrix.generate_mode }}" == "non_ccl" ]]; then
             # Skip all CCL modules when generating on N150
+            echo "Mode: non_ccl - Skipping CCL modules"
             SKIP_MODULES_FLAG="--skip-modules ccl.generality.all_broadcast,ccl.generality.all_gather,ccl.generality.all_reduce,ccl.generality.all_to_all_combine,ccl.generality.all_to_all_dispatch,ccl.generality.all_to_all,ccl.generality.point_to_point,ccl.generality.reduce_scatter"
           elif [[ "${{ matrix.generate_mode }}" == "ccl_only" ]]; then
             # Generate only CCL modules on n300-llmbox by skipping all non-CCL modules
+            echo "Mode: ccl_only - Skipping non-CCL modules"
             NON_CCL_MODULES=$(python3 -c "import pathlib; sweeps_dir = pathlib.Path('tests/sweep_framework/sweeps'); all_modules = [str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') for py_file in sorted(sweeps_dir.glob('**/*.py')) if '__init__' not in str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.') and not str(py_file.relative_to(sweeps_dir))[:-3].replace('/', '.').startswith('ccl.')]; print(','.join(all_modules))") || {
               echo "Error: Failed to compute non-CCL modules"
               exit 1
@@ -882,7 +894,11 @@ jobs:
             SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
           fi
 
+          echo "Running: python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --tag ci-main $SKIP_MODULES_FLAG"
           python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --tag ci-main $SKIP_MODULES_FLAG
+
+          echo "Generation complete. Checking output directory..."
+          ls -la /work/tests/sweep_framework/vectors_export/ || echo "vectors_export directory does not exist"
       - name: Run ttnn sweeps generation (all sweeps)
         if: |
           ((github.event_name == 'schedule' && github.event.schedule != '0 4 * * *' && github.event.schedule != '0 3 * * *' && github.event.schedule != '0 2 * * *') ||
@@ -910,9 +926,20 @@ jobs:
           fi
 
           python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main $SKIP_MODULES_FLAG
+      - name: Check if vectors were generated
+        id: check-vectors
+        shell: bash
+        run: |
+          if [ -d "/work/tests/sweep_framework/vectors_export" ] && [ -n "$(ls -A /work/tests/sweep_framework/vectors_export/*.json 2>/dev/null)" ]; then
+            echo "has-vectors=true" >> $GITHUB_OUTPUT
+            echo "Found vector files to upload"
+          else
+            echo "has-vectors=false" >> $GITHUB_OUTPUT
+            echo "No vector files found - skipping upload for generate_mode=${{ matrix.generate_mode }}"
+          fi
       - name: Upload sweep vectors
         # Only upload if vectors were generated (skip if no generation step ran for this matrix entry)
-        if: hashFiles('/work/tests/sweep_framework/vectors_export/*.json') != ''
+        if: steps.check-vectors.outputs.has-vectors == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: sweeps-vectors-${{ matrix.generate_mode }}
