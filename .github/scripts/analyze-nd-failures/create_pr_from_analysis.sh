@@ -1,44 +1,39 @@
 #!/bin/bash
 
-# Script to create a PR from an ND failure analysis
-# Usage: ./create_pr_from_analysis.sh [OPTIONS] <analysis_result.md>
+# =============================================================================
+# Create PR from ND Failure Analysis
+# =============================================================================
 #
-# This script:
-# 1. Reads an analysis result markdown file
-# 2. Uses Claude CLI to implement the recommended fixes
-# 3. Creates a branch, commits changes, and opens a PR
+# Takes an analysis document and uses Claude to implement the recommended fixes,
+# then creates a draft PR with the changes.
+#
+# Usage: ./create_pr_from_analysis.sh [OPTIONS] <analysis_result.md>
+# =============================================================================
 
 set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Resolve to absolute path
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
-# Non-root user for running Claude CLI
+# User for running Claude CLI when script runs as root
 CLAUDE_USER="claude-runner"
 
-# Colors for output
+# Implementation timeout (15 minutes)
+IMPLEMENTATION_TIMEOUT=900
+
+# -----------------------------------------------------------------------------
+# Logging utilities
+# -----------------------------------------------------------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1" >&2
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1" >&2
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
-
-log_debug() {
-    echo -e "${BLUE}[DEBUG]${NC} $1" >&2
-}
+log_info()  { echo -e "${GREEN}[INFO]${NC} $1" >&2; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
+log_debug() { echo -e "${BLUE}[DEBUG]${NC} $1" >&2; }
 
 # Function to check prerequisites
 check_prerequisites() {
@@ -84,50 +79,40 @@ check_prerequisites() {
     log_info "All prerequisites met"
 }
 
-# Function to ensure non-root user exists for Claude CLI
+# -----------------------------------------------------------------------------
+# Root user handling
+# -----------------------------------------------------------------------------
 ensure_claude_user() {
-    # Skip if not running as root
     if [[ $(id -u) -ne 0 ]]; then
         CLAUDE_USER=$(whoami)
-        log_debug "Not running as root, using current user: $CLAUDE_USER"
         return 0
     fi
 
-    # Check if user already exists
-    if id "$CLAUDE_USER" &>/dev/null; then
-        log_debug "User $CLAUDE_USER already exists"
-    else
-        log_info "Creating non-root user '$CLAUDE_USER' for Claude CLI..."
+    # Running as root - create or use existing non-root user
+    if ! id "$CLAUDE_USER" &>/dev/null; then
+        log_info "Creating user '$CLAUDE_USER' for Claude CLI..."
         useradd -m -s /bin/bash "$CLAUDE_USER" 2>/dev/null || {
             log_error "Failed to create user $CLAUDE_USER"
             exit 1
         }
-        log_info "User '$CLAUDE_USER' created successfully"
     fi
 
-    # Get the claude user's home directory
+    # Copy Claude credentials from root
     local claude_home
     claude_home=$(eval echo "~$CLAUDE_USER")
 
-    # Copy Claude credentials to the non-root user if they exist in root's home
-    if [[ -f /root/.claude.json ]]; then
-        cp /root/.claude.json "$claude_home/.claude.json" 2>/dev/null || true
-        chown "$CLAUDE_USER:$CLAUDE_USER" "$claude_home/.claude.json" 2>/dev/null || true
-        chmod 600 "$claude_home/.claude.json" 2>/dev/null || true
-        log_debug "Copied Claude credentials to $CLAUDE_USER"
-    fi
+    [[ -f /root/.claude.json ]] && {
+        cp /root/.claude.json "$claude_home/.claude.json"
+        chown "$CLAUDE_USER:$CLAUDE_USER" "$claude_home/.claude.json"
+        chmod 600 "$claude_home/.claude.json"
+    } 2>/dev/null || true
 
-    # Copy Claude config directory if it exists
-    if [[ -d /root/.claude ]]; then
-        cp -r /root/.claude "$claude_home/.claude" 2>/dev/null || true
-        chown -R "$CLAUDE_USER:$CLAUDE_USER" "$claude_home/.claude" 2>/dev/null || true
-        log_debug "Copied Claude config directory to $CLAUDE_USER"
-    fi
+    [[ -d /root/.claude ]] && {
+        cp -r /root/.claude "$claude_home/.claude"
+        chown -R "$CLAUDE_USER:$CLAUDE_USER" "$claude_home/.claude"
+    } 2>/dev/null || true
 
-    # Ensure the user has read/write access to the repository
-    if [[ -d "$REPO_ROOT" ]]; then
-        chmod -R a+rwX "$REPO_ROOT" 2>/dev/null || true
-    fi
+    chmod -R a+rwX "$REPO_ROOT" 2>/dev/null || true
 }
 
 # Function to generate a branch name from analysis
@@ -221,7 +206,9 @@ Now implement the primary fix from this analysis. Make the code changes directly
 PROMPT_FOOTER
 }
 
-# Function to run Claude to implement changes
+# -----------------------------------------------------------------------------
+# Claude implementation
+# -----------------------------------------------------------------------------
 run_claude_implementation() {
     local prompt_file=$1
     local output_file=$2
@@ -229,44 +216,34 @@ run_claude_implementation() {
 
     log_info "Running Claude to implement fixes (model: $model)..."
 
-    local exit_code=0
     local temp_output
     temp_output=$(mktemp)
     chmod 666 "$temp_output"
-
-    # Make prompt file readable by claude user
     chmod 644 "$prompt_file" 2>/dev/null || true
 
-    # Run Claude with permission to edit files
+    # Build command - use runuser for root, direct bash otherwise
+    local claude_cmd="cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model' -p --dangerously-skip-permissions"
+    local run_cmd
     if [[ $(id -u) -eq 0 ]]; then
-        if command -v timeout &> /dev/null; then
-            log_info "Using timeout (15 minute limit for implementation)"
-            if ! timeout 900 runuser -u "$CLAUDE_USER" -- bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
-                exit_code=$?
-            fi
-        else
-            if ! runuser -u "$CLAUDE_USER" -- bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
-                exit_code=$?
-            fi
-        fi
+        run_cmd="runuser -u '$CLAUDE_USER' -- bash -c \"$claude_cmd\""
     else
-        if command -v timeout &> /dev/null; then
-            log_info "Using timeout (15 minute limit for implementation)"
-            if ! timeout 900 bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
-                exit_code=$?
-            fi
-        else
-            if ! bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
-                exit_code=$?
-            fi
-        fi
+        run_cmd="bash -c \"$claude_cmd\""
+    fi
+
+    # Execute with optional timeout
+    local exit_code=0
+    if command -v timeout &>/dev/null; then
+        log_info "Timeout: $((IMPLEMENTATION_TIMEOUT / 60)) minutes"
+        eval "timeout $IMPLEMENTATION_TIMEOUT $run_cmd" 2>&1 | tee "$temp_output" || exit_code=$?
+    else
+        eval "$run_cmd" 2>&1 | tee "$temp_output" || exit_code=$?
     fi
 
     cp "$temp_output" "$output_file" 2>/dev/null || true
     rm -f "$temp_output"
 
     if [[ $exit_code -eq 124 ]]; then
-        log_error "Claude implementation timed out after 15 minutes"
+        log_error "Implementation timed out after $((IMPLEMENTATION_TIMEOUT / 60)) minutes"
         return 1
     fi
 

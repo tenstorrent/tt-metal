@@ -1,12 +1,21 @@
 #!/bin/bash
 
-# Main script to analyze non-deterministic failures from GitHub Actions jobs
-# Usage: ./analyze_nd_failures.sh [OPTIONS] <job_url_1> [job_url_2] ... [job_url_n]
+# =============================================================================
+# Non-Deterministic Failure Analysis Script
+# =============================================================================
 #
-# This script:
-# 1. Downloads logs from GitHub Actions job URLs
-# 2. Prepares analysis context (logs, test files, code context)
-# 3. Uses Claude CLI to analyze the failures and suggest fixes
+# Analyzes GitHub Actions job failures using Claude CLI to identify root causes
+# and suggest code fixes.
+#
+# Usage: ./analyze_nd_failures.sh [OPTIONS] <job_url_1> [job_url_2] ...
+#
+# Key options:
+#   --name <name>     Human-readable name for the output folder
+#   --model <model>   Claude model: haiku, sonnet, sonnet-1M, opus
+#   --create-pr       Automatically create a PR with suggested fixes
+#
+# Run with --help for full options.
+# =============================================================================
 
 set -eo pipefail
 
@@ -14,98 +23,64 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROMPT_FILE="${SCRIPT_DIR}/analysis_prompt.md"
 DOWNLOAD_SCRIPT="${SCRIPT_DIR}/download_job_logs.sh"
 REPO_ROOT="${SCRIPT_DIR}/../../.."
-BASE_OUTPUT_DIR="${REPO_ROOT}/build_ND_analysis"
+BASE_OUTPUT_DIR="${REPO_ROOT}/build_nd_analysis"
 
-# Non-root user for running Claude CLI (required because --dangerously-skip-permissions doesn't work as root)
+# User for running Claude CLI when script runs as root
 CLAUDE_USER="claude-runner"
 
-# Colors for output
+# -----------------------------------------------------------------------------
+# Logging utilities
+# -----------------------------------------------------------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1" >&2
-}
+log_info()  { echo -e "${GREEN}[INFO]${NC} $1" >&2; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
+log_debug() { echo -e "${BLUE}[DEBUG]${NC} $1" >&2; }
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1" >&2
-}
+# -----------------------------------------------------------------------------
+# Root user handling
+# -----------------------------------------------------------------------------
+# Claude CLI's --dangerously-skip-permissions doesn't work as root, so we
+# create a non-root user when running in CI/Docker environments.
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
-
-log_debug() {
-    echo -e "${BLUE}[DEBUG]${NC} $1" >&2
-}
-
-# Function to ensure non-root user exists for Claude CLI
-# Claude CLI's --dangerously-skip-permissions doesn't work as root for security reasons
 ensure_claude_user() {
-    # Skip if not running as root
     if [[ $(id -u) -ne 0 ]]; then
         CLAUDE_USER=$(whoami)
-        log_debug "Not running as root, using current user: $CLAUDE_USER"
+        log_debug "Running as user: $CLAUDE_USER"
         return 0
     fi
 
-    # Check if user already exists
-    if id "$CLAUDE_USER" &>/dev/null; then
-        log_debug "User $CLAUDE_USER already exists"
-    else
-        log_info "Creating non-root user '$CLAUDE_USER' for Claude CLI..."
+    # Running as root - create or use existing non-root user
+    if ! id "$CLAUDE_USER" &>/dev/null; then
+        log_info "Creating user '$CLAUDE_USER' for Claude CLI..."
         useradd -m -s /bin/bash "$CLAUDE_USER" 2>/dev/null || {
             log_error "Failed to create user $CLAUDE_USER"
             exit 1
         }
-        log_info "User '$CLAUDE_USER' created successfully"
     fi
 
-    # Get the claude user's home directory
+    # Copy Claude credentials from root to the new user
     local claude_home
     claude_home=$(eval echo "~$CLAUDE_USER")
 
-    # Copy Claude credentials to the non-root user if they exist in root's home
-    if [[ -f /root/.claude.json ]]; then
-        cp /root/.claude.json "$claude_home/.claude.json" 2>/dev/null || true
-        chown "$CLAUDE_USER:$CLAUDE_USER" "$claude_home/.claude.json" 2>/dev/null || true
-        chmod 600 "$claude_home/.claude.json" 2>/dev/null || true
-        log_debug "Copied Claude credentials to $CLAUDE_USER"
-    fi
+    [[ -f /root/.claude.json ]] && {
+        cp /root/.claude.json "$claude_home/.claude.json"
+        chown "$CLAUDE_USER:$CLAUDE_USER" "$claude_home/.claude.json"
+        chmod 600 "$claude_home/.claude.json"
+    } 2>/dev/null || true
 
-    # Copy Claude config directory if it exists
-    if [[ -d /root/.claude ]]; then
-        cp -r /root/.claude "$claude_home/.claude" 2>/dev/null || true
-        chown -R "$CLAUDE_USER:$CLAUDE_USER" "$claude_home/.claude" 2>/dev/null || true
-        log_debug "Copied Claude config directory to $CLAUDE_USER"
-    fi
+    [[ -d /root/.claude ]] && {
+        cp -r /root/.claude "$claude_home/.claude"
+        chown -R "$CLAUDE_USER:$CLAUDE_USER" "$claude_home/.claude"
+    } 2>/dev/null || true
 
-    # Ensure the user has read access to the repository
-    if [[ -d "$REPO_ROOT" ]]; then
-        # Make repo readable by claude user (preserve existing permissions)
-        chmod -R a+rX "$REPO_ROOT" 2>/dev/null || true
-    fi
-}
-
-# Function to run command as claude user (handles both root and non-root cases)
-run_as_claude_user() {
-    local cmd=$1
-
-    if [[ $(id -u) -ne 0 ]]; then
-        # Not root, run directly
-        eval "$cmd"
-    else
-        # Running as root, switch to claude user
-        # Use runuser if available, otherwise su
-        if command -v runuser &>/dev/null; then
-            runuser -u "$CLAUDE_USER" -- bash -c "$cmd"
-        else
-            su - "$CLAUDE_USER" -c "$cmd"
-        fi
-    fi
+    # Grant read access to repository
+    chmod -R a+rX "$REPO_ROOT" 2>/dev/null || true
 }
 
 # Function to check prerequisites
@@ -161,41 +136,27 @@ check_prerequisites() {
     log_info "All prerequisites met"
 }
 
-# Function to validate Claude model selection
+# -----------------------------------------------------------------------------
+# Model selection
+# -----------------------------------------------------------------------------
+VALID_MODELS="haiku sonnet sonnet-1M opus"
+
 validate_claude_model() {
     local model=$1
     case "$model" in
-        haiku|sonnet|sonnet-1M|opus)
-            return 0
-            ;;
+        haiku|sonnet|sonnet-1M|opus) return 0 ;;
         *)
-            log_error "Invalid model: $model"
-            log_error "Valid models are: haiku, sonnet, sonnet-1M, opus"
+            log_error "Invalid model: $model. Valid models: $VALID_MODELS"
             return 1
             ;;
     esac
 }
 
-# Function to get Claude model flag
 get_claude_model_flag() {
     local model=$1
-    # Map user-friendly names to Claude CLI model identifiers
     case "$model" in
-        haiku)
-            echo "haiku"
-            ;;
-        sonnet)
-            echo "sonnet"
-            ;;
-        sonnet-1M)
-            echo "sonnet[1m]"
-            ;;
-        opus)
-            echo "opus"
-            ;;
-        *)
-            echo "sonnet"  # Default fallback
-            ;;
+        sonnet-1M) echo "sonnet[1m]" ;;
+        *)         echo "$model" ;;
     esac
 }
 
@@ -219,172 +180,131 @@ prepare_analysis_context() {
     echo "$context_dir"
 }
 
-# Function to extract failure metadata from logs
-extract_failure_metadata() {
-    local log_file=$1
+# -----------------------------------------------------------------------------
+# Error and job name extraction for folder naming
+# -----------------------------------------------------------------------------
 
-    [[ ! -f "$log_file" ]] && return 1
-
-    # Extract just the essential failure information:
-    # - Failed test names
-    # - Error messages
-    # - File paths mentioned in errors
-    # - Stack trace snippets (first few lines)
-
-    {
-        # Extract failed test names
-        grep -E "FAILED|ERROR" "$log_file" | grep -E "test_" | head -10
-
-        # Extract error messages (RuntimeError, Exception, etc.)
-        grep -E "(RuntimeError|Exception|Error|TT_THROW)" "$log_file" | head -20
-
-        # Extract file paths mentioned in errors (look for /project/ or file paths)
-        grep -E "(/project/|\.py:|\.cpp:|\.hpp:)" "$log_file" | head -10
-
-        # Extract pytest failure summary
-        grep -A 5 "FAILURES ==" "$log_file" | head -20
-
-    } | sort -u
-}
-
-# Function to extract primary error message from logs for folder naming
+# Extracts a short error category from log files for use in folder names.
+# Returns lowercase strings like "device-timeout", "init-failure", etc.
 extract_primary_error() {
     local log_file=$1
+    [[ ! -f "$log_file" ]] && echo "unknown" && return 0
 
-    [[ ! -f "$log_file" ]] && echo "" && return 0
+    local error_type=""
 
-    # Try to find the most prominent error message
-    # Look for common ND failure patterns first
-    local error_msg=""
-
-    # Check for device timeout
+    # Check for common ND failure patterns (most specific first)
     if grep -qi "device.*timeout\|timeout.*device\|timed out" "$log_file" 2>/dev/null; then
-        error_msg="device_timeout"
-    # Check for initialization failure
+        error_type="device-timeout"
     elif grep -qi "failed to initialize\|initialization.*fail\|init.*fail" "$log_file" 2>/dev/null; then
-        error_msg="init_failure"
-    # Check for connection/discovery issues
+        error_type="init-failure"
     elif grep -qi "connection.*mismatch\|missing.*channel\|missing.*port\|discovery.*fail" "$log_file" 2>/dev/null; then
-        error_msg="connection_issue"
-    # Check for hardware errors
+        error_type="connection-issue"
     elif grep -qi "hardware.*error\|chip.*error\|device.*error" "$log_file" 2>/dev/null; then
-        error_msg="hardware_error"
-    # Check for resource exhaustion
+        error_type="hardware-error"
     elif grep -qi "out of memory\|resource.*exhaust\|handle.*exhaust" "$log_file" 2>/dev/null; then
-        error_msg="resource_exhaustion"
-    # Try to extract first significant error message
+        error_type="resource-exhaustion"
+    elif grep -qi "segmentation fault\|segfault\|sigsegv" "$log_file" 2>/dev/null; then
+        error_type="segfault"
+    elif grep -qi "assertion.*fail\|assert.*fail" "$log_file" 2>/dev/null; then
+        error_type="assertion-failure"
     else
-        error_msg=$(grep -E "(RuntimeError|Exception|Error|TT_THROW|FAILED)" "$log_file" 2>/dev/null | head -1 | sed 's/.*\(RuntimeError\|Exception\|Error\|TT_THROW\|FAILED\)[^:]*: *\([^[:space:]]*\).*/\2/' | head -c 30 | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_' || echo "unknown_error")
+        error_type="unknown"
     fi
 
-    # Sanitize: replace spaces with underscores, convert to lowercase, remove special chars, limit length
-    if [[ -z "$error_msg" ]]; then
-        error_msg="unknown_error"
-    fi
-    echo "$error_msg" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | sed 's/[^[:alnum:]_]//g' | sed 's/__*/_/g' | head -c 30
+    echo "$error_type"
 }
 
-# Function to extract job name from job info JSON
+# Extracts a human-readable job name from job metadata.
+# Produces names like "demo-tests-vit" or "unit-tests-wormhole".
 extract_job_name() {
     local job_dir=$1
-
-    # Look for job_info.json in logs directory
-    local job_info_file=$(find "$job_dir" -name "*_job_info.json" -type f | head -1)
-
-    # Try to extract job name from job_info.json
     local job_name=""
+
+    # Try to get job name from job_info.json
+    local job_info_file
+    job_info_file=$(find "$job_dir" -name "*_job_info.json" -type f 2>/dev/null | head -1)
+
     if [[ -f "$job_info_file" ]]; then
-        job_name=$(jq -r '.name // .labels[]? // empty' "$job_info_file" 2>/dev/null | head -1)
-
-        # If not found, try workflow name
-        if [[ -z "$job_name" || "$job_name" == "null" ]]; then
-            job_name=$(jq -r '.workflow_name // empty' "$job_info_file" 2>/dev/null)
-        fi
+        job_name=$(jq -r '.name // empty' "$job_info_file" 2>/dev/null | head -1)
+        [[ "$job_name" == "null" ]] && job_name=""
     fi
 
-    # If still not found, try to get from workflow_jobs.json
-    if [[ -z "$job_name" || "$job_name" == "null" ]]; then
-        local workflow_jobs_file=$(find "$job_dir" -name "workflow_jobs.json" -type f | head -1)
-        if [[ -f "$workflow_jobs_file" ]]; then
-            job_name=$(jq -r '.jobs[0].name // empty' "$workflow_jobs_file" 2>/dev/null)
-        fi
+    # Fallback: try workflow_jobs.json
+    if [[ -z "$job_name" ]]; then
+        local workflow_file
+        workflow_file=$(find "$job_dir" -name "workflow_jobs.json" -type f 2>/dev/null | head -1)
+        [[ -f "$workflow_file" ]] && job_name=$(jq -r '.jobs[0].name // empty' "$workflow_file" 2>/dev/null)
+        [[ "$job_name" == "null" ]] && job_name=""
     fi
 
-    # Fallback: use job_id from job_info filename
-    if [[ -z "$job_name" || "$job_name" == "null" ]]; then
-        if [[ -n "$job_info_file" ]]; then
-            job_name=$(basename "$job_info_file" .json | sed 's/_job_info//')
-        else
-            # Last resort: use run_id from directory name
-            job_name=$(basename "$job_dir" | sed 's/run_\([0-9]*\).*/\1/')
-            [[ -n "$job_name" ]] && job_name="run_${job_name}"
-        fi
+    # Fallback: extract from directory name
+    if [[ -z "$job_name" ]]; then
+        job_name=$(basename "$job_dir" | sed 's/run_//' | sed 's/_attempt.*//')
     fi
 
-    # Sanitize: remove special chars, limit length, replace spaces with underscores
-    echo "$job_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^[:alnum:]_]//g' | sed 's/__*/_/g' | sed 's/^_\|_$//g' | head -c 40
+    # Clean up the name: convert to lowercase, replace non-alphanumeric with hyphens
+    job_name=$(echo "$job_name" | tr '[:upper:]' '[:lower:]')
+    job_name=$(echo "$job_name" | sed 's/[^[:alnum:]]/-/g')  # Replace special chars with hyphens
+    job_name=$(echo "$job_name" | sed 's/--*/-/g')           # Collapse multiple hyphens
+    job_name=$(echo "$job_name" | sed 's/^-\|-$//g')         # Trim leading/trailing hyphens
+    job_name=$(echo "$job_name" | cut -c1-50)                # Limit length
+
+    echo "${job_name:-unknown-job}"
 }
 
-# Function to create run-specific directory name
+# Creates a directory name for analysis output.
+# Format: <job-name>--<error-type> (e.g., "demo-tests-vit--device-timeout")
+# If USER_PROVIDED_NAME is set, uses that instead.
 create_run_directory_name() {
     local job_dir=$1
 
-    # Extract job name
+    # If user provided a name via --name, use it
+    if [[ -n "${USER_PROVIDED_NAME:-}" ]]; then
+        # Sanitize user-provided name
+        local clean_name
+        clean_name=$(echo "$USER_PROVIDED_NAME" | tr '[:upper:]' '[:lower:]')
+        clean_name=$(echo "$clean_name" | sed 's/[^[:alnum:]]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+        echo "${clean_name:-analysis}"
+        return 0
+    fi
+
+    # Auto-generate name from job metadata
     local job_name
     job_name=$(extract_job_name "$job_dir")
 
-    # Fallback to run_id if job_name is empty
-    if [[ -z "$job_name" ]]; then
-        local run_id=$(basename "$job_dir" | sed 's/run_\([0-9]*\).*/\1/')
-        job_name="run_${run_id}"
-    fi
-
-    # Extract primary error from logs
-    local error_abbrev=""
-    local log_file=$(find "$job_dir" -name "*.log" -type f | head -1)
+    local error_type
+    local log_file
+    log_file=$(find "$job_dir" -name "*.log" -type f 2>/dev/null | head -1)
     if [[ -n "$log_file" ]]; then
-        error_abbrev=$(extract_primary_error "$log_file")
+        error_type=$(extract_primary_error "$log_file")
+    else
+        error_type="unknown"
     fi
 
-    # Fallback if no error found
-    if [[ -z "$error_abbrev" ]]; then
-        error_abbrev="unknown"
-    fi
-
-    # Combine: job_name_error_abbrev
-    local dir_name="${job_name}_${error_abbrev}"
-
-    # Final sanitization
-    dir_name=$(echo "$dir_name" | tr '[:upper:]' '[:lower:]' | sed 's/[^[:alnum:]_]//g' | sed 's/__*/_/g' | sed 's/^_\|_$//g')
-
-    echo "$dir_name"
+    # Combine with double-dash separator for readability
+    echo "${job_name}--${error_type}"
 }
 
-# Function to ensure unique directory name (append number if exists and no_overwrite is true)
+# Ensures directory name is unique by appending -1, -2, etc. if needed.
 ensure_unique_directory_name() {
     local base_name=$1
     local no_overwrite=$2
     local full_path="${BASE_OUTPUT_DIR}/${base_name}"
 
-    # If overwrite is allowed or directory doesn't exist, return base name
+    # Return base name if overwrite allowed or directory doesn't exist
     if [[ "$no_overwrite" == "false" ]] || [[ ! -d "$full_path" ]]; then
         echo "$base_name"
         return 0
     fi
 
-    # Directory exists and no_overwrite is true - find next available number
+    # Find next available number suffix
     local counter=1
-    local candidate_name="${base_name}_${counter}"
-    local candidate_path="${BASE_OUTPUT_DIR}/${candidate_name}"
-
-    while [[ -d "$candidate_path" ]]; do
+    while [[ -d "${BASE_OUTPUT_DIR}/${base_name}-${counter}" ]]; do
         counter=$((counter + 1))
-        candidate_name="${base_name}_${counter}"
-        candidate_path="${BASE_OUTPUT_DIR}/${candidate_name}"
     done
 
-    log_info "Directory '$base_name' already exists, using '$candidate_name' instead"
-    echo "$candidate_name"
+    log_info "Directory exists, using '${base_name}-${counter}' instead"
+    echo "${base_name}-${counter}"
 }
 
 # Function to create analysis prompt with context
@@ -434,129 +354,89 @@ EOF
     echo "$output_file"
 }
 
-# Function to run Claude analysis
+# -----------------------------------------------------------------------------
+# Claude analysis execution
+# -----------------------------------------------------------------------------
+ANALYSIS_TIMEOUT=600  # 10 minutes
+
 run_claude_analysis() {
     local prompt_file=$1
     local output_file=$2
     local model=$3
 
-    log_info "Running Claude analysis with model: $model..."
-    log_info "Prompt file: $prompt_file"
-    log_info "Output file: $output_file"
+    log_info "Running Claude analysis (model: $model)..."
 
-    # Get the Claude model flag
     local model_flag
     model_flag=$(get_claude_model_flag "$model")
 
-    # Print the full prompt before sending to Claude
+    # Show prompt being sent
     echo ""
-    log_info "=== Full Prompt to be sent to Claude ==="
+    log_info "=== Prompt sent to Claude ==="
     cat "$prompt_file"
-    echo ""
     log_info "=== End of Prompt ==="
     echo ""
 
-    log_info "Note: This may take several minutes. Large prompts can take time to process..."
+    log_info "This may take several minutes..."
 
-    # Ensure output directory is writable by claude user
+    # Ensure output directory is writable
     local output_dir
     output_dir=$(dirname "$output_file")
-    if [[ $(id -u) -eq 0 ]]; then
-        chown -R "$CLAUDE_USER:$CLAUDE_USER" "$output_dir" 2>/dev/null || true
-        chmod -R u+rwX "$output_dir" 2>/dev/null || true
-    fi
+    chmod -R a+rwX "$output_dir" 2>/dev/null || true
 
-    local exit_code=0
     local temp_output
     temp_output=$(mktemp)
-
-    # Make temp file writable by claude user
     chmod 666 "$temp_output"
 
-    log_info "Running Claude as user: $CLAUDE_USER"
+    # Build Claude command - add --dangerously-skip-permissions only for non-root
+    local claude_cmd="cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p"
+    [[ $(id -u) -ne 0 ]] && claude_cmd+=" --dangerously-skip-permissions"
 
-    # Build and run the Claude command
-    # Use -p flag for non-interactive/pipe mode (print and exit)
-    # Use --dangerously-skip-permissions to allow Claude to read source files
-    if [[ $(id -u) -eq 0 ]]; then
-        # Running as root - run claude directly (without --dangerously-skip-permissions, as root doesn't need it)
-        if command -v timeout &> /dev/null; then
-            log_info "Using timeout (10 minute limit)"
-            if ! timeout 600 bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p" 2>&1 | tee "$temp_output"; then
-                exit_code=$?
-            fi
-
-            if [[ $exit_code -eq 124 ]]; then
-                log_error "Claude analysis timed out after 10 minutes"
-                cp "$temp_output" "$output_file" 2>/dev/null || true
-                rm -f "$temp_output"
-                return 1
-            fi
-        else
-            # No timeout available
-            if ! bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p" 2>&1 | tee "$temp_output"; then
-                exit_code=$?
-            fi
-        fi
+    # Execute with optional timeout
+    local exit_code=0
+    if command -v timeout &>/dev/null; then
+        log_info "Timeout: ${ANALYSIS_TIMEOUT}s"
+        timeout "$ANALYSIS_TIMEOUT" bash -c "$claude_cmd" 2>&1 | tee "$temp_output" || exit_code=$?
     else
-        # Not running as root - run directly
-        if command -v timeout &> /dev/null; then
-            log_info "Using timeout (10 minute limit)"
-            if ! timeout 600 bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
-                exit_code=$?
-            fi
-
-            if [[ $exit_code -eq 124 ]]; then
-                log_error "Claude analysis timed out after 10 minutes"
-                cp "$temp_output" "$output_file" 2>/dev/null || true
-                rm -f "$temp_output"
-                return 1
-            fi
-        else
-            if ! bash -c "cd '$REPO_ROOT' && cat '$prompt_file' | claude --model '$model_flag' -p --dangerously-skip-permissions" 2>&1 | tee "$temp_output"; then
-                exit_code=$?
-            fi
-        fi
+        bash -c "$claude_cmd" 2>&1 | tee "$temp_output" || exit_code=$?
     fi
 
-    # Copy output to final location and fix permissions
+    # Save output
     cp "$temp_output" "$output_file" 2>/dev/null || true
     rm -f "$temp_output"
-
-    if [[ $(id -u) -eq 0 ]]; then
-        chown root:root "$output_file" 2>/dev/null || true
-    fi
-
-    # Ensure output is flushed to disk
     sync "$output_file" 2>/dev/null || true
 
-    # Check if we got valid output
-    if [[ $exit_code -eq 0 ]] && [[ -s "$output_file" ]]; then
-        log_info "Analysis complete"
-        return 0
-    else
-        log_error "Claude analysis failed (exit code: $exit_code)"
-        log_info "Check the output file for details: $output_file"
+    # Check result
+    if [[ $exit_code -eq 124 ]]; then
+        log_error "Analysis timed out after $((ANALYSIS_TIMEOUT / 60)) minutes"
+        return 1
+    elif [[ $exit_code -ne 0 ]] || [[ ! -s "$output_file" ]]; then
+        log_error "Analysis failed (exit code: $exit_code)"
         return 1
     fi
+
+    log_info "Analysis complete: $output_file"
+    return 0
 }
 
-# Main function
+# -----------------------------------------------------------------------------
+# Main entry point
+# -----------------------------------------------------------------------------
 main() {
-    # Record start time for total duration calculation
     local start_time=$(date +%s)
 
+    # Configuration variables
     local urls=()
     local urls_file=""
+    local custom_output_dir=""
+    local claude_model="sonnet"
     local skip_download=false
     local keep_output=false
-    local claude_model="sonnet"  # Default model
     local no_overwrite=false
     local create_pr=false
     local pr_base_branch="main"
+    USER_PROVIDED_NAME=""  # Global so create_run_directory_name can access it
 
     # Parse arguments
-    local custom_output_dir=""
     while [[ $# -gt 0 ]]; do
         case $1 in
             --file|-f)
@@ -567,11 +447,13 @@ main() {
                 custom_output_dir=$2
                 shift 2
                 ;;
+            --name|-n)
+                USER_PROVIDED_NAME=$2
+                shift 2
+                ;;
             --model|-m)
                 claude_model=$2
-                if ! validate_claude_model "$claude_model"; then
-                    exit 1
-                fi
+                validate_claude_model "$claude_model" || exit 1
                 shift 2
                 ;;
             --skip-download)
@@ -595,25 +477,42 @@ main() {
                 shift 2
                 ;;
             --help|-h)
-                echo "Usage: $0 [OPTIONS] <job_url_1> [job_url_2] ... [job_url_n]"
-                echo ""
-                echo "Options:"
-                echo "  --file, -f <file>       Read URLs from file (one per line)"
-                echo "  --output-dir, -o <dir>  Base output directory (default: <repo_root>/build_ND_analysis)"
-                echo "  --model, -m <model>    Claude model to use: haiku, sonnet, sonnet-1M, opus (default: sonnet)"
-                echo "  --skip-download        Skip downloading logs (use existing downloads)"
-                echo "  --keep-output          Keep output and downloaded folders (don't clean up)"
-                echo "  --no-overwrite         If output folder exists, append number suffix instead of overwriting"
-                echo "  --create-pr            After analysis, create a PR with the suggested fixes"
-                echo "  --pr-base <branch>     Base branch for PR (default: main)"
-                echo "  --help, -h             Show this help message"
-                echo ""
-                echo "Examples:"
-                echo "  $0 https://github.com/tenstorrent/tt-metal/actions/runs/1234567890/job/9876543210"
-                echo "  $0 --file urls.txt --model opus"
-                echo "  $0 --model sonnet-1M <job_url>"
-                echo "  $0 --create-pr --pr-base main <job_url>"
+                cat << 'EOF'
+Usage: analyze_nd_failures.sh [OPTIONS] <job_url> [job_url_2] ...
+
+Analyze non-deterministic failures from GitHub Actions jobs using Claude.
+
+OPTIONS:
+  --name, -n <name>       Human-readable name for output folder
+                          Example: --name "vit-timeout-issue"
+  --model, -m <model>     Claude model: haiku, sonnet, sonnet-1M, opus (default: sonnet)
+  --file, -f <file>       Read job URLs from file (one per line)
+  --output-dir, -o <dir>  Output directory (default: <repo>/build_nd_analysis)
+  --skip-download         Skip log download, use existing logs
+  --keep-output           Don't clean up temporary files
+  --no-overwrite          Create numbered folders instead of overwriting
+  --create-pr             Create a PR with suggested fixes after analysis
+  --pr-base <branch>      Base branch for PR (default: main)
+  --help, -h              Show this help
+
+EXAMPLES:
+  # Basic analysis
+  ./analyze_nd_failures.sh https://github.com/tenstorrent/tt-metal/actions/runs/123/job/456
+
+  # With custom folder name
+  ./analyze_nd_failures.sh --name "vit-demo-timeout" <job_url>
+
+  # Batch analysis with Opus
+  ./analyze_nd_failures.sh --file failed_jobs.txt --model opus
+
+  # Full workflow: analyze and create PR
+  ./analyze_nd_failures.sh --create-pr --model opus <job_url>
+EOF
                 exit 0
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                exit 1
                 ;;
             *)
                 urls+=("$1")
@@ -622,10 +521,8 @@ main() {
         esac
     done
 
-    # Set base output directory
-    if [[ -n "$custom_output_dir" ]]; then
-        BASE_OUTPUT_DIR="$custom_output_dir"
-    fi
+    # Set output directory
+    [[ -n "$custom_output_dir" ]] && BASE_OUTPUT_DIR="$custom_output_dir"
     mkdir -p "$BASE_OUTPUT_DIR"
 
     # Read URLs from file if provided

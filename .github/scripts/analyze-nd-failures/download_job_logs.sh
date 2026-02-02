@@ -1,37 +1,32 @@
 #!/bin/bash
 
-# Script to download logs from GitHub Actions job links
-# Usage: ./download_job_logs.sh <job_url_1> [job_url_2] ... [job_url_n]
-# Or: ./download_job_logs.sh --file <file_with_urls>
+# =============================================================================
+# Download GitHub Actions Job Logs
+# =============================================================================
 #
-# Each URL should be in format: https://github.com/tenstorrent/tt-metal/actions/runs/<run_id>/job/<job_id>
-# Or: https://github.com/tenstorrent/tt-metal/actions/runs/<run_id>
+# Downloads logs and artifacts from GitHub Actions job URLs.
+#
+# Usage: ./download_job_logs.sh [OPTIONS] <job_url> [job_url_2] ...
+#        ./download_job_logs.sh --file <urls.txt>
+# =============================================================================
 
 set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="tenstorrent/tt-metal"
-
-# Default output directory (can be overridden with --output-dir)
 OUTPUT_DIR=""
 
-# Colors for output
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Function to extract run_id and job_id from a GitHub Actions URL
 extract_job_info() {
@@ -177,7 +172,7 @@ main() {
                 echo ""
                 echo "Options:"
                 echo "  --file, -f <file>    Read URLs from file (one per line)"
-                echo "  --output-dir, -o <dir>  Output directory (default: ./build_downloaded_logs)"
+                echo "  --output-dir, -o <dir>  Output directory (default: ./downloaded-logs)"
                 echo "  --help, -h           Show this help message"
                 echo ""
                 echo "Examples:"
@@ -212,7 +207,7 @@ main() {
 
     # Set default output directory if not provided
     if [[ -z "$OUTPUT_DIR" ]]; then
-        OUTPUT_DIR="${SCRIPT_DIR}/build_downloaded_logs"
+        OUTPUT_DIR="${SCRIPT_DIR}/downloaded-logs"
     fi
 
     # Check if gh CLI is available
