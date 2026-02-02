@@ -47,7 +47,7 @@ gh auth login
 
 | Option | Description |
 |--------|-------------|
-| `--name, -n, -o <name>` | Name for output subfolder (e.g., `-o "vit-demo-timeout"`) |
+| `-o <name>` | Name for output subfolder (e.g., `-o "vit-demo-timeout"`) |
 | `--model, -m <model>` | Claude model: `haiku`, `sonnet` (default), `sonnet-1M`, `opus` |
 | `--file, -f <file>` | Read job URLs from file (one per line) |
 | `--skip-download` | Re-analyze existing logs |

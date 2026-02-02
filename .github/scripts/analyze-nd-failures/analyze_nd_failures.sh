@@ -442,7 +442,7 @@ main() {
                 urls_file=$2
                 shift 2
                 ;;
-            --name|-n|-o)
+            -o)
                 USER_PROVIDED_NAME=$2
                 shift 2
                 ;;
@@ -480,9 +480,7 @@ Analyze non-deterministic failures from GitHub Actions jobs using Claude.
 Output is saved to: build_ND_analysis/<name>/
 
 OPTIONS:
-  --name, -n, -o <name>   Name for the output subfolder
-                          Example: -o "vit-timeout-issue"
-                          Default: auto-generated from job name and error type
+  -o <name>               Name for the output subfolder (default: auto-generated)
   --model, -m <model>     Claude model: haiku, sonnet, sonnet-1M, opus (default: sonnet)
   --file, -f <file>       Read job URLs from file (one per line)
   --skip-download         Skip log download, use existing logs
