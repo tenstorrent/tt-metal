@@ -368,11 +368,6 @@ void append_routing_plane_connection_manager_rt_args(
             dst_node);
         // Use direction as tag for ConnectionSlot
         worker_args.push_back(static_cast<uint32_t>(dir_opt.value()));
-        log_info(tt::LogTest, "Src fabric node id: {}", src_fabric_node_id.chip_id);
-        log_info(tt::LogTest, "Src chip id: {}", control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id));
-        log_info(tt::LogTest, "Dst fabric node id: {}", dst_node.chip_id);
-        log_info(tt::LogTest, "Dst chip id: {}", control_plane.get_physical_chip_id_from_fabric_node_id(dst_node));
-        log_info(tt::LogTest, "Adding connection for tag {}", static_cast<uint32_t>(dir_opt.value())); 
 
         uint32_t link_idx = 0;
         if (!connection_link_indices.empty()) {
