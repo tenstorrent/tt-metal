@@ -136,7 +136,11 @@ def test_glm4_moe_naive_moe(device, default_moe_config):
     assert outputs_torch.shape == hidden_states.shape
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 245760, "fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
+    indirect=True,
+)
 def test_glm4_moe_full(mesh_device, default_moe_config):
     """Test full Glm4MoeMoE module with TTNN acceleration."""
     model = Glm4MoeMoE(default_moe_config).to(dtype=torch.bfloat16)
