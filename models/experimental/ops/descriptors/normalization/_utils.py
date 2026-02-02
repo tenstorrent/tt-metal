@@ -81,14 +81,8 @@ def _create_layernorm_op_descriptor(
     if not input_tensor.is_sharded() and core_range_set is None:
         raise RuntimeError("core_range_set is required for non-sharded input tensors")
 
-    # Initialize compute kernel config if not provided
     if compute_kernel_config is None:
-        compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            arch,
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-        )
+        raise ValueError("compute_kernel_config is required")
 
     # Use input's memory config if not provided
     output_mem_config = memory_config if memory_config is not None else input_tensor.memory_config()

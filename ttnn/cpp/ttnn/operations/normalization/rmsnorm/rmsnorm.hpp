@@ -12,6 +12,8 @@
 
 namespace ttnn {
 
+DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch);
+
 Tensor rms_norm(
     const Tensor& input_tensor,
     float epsilon = 1e-12,

@@ -128,6 +128,8 @@ LayerNormInputs = ttnn._ttnn.operations.normalization.LayerNormInputs
 LayerNormDeviceOperation = ttnn._ttnn.operations.normalization.LayerNormDeviceOperation
 LayerNormMultiCoreProgramFactory = ttnn._ttnn.operations.normalization.LayerNormMultiCoreProgramFactory
 LayerNormShardedProgramFactory = ttnn._ttnn.operations.normalization.LayerNormShardedProgramFactory
+layernorm_default_compute_config = ttnn._ttnn.operations.normalization.layernorm_default_compute_config
+rmsnorm_default_compute_config = ttnn._ttnn.operations.normalization.rmsnorm_default_compute_config
 
 
 def create_layer_norm_reciprocals(device: ttnn.Device, core_range_set: ttnn.CoreRangeSet, width: int):

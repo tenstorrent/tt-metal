@@ -11,6 +11,8 @@
 
 namespace ttnn {
 
+DeviceComputeKernelConfig layernorm_default_compute_config(tt::ARCH arch);
+
 Tensor layer_norm(
     const Tensor& input_tensor,
     float epsilon = 1e-12,
