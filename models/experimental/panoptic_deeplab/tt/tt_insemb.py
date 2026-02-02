@@ -9,6 +9,13 @@ from models.experimental.panoptic_deeplab.tt.tt_semseg import TtDeepLabV3PlusHea
 from models.experimental.panoptic_deeplab.tt.tt_upsample import BilinearUpsampleMatmulTTNN as TtBilinearUpsample
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*_args, **_kwargs):
+        pass
+
 
 class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
     """
@@ -146,7 +153,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             center_logits = ttnn.to_memory_config(center_logits, ttnn.L1_MEMORY_CONFIG)
 
         # Matmul based upsample
+        signpost("FINAL_UPSAMPLE_INSEMB_CENTER_START")
         center_logits = self.final_upsample(center_logits)
+        signpost("FINAL_UPSAMPLE_INSEMB_CENTER_END")
 
         # --- Final Upsample for Offset ---
         # Use saved spatial dimensions
@@ -170,7 +179,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         # Calculate scale factors
         # Matmul based upsample
+        signpost("FINAL_UPSAMPLE_INSEMB_OFFSET_START")
         offset_logits = self.final_upsample(offset_logits)
+        signpost("FINAL_UPSAMPLE_INSEMB_OFFSET_END")
 
         # Apply offset scaling
         offset_logits = ttnn.mul(offset_logits, self.common_stride)
@@ -189,6 +200,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
     def _execute_center_branch(self, y: ttnn.Tensor, use_memory_config_conversion: bool = False) -> ttnn.Tensor:
         """Execute center prediction branch with optional memory config handling"""
+        signpost("INSEMB_HEAD_CENTER_PREDICTION_START")
         logger.info(f"🔷 Executing conv: instance_head.center_head.0")
         center_y = self.center_head_0(y)
 
@@ -204,11 +216,12 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         logger.info(f"🔷 Executing conv: instance_head.center_predictor")
         center_logits = self.center_predictor(center_y)
-
+        signpost("INSEMB_HEAD_CENTER_PREDICTION_END")
         return center_logits
 
     def _execute_offset_branch(self, y: ttnn.Tensor, use_memory_config_conversion: bool = False) -> ttnn.Tensor:
         """Execute offset prediction branch with optional memory config handling"""
+        signpost("INSEMB_HEAD_OFFSET_PREDICTION_START")
         logger.info(f"🔷 Executing conv: instance_head.offset_head.0")
         offset_y = self.offset_head_0(y)
 
@@ -224,7 +237,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         logger.info(f"🔷 Executing conv: instance_head.offset_predictor")
         offset_logits = self.offset_predictor(offset_y)
-
+        signpost("INSEMB_HEAD_OFFSET_PREDICTION_END")
         return offset_logits
 
     def layers(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -234,7 +247,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             return self.layers_110_cores(features)
 
     def layers_20_cores(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        signpost("INSEMB_HEAD_DECODER_START")
         y = super().layers_20_cores(features)
+        signpost("INSEMB_HEAD_DECODER_END")
 
         y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -248,7 +263,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         return center_logits, offset_logits
 
     def layers_110_cores(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        signpost("INSEMB_HEAD_DECODER_START")
         y = super().layers_110_cores(features)
+        signpost("INSEMB_HEAD_DECODER_END")
 
         # Save spatial dimensions for upsample
         self._save_spatial_dimensions(y)
