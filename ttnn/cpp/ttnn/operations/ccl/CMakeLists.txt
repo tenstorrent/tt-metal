@@ -88,18 +88,18 @@ target_sources(
         all_to_all_dispatch/all_to_all_dispatch.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_device_operation.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_program_factory.cpp
-        broadcast/broadcast.cpp
-        broadcast/device/broadcast_device_operation.cpp
-        broadcast/device/broadcast_program_factory.cpp
-        mesh_partition/mesh_partition.cpp
-        mesh_partition/device/mesh_partition_device_operation.cpp
-        mesh_partition/device/mesh_partition_program_factory.cpp
         reduce_to_root/reduce_to_root.cpp
         reduce_to_root/device/reduce_to_root_op.cpp
         reduce_to_root/device/reduce_to_root_program.cpp
         reduce_scatter/reduce_scatter.cpp
         reduce_scatter/device/reduce_scatter_device_operation.cpp
         reduce_scatter/device/reduce_scatter_program_factory.cpp
+        mesh_partition/mesh_partition.cpp
+        mesh_partition/device/mesh_partition_device_operation.cpp
+        mesh_partition/device/mesh_partition_program_factory.cpp
+        broadcast/broadcast.cpp
+        broadcast/device/broadcast_device_operation.cpp
+        broadcast/device/broadcast_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_ccl PRIVATE ${FixmeOpIncDirs})
