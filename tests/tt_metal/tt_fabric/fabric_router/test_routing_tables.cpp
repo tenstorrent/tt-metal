@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
+#include <algorithm>
 #include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
@@ -287,8 +288,41 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
-    [[maybe_unused]] auto control_plane = make_control_plane(
+    auto control_plane = make_control_plane(
         t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
+
+    // Extract MGD filename (without extension) for golden file naming
+    std::filesystem::path mgd_path(mesh_graph_desc_path);
+    std::string mgd_filename = mgd_path.stem().string();
+    // Replace any special characters that might cause issues in filenames
+    std::replace(mgd_filename.begin(), mgd_filename.end(), '/', '_');
+    std::replace(mgd_filename.begin(), mgd_filename.end(), '-', '_');
+
+    // Extract parameter index from test name (format: TestName/Index)
+    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    std::string full_test_name = std::string(test_info->test_suite_name()) + "/" + test_info->name();
+    int param_index = 0;
+    // Test name format: TestSuiteName/TestName/Index
+    size_t last_slash = full_test_name.find_last_of('/');
+    if (last_slash != std::string::npos && last_slash + 1 < full_test_name.length()) {
+        try {
+            param_index = std::stoi(full_test_name.substr(last_slash + 1));
+        } catch (...) {
+            // If parsing fails, try to find index by searching through parameters
+            for (size_t i = 0; i < t3k_mesh_descriptor_chip_mappings.size(); ++i) {
+                if (std::get<0>(t3k_mesh_descriptor_chip_mappings[i]) == mesh_graph_desc_path &&
+                    std::get<1>(t3k_mesh_descriptor_chip_mappings[i]) == mesh_graph_eth_coords) {
+                    param_index = i;
+                    break;
+                }
+            }
+        }
+    }
+
+    std::string golden_name =
+        "T3kCustomMeshGraph_TestT3kControlPlaneInit_" + mgd_filename + "_" + std::to_string(param_index);
+
+    check_asic_mapping_against_golden("TestT3kControlPlaneInit", golden_name);
 }
 
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
