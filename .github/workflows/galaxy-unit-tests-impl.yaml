@@ -212,7 +212,7 @@ jobs:
           FAKE_DEVICE: TG
         run: |
           mkdir -p generated/test_reports
-          pytest -n auto models/demos/llama3_70b_galaxy/tests/unit_tests
+          pytest models/demos/llama3_70b_galaxy/tests/unit_tests
 
       - name: Run prefetcher unit tests
         if: ${{ matrix.test-group.model == 'prefetcher' }}
@@ -236,10 +236,10 @@ jobs:
           uv pip install -r models/demos/gpt_oss/requirements.txt
 
           TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
-            pytest -n auto models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
+            pytest models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
 
           TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
-            pytest -n auto models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
+            pytest models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
 
       - name: Run tttv2 module tests
         if: ${{ matrix.test-group.model == 'tttv2' }}
