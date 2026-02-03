@@ -320,6 +320,13 @@ private:
 };
 
 namespace experimental::quasar {
+enum class QuasarComputeCore : uint8_t {
+    COMPUTE_0 = 0,
+    COMPUTE_1 = 1,
+    COMPUTE_2 = 2,
+    COMPUTE_3 = 3,
+};
+
 class QuasarDataMovementKernel : public Kernel {
 public:
     QuasarDataMovementKernel(
@@ -375,6 +382,32 @@ private:
     std::string config_hash() const override;
 };
 
+class QuasarComputeKernel : public Kernel {
+public:
+    QuasarComputeKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const QuasarComputeConfig& config,
+        const std::set<QuasarComputeCore>& compute_cores) :
+        Kernel(
+            HalProgrammableCoreType::TENSIX,
+            HalProcessorClassType::COMPUTE,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config),
+        compute_cores_(compute_cores.begin(), compute_cores.end()) {
+        TT_FATAL(
+            MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
+            "QuasarComputeKernel is only supported on Quasar");
+        TT_FATAL(
+            config.num_processors_per_cluster == compute_cores.size(),
+            "Number of processors per cluster specified in config must match number of compute cores per cluster that "
+            "have "
+            "been reserved");
+    }
 }  // namespace experimental::quasar
 
 }  // namespace tt::tt_metal
