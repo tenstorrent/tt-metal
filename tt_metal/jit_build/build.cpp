@@ -155,10 +155,6 @@ void JitBuildEnv::init(
         common_flags += "-g ";
     }
 
-    // Add path normalization for reproducible builds and ccache effectiveness
-    common_flags += fmt::format("-ffile-prefix-map={}=. ", this->root_);
-    common_flags += fmt::format("-fdebug-prefix-map={}=. ", this->root_);
-
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-MMD "
@@ -407,7 +403,7 @@ void JitBuildState::compile_one(
     const JitBuildSettings* settings,
     const string& src,
     const string& obj,
-    [[maybe_unused]] const string& obj_temp_path) const {
+    const string& obj_temp_path) const {
     // ZoneScoped;
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
@@ -458,9 +454,7 @@ void JitBuildState::compile_one(
 
     // Append common args provided by the build state
     std::string obj_path = out_dir + obj;
-    // Use final object path for compilation to enable ccache across different runners
-    // Temporary .d file path for dependency tracking
-    fs::path temp_d_path = obj_path;
+    fs::path temp_d_path = obj_temp_path;
     temp_d_path.replace_extension("d");
     cmd += this->cflags_;
     cmd += this->includes_;
@@ -468,7 +462,7 @@ void JitBuildState::compile_one(
     if (settings) {
         settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
     }
-    cmd += fmt::format("-c -o {} {} -MF {} ", obj_path, src, temp_d_path.string());
+    cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, src, temp_d_path.string());
     cmd += defines;
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
@@ -479,14 +473,15 @@ void JitBuildState::compile_one(
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
-    // Compile directly to final object path for ccache compatibility
+    // log file and dephash file can be renamed after compilation, but the .o file
+    // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
     jit_build::utils::FileRenamer dephash_file(obj_path + ".dephash");
-    jit_build::write_dependency_hashes(out_dir, obj_path, dephash_file.path());
+    jit_build::write_dependency_hashes(out_dir, obj_temp_path, dephash_file.path());
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
@@ -496,17 +491,14 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
 }
 
 size_t JitBuildState::compile(
-    const string& out_dir,
-    const JitBuildSettings* settings,
-    [[maybe_unused]] jit_build::utils::FileGroupRenamer& renamer) const {
+    const string& out_dir, const JitBuildSettings* settings, jit_build::utils::FileGroupRenamer& renamer) const {
     // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         if (need_compile(out_dir, this->objs_[i])) {
-            // Compile directly to final object path for ccache compatibility across runners
             launch_build_step(
-                [this, &out_dir, settings, i]() {
-                    this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i], "");
+                [this, &out_dir, settings, i, obj_temp_path = renamer.generate_temp_path(i)]() {
+                    this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i], obj_temp_path);
                 },
                 events);
         } else {
@@ -586,9 +578,9 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 }
 
 // Given this elf (A) and a later elf (B):
-// weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of
-// the same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to
-// remain strong so to propogate link addresses
+// weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
+// same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
+// strong so to propogate link addresses
 void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
@@ -643,7 +635,7 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
 
     fs::create_directories(out_dir);
     {
-        // Compile directly to final object paths for ccache compatibility
+        // object files will be created at unique names and renamed after linking
         std::vector<std::string> obj_paths;
         obj_paths.reserve(this->objs_.size());
         for (const auto& obj : this->objs_) {
@@ -652,7 +644,7 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
         jit_build::utils::FileGroupRenamer renamer(std::move(obj_paths));
 
         if (compile(out_dir, settings, renamer) > 0 || need_link(out_dir)) {
-            string link_objs = fmt::format("{} {} ", this->extra_link_objs_, fmt::join(obj_paths, " "));
+            string link_objs = fmt::format("{} {} ", this->extra_link_objs_, fmt::join(renamer.paths(), " "));
             link(out_dir, settings, link_objs);
             if (this->is_fw_) {
                 weaken(out_dir);
