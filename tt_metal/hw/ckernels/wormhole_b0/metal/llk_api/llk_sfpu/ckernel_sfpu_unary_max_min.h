@@ -76,7 +76,7 @@ sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
             0,
             p_sfpu::LREG12,
             p_sfpu::LREG0,
-            IS_MAX_OP ? sfpi::SFPSWAP_MOD1_VEC_MIN_MAX : 9);  // mod1=9 means set VD=max and VC=min
+            IS_MAX_OP ^ IS_UNSIGNED ? sfpi::SFPSWAP_MOD1_VEC_MIN_MAX : 9);  // mod1=9 means set VD=max and VC=min
         TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
     }
     TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);

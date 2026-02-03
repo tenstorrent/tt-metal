@@ -111,7 +111,7 @@ inline void calculate_unary_max_min_int32(uint value) {
                 0,
                 p_sfpu::LREG12,
                 a,
-                IS_MAX_OP ? sfpi::SFPSWAP_MOD1_VEC_MIN_MAX : 9);  // mod1=9 means set VD=max and VC=min
+                IS_MAX_OP ^ IS_UNSIGNED ? sfpi::SFPSWAP_MOD1_VEC_MIN_MAX : 9);  // mod1=9 means set VD=max and VC=min
             TTI_SFPNOP;
         }
     } else {
