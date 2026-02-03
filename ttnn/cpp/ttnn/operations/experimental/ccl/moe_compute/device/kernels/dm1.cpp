@@ -121,6 +121,9 @@ void kernel_main() {
     uint64_t matmul_chunk_available_semaphore_noc_addr = get_noc_addr(
         tilize_drain_core_noc_x, tilize_drain_core_noc_y, get_semaphore(matmul_chunk_available_semaphore_id));
 
+    // Let compute know the address to wait on
+    // TODO
+
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
@@ -133,7 +136,8 @@ void kernel_main() {
             cb_pop_front(cb_c2w_rdy, 1);
 
             // Signal to tilize cores that they can send another chunk of tiles
-            noc_semaphore_inc(matmul_chunk_available_semaphore_noc_addr, 1);
+            noc_semaphore_inc</*posted=*/true>(
+                matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
 
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
@@ -166,5 +170,4 @@ void kernel_main() {
             }
         }
     }
-    noc_async_write_barrier();
 }
