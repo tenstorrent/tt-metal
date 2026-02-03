@@ -237,7 +237,9 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash()
         subtile_broadcast_type,
         is_sfpu,
         is_quant_op,
-        is_where_op);
+        is_where_op,
+        worker_grid,          // [HASH] Affects core distribution and parallelization
+        scalar.has_value());  // [HASH] Affects whether scalar path is used
 }
 
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
@@ -477,15 +479,26 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
 
         return operation::hash_operation<BinaryNgDeviceOperation>(
             attributes,
+            input_tensor_a.logical_shape(),   // [HASH] Affects computation correctness
+            input_tensor_a.padded_shape(),    // [HASH] Affects L1 buffer allocation
             input_tensor_a.dtype(),
             input_tensor_a.memory_config(),
+            input_tensor_a.layout(),           // [HASH] Affects kernel access patterns
+            input_tensor_b->logical_shape(),   // [HASH] Affects broadcast pattern
+            input_tensor_b->padded_shape(),    // [HASH] Affects L1 buffer allocation
             input_tensor_b->dtype(),
             input_tensor_b->memory_config(),
+            input_tensor_b->layout(),          // [HASH] Affects kernel access patterns
             shard_volumes);
     }
 
     return operation::hash_operation<BinaryNgDeviceOperation>(
-        attributes, input_tensor_a.dtype(), input_tensor_a.memory_config());
+        attributes,
+        input_tensor_a.logical_shape(),    // [HASH] Affects computation correctness
+        input_tensor_a.padded_shape(),     // [HASH] Affects L1 buffer allocation
+        input_tensor_a.dtype(),
+        input_tensor_a.memory_config(),
+        input_tensor_a.layout());          // [HASH] Affects kernel access patterns
 }
 
 bool BinaryNgDeviceOperation::skip_launch(
