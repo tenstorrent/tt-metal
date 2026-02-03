@@ -17,8 +17,8 @@ template <
     uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
-    untilize::InitUninitMode init_uninit_mode,
-    untilize::WaitMode wait_mode>
+    untilize_config::InitUninitMode init_uninit_mode,
+    untilize_config::WaitMode wait_mode>
 ALWI void untilize(uint32_t num_blocks) {
 
     // Compile-time validation
@@ -37,12 +37,12 @@ ALWI void untilize(uint32_t num_blocks) {
     // Determine which dispatch path to use
     // WaitUpfront or non-integer wide widths always use standard path
     constexpr bool use_standard_path =
-        (wait_mode == untilize::WaitMode::WaitUpfront) ||
+        (wait_mode == untilize_config::WaitMode::WaitUpfront) ||
         (block_width_tiles > dest_limit && !is_integer);
 
     constexpr bool use_block_based_pack =
         (block_width_tiles > dest_limit && is_integer &&
-         wait_mode != untilize::WaitMode::WaitUpfront);
+         wait_mode != untilize_config::WaitMode::WaitUpfront);
 
     // Compute block parameters for block-based pack path
     constexpr uint32_t num_sub_blocks = use_block_based_pack ?
@@ -55,8 +55,8 @@ ALWI void untilize(uint32_t num_blocks) {
     // =================================================================
 
     if constexpr (
-        init_uninit_mode == untilize::InitUninitMode::InitAndUninit ||
-        init_uninit_mode == untilize::InitUninitMode::InitOnly) {
+        init_uninit_mode == untilize_config::InitUninitMode::InitAndUninit ||
+        init_uninit_mode == untilize_config::InitUninitMode::InitOnly) {
 
         if constexpr (use_standard_path) {
             // Standard untilize path initialization
@@ -83,14 +83,14 @@ ALWI void untilize(uint32_t num_blocks) {
         // =================================================================
 
         // Handle upfront waiting
-        if constexpr (wait_mode == untilize::WaitMode::WaitUpfront) {
+        if constexpr (wait_mode == untilize_config::WaitMode::WaitUpfront) {
             uint32_t total_tiles = block_width_tiles * num_blocks;
             cb_wait_front(input_cb, total_tiles);
         }
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
             // Handle per-row waiting
-            if constexpr (wait_mode == untilize::WaitMode::Wait) {
+            if constexpr (wait_mode == untilize_config::WaitMode::Wait) {
                 cb_wait_front(input_cb, block_width_tiles);
             }
             // WaitUpfront: already waited above
@@ -113,7 +113,7 @@ ALWI void untilize(uint32_t num_blocks) {
         for (uint32_t r = 0; r < num_blocks; ++r) {
             cb_reserve_back(output_cb, block_width_tiles);
             for (uint32_t b = 0; b < num_sub_blocks; ++b) {
-                if constexpr (wait_mode != untilize::WaitMode::NoWait) {
+                if constexpr (wait_mode != untilize_config::WaitMode::NoWait) {
                     cb_wait_front(input_cb, sub_block_width);
                 }
                 pack_untilize_block<sub_block_width, block_width_tiles>(input_cb, 1, output_cb, b);
@@ -129,7 +129,7 @@ ALWI void untilize(uint32_t num_blocks) {
         // =================================================================
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
-            if constexpr (wait_mode != untilize::WaitMode::NoWait) {
+            if constexpr (wait_mode != untilize_config::WaitMode::NoWait) {
                 cb_wait_front(input_cb, block_width_tiles);
             }
             cb_reserve_back(output_cb, block_width_tiles);
@@ -144,8 +144,8 @@ ALWI void untilize(uint32_t num_blocks) {
     // =================================================================
 
     if constexpr (
-        init_uninit_mode == untilize::InitUninitMode::InitAndUninit ||
-        init_uninit_mode == untilize::InitUninitMode::UninitOnly) {
+        init_uninit_mode == untilize_config::InitUninitMode::InitAndUninit ||
+        init_uninit_mode == untilize_config::InitUninitMode::UninitOnly) {
 
         if constexpr (use_standard_path) {
             // Standard untilize path cleanup

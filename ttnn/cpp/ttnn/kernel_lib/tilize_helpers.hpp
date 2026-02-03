@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "tt-metalium/circular_buffer_constants.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/cb_api.h"
 
@@ -35,7 +36,7 @@
  *   compute_kernel_lib::tilize<32, cb_in, cb_out>(num_blocks);
  *
  *   // Fast tilize with explicit mode
- *   using namespace compute_kernel_lib::tilize;
+ *   using namespace compute_kernel_lib::tilize_config;
  *   compute_kernel_lib::tilize<
  *       64, cb_in, cb_out,
  *       InitUninitMode::InitAndUninit,
@@ -63,10 +64,10 @@
 namespace compute_kernel_lib {
 
 // Nested namespace for tilize-specific types to avoid conflicts
-namespace tilize {
+namespace tilize_config {
 
 // Sentinel value for invalid/unset circular buffer ID
-constexpr uint32_t INVALID_CB = 32;  // NUM_CIRCULAR_BUFFERS
+constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
 
 /**
  * @brief Controls init/uninit behavior for tilize operations
@@ -184,7 +185,7 @@ public:
     }
 };
 
-}  // namespace tilize
+}  // namespace tilize_config
 
 /**
  * @brief Unified tilize function handling ALL patterns with type-safe API
@@ -223,7 +224,7 @@ public:
  *
  * @example
  *   // Fast tilize (explicit mode selection)
- *   using namespace compute_kernel_lib::tilize;
+ *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<64, cb_in, cb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::Wait,
@@ -231,7 +232,7 @@ public:
  *
  * @example
  *   // Data type reconfiguration
- *   using namespace compute_kernel_lib::tilize;
+ *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<16, new_cb, cb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::Wait,
@@ -240,7 +241,7 @@ public:
  *
  * @example
  *   // Fast + DT reconfiguration
- *   using namespace compute_kernel_lib::tilize;
+ *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<64, new_cb, cb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::Wait,
@@ -251,36 +252,36 @@ public:
  *   // Per-iteration pages (asymmetric input/output - convert_to_hwc pattern)
  *   tilize<total_tiles, cb_in, cb_out>(
  *       1,
- *       tilize::NonTileAlignedCBWaitConfig::per_iteration(total_sticks));
+ *       tilize_config::NonTileAlignedCBWaitConfig::per_iteration(total_sticks));
  *
  * @example
  *   // Total batched pages (variable row alignment - conv3d pattern)
  *   tilize<matmul_K_t, cb_in, cb_out>(
  *       matmul_M_t,
- *       tilize::NonTileAlignedCBWaitConfig::total_batched(num_patches));
+ *       tilize_config::NonTileAlignedCBWaitConfig::total_batched(num_patches));
  *
  * @example
  *   // Skip wait (groupnorm pattern with pre-loaded data)
- *   using namespace compute_kernel_lib::tilize;
+ *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<per_core_N, cb_in, cb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::NoWait>(per_core_M);
  *
  * @example
  *   // Init only (first in sequence)
- *   using namespace compute_kernel_lib::tilize;
+ *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<width, cb_in, cb_out,
  *          InitUninitMode::InitOnly>(blocks);
  *
  * @example
  *   // Neither init nor uninit (middle of sequence)
- *   using namespace compute_kernel_lib::tilize;
+ *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<width, cb_in, cb_out,
  *          InitUninitMode::Neither>(blocks);
  *
  * @example
  *   // Uninit only (last in sequence)
- *   using namespace compute_kernel_lib::tilize;
+ *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<width, cb_in, cb_out,
  *          InitUninitMode::UninitOnly>(blocks);
  */
@@ -288,12 +289,13 @@ template <
     uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
-    tilize::InitUninitMode init_uninit_mode = tilize::InitUninitMode::InitAndUninit,
-    tilize::WaitMode wait_mode = tilize::WaitMode::Wait,
-    tilize::TilizeSpeedMode speed_mode = tilize::TilizeSpeedMode::Standard,
-    uint32_t reconfig_from_cb = tilize::INVALID_CB>
+    tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
+    tilize_config::WaitMode wait_mode = tilize_config::WaitMode::Wait,
+    tilize_config::TilizeSpeedMode speed_mode = tilize_config::TilizeSpeedMode::Standard,
+    uint32_t reconfig_from_cb = tilize_config::INVALID_CB>
 ALWI void tilize(
-    uint32_t num_blocks, tilize::NonTileAlignedCBWaitConfig config = tilize::NonTileAlignedCBWaitConfig::disabled());
+    uint32_t num_blocks,
+    tilize_config::NonTileAlignedCBWaitConfig config = tilize_config::NonTileAlignedCBWaitConfig::disabled());
 
 }  // namespace compute_kernel_lib
 

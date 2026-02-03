@@ -71,14 +71,13 @@ void kernel_main() {
                 pack_reconfig_data_format(cb_intermed1, out_cb_id);
 
                 // tilize CB::intermed2 and write to CBIndex::c_16
-                using namespace compute_kernel_lib::tilize;
                 compute_kernel_lib::tilize<
                     onetile,
                     cb_intermed2,
                     out_cb_id,
-                    InitUninitMode::InitAndUninit,
-                    WaitMode::Wait,
-                    TilizeSpeedMode::Standard,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::Wait,
+                    compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
                     cb_in1>(1);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);

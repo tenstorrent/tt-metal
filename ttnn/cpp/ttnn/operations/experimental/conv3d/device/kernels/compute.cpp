@@ -200,7 +200,8 @@ void kernel_main() {
                             // Reader produces row pages, which may not be tile aligned
                             compute_kernel_lib::tilize<matmul_K_t, cb_vol2col_rm, cb_vol2col_tiled>(
                                 matmul_M_t,
-                                compute_kernel_lib::tilize::NonTileAlignedCBWaitConfig::total_batched(num_patches));
+                                compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::total_batched(
+                                    num_patches));
 
                             // Apply matmul blocks
                             cb_wait_front(cb_vol2col_tiled, patch_tiles);
@@ -258,8 +259,8 @@ void kernel_main() {
                                 // After reduction (if any), untilize result using helper
                                 compute_kernel_lib::untilize<matmul_N_t, cb_matmul_interm_tiled, cb_matmul_result_rm>(
                                     matmul_M_t,
-                                    compute_kernel_lib::untilize::InitUninitMode::InitAndUninit,
-                                    compute_kernel_lib::untilize::WaitMode::WaitUpfront);
+                                    compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront);
                             }
                         }
                     }

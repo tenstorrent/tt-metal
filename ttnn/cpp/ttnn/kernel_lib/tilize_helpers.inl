@@ -17,13 +17,13 @@ template <
     uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
-    tilize::InitUninitMode init_uninit_mode,
-    tilize::WaitMode wait_mode,
-    tilize::TilizeSpeedMode speed_mode,
+    tilize_config::InitUninitMode init_uninit_mode,
+    tilize_config::WaitMode wait_mode,
+    tilize_config::TilizeSpeedMode speed_mode,
     uint32_t reconfig_from_cb>
 ALWI void tilize(
     uint32_t num_blocks,
-    tilize::NonTileAlignedCBWaitConfig config) {
+    tilize_config::NonTileAlignedCBWaitConfig config) {
 
     // Compile-time validation
     static_assert(input_cb != output_cb,
@@ -35,21 +35,21 @@ ALWI void tilize(
     static_assert(output_cb < 32,
         "Invalid output_cb: must be less than 32");
     static_assert(
-        (reconfig_from_cb == tilize::INVALID_CB) ||
-        init_uninit_mode != tilize::InitUninitMode::Neither,
+        (reconfig_from_cb == tilize_config::INVALID_CB) ||
+        init_uninit_mode != tilize_config::InitUninitMode::Neither,
         "Data type reconfiguration requires either init or uninit: "
         "cannot use InitUninitMode::Neither with reconfig_from_cb");
 
     // Determine if we're using fast tilize mode (explicit, NOT auto-detected)
-    constexpr bool use_fast = (speed_mode == tilize::TilizeSpeedMode::Fast);
+    constexpr bool use_fast = (speed_mode == tilize_config::TilizeSpeedMode::Fast);
 
     // Determine if we're doing data type reconfiguration
-    constexpr bool use_dt = (reconfig_from_cb != tilize::INVALID_CB);
+    constexpr bool use_dt = (reconfig_from_cb != tilize_config::INVALID_CB);
 
     // Compile-time initialization based on InitUninitMode
     if constexpr (
-        init_uninit_mode == tilize::InitUninitMode::InitAndUninit ||
-        init_uninit_mode == tilize::InitUninitMode::InitOnly) {
+        init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
+        init_uninit_mode == tilize_config::InitUninitMode::InitOnly) {
 
         if constexpr (use_dt && use_fast) {
             // Fast data type reconfiguration mode
@@ -71,7 +71,7 @@ ALWI void tilize(
     // 2. PerIteration: Asymmetric input/output (HWC/SSM pattern) - custom per-iteration count
     // 3. Disabled: Standard tile-aligned (default) - symmetric block_width_tiles
 
-    if (config.mode == tilize::NonTileAlignedMode::TotalBatched) {
+    if (config.mode == tilize_config::NonTileAlignedMode::TotalBatched) {
         // Variable row alignment pattern (Conv3D)
         // Handles non-tile-aligned input where the last iteration may have fewer rows
         // Processes in chunks of TILE_HEIGHT (32) rows
@@ -83,9 +83,9 @@ ALWI void tilize(
             uint32_t current_input = (rows_left < TILE_HEIGHT) ? rows_left : TILE_HEIGHT;
 
             // Handle waiting based on WaitMode
-            if constexpr (wait_mode == tilize::WaitMode::Wait) {
+            if constexpr (wait_mode == tilize_config::WaitMode::Wait) {
                 cb_wait_front(input_cb, current_input);
-            } else if constexpr (wait_mode == tilize::WaitMode::WaitUpfront) {
+            } else if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
                 // WaitUpfront: wait for all data at the beginning
                 if (block == 0) {
                     cb_wait_front(input_cb, config.value);  // wait for all total_pages
@@ -112,7 +112,7 @@ ALWI void tilize(
         // Standard or asymmetric pattern
         // Determine input wait/pop count
         uint32_t input_amount;
-        if (config.mode == tilize::NonTileAlignedMode::PerIteration) {
+        if (config.mode == tilize_config::NonTileAlignedMode::PerIteration) {
             // Asymmetric: custom pages per iteration
             input_amount = config.value;  // pages_per_iteration
         } else {
@@ -121,14 +121,14 @@ ALWI void tilize(
         }
 
         // Handle upfront waiting if requested
-        if constexpr (wait_mode == tilize::WaitMode::WaitUpfront) {
+        if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
             uint32_t total_tiles = block_width_tiles * num_blocks;
             cb_wait_front(input_cb, total_tiles);
         }
 
         for (uint32_t block = 0; block < num_blocks; ++block) {
             // Handle per-iteration waiting
-            if constexpr (wait_mode == tilize::WaitMode::Wait) {
+            if constexpr (wait_mode == tilize_config::WaitMode::Wait) {
                 cb_wait_front(input_cb, input_amount);
             }
             // WaitUpfront: already waited above
@@ -150,8 +150,8 @@ ALWI void tilize(
 
     // Compile-time cleanup based on InitUninitMode
     if constexpr (
-        init_uninit_mode == tilize::InitUninitMode::InitAndUninit ||
-        init_uninit_mode == tilize::InitUninitMode::UninitOnly) {
+        init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
+        init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
 
         if constexpr (use_fast) {
             // Fast tilize mode (works with both DT and non-DT)

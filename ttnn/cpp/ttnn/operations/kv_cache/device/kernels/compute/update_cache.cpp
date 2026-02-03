@@ -22,9 +22,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
-    using namespace compute_kernel_lib::tilize;
-    using namespace compute_kernel_lib::untilize;
-
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
         // Untilize input (standalone operation)
         compute_kernel_lib::untilize<Wt, in_cb, untilized_in_cb>(1);
@@ -42,9 +39,9 @@ void kernel_main() {
                 Wt,                   // block_width_tiles
                 untilized_cache2_cb,  // input_cb
                 out_cb,               // output_cb
-                InitUninitMode::InitAndUninit,
-                WaitMode::Wait,
-                TilizeSpeedMode::Standard,
+                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::tilize_config::WaitMode::Wait,
+                compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
                 cache_cb>(     // reconfig_from_cb (for DT restoration)
                 granularity);  // num_blocks
 

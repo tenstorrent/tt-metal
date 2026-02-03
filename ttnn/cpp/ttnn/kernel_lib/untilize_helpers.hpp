@@ -36,7 +36,7 @@
  *   compute_kernel_lib::untilize<4, cb_in, cb_out>(num_rows);
  *
  *   // With wait upfront (GroupNorm pattern)
- *   using namespace compute_kernel_lib::untilize;
+ *   using namespace compute_kernel_lib::untilize_config;
  *   compute_kernel_lib::untilize<10, cb_in, cb_out,
  *       InitUninitMode::InitAndUninit,
  *       WaitMode::WaitUpfront>(num_rows);
@@ -47,7 +47,7 @@ namespace compute_kernel_lib {
 // get_dest_limit() and DEST_AUTO_LIMIT are provided by dest_helpers.hpp
 
 // Nested namespace for untilize-specific types to avoid conflicts
-namespace untilize {
+namespace untilize_config {
 
 /**
  * @brief Controls init/uninit behavior for untilize operations
@@ -75,7 +75,7 @@ enum class WaitMode : uint8_t {
     NoWait        // Caller manages synchronization (reserved for future use)
 };
 
-}  // namespace untilize
+}  // namespace untilize_config
 
 // =============================================================================
 // Data Format Detection - Automatic Detection
@@ -181,26 +181,26 @@ constexpr uint32_t compute_num_blocks(uint32_t total_width, uint32_t max_block_w
  *
  * @example
  *   // Wait-upfront pattern (GroupNorm) - forces standard untilize
- *   using namespace compute_kernel_lib::untilize;
+ *   using namespace compute_kernel_lib::untilize_config;
  *   untilize<10, cb_in, cb_out,
  *            InitUninitMode::InitAndUninit,
  *            WaitMode::WaitUpfront>(num_rows);
  *
  * @example
  *   // Init only (first in sequence)
- *   using namespace compute_kernel_lib::untilize;
+ *   using namespace compute_kernel_lib::untilize_config;
  *   untilize<width, cb_in, cb_out,
  *            InitUninitMode::InitOnly>(num_blocks);
  *
  * @example
  *   // Neither init nor uninit (middle of sequence)
- *   using namespace compute_kernel_lib::untilize;
+ *   using namespace compute_kernel_lib::untilize_config;
  *   untilize<width, cb_in, cb_out,
  *            InitUninitMode::Neither>(num_blocks);
  *
  * @example
  *   // Uninit only (last in sequence)
- *   using namespace compute_kernel_lib::untilize;
+ *   using namespace compute_kernel_lib::untilize_config;
  *   untilize<width, cb_in, cb_out,
  *            InitUninitMode::UninitOnly>(num_blocks);
  */
@@ -208,8 +208,8 @@ template <
     uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
-    untilize::InitUninitMode init_uninit_mode = untilize::InitUninitMode::InitAndUninit,
-    untilize::WaitMode wait_mode = untilize::WaitMode::Wait>
+    untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
+    untilize_config::WaitMode wait_mode = untilize_config::WaitMode::Wait>
 ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib

@@ -214,8 +214,12 @@ void kernel_main() {
     compute_kernel_lib::tilize<per_core_N, cb_in_rm, cb_in>(per_core_M);
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
-    using namespace compute_kernel_lib::tilize;
-    compute_kernel_lib::tilize<per_core_N, cb_in_rm, cb_in, InitUninitMode::InitOnly, WaitMode::NoWait>(per_core_M);
+    compute_kernel_lib::tilize<
+        per_core_N,
+        cb_in_rm,
+        cb_in,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitOnly,
+        compute_kernel_lib::tilize_config::WaitMode::NoWait>(per_core_M);
 #endif
     cb_wait_front(cb_in, per_core_MN);
 #else
@@ -727,8 +731,8 @@ void kernel_main() {
                 // untilize - DEST capacity auto-detected
                 compute_kernel_lib::untilize<per_core_N, cb_untilize_in, cb_untilize_out>(
                     per_core_M,
-                    compute_kernel_lib::untilize::InitUninitMode::InitAndUninit,
-                    compute_kernel_lib::untilize::WaitMode::WaitUpfront);
+                    compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront);
 #endif
             }
             // End Final Val Calc
