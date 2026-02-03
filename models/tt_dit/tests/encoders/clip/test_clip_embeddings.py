@@ -3,19 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-from pathlib import Path
 import time
+from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[6]))
 
-import torch
 import pytest
-import ttnn
+import torch
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer
 
-from models.experimental.tt_dit.encoders.clip.model_clip import TextEmbeddings, CLIPConfig
-from models.experimental.tt_dit.utils.check import assert_quality
+import ttnn
+from models.tt_dit.encoders.clip.model_clip import CLIPConfig, TextEmbeddings
+from models.tt_dit.utils.check import assert_quality
 
 
 @pytest.mark.parametrize(

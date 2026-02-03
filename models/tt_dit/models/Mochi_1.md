@@ -43,10 +43,10 @@ To generate mp4 files from the output frames the imageio-ffmpeg pip package is n
 export TT_DIT_CACHE_DIR=/your/cache/path
 
 # Cache the transformer weights. On a LoudBox/QuietBox, use the "2x4sp0tp1" option. On Galaxy, use the "4x8sp1tp0" option.
-pytest models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "2x4sp0tp1"
+pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "2x4sp0tp1"
 
 # Generate a video with the pipeline test. Use the dit_2x4sp0tp1_vae_1x8sp0tp1 option on 8-chip systems and 4x8sp1tp0 on 32-chip systems.
-pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "dit_2x4sp0tp1_vae_1x8sp0tp1"
+pytest -n auto models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "dit_2x4sp0tp1_vae_1x8sp0tp1"
 ```
 
 ## Limitations

@@ -55,16 +55,16 @@ Flux comes in two variants:
 export TT_DIT_CACHE_DIR=/your/cache/path
 
 # Run the schnell variant on QuietBox (2x4 mesh)
-pytest models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "schnell and 2x4sp0tp1 and traced and encoder_device"
+pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "schnell and 2x4sp0tp1 and traced and encoder_device"
 
 # Run the schnell variant on Galaxy (4x8 mesh)
-pytest models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "schnell and 4x8sp0tp1 and traced and encoder_device"
+pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "schnell and 4x8sp0tp1 and traced and encoder_device"
 
 # Run the dev variant on QuietBox (2x4 mesh)
-pytest models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "dev and 2x4sp0tp1 and traced and encoder_device"
+pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "dev and 2x4sp0tp1 and traced and encoder_device"
 
 # Run the dev variant on Galaxy (4x8 mesh)
-pytest models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "dev and 4x8sp0tp1 and traced and encoder_device"
+pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "dev and 4x8sp0tp1 and traced and encoder_device"
 ```
 
 ## Scalability

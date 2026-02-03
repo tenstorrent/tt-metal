@@ -34,10 +34,10 @@ Current performance and target performance for two systems are detailed below. P
 export TT_DIT_CACHE_DIR=/your/cache/path
 
 # Run the pipeline test on QuietBox (2x4 mesh)
-pytest models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k "2x4cfg1sp0tp1 and traced and encoder_device"
+pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -k "2x4cfg1sp0tp1 and traced and encoder_device"
 
 # Run the pipeline test on Galaxy (4x8 mesh)
-pytest models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1 and traced and encoder_device"
+pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1 and traced and encoder_device"
 ```
 
 

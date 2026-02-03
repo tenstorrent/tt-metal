@@ -33,10 +33,10 @@ There are many items we're making progress on to improve performance:
 export TT_DIT_CACHE_DIR=/your/cache/path
 
 # Cache the transformer weights. On a LoudBox/QuietBox, use "2x4" option. On Galaxy, use "4x8" option.
-pytest models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "4x8"
+pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "4x8"
 
 # Generate a video with the pipeline test. Same comment here, use 2x4 on 8-chip systems and 4x8 on 32-chip systems.
-pytest models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x8"
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x8"
 ```
 
 ## Limitations

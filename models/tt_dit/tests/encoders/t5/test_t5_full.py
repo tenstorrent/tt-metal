@@ -2,24 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
-from pathlib import Path
-import time
 import os
+import sys
+import time
+from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[6]))
 
-import torch
 import pytest
-import ttnn
+import torch
 from loguru import logger
-from transformers.models.t5.modeling_t5 import T5EncoderModel
 from transformers.models.t5.configuration_t5 import T5Config as HF_T5Config
-from models.experimental.tt_dit.parallel.manager import CCLManager
-from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from transformers.models.t5.modeling_t5 import T5EncoderModel
 
-from models.experimental.tt_dit.encoders.t5.model_t5 import T5Config, T5Encoder
-from models.experimental.tt_dit.utils.check import assert_quality
+import ttnn
+from models.tt_dit.encoders.t5.model_t5 import T5Config, T5Encoder
+from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils.check import assert_quality
 
 
 @pytest.mark.parametrize(

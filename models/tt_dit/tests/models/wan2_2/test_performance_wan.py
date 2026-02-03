@@ -3,16 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import statistics
+
+import numpy as np
 import pytest
 import torch
-import ttnn
-import numpy as np
-from loguru import logger
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-from models.common.utility_functions import is_blackhole
-from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from diffusers.utils import export_to_video
-from ....parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import is_blackhole
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+
+from ....parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ....utils.test import line_params, ring_params
 
 

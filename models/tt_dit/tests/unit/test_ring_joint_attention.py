@@ -2,20 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-from loguru import logger
 import pytest
+import torch
 import torch.nn.functional as F
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
+from loguru import logger
+from tracy.process_model_log import post_process_ops_log, run_device_profiler
 
+import ttnn
+from models.tt_dit.utils.padding import get_padded_vision_seq_len
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_scaled_dot_product_attention import fa_rand
-
-from models.experimental.tt_dit.utils.padding import get_padded_vision_seq_len
-
-from tracy.process_model_log import run_device_profiler, post_process_ops_log
 
 
 def torch_sdpa(q, k, v, joint_q, joint_k, joint_v, num_devices):
@@ -509,7 +505,9 @@ def test_ring_joint_sdpa_perf_table(mesh_device_id):
         rp_axis, rp_factor, up_axis, up_factor = parallel_config
         parallel_name = get_parallel_config_id(rp_factor, up_factor)
         k_expr = f"{model_input_id} and {parallel_name} and {mesh_device_id} and no_trace_no_check"
-        command = f"-m 'pytest models/experimental/tt_dit/tests/models/wan2_2/test_ring_joint_attention.py::test_ring_joint_sdpa -k \"{k_expr}\"'"
+        command = (
+            f"-m 'pytest models/tt_dit/tests/unit/test_ring_joint_attention.py::test_ring_joint_sdpa -k \"{k_expr}\"'"
+        )
 
         run_device_profiler(
             command,

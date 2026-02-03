@@ -2,13 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import numpy as np
-from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
-from models.experimental.tt_dit.parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
-from diffusers.utils import export_to_video
 import pytest
+import torch
+from diffusers.utils import export_to_video
+
 import ttnn
+from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+
 from ....utils.test import line_params, ring_params
 
 

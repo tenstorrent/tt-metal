@@ -2,14 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import numpy as np
-from models.experimental.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V, ImagePrompt
-from diffusers.utils import export_to_video
-import pytest
-import ttnn
-from ....utils.test import line_params, ring_params
 import PIL
+import pytest
+import torch
+from diffusers.utils import export_to_video
+
+import ttnn
+from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
+
+from ....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(
