@@ -40,7 +40,7 @@ void copy_to_device(
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
     const Tensor& device_tensor,
-    std::byte* const dst,
+    std::byte* dst,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
