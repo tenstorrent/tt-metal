@@ -33,8 +33,13 @@ TEST_CHECK_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US: dict[tuple[str, int], dict[str, float]] = {}
+CI_ACTIVE = os.getenv("CI") == "true"
 
 _TRACE_REQUIRES_CACHE_MARK = pytest.mark.skip(reason="Trace mode requires program cache to be enabled.")
+_CI_SKIP_MARK = pytest.mark.skipif(
+    CI_ACTIVE,
+    reason="CI runs only decode/prefill-128 with program_cache+trace+real_weights coverage.",
+)
 
 # Single-device tests are not applicable for ops that include CCLs.
 

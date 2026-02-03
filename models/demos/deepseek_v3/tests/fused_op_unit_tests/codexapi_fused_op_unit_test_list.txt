@@ -1,8 +1,8 @@
+✅ moe ds_moe_all_gather
 moe ds_moe_fwd_moe
 moe ds_moe_gate_projection_sigmoid
 moe ds_moe_add_score_correction_bias
 moe ds_moe_expert_selection
-moe ds_moe_all_gather
 moe ds_moe_reduce_scatter
 moe ds_moe_repeat_permute_expert_weights
 embedding ds_embedding_fwd_embedding

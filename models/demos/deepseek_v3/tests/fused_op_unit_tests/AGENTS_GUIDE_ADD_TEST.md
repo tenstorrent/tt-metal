@@ -58,9 +58,12 @@ Change the module test command based on the module that the new fused op is cont
 
 ## Update resutls
 Path results csv: 'models/demos/deepseek_v3/tests/fused_op_unit_tests/MODULE/test_results/OP_NAME_results.csv', where MODULE is the module and OP_NAME is the op name
-1. Remove any previous results csv file for this op if existing, and remove all logs in the 'logs' subfolder for this op. Test all test funcitons and parameter configurations for the op.
+Path log folder: 'models/demos/deepseek_v3/tests/fused_op_unit_tests/MODULE/test_results/logs/OP_NAME/', where MODULE is the module and OP_NAME is the op name
+1. Check the date (timestamp) of runs recorded in the results csv file for this op if existing. If the most recent entry is older than one week (compare with "date" command), then remove the entire results csv file for this op, remove the logs sub-folder for this op, and remove the row in the README.md that corresponds to this op.
 2. Create a new empty results csv file, use the following structure for the csv: test_name,status,pcc,e2e perf, device perf,failure_reason (optional),comment (optional), link, timestamp.
-3. Run each test case one by one
+3. Create a subfolder in 'Path log folder' (see above), if it does not exist yet.
+4. Create a new row in the README.md file for the op.
+4. Run each test case one by one
   1. Reset the machine using 'tt-smi -glx_reset'
   2. Run the test case; use a timeout of 20 mins, if you need a longer timeout update the timeout in AGENTS_GUIDE_ADD_TEST.md with the new timeout; use CI=false
   3. Add a new line to the results csv for the current test case with all details filled in. In 'comment' column add any comments for potential fixes if the test is failing or any other comments of interest. Copy the log file for each test configuration into the logs sub-folder and add a link to the log file to the 'link' column in the results csv.
@@ -92,7 +95,7 @@ Path results csv: 'models/demos/deepseek_v3/tests/fused_op_unit_tests/MODULE/tes
 - Important: Running the test may take a few minutes, if you kill it the device might need a reset. In general, if there is no log output for more than 5 minutes the test likely hangs and needs to be killed + device reset, but if there's log output keep it running.
 - Run each job with piping the output to a log file, i.e. add " 2>&1 | tee $TT_METAL_HOME/logs/ds_mla_$(date +%Y%m%d_%H%M%S).log" to each command
 
-## Summary of fused uni test features
+## Summary of fused unit test features
   - Accuracy: compares ttnn vs reference with PCC and ATOL checks, asserts on both.
   - Iterations: runs 100 iterations; accuracy checks are asserted on the last iteration.
   - Modes/seqlen coverage: parameters for decode (seqlen 1) and prefill (128/1024/8k/32k/128k) when applicable.
