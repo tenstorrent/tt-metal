@@ -199,6 +199,34 @@ def run_all_to_all_dispatch_metadata_test(
 
     total_tokens = batch * seq_len
 
+    # Compute tokens per device for height sharding the input indices/scores
+    # After mesh sharding, each device gets batch/devices tokens
+    tokens_per_device = batch // devices
+
+    # Create height sharded memory config for input indices and scores
+    # 1 row per core, with tokens_per_device cores total
+    # Arrange cores in a grid - use 8 rows (Y) and ceil(tokens_per_device/8) columns (X)
+    num_cores_y = min(8, tokens_per_device)
+    num_cores_x = (tokens_per_device + num_cores_y - 1) // num_cores_y
+    input_indices_scores_core_range = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+    )
+    # Shard shape: [1 row, seq_len * select_experts_k columns]
+    input_indices_shard_spec = ttnn.ShardSpec(
+        input_indices_scores_core_range,
+        [1, seq_len * select_experts_k],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_indices_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        input_indices_shard_spec,
+    )
+    logger.info(
+        f"Input indices/scores height sharded: {tokens_per_device} tokens across {num_cores_x}x{num_cores_y} cores, "
+        f"shard shape [1, {seq_len * select_experts_k}]"
+    )
+
     for iter in range(num_iters):
         # Use the new gen_tensors_for_metadata_op which outputs shapes compatible with the operation
         (
@@ -249,15 +277,14 @@ def run_all_to_all_dispatch_metadata_test(
             mesh_mapper=mesh_mapper,
         )
 
-        # Use L1 memory for indices and scores to ensure 16B alignment
-        # (DRAM uses 32B alignment which creates padding that doesn't match
-        # the output metadata tensor's 16B aligned layout)
+        # Use L1 height sharded memory for indices and scores
+        # Height sharded with 1 row per core ensures 16B alignment and optimal memory access
         tt_expert_indices = ttnn.from_torch(
             expert_indices,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=input_indices_sharded_mem_config,
             mesh_mapper=mesh_mapper,
         )
 
@@ -266,7 +293,7 @@ def run_all_to_all_dispatch_metadata_test(
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=input_indices_sharded_mem_config,
             mesh_mapper=mesh_mapper,
         )
 

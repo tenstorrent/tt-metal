@@ -448,6 +448,10 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     // In payload split mode: tokens distributed across links, workers on same link share tokens
     // In token split mode: tokens distributed across all workers
     // In direct mode: tokens distributed across workers (1 worker per link)
+    //
+    // Note: tt::div_up may distribute tokens unevenly. When tokens_per_device is not evenly divisible
+    // by num_links/num_cores, the last link/worker handles fewer tokens. This is an intentional
+    // tradeoff for simpler work partitioning.
     uint32_t tokens_per_core = payload_split_mode ? tt::div_up(tokens_per_device, num_links)  // tokens per link
                                                   : tt::div_up(tokens_per_device, num_cores);
 
@@ -591,6 +595,14 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
     if (use_mux) {
         writer_defines["USE_MUX"] = "1";
         log_debug(tt::LogOp, "Using fabric mux for dispatch");
+
+        // Validate mux core range has enough cores (need 1 mux per link)
+        auto mux_cores = corerange_to_cores(operation_attributes.mux_core_range_set);
+        TT_FATAL(
+            mux_cores.size() >= num_links,
+            "Not enough mux cores {} to support {} links (need at least 1 mux per link)",
+            mux_cores.size(),
+            num_links);
 
         // Launch mux workers
         // Note: num_workers passed to launch_mux_workers should be workers_per_link (clients per mux channel)

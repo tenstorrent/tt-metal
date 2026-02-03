@@ -836,11 +836,11 @@ inline void send_init_semaphore_to_configured_targets(
 // 0 --> 1 --> 2 --> 3 --> 4 --- 5
 //      [X]               [X]
 // We would set a hop mask of 0b01001 and set direction to eth_chan_directions::EAST.
-template <int32_t FabricMaxPacketSzBytes, typename AddrGenType>
+template <int32_t FabricMaxPacketSzBytes, typename AddrGenType, typename FabricConnectionsArrayType>
 inline void fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction(
     // Fabric parameters
     AddrGenType addrgen,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsArrayType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint16_t fabric_mcast_hop_mask,
     uint32_t fabric_direction,  // eth_chan_directions index
@@ -938,11 +938,12 @@ template <
     uint32_t MeshCols,
     uint32_t FabricMaxNumDestinations,
     int32_t FabricMaxPacketSzBytes,
-    typename AddrGenType>
+    typename AddrGenType,
+    typename FabricConnectionsArrayType>
 inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
     // Fabric parameters
     AddrGenType addrgen,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    FabricConnectionsArrayType& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t linearized_dest_mesh_coords[FabricMaxNumDestinations],
     uint32_t NumDestinations,
@@ -963,7 +964,7 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d(
         FabricMaxNumDestinations>(linearized_dest_mesh_coords, NumDestinations);
 
     // Send the packet
-    fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSzBytes, AddrGenType>(
+    fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction<FabricMaxPacketSzBytes>(
         addrgen,
         fabric_connections,
         packet_header,
