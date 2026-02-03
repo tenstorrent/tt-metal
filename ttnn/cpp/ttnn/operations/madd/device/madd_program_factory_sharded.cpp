@@ -16,7 +16,7 @@
 namespace ttnn::prim {
 
 MAddProgramFactorySharded::cached_program_t MAddProgramFactorySharded::create(
-    [[maybe_unused]] const MAddParams& operation_attributes, const MAddArgs& tensor_args, Tensor& output_tensor) {
+    const MAddParams& operation_attributes, const MAddArgs& tensor_args, Tensor& output_tensor) {
     const ttnn::Tensor& a = tensor_args.a;
     const ttnn::Tensor& b = tensor_args.b;
     const ttnn::Tensor& c = tensor_args.c;
@@ -96,11 +96,19 @@ MAddProgramFactorySharded::cached_program_t MAddProgramFactorySharded::create(
     const std::vector<uint32_t> compute_compile_time_args = {
         num_tiles_per_core, cb_srcA_index, cb_srcB_index, cb_srcC_index, cb_zero_index, cb_output_index};
 
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
+
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/madd/device/kernels/compute/madd_compute.cpp",
         all_cores,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_compile_time_args});
 
     // Create sharded writer kernel - data stays in L1, just wait for compute to finish
     const std::vector<uint32_t> writer_compile_time_args = {cb_output_index};
