@@ -305,7 +305,7 @@ def run_test_linear(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis",
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y",
     [
         [
             (2, 4),
@@ -315,6 +315,8 @@ def run_test_linear(
             4,
             0,
             1,
+            4,
+            4,
         ],
         [
             (8, 4),
@@ -324,6 +326,8 @@ def run_test_linear(
             8,
             0,
             1,
+            8,
+            8,
         ],
         [
             (8, 4),
@@ -333,6 +337,8 @@ def run_test_linear(
             4,
             0,
             1,
+            8,
+            8,
         ],
         [
             (8, 4),
@@ -342,29 +348,41 @@ def run_test_linear(
             2,
             0,
             1,
+            8,
+            8,
+        ],
+        [
+            (8, 4),
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            ttnn.Topology.Ring,
+            2,
+            2,
+            0,
+            1,
+            12,
+            10,
         ],
     ],
     ids=[
         "2x4links1",
-        "8x4links1",
-        "8x4links2",
-        "8x4links4",
+        "wh8x4links1",
+        "wh8x4links2",
+        "wh8x4links4",
+        "bh8x4links2",
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    "M, K, N, core_grid_x, core_grid_y, force_transpose",
+    "M, K, N, force_transpose",
     [
-        (32768, 4096, 4096, 4, 4, True),
-        (32768, 4096, 4096, 8, 8, True),
-        (75776, 5120, 3840, 8, 8, True),
-        (75776, 5120, 1280, 8, 8, True),
-        (75776, 5120, 3456, 8, 8, True),
+        (32768, 4096, 4096, True),
+        (75776, 5120, 3840, True),
+        (75776, 5120, 1280, True),
+        (75776, 5120, 3456, True),
     ],
     ids=[
-        "4K4K4Ksmallgrid",
-        "4K4K4Kfullgrid",
-        "QKV",
+        "4k4k4k",
+        "qkv",
         "denseout",
         "ff1",
     ],
@@ -401,7 +419,8 @@ def test_linear(
     sp_axis,
     tp_axis,
 ):
-    assert (num_links * num_workers_per_link) == core_grid_y
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+
     check_result = run_test_linear(
         mesh_device,
         M,
