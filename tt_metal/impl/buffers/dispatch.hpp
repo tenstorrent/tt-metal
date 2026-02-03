@@ -108,6 +108,7 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     CoreCoord core;
 };
 
+// Returns true if pinned memory was used for the transfer
 bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
