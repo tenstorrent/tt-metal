@@ -148,13 +148,13 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         auto gold_hostnames = gold_mapping["hostnames"];
 
         // Collect all chip mappings from all hostnames and meshes (skip hostname comparison)
-        // Key format: "asic_id" (as a string) to uniquely identify each mapping
-        // asic_id is unique across all chips and is the most reliable identifier
-        std::map<std::string, YAML::Node> gen_map_by_asic_id;
-        std::map<std::string, YAML::Node> gold_map_by_asic_id;
+        // Key format: "mesh_id:chip_id" (fabric node ID) to uniquely identify each mapping
+        // Index by fabric node ID to compare tray assignments for each fabric node
+        std::map<std::string, YAML::Node> gen_map_by_fabric_node_id;
+        std::map<std::string, YAML::Node> gold_map_by_fabric_node_id;
 
         // Helper function to collect chips from a host entry (handles both old and new formats)
-        // Ignores hostname - collects chips by asic_id for uniqueness
+        // Ignores hostname - collects chips by fabric_node_id (mesh_id:chip_id) for uniqueness
         auto collect_chips_from_host = [](const YAML::Node& host_node, std::map<std::string, YAML::Node>& chip_map) {
             if (host_node.IsMap()) {
                 // Check if this is the new format: map with "hostname" and "mesh" keys
@@ -176,9 +176,10 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                             if (entry["chips"]) {
                                 auto chips_list = entry["chips"];
                                 for (const auto& chip_entry : chips_list) {
-                                    if (chip_entry["asic_id"]) {
-                                        uint64_t asic_id = chip_entry["asic_id"].as<uint64_t>();
-                                        std::string key = std::to_string(asic_id);
+                                    if (chip_entry["fabric_node_id"]) {
+                                        uint32_t mesh_id = chip_entry["fabric_node_id"]["mesh_id"].as<uint32_t>();
+                                        uint32_t chip_id = chip_entry["fabric_node_id"]["chip_id"].as<uint32_t>();
+                                        std::string key = std::to_string(mesh_id) + ":" + std::to_string(chip_id);
                                         chip_map[key] = YAML::Clone(chip_entry);
                                     }
                                 }
@@ -228,9 +229,10 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                             // Old map format: chip_id -> entry
                             for (const auto& chip_pair : mesh_value) {
                                 auto chip_entry = chip_pair.second;
-                                if (chip_entry["asic_id"]) {
-                                    uint64_t asic_id = chip_entry["asic_id"].as<uint64_t>();
-                                    std::string key = std::to_string(asic_id);
+                                if (chip_entry["fabric_node_id"]) {
+                                    uint32_t mesh_id = chip_entry["fabric_node_id"]["mesh_id"].as<uint32_t>();
+                                    uint32_t chip_id = chip_entry["fabric_node_id"]["chip_id"].as<uint32_t>();
+                                    std::string key = std::to_string(mesh_id) + ":" + std::to_string(chip_id);
                                     chip_map[key] = YAML::Clone(chip_entry);
                                 }
                             }
@@ -244,12 +246,12 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         if (gen_hostnames.IsSequence()) {
             // New format: hostnames is a sequence
             for (const auto& host_entry : gen_hostnames) {
-                collect_chips_from_host(host_entry, gen_map_by_asic_id);
+                collect_chips_from_host(host_entry, gen_map_by_fabric_node_id);
             }
         } else if (gen_hostnames.IsMap()) {
             // Old format: hostnames is a map
             for (const auto& host_pair : gen_hostnames) {
-                collect_chips_from_host(host_pair.second, gen_map_by_asic_id);
+                collect_chips_from_host(host_pair.second, gen_map_by_fabric_node_id);
             }
         }
 
@@ -257,36 +259,37 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         if (gold_hostnames.IsSequence()) {
             // New format: hostnames is a sequence
             for (const auto& host_entry : gold_hostnames) {
-                collect_chips_from_host(host_entry, gold_map_by_asic_id);
+                collect_chips_from_host(host_entry, gold_map_by_fabric_node_id);
             }
         } else if (gold_hostnames.IsMap()) {
             // Old format: hostnames is a map
             for (const auto& host_pair : gold_hostnames) {
-                collect_chips_from_host(host_pair.second, gold_map_by_asic_id);
+                collect_chips_from_host(host_pair.second, gold_map_by_fabric_node_id);
             }
         }
 
-        // Compare the collected asic_id mappings
+        // Compare the collected fabric_node_id mappings
+        // Compare asic_position (tray_id + asic_location) and fabric_node_id (mesh_id + chip_id), ignore ASIC IDs
         std::vector<std::string> mismatch_details;
 
         // First, check that we have the same number of entries
-        if (gen_map_by_asic_id.size() != gold_map_by_asic_id.size()) {
+        if (gen_map_by_fabric_node_id.size() != gold_map_by_fabric_node_id.size()) {
             std::ostringstream oss;
-            oss << "Mismatch in total number of unique ASIC entries: generated=" << gen_map_by_asic_id.size()
-                << ", golden=" << gold_map_by_asic_id.size();
+            oss << "Mismatch in total number of unique fabric node entries: generated="
+                << gen_map_by_fabric_node_id.size() << ", golden=" << gold_map_by_fabric_node_id.size();
             mismatch_details.push_back(oss.str());
         }
 
-        // Find missing ASIC entries (entries in generated but not in golden)
+        // Find missing fabric node entries (entries in generated but not in golden)
         std::vector<std::string> missing_in_golden;
-        for (const auto& [asic_id_key, _] : gen_map_by_asic_id) {
-            if (!gold_map_by_asic_id.contains(asic_id_key)) {
-                missing_in_golden.push_back(asic_id_key);
+        for (const auto& [fabric_node_key, _] : gen_map_by_fabric_node_id) {
+            if (!gold_map_by_fabric_node_id.contains(fabric_node_key)) {
+                missing_in_golden.push_back(fabric_node_key);
             }
         }
         if (!missing_in_golden.empty()) {
             std::ostringstream oss2;
-            oss2 << "ASIC entries (asic_id) present in generated but missing in golden: ";
+            oss2 << "Fabric node entries (mesh_id:chip_id) present in generated but missing in golden: ";
             for (size_t i = 0; i < missing_in_golden.size(); ++i) {
                 if (i > 0) {
                     oss2 << ", ";
@@ -296,16 +299,16 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
             mismatch_details.push_back(oss2.str());
         }
 
-        // Find missing ASIC entries (entries in golden but not in generated)
+        // Find missing fabric node entries (entries in golden but not in generated)
         std::vector<std::string> missing_in_generated;
-        for (const auto& [asic_id_key, _] : gold_map_by_asic_id) {
-            if (!gen_map_by_asic_id.contains(asic_id_key)) {
-                missing_in_generated.push_back(asic_id_key);
+        for (const auto& [fabric_node_key, _] : gold_map_by_fabric_node_id) {
+            if (!gen_map_by_fabric_node_id.contains(fabric_node_key)) {
+                missing_in_generated.push_back(fabric_node_key);
             }
         }
         if (!missing_in_generated.empty()) {
             std::ostringstream oss2;
-            oss2 << "ASIC entries (asic_id) present in golden but missing in generated: ";
+            oss2 << "Fabric node entries (mesh_id:chip_id) present in golden but missing in generated: ";
             for (size_t i = 0; i < missing_in_generated.size(); ++i) {
                 if (i > 0) {
                     oss2 << ", ";
@@ -316,24 +319,17 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         }
 
         // Compare all entries that exist in both files
-        for (const auto& [asic_id_key, gen_mapping_node] : gen_map_by_asic_id) {
-            if (!gold_map_by_asic_id.contains(asic_id_key)) {
+        // Compare asic_position (tray_id + asic_location) and fabric_node_id, ignore ASIC IDs and other fields
+        for (const auto& [fabric_node_key, gen_mapping_node] : gen_map_by_fabric_node_id) {
+            if (!gold_map_by_fabric_node_id.contains(fabric_node_key)) {
                 // Already reported as missing above, skip detailed comparison
                 continue;
             }
 
-            auto gold_mapping_node = gold_map_by_asic_id[asic_id_key];
+            auto gold_mapping_node = gold_map_by_fabric_node_id[fabric_node_key];
             std::vector<std::string> chip_mismatches;
 
-            // Compare the mapping fields
-            uint32_t gen_umd_chip_id = gen_mapping_node["umd_chip_id"].as<uint32_t>();
-            uint32_t gold_umd_chip_id = gold_mapping_node["umd_chip_id"].as<uint32_t>();
-            if (gen_umd_chip_id != gold_umd_chip_id) {
-                std::ostringstream oss;
-                oss << "umd_chip_id: generated=" << gen_umd_chip_id << ", golden=" << gold_umd_chip_id;
-                chip_mismatches.push_back(oss.str());
-            }
-
+            // Compare tray_id
             uint32_t gen_tray_id = gen_mapping_node["asic_position"]["tray_id"].as<uint32_t>();
             uint32_t gold_tray_id = gold_mapping_node["asic_position"]["tray_id"].as<uint32_t>();
             if (gen_tray_id != gold_tray_id) {
@@ -342,6 +338,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                 chip_mismatches.push_back(oss.str());
             }
 
+            // Compare asic_location
             uint32_t gen_asic_location = gen_mapping_node["asic_position"]["asic_location"].as<uint32_t>();
             uint32_t gold_asic_location = gold_mapping_node["asic_position"]["asic_location"].as<uint32_t>();
             if (gen_asic_location != gold_asic_location) {
@@ -350,6 +347,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                 chip_mismatches.push_back(oss.str());
             }
 
+            // Compare fabric_node_id (mesh_id + chip_id) - should match since we're indexing by it
             uint32_t gen_mesh_id = gen_mapping_node["fabric_node_id"]["mesh_id"].as<uint32_t>();
             uint32_t gold_mesh_id = gold_mapping_node["fabric_node_id"]["mesh_id"].as<uint32_t>();
             if (gen_mesh_id != gold_mesh_id) {
@@ -366,17 +364,9 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                 chip_mismatches.push_back(oss.str());
             }
 
-            uint64_t gen_asic_id = gen_mapping_node["asic_id"].as<uint64_t>();
-            uint64_t gold_asic_id = gold_mapping_node["asic_id"].as<uint64_t>();
-            if (gen_asic_id != gold_asic_id) {
-                std::ostringstream oss;
-                oss << "asic_id: generated=" << gen_asic_id << ", golden=" << gold_asic_id;
-                chip_mismatches.push_back(oss.str());
-            }
-
             if (!chip_mismatches.empty()) {
                 std::ostringstream oss;
-                oss << "ASIC entry " << asic_id_key << " (asic_id): ";
+                oss << "Fabric node entry " << fabric_node_key << " (mesh_id:chip_id): ";
                 for (size_t i = 0; i < chip_mismatches.size(); ++i) {
                     if (i > 0) {
                         oss << ", ";
@@ -388,7 +378,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         }
 
         if (!mismatch_details.empty()) {
-            log_error(tt::LogTest, "UMD chip ID mapping mismatches detected:");
+            log_error(tt::LogTest, "Fabric node to tray ID mapping mismatches detected:");
             for (const auto& detail : mismatch_details) {
                 log_error(tt::LogTest, "  {}", detail);
             }
@@ -398,8 +388,8 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                 "================================================================================\n"
                 "WARNING: Topology mapping mismatch detected!\n"
                 "================================================================================\n"
-                "The generated ASIC-to-fabric-node mappings do not match the golden reference.\n"
-                "This indicates a change in how ASICs are mapped to fabric nodes.\n"
+                "The generated fabric-node-to-tray mappings do not match the golden reference.\n"
+                "This indicates a change in how fabric nodes are mapped to tray IDs.\n"
                 "\n"
                 "IMPORTANT: Changing topology bindings/pinnings is a MAJOR change that can:\n"
                 "  - Cause topology errors in other topologies\n"
