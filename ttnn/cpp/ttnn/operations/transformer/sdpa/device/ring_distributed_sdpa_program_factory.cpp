@@ -278,6 +278,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr)
         .append_to(reader_compile_time_args);                  // page table
     TensorAccessorArgs().append_to(reader_compile_time_args);  // attention sink (not used in ring)
+    TensorAccessorArgs().append_to(reader_compile_time_args);  // chunk_start_idx_tensor (ring has no flexible chunked)
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
