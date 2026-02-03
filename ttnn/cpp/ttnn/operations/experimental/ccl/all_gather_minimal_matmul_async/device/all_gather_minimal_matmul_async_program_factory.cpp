@@ -666,7 +666,7 @@ all_gather_minimal_matmul_async_factory_helper(
         uint32_t dir = 1 - (mux_id % 2);  // 2 being the number of directions
         if (mux_connection_valid(dir)) {
             uint32_t link = mux_id / 2;  // 2 is the num directions
-            uint32_t mux_x_index = num_workers_per_link * (link + 1) - (1 - dir);
+            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
             if (mux_x_index >= full_grid_size.x) {
                 mux_x_index = mux_x_index - full_grid_size.x;
             }
