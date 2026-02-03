@@ -165,8 +165,16 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     };
 
     auto validate_chunked_mode = [&]() {
-        const bool flexible_chunked = attrs.chunk_start_idx_tensor.has_value();
-        const bool legacy_chunked = attrs.chunk_start_idx.has_value() && !flexible_chunked;
+        const bool has_tensor_chunk_start_idx = attrs.chunk_start_idx_tensor.has_value();
+        const bool has_scalar_chunk_start_idx = attrs.chunk_start_idx.has_value();
+
+        // Disallow ambiguous configuration where both scalar and tensor start indices are provided.
+        TT_FATAL(
+            !(has_scalar_chunk_start_idx && has_tensor_chunk_start_idx),
+            "chunked mode accepts only one of chunk_start_idx (scalar) or chunk_start_idx_tensor; both were provided");
+
+        const bool flexible_chunked = has_tensor_chunk_start_idx;
+        const bool legacy_chunked = has_scalar_chunk_start_idx && !has_tensor_chunk_start_idx;
         TT_FATAL(
             legacy_chunked || flexible_chunked,
             "chunked mode requires either chunk_start_idx (scalar) or chunk_start_idx_tensor");

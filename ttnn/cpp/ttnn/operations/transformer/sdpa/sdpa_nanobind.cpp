@@ -109,7 +109,7 @@ void bind_sdpa(nb::module_& mod) {
         The kernel reads the start index from device memory at runtime. Use for:
         - Trace capture/replay: capture one SDPA call, then replay with different
           chunk_start_idx by updating the tensor on device (no recompile).
-          One pogram handles variable prefix lengths by updating
+          One program handles variable prefix lengths by updating
           the tensor each step.
         The program is compiled once (fixed max page table size); the trace key does not
         include the runtime offset.
