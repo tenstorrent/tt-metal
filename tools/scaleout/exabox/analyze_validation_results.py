@@ -15,14 +15,14 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
 
 # Constants
 EXPECTED_ITERATIONS = 50
 TIMEOUT_ESCALATION_THRESHOLD = 10.0  # 10% failure rate
-SUCCESS_RATE_EXCELLENT = 90.0
-SUCCESS_RATE_GOOD = 70.0
-SUCCESS_RATE_STABLE = 80.0
+SUCCESS_RATE_EXCELLENT = 90.0  # Green success rate color threshold
+SUCCESS_RATE_GOOD = 70.0  # Yellow success rate color threshold
+SUCCESS_RATE_STABLE = 80.0  # "Ready for workloads" threshold in recommendations
 MAX_DISPLAY_FILES = 10
 MAX_HISTOGRAM_ENTRIES = 20
 MAX_ERROR_MESSAGES = 15
@@ -31,12 +31,6 @@ MAX_LINE_PREVIEW = 200
 MAX_ERROR_PREVIEW = 100
 TIMELINE_ROW_SIZE = 25
 
-# Troubleshooting section titles (only include sections actually referenced)
-TROUBLESHOOTING_SECTIONS = {
-    "gddr_issue": "GDDR Issue on Chip",
-    "missing_connections": "QSFP Connections Missing Between Hosts",
-    "ssh_agent": "SSH Agent Forwarding for MPI",
-}
 
 
 class Colors:
@@ -45,20 +39,15 @@ class Colors:
     YELLOW = "\033[1;33m"
     BLUE = "\033[0;34m"
     CYAN = "\033[0;36m"
-    MAGENTA = "\033[0;35m"
     BOLD = "\033[1m"
     NC = "\033[0m"
 
     @classmethod
     def disable(cls):
-        for attr in ["GREEN", "RED", "YELLOW", "BLUE", "CYAN", "MAGENTA", "BOLD", "NC"]:
+        for attr in ["GREEN", "RED", "YELLOW", "BLUE", "CYAN", "BOLD", "NC"]:
             setattr(cls, attr, "")
 
 
-def ts_ref(section: str) -> str:
-    """Generate troubleshooting reference using section title."""
-    title = TROUBLESHOOTING_SECTIONS.get(section, section)
-    return f"'{title}' in TROUBLESHOOTING.md"
 
 
 def clean_line(line: str) -> str:
@@ -69,61 +58,72 @@ def clean_line(line: str) -> str:
     return line.strip()
 
 
-# Category definitions with display info: (pattern, color, label)
+# Category definitions with display info: (pattern, color_name, label, case_insensitive?)
+# - pattern: regex pattern to match
+# - color_name: name of Colors attribute (resolved at runtime for --no-color support)
+# - label: human-readable label for display
+# - case_insensitive: optional 4th element, True for case-insensitive matching (default: False)
 # Only report specific failure modes; everything else is inconclusive
 CATEGORIES = {
     # Success
-    "healthy": (r"All Detected Links are healthy", Colors.GREEN, "Healthy links"),
+    "healthy": (r"All Detected Links are healthy", "GREEN", "Healthy links"),
     # Link health (traffic/data tests)
-    "unhealthy": (r"Found Unhealthy Links|FAULTY LINKS REPORT", Colors.RED, "Unhealthy links"),
+    "unhealthy": (r"Found Unhealthy Links|FAULTY LINKS REPORT", "RED", "Unhealthy links"),
     # Connectivity issues
     "missing_ports": (
         r"missing port/cable connections",
-        Colors.BLUE,
+        "BLUE",
         "Missing port connections",
     ),
     "missing_channels": (
         r"missing channel connections",
-        Colors.BLUE,
+        "BLUE",
         "Missing channel connections",
     ),
     "extra_connections": (
         r"extra port/cable connections|extra channel connections",
-        Colors.YELLOW,
+        "YELLOW",
         "Extra connections",
     ),
     # Timeouts and failures
     "workload_timeout": (
         r"Workload execution timed out|cluster is not in a healthy state",
-        Colors.YELLOW,
+        "YELLOW",
         "Workload timeout",
     ),
-    "dram_failure": (r"DRAM training failed|gddr issue", Colors.RED, "DRAM training failures"),
-    "arc_timeout": (r"ARC.*[Tt]imeout|ARC message timed out", Colors.YELLOW, "ARC timeout"),
+    "dram_failure": (r"DRAM training failed|gddr issue", "RED", "DRAM training failures", True),
+    "arc_timeout": (r"ARC.*[Tt]imeout|ARC message timed out", "YELLOW", "ARC timeout"),
     # Connectivity issues
-    "mpi_error": (r"PRTE has lost communication|MPI_ABORT", Colors.RED, "MPI error"),
-    "ssh_error": (r"Permission denied \(publickey\)", Colors.YELLOW, "SSH error"),
+    "mpi_error": (r"PRTE has lost communication|MPI_ABORT", "RED", "MPI error"),
+    "ssh_error": (r"Permission denied \(publickey\)", "YELLOW", "SSH error"),
 }
+
+
+def get_color(name: str) -> str:
+    """Get color code by name, respecting --no-color flag."""
+    return getattr(Colors, name, "")
 
 # Patterns for detecting other issues (will be mapped to inconclusive)
 # These are detected but not reported as separate categories - they indicate
 # issues that require manual log review and triage
 DETECTION_PATTERNS = {
-    "unrecoverable": (r"Encountered unrecoverable state", Colors.RED),
-    "validation_failed": (r"Cluster validation failed", Colors.RED),
-    "device_error": (r"Error starting devices|Error details:", Colors.RED),
-    "discovery_failed": (r"Physical Discovery.*failed", Colors.RED),
-    "crc_error": (r"CRC Error", Colors.YELLOW),
-    "uncorrected_cw": (r"Uncorrected CW", Colors.YELLOW),
-    "data_mismatch": (r"Data Mismatch", Colors.RED),
-    "stack_trace": (r"TT_FATAL|TT_THROW|std::runtime_error", Colors.RED),
-    "truncated": (r"Sending traffic across detected links", Colors.YELLOW),
+    "unrecoverable": r"Encountered unrecoverable state",
+    "validation_failed": r"Cluster validation failed",
+    "device_error": r"Error starting devices|Error details:",
+    "discovery_failed": r"Physical Discovery.*failed",
+    "crc_error": r"CRC Error",
+    "uncorrected_cw": r"Uncorrected CW",
+    "data_mismatch": r"Data Mismatch",
+    "stack_trace": r"TT_FATAL|TT_THROW|std::runtime_error",
+    "truncated": r"Sending traffic across detected links",
 }
 
-PATTERNS = {k: re.compile(v[0], re.IGNORECASE if "gddr" in v[0].lower() else 0) for k, v in CATEGORIES.items()}
-DETECTION_PATTERNS_COMPILED = {
-    k: re.compile(v[0], re.IGNORECASE if "gddr" in v[0].lower() else 0) for k, v in DETECTION_PATTERNS.items()
+# Compile patterns with explicit case-sensitivity from 4th tuple element (default: case-sensitive)
+PATTERNS = {
+    k: re.compile(v[0], re.IGNORECASE if (len(v) > 3 and v[3]) else 0) for k, v in CATEGORIES.items()
 }
+# Detection patterns are all case-sensitive
+DETECTION_PATTERNS_COMPILED = {k: re.compile(v) for k, v in DETECTION_PATTERNS.items()}
 
 # Patterns for parsing structured data
 PORT_PATTERN = re.compile(
@@ -175,10 +175,10 @@ def _shorten_log_name(log_name: str) -> str:
     return log_name.replace("cluster_validation_iteration_", "iter_").replace(".log", "")
 
 
-def parse_int(s: str, base: int = 10) -> int:
-    """Parse int, handling hex prefix."""
+def parse_int(s: str) -> int:
+    """Parse int, handling hex prefix (0x...)."""
     try:
-        return int(s, 16) if s.startswith("0x") else int(s, base)
+        return int(s, 16) if s.startswith("0x") else int(s)
     except (ValueError, AttributeError):
         return 0
 
@@ -303,10 +303,8 @@ def parse_faulty_links(content: str) -> list[FaultyLink]:
                     )
                 )
             except (ValueError, IndexError) as e:
-                # Log parsing errors for debugging while keeping script robust
-                # In production, you might want to use logging module instead
-                if __debug__:  # Only in debug mode to avoid performance impact
-                    print(f"Warning: Failed to parse faulty link line: {c[:100]}... ({e})", file=sys.stderr)
+                # Log parsing errors while keeping script robust
+                print(f"Warning: Failed to parse faulty link line: {c[:100]}... ({e})", file=sys.stderr)
     return links
 
 
@@ -319,16 +317,17 @@ def parse_missing_connections(content: str) -> list[tuple[str, tuple, tuple]]:
 
     for line in lines:
         c = clean_line(line)
-        if "missing port/cable" in line or "Port Connections found in FSD" in line:
+        # Use cleaned line consistently for all pattern matching
+        if "missing port/cable" in c or "Port Connections found in FSD" in c:
             mode = "port"
-        elif "missing channel" in line or "Channel Connections found in FSD" in line:
+        elif "missing channel" in c or "Channel Connections found in FSD" in c:
             mode = "channel"
         elif mode == "port" and "PhysicalPortEndpoint" in c:
-            matches = PORT_PATTERN.findall(line)
+            matches = PORT_PATTERN.findall(c)
             if len(matches) == 2:
                 connections.append(("port", matches[0], matches[1]))
         elif mode == "channel" and "PhysicalChannelEndpoint" in c:
-            matches = CHANNEL_PATTERN.findall(line)
+            matches = CHANNEL_PATTERN.findall(c)
             if len(matches) == 2:
                 connections.append(("channel", matches[0], matches[1]))
         elif mode and c and not c.startswith("-") and "Physical" not in c:
@@ -356,7 +355,7 @@ def parse_metadata(content: str, filepath: str) -> LogMetadata:
             match = re.search(r"Detected Hosts:\s*(.+?)(?:\s*\(|$)", line)
             if match:
                 hosts = [h.strip() for h in match.group(1).split(",") if h.strip()]
-                m.hosts = [h for h in hosts if re.match(r"^[a-zA-Z][\w\-]+$", h)]
+                m.hosts = [h for h in hosts if re.match(r"^[a-zA-Z][\w\-]*$", h)]
         elif "chips found" in line:
             match = re.search(r"All (\d+) chips found", line)
             if match:
@@ -380,8 +379,7 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             result.content = f.read()
     except (OSError, IOError, PermissionError) as e:
-        if __debug__:
-            print(f"Warning: Failed to read {filepath}: {e}", file=sys.stderr)
+        print(f"Warning: Failed to read {filepath}: {e}", file=sys.stderr)
         return result
 
     result.metadata = parse_metadata(result.content, filepath)
@@ -418,7 +416,7 @@ def aggregate_stats(analyses: list[LogAnalysis]) -> tuple[dict[tuple, dict[str, 
 
     for a in analyses:
         for link in a.faulty_links:
-            key = (link.host, link.tray, link.channel, link.port_type)
+            key = (link.host, link.tray, link.asic, link.channel, link.port_type)
             link_stats[key]["count"] += 1
             link_stats[key]["retrains"] += link.retrains
             link_stats[key]["crc"] += link.crc_errors
@@ -464,7 +462,10 @@ def print_summary(analyses: list[LogAnalysis], show_files: bool = True) -> None:
         if info["hosts"]:
             print(f"  Hosts: {', '.join(info['hosts'])}")
         if info["chips"]:
-            print(f"  Chips per host: {info['chips']}, Total: {info['chips'] * len(info['hosts'])}")
+            if info["hosts"]:
+                print(f"  Chips per host: {info['chips']}, Total: {info['chips'] * len(info['hosts'])}")
+            else:
+                print(f"  Chips found: {info['chips']}")
         if info["config"]:
             c = info["config"]
             print(f"  Traffic: {c.traffic_iters} iters, {c.pkt_size}B pkts, {c.data_size}B data")
@@ -497,7 +498,7 @@ def print_summary(analyses: list[LogAnalysis], show_files: bool = True) -> None:
             color = Colors.CYAN
             label = "Inconclusive"
         else:
-            color = CATEGORIES[cat][1]
+            color = get_color(CATEGORIES[cat][1])
             label = CATEGORIES[cat][2]
         count = len(cat_counts.get(cat, []))
         print(f"{color}{label}:{Colors.NC} {count} / {total}")
@@ -614,17 +615,18 @@ def print_link_histogram(analyses: list[LogAnalysis]) -> None:
         return
 
     # Dynamic column widths
+    # Key format: (host, tray, asic, channel, port_type)
     host_w = max(len("Host"), max(len(k[0]) for k, _ in sorted_links))
-    type_w = max(len("Type"), max(len(k[3]) for k, _ in sorted_links))
+    type_w = max(len("Type"), max(len(k[4]) for k, _ in sorted_links))
 
     # Header
-    header = f"{'Host':<{host_w}}  {'Tray':>4}  {'Ch':>2}  {'Type':<{type_w}}  {'Fails':>5}  {'Retrains':>8}  {'CRC Err':>8}  {'Mismatch':>8}"
+    header = f"{'Host':<{host_w}}  {'Tray':>4}  {'ASIC':>4}  {'Ch':>2}  {'Type':<{type_w}}  {'Fails':>5}  {'Retrains':>8}  {'CRC Err':>8}  {'Mismatch':>8}"
     print(header)
     print("-" * len(header))
 
-    for (host, tray, channel, port_type), stats in sorted_links:
+    for (host, tray, asic, channel, port_type), stats in sorted_links:
         print(
-            f"{host:<{host_w}}  {tray:>4}  {channel:>2}  {port_type:<{type_w}}  "
+            f"{host:<{host_w}}  {tray:>4}  {asic:>4}  {channel:>2}  {port_type:<{type_w}}  "
             f"{stats['count']:>5}  {stats['retrains']:>8}  {stats['crc']:>8}  {stats['mismatch']:>8}"
         )
 
@@ -701,7 +703,11 @@ def _recommend_missing_connections(cats: dict, total: int, analyses: list[LogAna
     port_count, chan_count = cats.get("missing_ports", 0), cats.get("missing_channels", 0)
 
     # Check if missing connections are transient (appear in some but not all logs)
-    is_transient = (port_count + chan_count) < total
+    # Count unique logs that have ANY missing connection issue (port OR channel)
+    logs_with_missing = sum(
+        1 for a in analyses if "missing_ports" in a.categories or "missing_channels" in a.categories
+    )
+    is_transient = logs_with_missing < total
 
     # Check if any missing connections are QSFP
     has_qsfp = _has_qsfp_connections(analyses)
@@ -725,7 +731,6 @@ def _recommend_missing_connections(cats: dict, total: int, analyses: list[LogAna
         msg_parts.append("If missing connections are over QSFP, check cable seating.")
 
     msg_parts.append("Report to cluster installation team/Syseng for triage.")
-    msg_parts.append(f"See {ts_ref('missing_connections')}")
 
     return [" ".join(msg_parts)]
 
@@ -743,7 +748,7 @@ def _recommend_extra_connections(cats: dict, total: int, analyses: list[LogAnaly
 @register_recommendation("workload_timeout")
 def _recommend_workload_timeout(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
     """Generate recommendations for workload timeout."""
-    if not cats.get("workload_timeout"):
+    if not cats.get("workload_timeout") or total <= 0:
         return []
     timeout_rate = cats["workload_timeout"] / total * 100
     msg = (
@@ -764,7 +769,7 @@ def _recommend_dram_failure(cats: dict, total: int, analyses: list[LogAnalysis])
     if not cats.get("dram_failure"):
         return []
     return [
-        f"- {Colors.RED}DRAM training failures:{Colors.NC} Hardware issue. Report to Syseng. See {ts_ref('gddr_issue')}"
+        f"- {Colors.RED}DRAM training failures:{Colors.NC} Hardware issue. Report to Syseng."
     ]
 
 
@@ -782,7 +787,7 @@ def _recommend_mpi_error(cats: dict, total: int, analyses: list[LogAnalysis]) ->
     if not cats.get("mpi_error"):
         return []
     return [
-        f"- {Colors.RED}MPI error:{Colors.NC} Lost connection between hosts. Check SSH agent and network. See {ts_ref('ssh_agent')}"
+        f"- {Colors.RED}MPI error:{Colors.NC} Lost connection between hosts. Check SSH agent and network."
     ]
 
 
@@ -792,7 +797,7 @@ def _recommend_ssh_error(cats: dict, total: int, analyses: list[LogAnalysis]) ->
     if not cats.get("ssh_error"):
         return []
     return [
-        f"- {Colors.YELLOW}SSH errors:{Colors.NC} Authentication failed. Ensure ssh-agent running and keys added. See {ts_ref('ssh_agent')}"
+        f"- {Colors.YELLOW}SSH errors:{Colors.NC} Authentication failed. Ensure ssh-agent running and keys added."
     ]
 
 
@@ -818,10 +823,10 @@ def _recommend_inconclusive(cats: dict, total: int, analyses: list[LogAnalysis])
 
 def print_recommendations(analyses: list[LogAnalysis]) -> None:
     """Print actionable recommendations based on analysis."""
-    cats = defaultdict(int)
+    cat_counts = defaultdict(int)
     for a in analyses:
         for c in a.categories:
-            cats[c] += 1
+            cat_counts[c] += 1
     total = len(analyses)
     if not total:
         return
@@ -850,7 +855,7 @@ def print_recommendations(analyses: list[LogAnalysis]) -> None:
             generator = RECOMMENDATION_GENERATORS[cat]
             # Avoid calling the same generator twice (e.g., missing_ports and missing_channels)
             if generator not in processed_generators:
-                recs.extend(generator(cats, total, analyses))
+                recs.extend(generator(cat_counts, total, analyses))
                 processed_generators.add(generator)
 
     # Special handling for discovery_failed (not a category, but needs recommendation)
@@ -867,14 +872,19 @@ def print_recommendations(analyses: list[LogAnalysis]) -> None:
         )
 
     # Overall health assessment
-    rate = cats["healthy"] / total * 100
-    if rate >= 100:
-        recs.append(f"- {Colors.GREEN}Cluster is healthy.{Colors.NC} Ready for workloads.")
-    elif rate >= SUCCESS_RATE_STABLE:
-        recs.append(f"- {Colors.YELLOW}Cluster looks stable ({rate:.0f}%).{Colors.NC} Ready for workloads.")
-    elif rate > 0:
+    if total > 0:
+        rate = cat_counts["healthy"] / total * 100
+        if rate >= 100:
+            recs.append(f"- {Colors.GREEN}Cluster is healthy.{Colors.NC} Ready for workloads.")
+        elif rate >= SUCCESS_RATE_STABLE:
+            recs.append(f"- {Colors.YELLOW}Cluster looks stable ({rate:.0f}%).{Colors.NC} Ready for workloads.")
+        elif rate > 0:
+            recs.append(
+                f"- {Colors.RED}Low success rate ({rate:.0f}%).{Colors.NC} Investigate failure patterns before proceeding."
+            )
+    else:
         recs.append(
-            f"- {Colors.RED}Low success rate ({rate:.0f}%).{Colors.NC} Investigate failure patterns before proceeding."
+            f"- {Colors.YELLOW}No validation logs analyzed.{Colors.NC} Unable to determine cluster health."
         )
 
     for r in recs:
@@ -891,35 +901,36 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
     sorted_a = sorted(analyses, key=lambda a: a.metadata.iteration)
     icons = []
     for a in sorted_a:
-        # Priority order: check most specific categories first
-        # Multiple categories can exist, so we show the most critical one
-        if "healthy" in a.categories:
-            icons.append(("✓", Colors.GREEN))
-        elif "dram_failure" in a.categories:
+        # Priority order: show most critical issues first
+        # "healthy" is lowest priority - only shown if no issues detected
+        # This ensures issues aren't hidden by a passing health check
+        if "dram_failure" in a.categories:
             icons.append(("!", Colors.RED))
         elif "unhealthy" in a.categories:
             icons.append(("✗", Colors.RED))
+        elif "mpi_error" in a.categories:
+            icons.append(("M", Colors.RED))
         elif "workload_timeout" in a.categories:
             icons.append(("⏱", Colors.YELLOW))
+        elif "arc_timeout" in a.categories:
+            icons.append(("A", Colors.YELLOW))
+        elif "ssh_error" in a.categories:
+            icons.append(("S", Colors.YELLOW))
         elif "missing_ports" in a.categories:
             icons.append(("○", Colors.BLUE))
         elif "missing_channels" in a.categories:
             icons.append(("○", Colors.BLUE))
         elif "extra_connections" in a.categories:
             icons.append(("+", Colors.YELLOW))
-        elif "arc_timeout" in a.categories:
-            icons.append(("A", Colors.YELLOW))
-        elif "mpi_error" in a.categories:
-            icons.append(("M", Colors.RED))
-        elif "ssh_error" in a.categories:
-            icons.append(("S", Colors.YELLOW))
         elif "inconclusive" in a.categories:
             icons.append(("?", Colors.CYAN))
+        elif "healthy" in a.categories:
+            icons.append(("✓", Colors.GREEN))
         else:
             icons.append(("~", Colors.YELLOW))
 
     for start in range(0, len(icons), TIMELINE_ROW_SIZE):
-        row = icons[start : start + 25]
+        row = icons[start : start + TIMELINE_ROW_SIZE]
         print("  " + " ".join(f"{start + i + 1:2d}" for i in range(len(row))))
         print("  " + " ".join(f"{color}{icon}{Colors.NC} " for icon, color in row) + "\n")
 
@@ -948,17 +959,21 @@ def print_errors(analyses: list[LogAnalysis]) -> None:
         # Split once per analysis
         lines = a.content.split("\n")
         for line in lines:
-            if "<stderr>:" in line and ("0x" in line or "usually indicates" in line):
-                continue
             c = clean_line(line)
-            if error_re.search(c) and "Found Unhealthy" not in c:
-                # Normalize: remove timestamps, file paths, MPI prefixes
-                msg = re.sub(
-                    r"^\d{4}-\d{2}-\d{2}.*?\|\s*|^\[\d+,\d+\]<\w+>:\s*|\s*\([^)]+\.(cpp|hpp):\d+\)\s*$", "", c
-                ).strip()
-                if len(msg) > 15 and msg not in seen:
-                    seen.add(msg)
-                    errors[msg].append(os.path.basename(a.filepath))
+            # Skip if no error keywords found
+            if not error_re.search(c) or "Found Unhealthy" in c:
+                continue
+            # Skip noisy stderr lines (addresses/warnings) unless they have clear error indicators
+            if "<stderr>:" in line and ("0x" in line or "usually indicates" in line):
+                if not re.search(r"(Error|Failed|fatal|exception)", c, re.IGNORECASE):
+                    continue
+            # Normalize: remove timestamps, file paths, MPI prefixes
+            msg = re.sub(
+                r"^\d{4}-\d{2}-\d{2}.*?\|\s*|^\[\d+,\d+\]<\w+>:\s*|\s*\([^)]+\.(cpp|hpp):\d+\)\s*$", "", c
+            ).strip()
+            if len(msg) > 15 and msg not in seen:
+                seen.add(msg)
+                errors[msg].append(os.path.basename(a.filepath))
 
     if not errors:
         return
@@ -1025,14 +1040,14 @@ def main():
         output_json(analyses)
     else:
         print_summary(analyses)
+        # Always show recommendations - they're actionable and concise
+        print_recommendations(analyses)
         if args.all:
             print_details(analyses)
         if args.histogram:
             print_link_histogram(analyses)
         if args.hosts or args.all:
             print_host_summary(analyses)
-        if args.all:
-            print_recommendations(analyses)
         if args.timeline or args.all:
             print_timeline(analyses)
         if args.errors or args.all:
