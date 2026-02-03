@@ -799,6 +799,7 @@ class TtTransformer(LightweightModule):
                 page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=start_pos,
+                chunk_start_idx_tensor=chunk_start_idx if mode == "prefill" else None,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
             )

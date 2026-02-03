@@ -41,6 +41,31 @@ def get_padded_prefill_len(seq_len: int) -> int:
         return 2 ** (seq_len - 1).bit_length()
 
 
+def _get_max_blocks_prefill(kv_cache) -> int:
+    """
+    Return the maximum number of blocks to use for prefill trace page_table shape,
+    derived only from the KV cache tensor shape. Assumes paged layout where the
+    first dimension of the cache tensor is the number of blocks.
+    """
+    # kv_cache[0] = keys for first layer; [0] = first device tensor if multi-device
+    first_cache_tensor = kv_cache[0][0]
+    return int(first_cache_tensor.shape[0])
+
+
+def _pad_or_create_page_table(table, target_blocks: int):
+    """
+    Pad table to (1, target_blocks) with zeros, or create (1, target_blocks) filled with -1 if table is None.
+    Used so the trace always sees fixed input shapes for page_table/chunk_page_table.
+    """
+    if table is not None:
+        num_pad = target_blocks - table.shape[1]
+        if num_pad > 0:
+            padding = torch.zeros(1, num_pad, dtype=torch.int32)
+            return torch.cat([table, padding], dim=-1)
+        return table
+    return torch.ones(1, target_blocks, dtype=torch.int32) * -1
+
+
 class Generator:
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
@@ -578,43 +603,41 @@ class Generator:
     ):
         """
         Tracing with prefix caching support.
-        Trace reuse is valid only for the same
-        (prefill_seq_len, num_cached_blocks) which determines start_pos.
+        Trace key is (prefill_seq_len, batch_size) only; page_table/chunk_page_table
+        are padded to fixed shapes so one trace serves any num_cached_blocks.
         """
+        if isinstance(last_token_idx, (list, tuple)):
+            last_token_idx = last_token_idx[user_id] if isinstance(user_id, int) else last_token_idx[0]
+
         # Extract single user's page table row for batch_size=1
         # page_table comes from _get_prefill_user_page_table which places user data at row user_id
         # We extract to (1, num_blocks) so prepare_prefill_inputs_host can use page_table[0, :]
         if page_table is not None and batch_size == 1:
             page_table = page_table[user_id : user_id + 1, :]
 
-        # Compute prefix caching values
+        # Compute prefix caching values and fixed trace shapes (batch_size==1 only)
         use_prefix_caching = num_cached_tokens > 0
         chunk_start_idx = num_cached_tokens  # 0 when not prefix caching
-        chunk_page_table = None
-        block_size = None
+        block_size = get_block_size(kv_cache)
+        max_blocks_prefill = _get_max_blocks_prefill(kv_cache)
+        chunk_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
 
         if use_prefix_caching:
-            block_size = get_block_size(kv_cache)
             chunk_start_block = num_cached_tokens // block_size
             chunk_end_block = (num_cached_tokens + prefill_seq_len) // block_size
             chunk_page_table = page_table[:, chunk_start_block:chunk_end_block]
-
-            # Pad page_table if needed
-            num_padding_blocks = (
-                num_blocks_in_seq(prefill_seq_len + num_cached_tokens, block_size) - page_table.shape[1]
+            page_table = _pad_or_create_page_table(
+                page_table, num_blocks_in_seq(prefill_seq_len + num_cached_tokens, block_size)
             )
-            if num_padding_blocks > 0:
-                padding = torch.zeros(1, num_padding_blocks, dtype=torch.int32)
-                page_table = torch.cat([page_table, padding], dim=-1)
-
-        # Trace key includes num_cached_blocks because page_table shape depends on total blocks
-        # (page_table is padded to num_blocks_in_seq(prefill_seq_len + num_cached_tokens, block_size))
-        # num_cached_tokens is block-aligned, so we use cached blocks count for the key
-        if use_prefix_caching:
-            num_cached_blocks = num_cached_tokens // block_size
         else:
-            num_cached_blocks = 0
-        trace_key = f"{prefill_seq_len}_{batch_size}_{num_cached_blocks}"
+            chunk_page_table = None
+
+        # For batch_size==1: fixed shapes so one trace key works for any num_cached_blocks
+        if batch_size == 1:
+            page_table = _pad_or_create_page_table(page_table, max_blocks_prefill)
+            chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
+
+        trace_key = f"{prefill_seq_len}_{batch_size}"
 
         # For prefix caching, the model output has only prefill_seq_len positions (the chunk).
         # get_last_token must be the relative index within the chunk (0..prefill_seq_len-1).

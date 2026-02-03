@@ -602,6 +602,7 @@ class TtLlamaAttention(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
     ):
@@ -779,17 +780,21 @@ class TtLlamaAttention(LightweightModule):
                 chunk_start_idx=None,
             )
         else:
-            # When using prefix caching (chunk_start_idx provided), use chunked SDPA with KV cache tensors
+            # When using prefix caching (chunk_start_idx provided), use chunked SDPA with KV cache tensors.
+            # Flexible path: chunk_start_idx_tensor so one trace works for any chunk_start at replay.
             if chunk_start_idx is not None and chunk_start_idx > 0:
                 assert page_table is not None, "page_table must be provided for prefix caching"
+                assert (
+                    chunk_start_idx_tensor is not None
+                ), "prefix caching requires chunk_start_idx_tensor for flexible SDPA"
                 attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
                     input_tensor_q=q_heads_1QSD_8b,
                     input_tensor_k=keys_BKSD,
                     input_tensor_v=values_BKSD,
                     page_table_tensor=page_table,
-                    chunk_start_idx=chunk_start_idx,
+                    chunk_start_idx_tensor=chunk_start_idx_tensor,
                     compute_kernel_config=self.compute_kernel_config_hifi4,
-                    program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx=chunk_start_idx),
+                    program_config=self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"](seq_len),
                 )
 
                 # Replicate active column's data to all columns for correct RMSNORM behavior
@@ -923,6 +928,7 @@ class TtLlamaAttention(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
     ):
@@ -934,6 +940,7 @@ class TtLlamaAttention(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
             )
