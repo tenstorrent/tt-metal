@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <iostream>
 #include <map>
 #include <memory>
 #include <set>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 #include <gtest/gtest.h>

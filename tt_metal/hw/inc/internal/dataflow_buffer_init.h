@@ -85,7 +85,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
                 }
 
-                if (dfb_interface.remapper_pair_index != 0xFF) {
+                if (per_risc_ptr->flags.remapper_en) {
                     enable_remapper = true;
                     uint8_t remapper_consumer_mask = init_ptr->remapper_consumer_mask;
                     uint8_t num_clientRs = __builtin_popcount(remapper_consumer_mask);

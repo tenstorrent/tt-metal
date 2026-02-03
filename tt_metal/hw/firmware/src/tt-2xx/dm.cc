@@ -52,7 +52,7 @@ tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailbo
 
 // Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
 thread_local ::experimental::LocalDFBInterface g_dfb_interface[32] __attribute__((used));
-::experimental::RemapperAPI g_remapper_configurator __attribute__((used));
+RemapperAPI g_remapper_configurator __attribute__((used));
 
 void device_setup() {
     // instn_buf

@@ -66,7 +66,7 @@ struct dfb_initializer_per_risc_t {  // 44 bytes
     uint8_t num_tcs_to_rr;
     struct {
         uint8_t remapper_pair_index : 6;  // bits 0-5: 0..63
-        uint8_t reserved : 1;             // bit 6
+        uint8_t remapper_en : 1;          // bit 6
         uint8_t should_init_tc : 1;  // bit 7: 1 = this RISC should initialize tile counters and program the remapper
     } __attribute__((packed)) flags;
     uint32_t consumer_tcs;  // used to program remapper, for a L:R mapping contains all the TCs on the consumer side

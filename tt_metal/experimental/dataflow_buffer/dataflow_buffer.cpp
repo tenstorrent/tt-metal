@@ -94,7 +94,7 @@ uint8_t get_dm_tensix_id_for_pair(uint8_t pair_index) { return pair_index % 4; }
 
 // Holds tile counters allocated together for a producer-consumer group
 struct TileCounterGroup {
-    ::experimental::PackedTileCounter producer_tc;
+    ::experimental::PackedTileCounter producer_tc{};
     std::vector<::experimental::PackedTileCounter> consumer_tcs;
 };
 
@@ -165,7 +165,11 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
         per_risc.num_tcs_to_rr = rc.config.num_tcs_to_rr;
         log_info(tt::LogMetal, "Num tcs to rr: {}", per_risc.num_tcs_to_rr);
         per_risc.flags.remapper_pair_index = static_cast<uint8_t>(rc.config.remapper_pair_index) & 0x3F;
-        per_risc.flags.reserved = 0;
+        per_risc.flags.remapper_en =
+            this->config.cap ==
+            ::experimental::AccessPattern::BLOCKED;  // TODO: update this when there is 1 consumer to not use remapper
+                                                     // and en when there are multiple dfbs on a core where any use
+                                                     // remapper
         per_risc.flags.should_init_tc = rc.config.should_init_tc;
         per_risc.consumer_tcs = rc.config.consumer_tcs;
         log_info(tt::LogMetal, "Should init tc: {}", rc.config.should_init_tc);
@@ -262,6 +266,10 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         "DFB only supports single core, but CoreRangeSet contains {} cores: {}",
         core_range_set.num_cores(),
         core_range_set.str());
+    TT_FATAL(
+        config.cap != ::experimental::AccessPattern::BLOCKED || config.num_consumers <= 4,
+        "Blocked consumer pattern supports at most 4 consumers, but {} were specified",
+        config.num_consumers);
 
     auto dfb = std::make_shared<DataflowBufferImpl>();
 
@@ -376,13 +384,13 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                     consumer_idx);
             } else if (config.cap == ::experimental::AccessPattern::BLOCKED) {
                 // Determine tensix_id for this producer TC slot
-                uint8_t tensix_id = get_tensix_id_for_pair(producer_idx * num_producer_tcs + tc_slot);
+                uint8_t tensix_id = get_tensix_id_for_pair((producer_idx * num_producer_tcs) + tc_slot);
 
                 group.producer_tc = tile_counter_allocator_.allocate(tensix_id);
 
                 // Allocate separate consumer TCs for Remapper 1-to-many mapping
                 for (size_t consumer_idx = 0; consumer_idx < consumer_risc_ids.size(); consumer_idx++) {
-                    uint8_t consumer_tensix_id = get_tensix_id_for_pair(producer_idx * num_producer_tcs + tc_slot);
+                    uint8_t consumer_tensix_id = get_tensix_id_for_pair((producer_idx * num_producer_tcs) + tc_slot);
                     ::experimental::PackedTileCounter consumer_tc =
                         tile_counter_allocator_.allocate(consumer_tensix_id);
                     group.consumer_tcs.push_back(consumer_tc);
