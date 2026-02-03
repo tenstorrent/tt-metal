@@ -116,7 +116,7 @@ def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function
 )
 @pytest.mark.parametrize(
     "scalar",
-    {2.3, 15.6, 55.4, 72.5, 120.6},
+    (2.3, 15.6, 55.4, 72.5, 120.6),
 )
 @pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16))
 @pytest.mark.parametrize(
