@@ -427,12 +427,16 @@ def fused_attention_roofline(
 
         total_flops = matmul_flops + sfpu_flops
 
-        # Memory: Read Q, K, V; Write O
+        # Memory: Read Q, K, V; Write O + intermediate values for backward
         # Q, K, V, O each: B * H * S * d
-        # No intermediate attention matrix stored!
+        # Intermediate values saved for backward:
+        #   - max values per row: B * H * S
+        #   - sum(exp-max) per row: B * H * S
+        # Total intermediates: B * H * S * 2
         input_bytes = 3 * B * H * S * d * bytes_per_elem  # Q, K, V
         output_bytes = B * H * S * d * bytes_per_elem  # O
-        total_bytes = int(input_bytes + output_bytes)
+        intermediate_bytes = B * H * S * 2 * bytes_per_elem  # max and sum values
+        total_bytes = int(input_bytes + output_bytes + intermediate_bytes)
 
     else:  # backward
         # Backward recomputes attention on-the-fly (Flash Attention style)
@@ -454,11 +458,16 @@ def fused_attention_roofline(
 
         total_flops = matmul_flops + sfpu_flops
 
-        # Memory: Read Q, K, V, O, dO; Write dQ, dK, dV
-        # No reading of saved attention weights (they're recomputed)!
+        # Memory: Read Q, K, V, O, dO + intermediate values; Write dQ, dK, dV
+        # Reads intermediate values saved from forward:
+        #   - max values per row: B * H * S
+        #   - sum(exp-max) per row: B * H * S
         input_bytes = 5 * B * H * S * d * bytes_per_elem  # Q, K, V, O, dO
+        intermediate_bytes = (
+            B * H * S * 2 * bytes_per_elem
+        )  # max and sum values from forward
         output_bytes = 3 * B * H * S * d * bytes_per_elem  # dQ, dK, dV
-        total_bytes = int(input_bytes + output_bytes)
+        total_bytes = int(input_bytes + intermediate_bytes + output_bytes)
 
     # Compute time: split between FPU (matmul) and SFPU (scale, softmax)
     fpu_mm_ops_per_cycle = fpu_mm_flops_per_core_per_cycle(fidelity)

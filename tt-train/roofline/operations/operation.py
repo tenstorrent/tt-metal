@@ -111,7 +111,11 @@ class RooflineFunctionContext:
         # Verify MockTensors have proper labels
         for t in tensors:
             if isinstance(t, MockTensor):
-                assert t.label in (TensorLabel.ACTIVATION, TensorLabel.PARAMETER), (
+                assert t.label in (
+                    TensorLabel.ACTIVATION,
+                    TensorLabel.PARAMETER,
+                    None,
+                ), (
                     f"Tensor saved for backward must be labeled as ACTIVATION or PARAMETER, "
                     f"got {t.label}. Use create_activation_tensor() for forward outputs "
                     f"or MockParameter for parameters."

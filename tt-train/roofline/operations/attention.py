@@ -498,10 +498,24 @@ class MockScaledDotProductAttentionFusedOp(RooflineFunction):
         seq_len = query.shape[2]
         head_dim = query.shape[3]
 
-        # Fused attention does NOT save attention_weights!
-        # This is the key memory savings - no (B, H, S, S) tensor needed.
-        # Instead, backward will recompute attention on-the-fly.
-        ctx.save_for_backward(query, key, value, mask)
+        #   - max values per attention row: [B, H, S]
+        #   - sum(exp-max) per row: [B, H, S]
+        max_values = create_activation_tensor(
+            (batch_size, num_heads, seq_len),
+            query.dtype,
+            query.layout,
+            name="attention_max_values",
+        )
+        sum_values = create_activation_tensor(
+            (batch_size, num_heads, seq_len),
+            query.dtype,
+            query.layout,
+            name="attention_sum_values",
+        )
+
+        # Save for backward: inputs + intermediate values
+        # Backward will recompute attention on-the-fly using these saved values
+        ctx.save_for_backward(query, key, value, mask, max_values, sum_values)
 
         estimate = fused_attention_roofline(
             roofline_ctx.hw,
@@ -523,11 +537,12 @@ class MockScaledDotProductAttentionFusedOp(RooflineFunction):
         ctx: RooflineFunctionContext,
         roofline_ctx: "RooflineContext",
         grad_output: MockTensor,
-    ) -> Tuple[MockTensor, MockTensor, MockTensor, None]:
+    ) -> Tuple[MockTensor, MockTensor, MockTensor, None, None, None]:
         """Backward pass: compute gradients for Q, K, V using recomputation.
 
         Fused backward recomputes attention weights on-the-fly instead of
         reading them from memory. This trades compute for memory bandwidth.
+        Uses saved max and sum values to efficiently recompute softmax.
 
         Args:
             ctx: Function context with saved tensors
@@ -535,10 +550,10 @@ class MockScaledDotProductAttentionFusedOp(RooflineFunction):
             grad_output: Gradient tensor [B, H, S, d]
 
         Returns:
-            (grad_query, grad_key, grad_value, None) tuple
-            (None for mask which doesn't need gradients)
+            (grad_query, grad_key, grad_value, None, None, None) tuple
+            (None for mask, max_values, and sum_values which don't need gradients)
         """
-        query, key, value, mask = ctx.saved_tensors
+        query, key, value, mask, max_values, sum_values = ctx.saved_tensors
 
         batch_size = query.shape[0]
         num_heads = query.shape[1]
@@ -565,5 +580,5 @@ class MockScaledDotProductAttentionFusedOp(RooflineFunction):
             value.shape, value.dtype, value.layout, name="grad_value"
         )
 
-        # No gradient for mask
-        return grad_query, grad_key, grad_value, None
+        # No gradients for mask, max_values, or sum_values (intermediate values)
+        return grad_query, grad_key, grad_value, None, None, None
