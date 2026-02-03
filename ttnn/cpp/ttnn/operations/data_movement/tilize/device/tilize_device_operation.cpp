@@ -55,13 +55,13 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             "Input tensor memory layout must be HEIGHT_SHARDED or WIDTH_SHARDED but got {}",
             input_tensor_a.memory_config().memory_layout());
         TT_FATAL(
-            (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            (input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED ||
              operation_attributes.output_mem_config.shard_spec().value().shape[1] % tt::constants::TILE_WIDTH == 0),
             "Output shard width ({}) must be a multiple of TILE_WIDTH ({}) for WIDTH_SHARDED input",
             operation_attributes.output_mem_config.shard_spec().value().shape[1],
             tt::constants::TILE_WIDTH);
         TT_FATAL(
-            (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            (input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED ||
              operation_attributes.output_mem_config.shard_spec().value().shape[0] == tt::constants::TILE_HEIGHT),
             "Shard height ({}) must equal TILE_HEIGHT ({}) for WIDTH_SHARDED input",
             operation_attributes.output_mem_config.shard_spec().value().shape[0],

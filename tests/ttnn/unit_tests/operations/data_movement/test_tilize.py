@@ -65,7 +65,6 @@ def test_tilize_row_major_to_width_sharded(device, dtype, tensor_shape, shard_sh
 
     # Create test data with sequential values from 1 to n for debugging
     for _ in range(30):
-        total_elements = tensor_shape[0] * tensor_shape[1]
         input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
 
         # Convert to ttnn tensor with row major layout and width sharding

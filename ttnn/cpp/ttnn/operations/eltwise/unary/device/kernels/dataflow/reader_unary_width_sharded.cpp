@@ -24,7 +24,7 @@ void kernel_main() {
     const auto src_accessor = TensorAccessor(src_tensor_args, src_addr, row_width);
 
     // Calculate element size in bytes and tile width in bytes
-    const uint32_t tile_width_bytes = tt::constants::TILE_WIDTH * datum_size;
+    constexpr uint32_t tile_width_bytes = tt::constants::TILE_WIDTH * datum_size;
 
     uint32_t core_number = start_core_number;
 
