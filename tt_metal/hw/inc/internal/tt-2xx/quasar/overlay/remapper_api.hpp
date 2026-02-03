@@ -36,6 +36,7 @@
 
 #include <cstdint>
 #include "remapper_common.hpp"
+#include "overlay_addresses.h"
 
 /**
  * @brief Generic API for Counter Remapper Configuration
