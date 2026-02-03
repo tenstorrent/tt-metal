@@ -24,9 +24,9 @@ def create_fabric_router_config(max_payload_size):
 
 
 @pytest.mark.parametrize(
-    "mesh_rows, mesh_cols, sender_row, sender_col",
+    "sender_row, sender_col",
     [
-        (4, 2, 1, 0),
+        (1, 0),
     ],
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
@@ -34,7 +34,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("using_persistent_buffers", [True])
-@pytest.mark.parametrize("skip_ccl", [True])
+@pytest.mark.parametrize("mesh_rows, mesh_cols, skip_ccl", [(4, 2, False), (1, 1, True)])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -119,22 +119,29 @@ def test_pre_sdpa_mesh(
 
     # Create mesh tensors for input and intermediate (CCL broadcast destination)
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+
+    # Build tensors for each device in row-major order
+    # Concatenate along dim 0 to get shape (num_devices, 7168)
     device_tensors = []
     intermediate_tensors = []
     for row in range(mesh_rows):
-        if skip_ccl:
-            # Single-device mode: all devices have the input
-            device_tensors.append(sender_input)
-        elif row == sender_row:
-            device_tensors.append(sender_input)
-        else:
-            device_tensors.append(torch.zeros_like(sender_input))
-        intermediate_tensors.append(torch.zeros_like(sender_input))
+        for col in range(mesh_cols):
+            if skip_ccl:
+                # Single-device mode: all devices have the input
+                device_tensors.append(sender_input)  # (1, 7168)
+            elif row == sender_row and col == sender_col:
+                # Only sender device has actual input data
+                device_tensors.append(sender_input)  # (1, 7168)
+            else:
+                # All other devices start with zeros
+                device_tensors.append(torch.zeros_like(sender_input))  # (1, 7168)
+            intermediate_tensors.append(torch.zeros_like(sender_input))
 
+    # Concatenate: shape (num_devices, 7168) where num_devices = mesh_rows * mesh_cols
     mesh_tensor_torch = torch.cat(device_tensors, dim=0)
     intermediate_mesh_tensor_torch = torch.cat(intermediate_tensors, dim=0)
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
 
+    # Use ShardTensorToMesh to distribute tensors - shards dim 0 across all devices linearly
     input_tensor_mesh = ttnn.from_torch(
         mesh_tensor_torch,
         device=submesh,
@@ -142,7 +149,7 @@ def test_pre_sdpa_mesh(
         tile=tile,
         dtype=ttnn.bfloat16,
         memory_config=mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
     )
     intermediate_tensor_mesh = ttnn.from_torch(
         intermediate_mesh_tensor_torch,
@@ -151,7 +158,7 @@ def test_pre_sdpa_mesh(
         tile=tile,
         dtype=ttnn.bfloat16,
         memory_config=mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
     )
 
     # Create gamma tensor replicated across mesh
@@ -166,9 +173,9 @@ def test_pre_sdpa_mesh(
     )
 
     # Create matmul weights tensor - width sharded on 6x8 grid (48 cores)
-    matmul_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))
+    matmul_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))  # x=6, y=8
     num_matmul_cores = 6 * 8  # 48 cores
-    matmul_shard_shape = (matmul_weights_shape[0], matmul_weights_shape[1] // num_matmul_cores)
+    matmul_shard_shape = (matmul_weights_shape[0], matmul_weights_shape[1] // num_matmul_cores)  # (7168, 32)
     matmul_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({matmul_grid}),
         matmul_shard_shape,
@@ -185,9 +192,11 @@ def test_pre_sdpa_mesh(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # Create matmul2 weights tensor - width sharded on device grid
-    matmul2_grid = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(matmul2_grid_x - 1, matmul2_grid_y - 1))
-    matmul2_shard_shape = (matmul2_weights_shape[0], matmul2_weights_shape[1] // matmul2_num_cores)
+    # Create matmul2 weights tensor - width sharded on device grid (8x12 or 8x11), 4 tiles per core
+    matmul2_grid = ttnn.CoreRange(
+        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(matmul2_grid_x - 1, matmul2_grid_y - 1)
+    )  # (0,0) to (11,7) or (10,7)
+    matmul2_shard_shape = (matmul2_weights_shape[0], matmul2_weights_shape[1] // matmul2_num_cores)  # (1536, 128)
     matmul2_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({matmul2_grid}),
         matmul2_shard_shape,
@@ -206,7 +215,7 @@ def test_pre_sdpa_mesh(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # Create RMSNorm2 gamma tensor sharded on same core
+    # Create RMSNorm2 gamma tensor sharded on same core (3 tiles of 16x32)
     rmsnorm2_gamma_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}),
         (1, rmsnorm2_width),
@@ -225,9 +234,9 @@ def test_pre_sdpa_mesh(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # Create output tensor - width sharded on same grid as matmul2
-    output_shape = (1, matmul2_width)
-    output_shard_shape = (1, matmul2_width // matmul2_num_cores)
+    # Create output tensor - width sharded on same grid as matmul2, shape is (1, matmul2_width)
+    output_shape = (1, matmul2_width)  # (1, 12288) or (1, 11264)
+    output_shard_shape = (1, matmul2_width // matmul2_num_cores)  # (1, 128)
     output_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({matmul2_grid}),
         output_shard_shape,

@@ -75,7 +75,7 @@ class PreSDPA:
         sender_coord,
         semaphores=None,
         cluster_axis=0,
-        secondary_cluster_axis=None,
+        secondary_cluster_axis=1,
         num_links=1,
         using_persistent_buffers=True,
         epsilon=1e-6,
@@ -102,7 +102,6 @@ class PreSDPA:
             using_persistent_buffers: Whether to use persistent buffers for CCL
             epsilon: Small value to avoid division by zero
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
-            rsqrt_fast_approx: Whether to use fast approximation for rsqrt
             skip_ccl: If True, skip CCL broadcast (single-device mode)
 
         Returns:
@@ -144,6 +143,7 @@ class PreSDPA:
         # Get tensor properties (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
         input_shape = input_tensor_sample.shape
+        print("input shape is: ", input_shape)
         data_format = input_tensor_sample.dtype
 
         # CCL broadcast page info
@@ -591,10 +591,9 @@ class PreSDPA:
                 # Create per-device CB descriptors
                 # ================================================================
                 # CB: Input - in CCL mode backed by intermediate, in single-device backed by input
-                # IMPORTANT: Use per-device tensors for cb_descriptor_from_sharded_tensor to get
-                # correct buffer references for each device (mesh tensors return device 0's buffer)
                 cb0_backing_tensor = input_tensor_device if skip_ccl else intermediate_tensor_device
                 in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_cb, cb0_backing_tensor)
+                # Update the tile descriptor in the format descriptor
                 in_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 in_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
@@ -614,6 +613,7 @@ class PreSDPA:
 
                 # CB: Gamma (created from sharded per-device tensor)
                 gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor_device)
+                # Update the tile descriptor in the format descriptor
                 gamma_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 gamma_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
@@ -621,10 +621,11 @@ class PreSDPA:
                 rmsnorm2_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     rmsnorm2_gamma_cb, rmsnorm2_gamma_tensor_device
                 )
+                # Update the tile descriptor in the format descriptor to match rmsnorm2 tile shape
                 rmsnorm2_gamma_cb_descriptor.format_descriptors[0].tile = rmsnorm2_tile_descriptor
                 rmsnorm2_gamma_cb_descriptor.format_descriptors[0].page_size = rmsnorm2_page_size
 
-                # CB: RMSNorm2 input buffer (3 tiles of 16x32)
+                # CB: RMSNorm2 input buffer (3 tiles)
                 rmsnorm2_input_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=rmsnorm2_input_cb,
                     data_format=data_format,
@@ -637,7 +638,8 @@ class PreSDPA:
                     total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,  # 3 tiles
                     core_ranges=rmsnorm2_input_cb_core_ranges,
                     format_descriptors=[rmsnorm2_input_cb_format],
-                )  # CB: RMSNorm2 output buffer (3 tiles of 16x32)
+                )
+                # CB: RMSNorm2 output buffer (3 tiles)
                 rmsnorm2_output_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=rmsnorm2_output_cb,
                     data_format=data_format,
@@ -663,12 +665,22 @@ class PreSDPA:
                     format_descriptors=[rmsnorm_output_cb_format],
                 )
 
-                # CB: Matmul weights (created from sharded per-device tensor)
+                # CB: Matmul weights (created from sharded tensor)
                 matmul_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     matmul_weights_cb, matmul_weights_tensor_device
                 )
 
                 # CB: Matmul input buffer (1x32 tiles, receives mcast data)
+                # Senders will query the write pointer of this CB to get the receiver address.
+                # Constraints on CB creation:
+                # - Must be allocated and visible on the union of sender and receiver grids,
+                #   even though the sender never uses the space allocated for this CB
+                # - Must be single-buffered so senders can use get_write_ptr to get receiver address
+                # - Dynamically allocated CB is better because less inputs to OP and technically
+                #   uses minimal grid (ie. we can still use the same CB id for cores not in the
+                #   union of sender and receiver grid)
+                # Note: TILE_1x32, matmul_input_page_size, and matmul_input_total_size
+                # were already calculated above for mcast page count calculation
                 matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
                 matmul_input_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=matmul_input_cb,
@@ -699,6 +711,8 @@ class PreSDPA:
                 )
 
                 # CB: Matmul2 input buffer (1x1536 with 1x32 tiles = 48 tiles)
+                # Must be allocated on union of sender (rmsnorm input grid) and receiver (matmul2 grid)
+                # Similar constraint as gather CB - senders query write_ptr to get receiver address
                 matmul2_input_total_size = matmul2_num_tiles_k * matmul_input_page_size  # 48 * 64 bytes
                 matmul2_input_cb_format = ttnn.CBFormatDescriptor(
                     buffer_index=matmul2_input_cb,
@@ -780,10 +794,9 @@ class PreSDPA:
                     + mcast_sender_named_compile_time_args
                     + matmul_brisc_named_compile_time_args
                     + gather_receiver_named_compile_time_args
-                    + rmsnorm2_brisc_named_compile_time_args
                     + matmul2_brisc_named_compile_time_args
                     + mcast2_brisc_named_compile_time_args,
-                    # TRISC: bcast (skip_ccl flag only) + rmsnorm compute + matmul + rmsnorm2 + matmul2
+                    # TRISC: bcast + rmsnorm compute + matmul + rmsnorm2 + matmul2
                     trisc_named_compile_time_args=bcast_trisc_named_compile_time_args
                     + rmsnorm_compute_named_compile_time_args
                     + matmul_trisc_named_compile_time_args
@@ -900,12 +913,12 @@ class PreSDPA:
                     matmul_weights_cb_descriptor,
                     matmul_output_cb_descriptor,
                     matmul_input_cb_descriptor,
-                    rmsnorm2_gamma_cb_descriptor,
-                    rmsnorm2_input_cb_descriptor,
-                    rmsnorm2_output_cb_descriptor,
-                    matmul2_input_cb_descriptor,
-                    matmul2_weights_cb_descriptor,
-                    matmul2_output_cb_descriptor,
+                    rmsnorm2_gamma_cb_descriptor,  # CB: RMSNorm2 gamma
+                    rmsnorm2_input_cb_descriptor,  # CB: RMSNorm2 input
+                    rmsnorm2_output_cb_descriptor,  # CB: RMSNorm2 output
+                    matmul2_input_cb_descriptor,  # CB: Matmul2 input
+                    matmul2_weights_cb_descriptor,  # CB: Matmul2 weights
+                    matmul2_output_cb_descriptor,  # CB: Matmul2 output
                 ]
                 if not skip_ccl:
                     cbs_list.append(bcast_pkt_cb_descriptor)
@@ -914,10 +927,10 @@ class PreSDPA:
                     kernels=unified_kernel.get_kernel_descriptors(),
                     cbs=cbs_list,
                     semaphores=[
-                        mcast_sender_semaphore_descriptor,
-                        mcast_receiver_semaphore_descriptor,
-                        gather_noc0_receiver_semaphore_descriptor,
-                        gather_noc1_receiver_semaphore_descriptor,
+                        mcast_sender_semaphore_descriptor,  # ID 0
+                        mcast_receiver_semaphore_descriptor,  # ID 1
+                        gather_noc0_receiver_semaphore_descriptor,  # ID 2
+                        gather_noc1_receiver_semaphore_descriptor,  # ID 3
                     ],
                 )
                 print("Program has {} kernels".format(len(program.kernels)))
@@ -978,9 +991,6 @@ class PreSDPA:
             )
         )
         print("mesh_program_descriptor created successfully")
-        import sys
-
-        sys.stdout.flush()
         result = ttnn.generic_op(
             [
                 input_tensor_mesh,

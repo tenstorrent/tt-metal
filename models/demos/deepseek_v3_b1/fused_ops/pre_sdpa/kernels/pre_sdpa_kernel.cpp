@@ -36,7 +36,7 @@ void kernel_main() {
 // ============================================================================
 // NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
 // Named compile-time args: bcast reader, rmsnorm reader, mcast receiver, matmul reader, gather sender
-// Runtime args: [tensor_address0, tile_id_start, tile_id_end] for CCL broadcast
+// Runtime args: []
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // CCL Broadcast CTArgs type alias
@@ -116,7 +116,7 @@ void kernel_main() {
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: bcast writer, rmsnorm writer, mcast sender, matmul writer, gather receiver
-// Runtime args: CCL broadcast writer args (when not skip_ccl)
+// Runtime args: CCL broadcast writer args
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
     // CCL Broadcast CTArgs type alias
@@ -138,7 +138,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_range_hops_backward"),
         get_named_compile_time_arg_val("bcast_using_persistent_buffers")>;
 
-    // CCL Broadcast writer runtime args (only populated when not skip_ccl)
+    // CCL Broadcast writer runtime args
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
     if constexpr (!Core::skip_ccl) {
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
@@ -236,7 +236,7 @@ void kernel_main() {
 
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
-// Named compile-time args: bcast (skip_ccl only), rmsnorm compute, matmul compute
+// Named compile-time args: bcast, rmsnorm compute, matmul compute
 // ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
     // CCL Broadcast CTArgs (no-op for TRISC)
@@ -254,7 +254,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
 
-    // RMSNorm compute runtime args (use get_common_arg_val for common runtime args)
+    // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
