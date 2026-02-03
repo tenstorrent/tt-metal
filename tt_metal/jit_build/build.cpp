@@ -98,23 +98,9 @@ void JitBuildEnv::init(
     this->arch_ = arch;
     this->max_cbs_ = max_cbs;
 
-#ifndef GIT_COMMIT_HASH
-    log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
-#else
-    std::string git_hash(GIT_COMMIT_HASH);
-
-    std::filesystem::path git_hash_path(this->out_root_ + git_hash);
-    std::filesystem::path root_path(this->out_root_);
-    if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
-            check_built_dir(dir_entry.path(), git_hash_path);
-        });
-    } else {
+    if (not rtoptions.get_skip_deleting_built_cache()) {
         log_info(tt::LogBuildKernels, "Skipping deleting built cache");
     }
-
-    this->out_root_ = this->out_root_ + git_hash + "/";
-#endif
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
@@ -154,6 +140,10 @@ void JitBuildEnv::init(
     if (rtoptions.get_riscv_debug_info_enabled()) {
         common_flags += "-g ";
     }
+
+    // Add path normalization for reproducible builds and ccache effectiveness
+    common_flags += fmt::format("-ffile-prefix-map={}=. ", this->root_);
+    common_flags += fmt::format("-fdebug-prefix-map={}=. ", this->root_);
 
     this->cflags_ = common_flags;
     this->cflags_ +=
