@@ -41,7 +41,6 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
     return logical_volume / hidden_size;
 }
 
-// T, MM, T + MM
 std::tuple<
     std::vector<CoreCoord>,  // T cores
     std::vector<CoreCoord>,  // MM cores
@@ -49,20 +48,52 @@ std::tuple<
     CoreRangeSet,            // MM CoreRangeSet
     CoreRangeSet,            // T + MM CoreRangeSet
     CoreRange,               // T bounding box
-    CoreRange>               // MM bounding box
+    CoreRange,               // MM bounding box one
+    CoreRange>               // MM bounding box two
 get_cores(ttnn::MeshDevice* mesh_device) {
+    // Cores
     const std::vector<CoreCoord> tilize_cores = {CoreCoord(5, 0), CoreCoord(5, 1), CoreCoord(5, 2), CoreCoord(5, 3)};
     const std::vector<CoreCoord> matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
 
+    std::pair<std::vector<CoreCoord>, std::vector<CoreCoord>> matmul_core_columns;
+    for (const CoreCoord& matmul_core : matmul_cores) {
+        if (matmul_core.x == 0) {
+            matmul_core_columns.first.push_back(matmul_core);
+        } else if (matmul_core.x == 4) {
+            matmul_core_columns.second.push_back(matmul_core);
+        } else {
+            TT_FATAL(false, "Matmul cores must have x value 0 or 4, but has {}", matmul_core.x);
+        }
+    }
+
+    // CoreRangeSets
     const CoreRangeSet tilize_core_range_set = CoreRangeSet(tilize_cores);
     const CoreRangeSet matmul_core_range_set = CoreRangeSet(matmul_cores);
     const CoreRangeSet tilize_matmul_core_range_set = tilize_core_range_set.merge(matmul_core_range_set);
 
+    // Bounding boxes
     const CoreRange tilize_bounding_box = tilize_core_range_set.bounding_box();
-    const CoreRange matmul_bounding_box = matmul_core_range_set.bounding_box();
+    const CoreRange matmul_bounding_box_one = CoreRangeSet(matmul_core_columns.first).bounding_box();
+    const CoreRange matmul_bounding_box_two = CoreRangeSet(matmul_core_columns.second).bounding_box();
 
-    TT_FATAL(!tilize_bounding_box.intersects(matmul_bounding_box), "tilize and matmul bounding boxes cannot overlap");
+    // Verify none of the bounding boxes overlap
+    TT_FATAL(
+        !tilize_bounding_box.intersects(matmul_bounding_box_one), "tilize and matmul bounding boxes cannot overlap");
+    TT_FATAL(
+        !tilize_bounding_box.intersects(matmul_bounding_box_two), "tilize and matmul bounding boxes cannot overlap");
+    TT_FATAL(
+        !matmul_bounding_box_one.intersects(matmul_bounding_box_two), "separate matmul bounding boxes cannot overlap");
+
+    // Combine cores (16 total), that don't overlap with any of the tilize or matmul bounding boxes
+    const CoreRange combine_core_range({1, 0}, {2, 7});
+    const CoreRangeSet combine_core_range_set = CoreRangeSet(combine_core_range);
+    const CoreRange combine_bounding_box = combine_core_range_set.bounding_box();
+    TT_FATAL(!combine_bounding_box.intersects(tilize_bounding_box), "combine and tilize bounding boxes cannot overlap");
+    TT_FATAL(
+        !combine_bounding_box.intersects(matmul_bounding_box_one), "combine and matmul bounding boxes cannot overlap");
+    TT_FATAL(
+        !combine_bounding_box.intersects(matmul_bounding_box_two), "combine and matmul bounding boxes cannot overlap");
 
     return {
         tilize_cores,
@@ -71,8 +102,8 @@ get_cores(ttnn::MeshDevice* mesh_device) {
         matmul_core_range_set,
         tilize_matmul_core_range_set,
         tilize_bounding_box,
-        matmul_bounding_box,
-    };
+        matmul_bounding_box_one,
+        matmul_bounding_box_two};
 }
 
 }  // namespace
@@ -144,27 +175,27 @@ MoEComputeMeshWorkloadFactory::create_at(
     const ttnn::Tensor& tilize_per_expert_total_tokens_output_tensor = tensor_return_value.at(0);
     const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
     const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
-    const ttnn::Tensor& matmul_output_tensor = tensor_return_value.at(3);
+    const ttnn::Tensor& output_tensor = tensor_return_value.at(3);
 
     [[maybe_unused]] const auto& tilize_per_expert_total_tokens_output_shape =
         tilize_per_expert_total_tokens_output_tensor.tensor_spec().logical_shape();
     [[maybe_unused]] const auto& tilize_expert_activation_output_shape =
         tilize_expert_activation_output_tensor.tensor_spec().logical_shape();
     [[maybe_unused]] const auto& tilize_e_t_output_shape = tilize_e_t_output_tensor.tensor_spec().logical_shape();
-    [[maybe_unused]] const auto& matmul_output_shape = matmul_output_tensor.tensor_spec().logical_shape();
+    [[maybe_unused]] const auto& output_shape = output_tensor.tensor_spec().logical_shape();
 
     [[maybe_unused]] const uint32_t tilize_per_expert_total_tokens_output_pages =
         get_num_pages_st(tilize_per_expert_total_tokens_output_tensor);
     [[maybe_unused]] const uint32_t tilize_expert_activation_output_pages =
         get_num_pages_st(tilize_expert_activation_output_tensor);
     [[maybe_unused]] const uint32_t tilize_e_t_output_pages = get_num_pages_st(tilize_e_t_output_tensor);
-    [[maybe_unused]] const uint32_t matmul_output_pages = get_num_pages_st(matmul_output_tensor);
+    [[maybe_unused]] const uint32_t output_pages = get_num_pages_st(output_tensor);
 
     const uint32_t tilize_per_expert_total_tokens_output_page_size =
         get_page_size_st(tilize_per_expert_total_tokens_output_tensor);
     const uint32_t tilize_expert_activation_output_page_size = get_page_size_st(tilize_expert_activation_output_tensor);
     const uint32_t tilize_e_t_output_page_size = get_page_size_st(tilize_e_t_output_tensor);
-    [[maybe_unused]] const uint32_t matmul_output_page_size = get_page_size_st(matmul_output_tensor);
+    [[maybe_unused]] const uint32_t output_page_size = get_page_size_st(output_tensor);
 
     [[maybe_unused]] const uint32_t tilize_per_expert_total_tokens_output_aligned_page_size =
         get_aligned_page_size_st(tilize_per_expert_total_tokens_output_tensor);
@@ -172,7 +203,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         get_aligned_page_size_st(tilize_expert_activation_output_tensor);
     [[maybe_unused]] const uint32_t tilize_e_t_output_aligned_page_size =
         get_aligned_page_size_st(tilize_e_t_output_tensor);
-    [[maybe_unused]] const uint32_t matmul_output_aligned_page_size = get_aligned_page_size_st(matmul_output_tensor);
+    [[maybe_unused]] const uint32_t output_aligned_page_size = get_aligned_page_size_st(output_tensor);
 
     // Mesh
     auto* mesh_device = tilize_input_tensor.device();
@@ -200,23 +231,35 @@ MoEComputeMeshWorkloadFactory::create_at(
          matmul_core_range_set,
          tilize_matmul_core_range_set,
          tilize_bounding_box,
-         matmul_bounding_box] = get_cores(mesh_device);
+         matmul_bounding_box_one,
+         matmul_bounding_box_two] = get_cores(mesh_device);
 
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
-    const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
+
+    const uint32_t matmul_bounding_box_one_num_cores = matmul_bounding_box_one.size();
+    const uint32_t matmul_bounding_box_two_num_cores = matmul_bounding_box_two.size();
 
     // Logical mcast bounding box coordinates
-    const CoreCoord t_mcast_start_logical = tilize_bounding_box.start_coord;
-    const CoreCoord t_mcast_end_logical = tilize_bounding_box.end_coord;
-    const CoreCoord mm_mcast_start_logical = matmul_bounding_box.start_coord;
-    const CoreCoord mm_mcast_end_logical = matmul_bounding_box.end_coord;
+    const CoreCoord tilize_mcast_start_logical = tilize_bounding_box.start_coord;
+    const CoreCoord tilize_mcast_end_logical = tilize_bounding_box.end_coord;
+    const CoreCoord matmul_mcast_box_one_start_logical = matmul_bounding_box_one.start_coord;
+    const CoreCoord matmul_mcast_box_one_end_logical = matmul_bounding_box_one.end_coord;
+    const CoreCoord matmul_mcast_box_two_start_logical = matmul_bounding_box_two.start_coord;
+    const CoreCoord matmul_mcast_box_two_end_logical = matmul_bounding_box_two.end_coord;
 
     // Convert to physical NOC coordinates
-    const CoreCoord t_mcast_start_physical = mesh_device->worker_core_from_logical_core(t_mcast_start_logical);
-    const CoreCoord t_mcast_end_physical = mesh_device->worker_core_from_logical_core(t_mcast_end_logical);
-    const CoreCoord mm_mcast_start_physical = mesh_device->worker_core_from_logical_core(mm_mcast_start_logical);
-    const CoreCoord mm_mcast_end_physical = mesh_device->worker_core_from_logical_core(mm_mcast_end_logical);
+    const CoreCoord tilize_mcast_start_physical =
+        mesh_device->worker_core_from_logical_core(tilize_mcast_start_logical);
+    const CoreCoord tilize_mcast_end_physical = mesh_device->worker_core_from_logical_core(tilize_mcast_end_logical);
+    const CoreCoord matmul_mcast_box_one_start_physical =
+        mesh_device->worker_core_from_logical_core(matmul_mcast_box_one_start_logical);
+    const CoreCoord matmul_mcast_box_one_end_physical =
+        mesh_device->worker_core_from_logical_core(matmul_mcast_box_one_end_logical);
+    const CoreCoord matmul_mcast_box_two_start_physical =
+        mesh_device->worker_core_from_logical_core(matmul_mcast_box_two_start_logical);
+    const CoreCoord matmul_mcast_box_two_end_physical =
+        mesh_device->worker_core_from_logical_core(matmul_mcast_box_two_end_logical);
 
     //-------------------------------------------------------------------------
     // Tilize semaphores
@@ -297,16 +340,26 @@ MoEComputeMeshWorkloadFactory::create_at(
         1,
         tt::tt_metal::datatype_to_dataformat_converter(tilize_per_expert_total_tokens_output_tensor.dtype()));
 
-    // stores the chunks sent from the tilize cores to the matmul cores
-    // only allocated on the matmul cores, but tilize needs the CB address
-    uint32_t cb_s2c_in_id = tt::CBIndex::c_1;
-    [[maybe_unused]] auto cb_s2c_in_tuple = tt::tt_metal::create_cb(
-        cb_s2c_in_id,
+    /*
+     * Tilize: Used as output CB of tilize operation
+     * MM: Used as input CB (where tilized chunks arrive)
+     * Combine: Stores output of MM, for input to combine
+     */
+    uint32_t tilize_output_cb_id = tt::CBIndex::c_1;
+    [[maybe_unused]] uint32_t cb_s2c_in_id = tt::CBIndex::c_1;
+    [[maybe_unused]] uint32_t combine_input_cb_id = tt::CBIndex::c_1;
+
+    // All cores (not just Tilize and Matmul)
+    CoreRangeSet shard_cores = output_tensor.memory_config().shard_spec()->grid;
+    auto output_cb = tt::tt_metal::create_cb(
+        tilize_output_cb_id,
         program,
-        matmul_core_range_set,
-        tilize_output_page_size,
-        224 * 2,  // TODO: (GR) does this turn into two separate CBs?
-        tilize_output_dataformat);
+        shard_cores,
+        output_page_size,
+        output_pages / shard_cores.size(),
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype()),
+        output_tensor.buffer());
+    tt::tt_metal::CBHandle sharded_output_cb_handle = std::get<1>(output_cb);
 
     //-------------------------------------------------------------------------
     // Tilize CBs
@@ -323,22 +376,20 @@ MoEComputeMeshWorkloadFactory::create_at(
     uint32_t e_t_cb_id = tt::CBIndex::c_6;
     // tilize input buffer for tokens to be tilized (row-major from reader)
     uint32_t tilize_input_cb_id = tt::CBIndex::c_7;
-    // tilize output buffer for tilized tokens (from compute to writer)
-    uint32_t tilize_output_cb_id = tt::CBIndex::c_8;
     // Experts activation buffer [T, 2*E + 1] each row is {token id, expert_0_activated, expert_1_activated,...,
     // expert_0_score, expert_1_score, ...} k+1 if not activated, k value in the indices tensor for that token if
     // activated
-    uint32_t expert_activation_cb_id = tt::CBIndex::c_9;
+    uint32_t expert_activation_cb_id = tt::CBIndex::c_8;
     // BRISC's e_t buffer for parallel metadata processing (BRISC processes tokens/2 to tokens)
-    uint32_t brisc_e_t_cb_id = tt::CBIndex::c_10;
+    uint32_t brisc_e_t_cb_id = tt::CBIndex::c_19;
     // BRISC's per-expert token counts to communicate to NCRISC after parallel processing
-    uint32_t brisc_expert_counts_cb_id = tt::CBIndex::c_11;
+    uint32_t brisc_expert_counts_cb_id = tt::CBIndex::c_10;
     // BRISC's expert activation buffer for parallel processing
-    uint32_t brisc_expert_activation_cb_id = tt::CBIndex::c_12;
+    uint32_t brisc_expert_activation_cb_id = tt::CBIndex::c_11;
     // BRISC's activated token count (single uint32_t)
-    uint32_t brisc_activated_count_cb_id = tt::CBIndex::c_13;
+    uint32_t brisc_activated_count_cb_id = tt::CBIndex::c_12;
 
-    uint32_t remote_counts_cb_id = tt::CBIndex::c_14;
+    uint32_t remote_counts_cb_id = tt::CBIndex::c_13;
 
     const auto tilize_input_data_format = tt::tt_metal::datatype_to_dataformat_converter(tilize_input_tensor.dtype());
     const auto tilize_indices_data_format =
@@ -474,22 +525,6 @@ MoEComputeMeshWorkloadFactory::create_at(
         1,  // single page
         tt::DataFormat::UInt32);
 
-    // tilize output buffer: holds tilized output from compute kernel
-    // page_size is the tile size, num_pages is max_tiles_per_chunk (based on max subtoken size)
-    // Tile dimensions: height = tokens_per_chunk, width = 32
-    // tile_width_bytes = TILE_WIDTH * element_size
-    // max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes
-    constexpr uint32_t TILE_WIDTH = 32;
-    uint32_t tile_width_bytes = TILE_WIDTH * tilize_input_tensor.element_size();
-    uint32_t max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes;
-    tt::tt_metal::create_cb(
-        tilize_output_cb_id,
-        program,
-        tilize_core_range_set,
-        tokens_per_chunk * tile_width_bytes,
-        max_tiles_per_chunk * buffering_factor,  // double-buffered
-        tilize_input_data_format);
-
     //-------------------------------------------------------------------------
     // Matmul CBs
     //-------------------------------------------------------------------------
@@ -509,7 +544,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
-    // Note: cb_s2c_in is handled separately as it is allocated on both Tilize and Matmul cores
+    // Note: cb_s2c_in is handled separately as it is allocated on Tilize, Matmul, and (future) Combine cores
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> matmul_cb_specs0 = {
         {"cb_r2c_w0", tt::CBIndex::c_2, tt::DataFormat::Bfp4_b, true, 14 * 6},
         {"cb_c2w_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
@@ -546,6 +581,12 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_cores_physical.push_back(mesh_device->worker_core_from_logical_core(tilize_cores.at(i)));
     }
 
+    // tile_width_bytes = TILE_WIDTH * element_size
+    // max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes
+    constexpr uint32_t TILE_WIDTH = 32;
+    uint32_t tile_width_bytes = TILE_WIDTH * tilize_input_tensor.element_size();
+    uint32_t max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes;
+
     // Drain core is always the first tilize core (index 0)
     CoreCoord tilize_drain_core_physical = tilize_cores_physical.at(0);
 
@@ -565,8 +606,6 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"brisc_expert_activation_cb_id", brisc_expert_activation_cb_id},
         {"brisc_activated_count_cb_id", brisc_activated_count_cb_id},
         {"remote_counts_cb_id", remote_counts_cb_id},
-        {"cb_s2c_in_id", cb_s2c_in_id},  // where matmul accepts tilized chunks
-        // {"cb_s2c_in_address", cb_s2c_in_address},   // where matmul accepts tilized chunks
 
         // Alignment
         {"l1_alignment", l1_alignment},
@@ -616,19 +655,26 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"drain_core_noc_y", (uint32_t)tilize_drain_core_physical.y},
 
         // T multicast coordinates
-        {"tilize_mcast_start_x", (uint32_t)t_mcast_start_physical.x},
-        {"tilize_mcast_start_y", (uint32_t)t_mcast_start_physical.y},
-        {"tilize_mcast_end_x", (uint32_t)t_mcast_end_physical.x},
-        {"tilize_mcast_end_y", (uint32_t)t_mcast_end_physical.y},
+        {"tilize_mcast_start_x", (uint32_t)tilize_mcast_start_physical.x},
+        {"tilize_mcast_start_y", (uint32_t)tilize_mcast_start_physical.y},
+        {"tilize_mcast_end_x", (uint32_t)tilize_mcast_end_physical.x},
+        {"tilize_mcast_end_y", (uint32_t)tilize_mcast_end_physical.y},
         {"num_tilize_cores", tilize_num_cores},
 
         // MM multicast coordinates
-        {"matmul_mcast_start_x", (uint32_t)mm_mcast_start_physical.x},
-        {"matmul_mcast_start_y", (uint32_t)mm_mcast_start_physical.y},
-        {"matmul_mcast_end_x", (uint32_t)mm_mcast_end_physical.x},
-        {"matmul_mcast_end_y", (uint32_t)mm_mcast_end_physical.y},
         {"num_matmul_cores", matmul_num_cores},
-        {"num_matmul_bounding_box_cores", matmul_bounding_box_num_cores},
+
+        {"matmul_mcast_box_one_start_x", (uint32_t)matmul_mcast_box_one_start_physical.x},
+        {"matmul_mcast_box_one_start_y", (uint32_t)matmul_mcast_box_one_start_physical.y},
+        {"matmul_mcast_box_one_end_x", (uint32_t)matmul_mcast_box_one_end_physical.x},
+        {"matmul_mcast_box_one_end_y", (uint32_t)matmul_mcast_box_one_end_physical.y},
+        {"num_matmul_bounding_box_one_cores", matmul_bounding_box_one_num_cores},
+
+        {"matmul_mcast_box_two_start_x", (uint32_t)matmul_mcast_box_two_start_physical.x},
+        {"matmul_mcast_box_two_start_y", (uint32_t)matmul_mcast_box_two_start_physical.y},
+        {"matmul_mcast_box_two_end_x", (uint32_t)matmul_mcast_box_two_end_physical.x},
+        {"matmul_mcast_box_two_end_y", (uint32_t)matmul_mcast_box_two_end_physical.y},
+        {"num_matmul_bounding_box_two_cores", matmul_bounding_box_two_num_cores},
 
         // Semaphores
         {"partial_metadata_ready_semaphore_id", tilize_partial_metadata_ready_semaphore_id},
@@ -771,7 +817,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Create compile args for the program
     const auto matmul_tensors =
-        std::vector<const ttnn::Tensor*>{&matmul_w0_w1_tensor, &matmul_w2_tensor, &matmul_output_tensor};
+        std::vector<const ttnn::Tensor*>{&matmul_w0_w1_tensor, &matmul_w2_tensor, &output_tensor};
 
     std::vector<uint32_t> matmul_compile_time_args;
     for (const auto& tensor : matmul_tensors) {
@@ -911,7 +957,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         {.tilize_kernel_handles = {tilize_reader_kernel_id, tilize_compute_kernel_id, tilize_writer_kernel_id},
          .tilize_cores = tilize_cores,
          .matmul_kernel_handles = {matmul_dm0_kernel_handle, matmul_dm1_kernel_handle, matmul_compute_kernel_handle},
-         .matmul_cores = matmul_cores}};
+         .matmul_cores = matmul_cores,
+         .sharded_output_cb_handle = sharded_output_cb_handle}};
 }
 
 void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
@@ -923,10 +970,14 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     const ttnn::Tensor& tilize_per_expert_total_tokens_output_tensor = tensor_return_value.at(0);
     const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
     const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
-    const ttnn::Tensor& matmul_output_tensor = tensor_return_value.at(3);
+    const ttnn::Tensor& output_tensor = tensor_return_value.at(3);
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
+
+        // Update sharded circular buffer address
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(
+            program, shared_variables.sharded_output_cb_handle, *output_tensor.buffer());
 
         //-------------------------------------------------------------------------
         // Tilize
@@ -963,7 +1014,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
                 auto& matmul_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
                 matmul_runtime_args.at(2) = tensor_args.matmul_w0_w1_tensor.buffer()->address();
                 matmul_runtime_args.at(3) = tensor_args.matmul_w2_tensor.buffer()->address();
-                matmul_runtime_args.at(4) = matmul_output_tensor.buffer()->address();
+                matmul_runtime_args.at(4) = output_tensor.buffer()->address();
             }
         }
     }

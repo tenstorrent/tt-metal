@@ -147,8 +147,9 @@ void kernel_main() {
     uint32_t trid_to_issue = 1, trid_to_wait = 1, slot_to_issue = 0;
     bool txns_in_flight = false;
 
-    // We reserve one to kick start the pipeline, and then it is steady state
-    cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
+    //-------------------------------------------------------------------------
+    // Init synchronization with tilize cores
+    //-------------------------------------------------------------------------
 
     // Receive number of tokens per expert from the tilize cores
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
@@ -162,6 +163,13 @@ void kernel_main() {
     // Value we wait on that indicates the next chunk of tiles have arrived from the tilize cores
     uint32_t matmul_chunk_ready_semaphore_wait_value = 1;
     uint32_t matmul_chunk_ready_semaphore_addr = get_semaphore(matmul_chunk_ready_semaphore_id);
+
+    //-------------------------------------------------------------------------
+    // Start pipeline
+    //-------------------------------------------------------------------------
+
+    // We reserve one to kick start the pipeline, and then it is steady state
+    cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_tokens = num_tokens_per_expert[expert_id];
