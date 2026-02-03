@@ -320,7 +320,6 @@ def run_all_to_all_dispatch_metadata_test(
         metadata_shape = [devices, total_tokens, select_experts_k]
 
         # Create core range set for worker cores (needed for global semaphore creation)
-        compute_grid_size = mesh_device.compute_with_storage_grid_size()
         worker_core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))})
 
         # Create sharded memory config for metadata/scores on drain core
@@ -427,7 +426,7 @@ def run_all_to_all_dispatch_metadata_test(
     if trace_mode:
         # compile run:
         logger.info("Compiling model")
-        tt_out_tensor_list, tt_metadata_list, tt_scores_out_list = run_op(1, store_all_results=True)
+        run_op(1, store_all_results=True)
         ttnn.synchronize_device(mesh_device)
 
         logger.info("Capturing Warmup")
@@ -435,7 +434,7 @@ def run_all_to_all_dispatch_metadata_test(
         if warmup_iters > 0:
             logger.info(f"Capturing Warmup {warmup_iters} iterations")
             trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            tt_out_tensor_list, tt_metadata_list, tt_scores_out_list = run_op(warmup_iters, store_all_results=True)
+            run_op(warmup_iters, store_all_results=True)
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             ttnn.synchronize_device(mesh_device)
         logger.info("Warmup done")
@@ -616,7 +615,7 @@ def run_all_to_all_dispatch_metadata_test(
         logger.info(f"Failed data indices: {failed_indices}")
         assert (
             passed
-        ), f"First failing index: {first_failed_tensor_index} token {first_failed_batch_index} expert {first_failed_expert_index} device {first_failed_device_index} FAILED data indices: {failed_indices}"
+        ), f"First failing index: {first_failed_tensor_index} token {first_failed_batch_index} sequence {first_failed_sequence_index} expert {first_failed_expert_index} device {first_failed_device_index} FAILED data indices: {failed_indices}"
 
 
 # Correctness test - single focused test case for pipeline validation
