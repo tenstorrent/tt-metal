@@ -445,14 +445,17 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     std::filesystem::path generated_file = generated_dir / generated_filename;
     std::filesystem::path golden_file = golden_dir / golden_filename;
 
-    // Skip comparison if golden file doesn't exist (first run scenario)
+    // First check if the generated file exists - if ControlPlane didn't create it, the test must fail
+    if (!std::filesystem::exists(generated_file)) {
+        FAIL() << "Generated ASIC mapping file does not exist: " << generated_file.string()
+               << ". The ControlPlane should have created this file. Test: " << test_name << " on rank " << rank;
+    }
+
+    // If golden file doesn't exist, the test must fail - we need a golden file to compare against
     if (!std::filesystem::exists(golden_file)) {
-        log_warning(
-            tt::LogTest,
-            "Golden file does not exist: {}. See tests/tt_metal/tt_fabric/golden_mapping_files/README.md "
-            "for instructions on generating it. Skipping comparison for now.",
-            golden_file.string());
-        return;
+        FAIL() << "Golden file does not exist: " << golden_file.string()
+               << ". See tests/tt_metal/tt_fabric/golden_mapping_files/README.md "
+               << "for instructions on generating it. Test: " << test_name << " on rank " << rank;
     }
 
     bool comparison_result = compare_asic_mapping_files(generated_file, golden_file);
