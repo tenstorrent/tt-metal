@@ -265,6 +265,26 @@ test_suite_bh_glx_torus_xyz_health_check_tests() {
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus_z_ports.textproto --hard-fail --send-traffic
 }
 
+test_suite_wh_qb2_unit_tests() {
+    echo "[upstream-tests] running WH QB2 upstream metal tests"
+    export TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/n300_x2_mesh_graph_descriptor.textproto
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardFixture.*"
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardProgramFixture.*"
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_llama_perf
+
+    echo "[upstream-tests] running WH QB2 upstream ttnn tests"
+    ./build/test/ttnn/unit_tests_ttnn_ccl
+}
+
+test_suite_wh_qb2_llama_demo_tests() {
+    echo "[upstream-tests] running WH QB2 upstream Llama demo tests with weights"
+    export TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/n300_x2_mesh_graph_descriptor.textproto
+    verify_llama_dir_
+    pytest models/tt_transformers/demo/simple_text_demo.py -k batch-32
+}
+
 # Define test suite mappings for different hardware topologies
 declare -A hw_topology_test_suites
 
@@ -322,6 +342,10 @@ hw_topology_test_suites["blackhole_glx"]="
 test_suite_bh_glx_metal_unit_tests
 test_suite_bh_glx_python_unit_tests
 test_suite_bh_glx_llama_demo_tests"
+
+hw_topology_test_suites["wh_qb2"]="
+test_suite_wh_qb2_unit_tests
+test_suite_wh_qb2_llama_demo_tests"
 
 # Function to display help
 show_help() {
