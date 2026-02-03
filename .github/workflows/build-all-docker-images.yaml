@@ -56,7 +56,7 @@ permissions:
 jobs:
   check-images:
     name: "🔍 Check existing images"
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ubuntu-latest
     outputs:
       # Ubuntu 22.04
       ubuntu-2204-ci-build-tag: ${{ steps.ubuntu-2204-tags.outputs.ci-build-tag }}
