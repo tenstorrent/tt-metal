@@ -30,9 +30,25 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
 
     uint32_t num_tiles = output.physical_volume() / TILE_HW;
 
+    uint32_t num_dram_banks = device->num_dram_channels();
+
+    CoreRangeSet worker_core_grid;
+    if (args.sub_core_grids.has_value()) {
+        const CoreRangeSet& sub_grid = args.sub_core_grids.value();
+        uint32_t max_worker_cores = std::min(num_dram_banks, sub_grid.num_cores());
+        worker_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+            sub_grid.ranges().begin()->start_coord, max_worker_cores, sub_grid, false);
+    } else {
+        uint32_t total_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+        uint32_t max_worker_cores = std::min(num_dram_banks, total_cores);
+        worker_core_grid =
+            tt::tt_metal::num_cores_to_corerangeset(max_worker_cores, compute_with_storage_grid_size, false);
+    }
+
     auto [num_cores, all_cores, core_group, core_group_cliff, num_tiles_per_core, num_tiles_per_core_cliff] =
-        args.sub_core_grids.has_value() ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_tiles)
-                                        : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+        tt::tt_metal::split_work_to_cores(worker_core_grid, num_tiles);
+
+    std::cout << "  num cores : " << num_cores << "\n";
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
