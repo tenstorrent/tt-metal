@@ -221,6 +221,14 @@ void MetalContext::initialize(
         std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
     noc_debug_state_ = std::make_unique<NOCDebugState>();
 
+    if (rtoptions_.get_experimental_noc_debug_dump_enabled()) {
+        TT_FATAL(
+            !rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint),
+            "Both DPRINT and NOC debug dump cannot be enabled at the same time.");
+        TT_FATAL(
+            !rtoptions_.get_watcher_enabled(), "Both Watcher and NOC debug dump cannot be enabled at the same time.");
+    }
+
     if (rtoptions_.get_profiler_enabled()) {
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
