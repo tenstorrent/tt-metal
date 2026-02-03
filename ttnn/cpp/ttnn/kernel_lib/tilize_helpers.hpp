@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <optional>
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/cb_api.h"
 
@@ -65,6 +64,9 @@ namespace compute_kernel_lib {
 
 // Nested namespace for tilize-specific types to avoid conflicts
 namespace tilize {
+
+// Sentinel value for invalid/unset circular buffer ID
+constexpr uint32_t INVALID_CB = 32;  // NUM_CIRCULAR_BUFFERS
 
 /**
  * @brief Controls init/uninit behavior for tilize operations
@@ -210,7 +212,7 @@ public:
  * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
  * @tparam wait_mode Controls input synchronization strategy (default: Wait)
  * @tparam speed_mode Explicit tilize speed mode selection (default: Standard)
- * @tparam reconfig_from_cb Previous CB for DT tracking (default: std::nullopt = disabled)
+ * @tparam reconfig_from_cb Previous CB for DT tracking (default: INVALID_CB = disabled)
  *
  * @param num_blocks Number of blocks to process
  * @param config Non-tile-aligned CB wait configuration (default: disabled)
@@ -289,7 +291,7 @@ template <
     tilize::InitUninitMode init_uninit_mode = tilize::InitUninitMode::InitAndUninit,
     tilize::WaitMode wait_mode = tilize::WaitMode::Wait,
     tilize::TilizeSpeedMode speed_mode = tilize::TilizeSpeedMode::Standard,
-    std::optional<uint32_t> reconfig_from_cb = std::nullopt>
+    uint32_t reconfig_from_cb = tilize::INVALID_CB>
 ALWI void tilize(
     uint32_t num_blocks, tilize::NonTileAlignedCBWaitConfig config = tilize::NonTileAlignedCBWaitConfig::disabled());
 

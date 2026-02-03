@@ -20,7 +20,7 @@ template <
     tilize::InitUninitMode init_uninit_mode,
     tilize::WaitMode wait_mode,
     tilize::TilizeSpeedMode speed_mode,
-    std::optional<uint32_t> reconfig_from_cb>
+    uint32_t reconfig_from_cb>
 ALWI void tilize(
     uint32_t num_blocks,
     tilize::NonTileAlignedCBWaitConfig config) {
@@ -35,7 +35,7 @@ ALWI void tilize(
     static_assert(output_cb < 32,
         "Invalid output_cb: must be less than 32");
     static_assert(
-        !reconfig_from_cb.has_value() ||
+        (reconfig_from_cb == tilize::INVALID_CB) ||
         init_uninit_mode != tilize::InitUninitMode::Neither,
         "Data type reconfiguration requires either init or uninit: "
         "cannot use InitUninitMode::Neither with reconfig_from_cb");
@@ -44,7 +44,7 @@ ALWI void tilize(
     constexpr bool use_fast = (speed_mode == tilize::TilizeSpeedMode::Fast);
 
     // Determine if we're doing data type reconfiguration
-    constexpr bool use_dt = reconfig_from_cb.has_value();
+    constexpr bool use_dt = (reconfig_from_cb != tilize::INVALID_CB);
 
     // Compile-time initialization based on InitUninitMode
     if constexpr (
@@ -56,7 +56,7 @@ ALWI void tilize(
             fast_tilize_init_with_dt(input_cb, block_width_tiles, output_cb);
         } else if constexpr (use_dt) {
             // Standard data type reconfiguration mode
-            tilize_init_short_with_dt(reconfig_from_cb.value(), input_cb, block_width_tiles, output_cb);
+            tilize_init_short_with_dt(reconfig_from_cb, input_cb, block_width_tiles, output_cb);
         } else if constexpr (use_fast) {
             // Fast tilize mode (no DT reconfiguration)
             fast_tilize_init(input_cb, block_width_tiles, output_cb);
@@ -158,7 +158,7 @@ ALWI void tilize(
             fast_tilize_uninit(input_cb, output_cb);
         } else if constexpr (use_dt) {
             // Standard data type reconfiguration mode
-            tilize_uninit_with_dt(input_cb, reconfig_from_cb.value(), output_cb);
+            tilize_uninit_with_dt(input_cb, reconfig_from_cb, output_cb);
         } else {
             // Standard tilize mode
             tilize_uninit(input_cb, output_cb);
