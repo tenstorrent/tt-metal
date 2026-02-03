@@ -62,6 +62,8 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     const auto output_mapping_page_size_bytes = output_mapping_tensor.tensor_spec().compute_page_size_bytes();
     const auto output_reduced_page_size_bytes = output_reduced_tensor.tensor_spec().compute_page_size_bytes();
 
+    const auto reduction_size = operation_attributes.reduction_size;
+
     Program program{};
 
     // todo maybe, subdevice
@@ -75,13 +77,19 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     using tt::tt_metal::CircularBufferConfig;
 
+    // split work over metadata pages (batch*seq)
+    const auto num_metadata_pages = metadata_tensor.buffer()->num_pages();
+
+    const auto [core_page_increments, utilized_core_range] =
+        tt::tt_metal::split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
+
     // full mapping buffer
     const auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.dtype());
     const auto mapping_tensor_cb_id = tt::CBIndex::c_0;
     CircularBufferConfig cb_mapping_tensor_config =
         CircularBufferConfig(aligned_mapping_page_size_bytes, {{mapping_tensor_cb_id, mapping_data_format}})
             .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size_bytes);
-    CreateCircularBuffer(program, total_cores, cb_mapping_tensor_config);
+    CreateCircularBuffer(program, utilized_core_range, cb_mapping_tensor_config);
 
     // scratch space to store and share indices of per device experts
     const auto local_experts_cb_id = tt::CBIndex::c_1;
@@ -93,7 +101,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CircularBufferConfig cb_local_experts_config =
         CircularBufferConfig(aligned_local_expert_page_size_bytes, {{local_experts_cb_id, local_experts_dataformat}})
             .set_page_size(local_experts_cb_id, aligned_local_expert_page_size_bytes);
-    CreateCircularBuffer(program, total_cores, cb_local_experts_config);
+    CreateCircularBuffer(program, utilized_core_range, cb_local_experts_config);
 
     // metadata page buffer
     constexpr uint32_t metadata_buffer_factor = 1;
@@ -103,7 +111,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         CircularBufferConfig(
             metadata_buffer_factor * aligned_metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
             .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes);
-    CreateCircularBuffer(program, total_cores, cb_metadata_config);
+    CreateCircularBuffer(program, utilized_core_range, cb_metadata_config);
 
     // topk page buffer
     constexpr uint32_t topk_buffer_factor = 2;
@@ -112,7 +120,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CircularBufferConfig cb_topk_config =
         CircularBufferConfig(topk_buffer_factor * aligned_topk_page_size_bytes, {{topk_cb_id, topk_data_format}})
             .set_page_size(topk_cb_id, aligned_topk_page_size_bytes);
-    CreateCircularBuffer(program, total_cores, cb_topk_config);
+    CreateCircularBuffer(program, utilized_core_range, cb_topk_config);
 
     // output mapping staging buffer
     const auto output_mapping_data_format = datatype_to_dataformat_converter(output_mapping_tensor.dtype());
@@ -120,7 +128,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CircularBufferConfig cb_output_mapping_config =
         CircularBufferConfig(output_mapping_page_size_bytes, {{output_mapping_cb_id, output_mapping_data_format}})
             .set_page_size(output_mapping_cb_id, output_mapping_page_size_bytes);
-    CreateCircularBuffer(program, total_cores, cb_output_mapping_config);
+    CreateCircularBuffer(program, utilized_core_range, cb_output_mapping_config);
 
     // output reduced staging buffer
     const auto output_reduced_data_format = datatype_to_dataformat_converter(output_reduced_tensor.dtype());
@@ -128,7 +136,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CircularBufferConfig cb_output_reduced_config =
         CircularBufferConfig(output_reduced_page_size_bytes, {{output_reduced_cb_id, output_reduced_data_format}})
             .set_page_size(output_reduced_cb_id, output_reduced_page_size_bytes);
-    CreateCircularBuffer(program, total_cores, cb_output_reduced_config);
+    CreateCircularBuffer(program, utilized_core_range, cb_output_reduced_config);
 
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t flat_mesh_idx = (mesh_coordinate[0] * mesh_view.num_cols()) + mesh_coordinate[1];
@@ -157,11 +165,10 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/reader_all_to_all_combine.cpp",
-        total_cores,
+        utilized_core_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     const auto output_datum_size_bytes = tt::datum_size(output_mapping_data_format);
-    const auto reduction_size = operation_attributes.reduction_size;
     std::vector<uint32_t> writer_ct_args = {
         local_experts_cb_id,
         metadata_cb_id,
@@ -182,14 +189,8 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/moe_expert_token_remap/device/kernels/dataflow/"
         "writer_moe_expert_token_remap.cpp",
-        total_cores,
+        utilized_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
-
-    // split work over metadata pages (batch*seq)
-    const auto num_metadata_pages = metadata_tensor.buffer()->num_pages();
-
-    const auto [core_page_increments, all_cores] =
-        tt::tt_metal::split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
 
     const auto mapping_tensor_addr = mapping_tensor.buffer()->address();
     const auto metadata_tensor_addr = metadata_tensor.buffer()->address();
@@ -199,7 +200,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     constexpr auto num_reader_rt_args = 5, num_writer_rt_args = 5;
-    std::vector<CoreCoord> utilized_cores = corerange_to_cores(all_cores, std::nullopt);
+    std::vector<CoreCoord> utilized_cores = corerange_to_cores(utilized_core_range, std::nullopt);
     TT_FATAL(utilized_cores.size() == core_page_increments.size(), "Internal error");
 
     auto cit = utilized_cores.begin();
