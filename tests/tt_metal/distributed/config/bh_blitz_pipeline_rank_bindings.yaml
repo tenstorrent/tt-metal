@@ -1,0 +1,242 @@
+rank_bindings:
+- rank: 0
+  mesh_id: 0
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,5,6,8,14,15,16,26
+- rank: 1
+  mesh_id: 1
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,4,7,11,12,24,29,31
+- rank: 2
+  mesh_id: 2
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,6,13,14,16,23,25,28
+- rank: 3
+  mesh_id: 3
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,9,10,18,19,21,27,30
+- rank: 4
+  mesh_id: 4
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,5,8,15,17,20,22,26
+- rank: 5
+  mesh_id: 5
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,10,11,18,19,22,27,29
+- rank: 6
+  mesh_id: 6
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,7,8,11,12,21,22,27
+- rank: 7
+  mesh_id: 7
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,14,19,22,25,29,30,31
+- rank: 8
+  mesh_id: 8
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,6,8,9,16,17,21,27
+- rank: 9
+  mesh_id: 9
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,4,5,7,10,11,13,20
+- rank: 10
+  mesh_id: 10
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,12,15,18,23,24,26,28
+- rank: 11
+  mesh_id: 11
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,4,15,23,24,26,28,31
+- rank: 12
+  mesh_id: 12
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,6,14,17,18,20,29,30
+- rank: 13
+  mesh_id: 13
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,5,9,10,13,16,19,25
+- rank: 14
+  mesh_id: 14
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,4,9,12,13,20,21,24
+- rank: 15
+  mesh_id: 15
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,7,17,23,25,28,30,31
+- rank: 16
+  mesh_id: 16
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,8,12,17,22,25,26,28
+- rank: 17
+  mesh_id: 17
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,4,5,6,18,21,23,30
+- rank: 18
+  mesh_id: 18
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,5,6,14,17,19,23,29
+- rank: 19
+  mesh_id: 19
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,15,20,21,24,28,30,31
+- rank: 20
+  mesh_id: 20
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,9,10,11,13,18,25,27
+- rank: 21
+  mesh_id: 21
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,4,7,8,12,16,22,26
+- rank: 22
+  mesh_id: 22
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,9,11,13,19,20,27,31
+- rank: 23
+  mesh_id: 23
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,7,10,14,15,16,24,29
+- rank: 24
+  mesh_id: 24
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,4,6,8,11,14,20,30
+- rank: 25
+  mesh_id: 25
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,7,10,19,23,25,28,31
+- rank: 26
+  mesh_id: 26
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,5,11,12,19,23,28,30
+- rank: 27
+  mesh_id: 27
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,9,13,15,21,24,27,29
+- rank: 28
+  mesh_id: 28
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,4,6,8,10,14,17,31
+- rank: 29
+  mesh_id: 29
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,7,16,18,20,22,25,26
+- rank: 30
+  mesh_id: 30
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,15,16,17,18,22,26,27
+- rank: 31
+  mesh_id: 31
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,5,9,12,13,21,24,29
+- rank: 32
+  mesh_id: 32
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,6,16,21,27,29,30,31
+- rank: 33
+  mesh_id: 33
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,8,14,18,19,20,22,23
+- rank: 34
+  mesh_id: 34
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,9,13,19,23,24,29,31
+- rank: 35
+  mesh_id: 35
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,7,11,12,15,21,26,28
+- rank: 36
+  mesh_id: 36
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,4,6,8,17,18,20,30
+- rank: 37
+  mesh_id: 37
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,7,9,10,12,23,30,31
+- rank: 38
+  mesh_id: 38
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,13,15,16,19,24,28,29
+- rank: 39
+  mesh_id: 39
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,5,11,17,18,22,25,27
+- rank: 40
+  mesh_id: 40
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,4,6,8,14,20,21,26
+- rank: 41
+  mesh_id: 41
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,5,10,14,16,22,25,27
+- rank: 42
+  mesh_id: 42
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,5,9,11,17,24,25,28
+- rank: 43
+  mesh_id: 43
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 1,6,11,13,17,21,24,28
+- rank: 44
+  mesh_id: 44
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,8,12,15,16,22,23,27
+- rank: 45
+  mesh_id: 45
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,5,18,19,20,25,30,31
+- rank: 46
+  mesh_id: 46
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 2,4,7,9,10,14,26,29
+- rank: 47
+  mesh_id: 47
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 3,4,7,10,12,13,15,26
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto
