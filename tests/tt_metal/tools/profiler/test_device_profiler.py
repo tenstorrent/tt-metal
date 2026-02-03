@@ -327,7 +327,7 @@ def test_device_api_debugger_non_dropping():
     testCommand = f"build/{PROG_EXMP_DIR}/test_device_api_debugger"
     clear_profiler_runtime_artifacts()
 
-    envVars = "TT_METAL_DEVICE_DEBUG_DUMP_ENABLED=1 "
+    envVars = "TT_METAL_NOC_DEBUG_DUMP=1 "
 
     profilerRun = os.system(f"cd {TT_METAL_HOME} && {envVars} {testCommand}")
     assert profilerRun == 0, f"Test command failed with exit code {profilerRun}"
