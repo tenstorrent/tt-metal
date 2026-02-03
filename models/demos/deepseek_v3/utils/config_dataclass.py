@@ -1,11 +1,18 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Union
 
 import ttnn
+
+optimal_topology = (
+    ttnn.Topology.Ring
+    if ((os.getenv("MESH_DEVICE") == "QUAD") or (os.getenv("USE_TORUS_MODE") is not None))
+    else ttnn.Topology.Linear
+)
 
 # Union type for all possible program configs used with ttnn.linear
 ProgramConfig = Union[
@@ -115,7 +122,7 @@ class AllGatherAsyncConfig(OpConfigBase):
     dim: int | None = None
     cluster_axis: int | None = None
     mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
-    topology: ttnn._ttnn.operations.ccl.Topology | None = ttnn.Topology.Ring
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
     multi_device_global_semaphore: ttnn._ttnn.operations.experimental.ccl_experimental.GlobalSemaphoreArg | None = None
     persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
     num_links: int | None = 4
@@ -133,7 +140,7 @@ class AllToAllAsyncGenericConfig(OpConfigBase):
     out_dim: int | None = None
     cluster_axis: int | None = None
     mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
-    topology: ttnn._ttnn.operations.ccl.Topology | None = ttnn.Topology.Ring
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
     persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
     num_links: int | None = 4
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
@@ -166,7 +173,7 @@ class ReduceScatterAsyncMinimalConfig(OpConfigBase):
     barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     intermediate_memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
+    topology: ttnn.Topology = optimal_topology
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     cluster_axis: int | None = None
     chunks_per_sync: int | None = None
@@ -180,7 +187,7 @@ class PointToPointConfig(OpConfigBase):
 
     receiver_coord: ttnn.MeshCoordinate | None = None
     sender_coord: ttnn.MeshCoordinate | None = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
+    topology: ttnn.Topology = optimal_topology
     output_tensor: ttnn.Tensor | None = None
 
 
@@ -192,7 +199,7 @@ class AllGatherConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig | None = None
     num_workers: int | None = None
     num_buffers_per_channel: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
+    topology: ttnn.Topology = optimal_topology
     num_links: int = 4
 
 
@@ -205,7 +212,7 @@ class ReduceScatterConfig(OpConfigBase):
     mesh_device: ConfigDevice | None = None
     cluster_axis: int | None = None
     memory_config: ttnn.MemoryConfig = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
+    topology: ttnn.Topology = optimal_topology
     num_links: int = 4
 
 
@@ -305,7 +312,7 @@ class AllToAllDispatchConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
+    topology: ttnn.Topology = optimal_topology
     subdevice_id: int | None = None
 
 
@@ -316,7 +323,7 @@ class AllToAllCombineConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
+    topology: ttnn.Topology = optimal_topology
 
 
 @dataclass
