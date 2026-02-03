@@ -19,7 +19,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    UnifiedCompileTimeCoreDescriptor,
+    UnifiedKernelDescriptor,
+)
 
 
 class DeepseekMinimalAllReduce:
@@ -144,11 +147,8 @@ class DeepseekMinimalAllReduce:
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
-        # Kernel paths (unified kernels)
-        sender_kernel_path = "models/demos/deepseek_v3_b1/micro_ops/ccl_all_reduce/kernels/all_reduce_sender_kernel.cpp"
-        receiver_kernel_path = (
-            "models/demos/deepseek_v3_b1/micro_ops/ccl_all_reduce/kernels/all_reduce_receiver_kernel.cpp"
-        )
+        # Unified kernel path
+        kernel_path = "models/demos/deepseek_v3_b1/micro_ops/ccl_all_reduce/kernels/all_reduce_kernel.cpp"
 
         # For each device in the mesh, create appropriate program
         for row in range(mesh_rows):
@@ -385,21 +385,15 @@ class DeepseekMinimalAllReduce:
                     cb_list.append(cb7_desc)
 
                 # === KERNEL DESCRIPTORS using UnifiedKernelDescriptor ===
-                sender_unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source=sender_kernel_path,
-                    core_ranges=sender_core_set,
-                    ncrisc_named_compile_time_args=sender_ncrisc_ct_args,
-                    brisc_named_compile_time_args=sender_brisc_ct_args,
-                    trisc_named_compile_time_args=[],  # No compute on sender core
-                    ncrisc_common_runtime_args=[],
-                    trisc_common_runtime_args=[],
-                )
+                # Single unified kernel with is_sender compile-time arg to differentiate roles
+                # Sender core: NCRISC reads tensor, BRISC writes via fabric, TRISC no-op
+                # Receiver core: NCRISC waits for data, BRISC no-op, TRISC computes reduction
 
-                receiver_unified_kernel = UnifiedKernelDescriptor(
-                    kernel_source=receiver_kernel_path,
-                    core_ranges=receiver_core_set,
-                    ncrisc_named_compile_time_args=receiver_ncrisc_ct_args,
-                    brisc_named_compile_time_args=[],  # No writer on receiver core
+                unified_kernel = UnifiedKernelDescriptor(
+                    kernel_source=kernel_path,
+                    core_ranges=worker_core_set,
+                    ncrisc_named_compile_time_args=sender_ncrisc_ct_args + receiver_ncrisc_ct_args,
+                    brisc_named_compile_time_args=sender_brisc_ct_args,
                     trisc_named_compile_time_args=receiver_trisc_ct_args,
                     ncrisc_common_runtime_args=[],
                     trisc_common_runtime_args=[],
@@ -408,54 +402,65 @@ class DeepseekMinimalAllReduce:
                         fp32_dest_acc_en=True,
                         math_approx_mode=False,
                     ),
+                    unified_compile_time_core_descriptors=[
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_sender",
+                            core_range=sender_core_set,
+                            value=1,
+                            other_value=0,
+                        ),
+                    ],
                 )
 
-                # Get kernel descriptors
-                sender_kernels = sender_unified_kernel.get_kernel_descriptors()
-                receiver_kernels = receiver_unified_kernel.get_kernel_descriptors()
+                # Get kernel descriptors - generates separate kernels for sender and receiver groups
+                kernel_result = unified_kernel.get_kernel_descriptors()
 
-                # Combine kernels: [sender_ncrisc, sender_brisc, sender_trisc, receiver_ncrisc, receiver_brisc, receiver_trisc]
-                all_kernels = sender_kernels + receiver_kernels
+                # Get kernel indices by role using compile-time arg values
+                sender_group = kernel_result.get_group_by_arg("is_sender", 1)
+                receiver_group = kernel_result.get_group_by_arg("is_sender", 0)
 
                 # === PROGRAM DESCRIPTOR ===
                 program = ttnn.ProgramDescriptor(
-                    kernels=all_kernels,
+                    kernels=kernel_result.kernels,
                     semaphores=[],
                     cbs=cb_list,
                 )
 
-                # Set runtime args for kernels
-                # Sender kernels: index 0 (ncrisc), 1 (brisc), 2 (trisc)
-                program.kernels[0].runtime_args = sender_reader_rt_args
-                program.kernels[1].runtime_args = sender_writer_rt_args
+                # Set runtime args for kernels using group indices
+                program.kernels[sender_group.ncrisc_kernel_index].runtime_args = sender_reader_rt_args
+                program.kernels[sender_group.brisc_kernel_index].runtime_args = sender_writer_rt_args
+                program.kernels[receiver_group.ncrisc_kernel_index].runtime_args = receiver_reader_rt_args
 
-                # Receiver kernels: index 3 (ncrisc), 4 (brisc), 5 (trisc)
-                program.kernels[3].runtime_args = receiver_reader_rt_args
-
-                # Add fabric connection for sender writer (kernel index 1)
+                # Add fabric connection for sender writer
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
                 neighbor_coord = ttnn.MeshCoordinate(neighbor_row, neighbor_col)
                 neighbor_fabric_node_id = mesh_device.get_fabric_node_id(neighbor_coord)
 
-                sender_writer_rt_args_ref = program.kernels[1].runtime_args[sender_core.x][sender_core.y]
+                sender_writer_kernel_idx = sender_group.brisc_kernel_index
+                sender_writer_rt_args_ref = program.kernels[sender_writer_kernel_idx].runtime_args[sender_core.x][
+                    sender_core.y
+                ]
                 sender_fabric_args = ttnn.setup_routing_plane_connection(
                     fabric_node_id,
                     [neighbor_fabric_node_id],
                     [sender_link],
                     program,
-                    1,  # kernel_idx for sender_writer
+                    sender_writer_kernel_idx,
                     sender_core,
                 )
                 sender_writer_rt_args_ref.extend(sender_fabric_args)
 
-                # Add fabric connection for receiver reader (kernel index 3)
-                receiver_reader_rt_args_ref = program.kernels[3].runtime_args[receiver_core.x][receiver_core.y]
+                # Add fabric connection for receiver reader
+                receiver_reader_kernel_idx = receiver_group.ncrisc_kernel_index
+                receiver_reader_rt_args_ref = program.kernels[receiver_reader_kernel_idx].runtime_args[receiver_core.x][
+                    receiver_core.y
+                ]
                 receiver_fabric_args = ttnn.setup_routing_plane_connection(
                     fabric_node_id,
                     [neighbor_fabric_node_id],
                     [receiver_link],
                     program,
-                    3,  # kernel_idx for receiver_reader
+                    receiver_reader_kernel_idx,
                     receiver_core,
                 )
                 receiver_reader_rt_args_ref.extend(receiver_fabric_args)

@@ -15,7 +15,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
     // Reader CTArgs
-    using ReaderCTArgs = Broadcast::ReaderCTArgs<
+    using BcastCTArgs = Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("cb0_id"),
         get_named_compile_time_arg_val("packet_size_in_pages"),
         get_named_compile_time_arg_val("tensor0_page_size"),
@@ -26,19 +26,15 @@ void kernel_main() {
         get_named_compile_time_arg_val("is_active_broadcaster")>;
 
     // Runtime args:
-    Broadcast::ReaderArgs reader_args{
+    Broadcast::ReaderArgs bcast_args{
         get_arg_val<uint32_t>(0),  // tensor_address0
         get_arg_val<uint32_t>(1),  // tile_id_start
         get_arg_val<uint32_t>(2),  // tile_id_end
     };
 
-    // Execute reader op on worker cores
-    Broadcast::Op<ReaderCTArgs, true> reader;
-    reader(reader_args);
-
 #elif defined(COMPILE_FOR_BRISC)
     // Writer CTArgs
-    using WriterCTArgs = Broadcast::WriterCTArgs<
+    using BcastCTArgs = Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("cb0_id"),
         get_named_compile_time_arg_val("packet_size_in_pages"),
         get_named_compile_time_arg_val("tensor0_page_size"),
@@ -57,7 +53,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("using_persistent_buffers")>;
 
     // Writer runtime args
-    Broadcast::WriterArgs writer_args{
+    Broadcast::WriterArgs bcast_args{
         get_arg_val<uint32_t>(0),   // tensor_address0
         get_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
         get_arg_val<uint32_t>(2),   // tile_id_start
@@ -75,15 +71,13 @@ void kernel_main() {
         get_arg_val<uint32_t>(14),  // num_connections
     };
 
-    // Execute writer op on worker cores (BRISC)
-    Broadcast::Op<WriterCTArgs, true> writer;
-    writer(writer_args);
-
 #elif defined(COMPILE_FOR_TRISC)
     // TRISC: Compute args unused for broadcast
-    Broadcast::ComputeArgs compute_args{};
-    Broadcast::Op<Broadcast::ReaderArgs, true> noop;  // template param doesn't matter for TRISC path
-    (void)compute_args;                               // suppress unused
-    // No-op for TRISC; Broadcast is dataflow on NCRISC/BRISC
+    Broadcast::ComputeArgs bcast_args{};
+    Broadcast::ComputeCTArgs BcastCTArgs = {};
 #endif
+
+    // Execute ccl broadcast op
+    Broadcast::Op<BcastCTArgs, true> bcast;
+    bcast(bcast_args);
 }

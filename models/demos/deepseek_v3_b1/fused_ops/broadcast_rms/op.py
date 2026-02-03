@@ -348,6 +348,7 @@ class BroadcastRMSNorm:
                 out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_cb, output_tensor)
                 out_cb_descriptor.format_descriptors[0].tile = tile_descriptor
                 out_cb_descriptor.format_descriptors[0].page_size = cb_page_size
+                kernel_defines = [("SKIP_CCL", "1")] if skip_ccl else []
 
                 # Unified kernel descriptor for fused op
                 unified_kernel = UnifiedKernelDescriptor(
@@ -362,11 +363,12 @@ class BroadcastRMSNorm:
                         fp32_dest_acc_en=fp32_dest_acc_en,
                         dst_full_sync_en=fp32_dest_acc_en,
                     ),
+                    defines=kernel_defines,
                 )
 
                 # Program descriptor
                 program = ttnn.ProgramDescriptor(
-                    kernels=unified_kernel.get_kernel_descriptors(),
+                    kernels=unified_kernel.get_kernel_descriptors().kernels,
                     cbs=[
                         in_cb_descriptor,
                         pkt_cb_descriptor,

@@ -8,7 +8,9 @@
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
+#if !defined(SKIP_CCL)
 #include "../../../unified_kernels/broadcast.hpp"
+#endif
 #include "../../../unified_kernels/rmsnorm.hpp"
 
 #if defined(COMPILE_FOR_NRISC)
@@ -23,6 +25,7 @@ void kernel_main() {
 // -----------------------
 #if defined(COMPILE_FOR_NCRISC)
 
+#if !defined(SKIP_CCL)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("cb0_id"),
         get_named_compile_time_arg_val("packet_size_in_pages"),
@@ -35,13 +38,13 @@ void kernel_main() {
 
     // Only read broadcast runtime args if CCL is enabled
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
-    if constexpr (!skip_ccl) {
-        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
-            get_arg_val<uint32_t>(0),  // tensor_address0
-            get_arg_val<uint32_t>(1),  // tile_id_start
-            get_arg_val<uint32_t>(2),  // tile_id_end
-        };
-    }
+
+    bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
+        get_arg_val<uint32_t>(0),  // tensor_address0
+        get_arg_val<uint32_t>(1),  // tile_id_start
+        get_arg_val<uint32_t>(2),  // tile_id_end
+    };
+#endif
 
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
 
@@ -52,7 +55,7 @@ void kernel_main() {
 // BRISC: Broadcast writer
 // -----------------------
 #elif defined(COMPILE_FOR_BRISC)
-
+#if !defined(SKIP_CCL)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
         get_named_compile_time_arg_val("cb0_id"),
         get_named_compile_time_arg_val("packet_size_in_pages"),
@@ -72,7 +75,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("using_persistent_buffers")>;
 
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
-    if constexpr (!skip_ccl) {
+
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
             get_arg_val<uint32_t>(0),   // tensor_address0
             get_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
@@ -90,10 +93,10 @@ void kernel_main() {
             get_arg_val<uint32_t>(13),  // secondary_sync_sem
             get_arg_val<uint32_t>(14),  // num_connections
         };
-    }
+#endif
 
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
-    deepseek_b1_ops::RMSNorm::WriterArgs rms_args{};
+        using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
+        deepseek_b1_ops::RMSNorm::WriterArgs rms_args{};
 
 // -----------------------
 // TRISC: RMSNorm compute
@@ -113,16 +116,18 @@ void kernel_main() {
         get_arg_val<float>(1),     // scalar (1/N)
     };
 
+#if !defined(SKIP_CCL)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
     deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
+#endif
 
 #endif
 
     // CCL Broadcast
-    if constexpr (!skip_ccl) {
-        deepseek_b1_ops::Broadcast::Op<BcastCTArgs, true> bcast;
-        bcast(bcast_args);
-    }
+#if !defined(SKIP_CCL)
+    deepseek_b1_ops::Broadcast::Op<BcastCTArgs, true> bcast;
+    bcast(bcast_args);
+#endif
 
 #if defined(COMPILE_FOR_NCRISC)
     if constexpr (skip_ccl) {
