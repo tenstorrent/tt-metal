@@ -152,7 +152,7 @@ void bind_sdpa(nb::module_& mod) {
                const ttnn::Tensor& input_tensor_k,
                const ttnn::Tensor& input_tensor_v,
                const ttnn::Tensor& page_table_tensor,
-               const nb::object chunk_start_idx_arg,
+               const nb::object& chunk_start_idx_arg,
                std::optional<ttnn::Tensor> chunk_start_idx_tensor_opt,
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
