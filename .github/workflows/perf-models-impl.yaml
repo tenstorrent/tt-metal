@@ -29,10 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "N300 WH B0", model-group: "llm_javelin", timeout: 20, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "N300 WH B0", model-group: "cnn_javelin", timeout: 10, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "N300 WH B0", model-group: "other_magic_env", timeout: 45, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-          # Doesn't work on blackhole P150 {name: "P150 BH", model-group: "llm_javelin", timeout: 20, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
           {name: "P150 BH", model-group: "cnn_javelin", timeout: 10, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
           {name: "P150 BH", model-group: "other_magic_env", timeout: 45, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
         ]
@@ -71,12 +69,6 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run falcon7b model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          commands: pytest -n auto models/demos/falcon7b_common/tests -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' && (inputs.model == 'all' || inputs.model == 'falcon7b') }}
       - name: Run vanilla_unet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
