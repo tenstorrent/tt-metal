@@ -203,7 +203,7 @@ TEST_P(SGDFusedParityTest, UpdateParity) {
     // Skip specific Nesterov test case with watcher enabled
     if (pc.nesterov && pc.name == "Nesterov" && pc.shape[0] == 1 && pc.shape[1] == 2 && pc.shape[2] == 32 &&
         pc.shape[3] == 64) {
-        SKIP_FOR_WATCHER("Test is not passing with watcher enabled");
+        SKIP_FOR_WATCHER();
     }
 
     // Run 2 steps if momentum is enabled, 1 step otherwise
