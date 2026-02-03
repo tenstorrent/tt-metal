@@ -61,21 +61,21 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_receiver_data_addr"),
     };
 
-    // Gate CTArgs (NCRISC: reader on sender core)
-    // skip_input_signal=true because gather already pushed to gate_input_cb
-    using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ReaderCTArgs<
-        get_named_compile_time_arg_val("gate_input_cb"),
-        get_named_compile_time_arg_val("gate_bias_cb"),
-        get_named_compile_time_arg_val("gate_input_indices_cb"),
-        true>;
+    // Gate CTArgs (NCRISC: reader on sender core) - empty, setup done below
+    using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ReaderCTArgs;
 
     // Setup sharded persistent buffers
     if constexpr (Core::is_sender_core) {
         constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
         constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
         unified_kernels::setup_sharded_buffer(mcast_src_cb, mcast_src_num_pages);
-        // Note: gate_bias_cb and gate_input_indices_cb are tensor-backed CBs
-        // The gate reader handles signaling them (skip_input_signal only skips gate_input_cb)
+
+        // Gate tensor-backed CBs (bias and indices)
+        // Note: gate_input_cb is NOT setup here - gather already pushes to it
+        constexpr uint32_t gate_bias_cb = get_named_compile_time_arg_val("gate_bias_cb");
+        constexpr uint32_t gate_input_indices_cb = get_named_compile_time_arg_val("gate_input_indices_cb");
+        unified_kernels::setup_sharded_buffer(gate_bias_cb, 1);
+        unified_kernels::setup_sharded_buffer(gate_input_indices_cb, 1);
     }
     if constexpr (Core::is_matmul_core) {
         constexpr uint32_t matmul_in1 = get_named_compile_time_arg_val("matmul_in1");
