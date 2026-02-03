@@ -414,38 +414,121 @@ if __name__ == "__main__":
 **IMPORTANT: Set environment variables AND activate the virtual environment before running tests**
 
 ---
-⚠️ **MANDATORY: EVERY pytest command MUST use `2>&1 | tee logs/<filename>.log`** ⚠️
+⚠️ **MANDATORY: RUN TESTS IN BACKGROUND AND MONITOR OUTPUT** ⚠️
 
-The user CANNOT see test output unless you save it to a file. If you run pytest without `| tee logs/...`, the user has no way to verify what happened. This is not optional.
+**You MUST run tests in background mode** so you can monitor progress, detect errors early, and react without waiting for timeouts. If you run a blocking command and the test hangs or fails, you will be stuck waiting and unable to help the user.
 
-**WRONG:** `pytest tests/test_stress.py -v`
-**RIGHT:** `pytest tests/test_stress.py -v 2>&1 | tee logs/run_1.log`
+**WRONG (BLOCKING - DO NOT DO THIS):**
+```bash
+pytest tests/test_stress.py -v 2>&1 | tee logs/run_1.log
+```
+This blocks until completion. If the test hangs for 5 minutes, you sit there doing nothing.
+
+**RIGHT (BACKGROUND + MONITOR):**
+```bash
+# Run in background
+pytest tests/test_stress.py -v 2>&1 | tee logs/run_1.log &
+TEST_PID=$!
+
+# Monitor the output file periodically
+sleep 10 && tail -50 logs/run_1.log
+```
+
+Or use the Bash tool's `run_in_background: true` parameter and then use `Read` or `tail` to check the output file.
 
 ---
 
-```bash
-# Set ALL CI environment variables first (especially timeout settings!)
-export TT_METAL_HANG_DETECTION_TIMEOUT="5"  # CRITICAL for device timeouts
-export PYTHONPATH="/tt-metal"
-export LD_LIBRARY_PATH="/tt-metal/build/lib"
-export TT_METAL_HOME="/tt-metal"
-export ARCH_NAME="wormhole_b0"
-export LOGURU_LEVEL="INFO"
-# ... (all other variables from step 7)
+### 9a. Background Execution Workflow (MANDATORY)
 
-# Activate venv
+**Every test run MUST follow this pattern:**
+
+1. **Start test in background:**
+   ```bash
+   # Using Bash tool with run_in_background: true
+   pytest tests/test_stress.py -x -v --timeout=60 2>&1 | tee logs/run_1.log
+   ```
+
+2. **Wait briefly, then check output:**
+   ```bash
+   # After 10-15 seconds, check what's happening
+   tail -50 logs/run_1.log
+   ```
+
+3. **Look for these signals:**
+   - `PASSED` / `FAILED` - Test completed
+   - `TIMEOUT` / `RuntimeError` - Error occurred (may need board reset)
+   - `Error` / `Exception` - Something went wrong
+   - No new output for 30+ seconds - Possible hang
+
+4. **React appropriately:**
+   - **Test passed:** Continue to next test or finish
+   - **Test failed with expected error:** SUCCESS! You reproduced it. Run sequential for clean logs.
+   - **Test failed with unexpected error:** Analyze, fix test, reset board if needed, try again
+   - **Test hanging:** Cancel the process, reset board, try different approach
+
+5. **Reset board after device errors:**
+   ```bash
+   # If you see device errors, reset before trying again
+   tt-smi -r
+   sleep 5
+   ```
+
+### 9b. Detecting and Handling Errors Early
+
+**Check output every 10-15 seconds.** Don't wait for the full timeout.
+
+**Signs you need to cancel and reset:**
+- `Read unexpected run_mailbox value` - Device contention, wrong test setup
+- `TIMEOUT: device timeout` - You may have reproduced it! Or device is stuck.
+- `RuntimeError: TT_THROW` - Device error, may need reset
+- Multiple workers failing simultaneously - Likely device contention issue
+- No output for 30+ seconds after tests started - Possible hang
+
+**When you see errors:**
+1. Cancel the running test (kill the process or stop the background task)
+2. Read the full log to understand what happened
+3. Reset the board: `tt-smi -r`
+4. Analyze what went wrong
+5. Fix the test or try a different approach
+6. Run again
+
+### 9c. Example: Proper Background Test Execution
+
+```bash
+# Step 1: Set environment
+export TT_METAL_OPERATION_TIMEOUT_SECONDS=5
+export ARCH_NAME=wormhole_b0
+export PYTHONPATH=/tt-metal
+export TT_METAL_HOME=/tt-metal
 source /opt/venv/bin/activate
 
-# ALWAYS redirect test output to logs folder so the user can review it!
-# Run your test and save output (use -x to stop on first failure):
-pytest tests/test_*_stress.py -x -v --timeout=60 2>&1 | tee logs/stress_test_run_1.log
+# Step 2: Start test in background (using run_in_background: true in Bash tool)
+cd /path/to/tests
+pytest test_stress.py -x -v --timeout=60 2>&1 | tee ../logs/run_1.log
 
-# Or with pytest parallel workers (recommended for reproduction):
-pytest tests/test_*_stress.py -n auto -x -v --timeout=60 2>&1 | tee logs/stress_test_parallel_run_1.log
+# Step 3: After 10-15 seconds, check progress
+tail -100 ../logs/run_1.log
 
-# After reproducing, run sequential for clean stack traces:
-pytest tests/test_*_stress.py -x -v --timeout=60 2>&1 | tee logs/sequential_clean_run.log
+# Step 4: If you see errors or success, react
+# - If FAILED with expected error: Great! Run sequential for clean trace
+# - If FAILED with unexpected error: Analyze, reset board, fix test
+# - If still running: Wait and check again
+
+# Step 5: If device errors occurred, reset before next attempt
+tt-smi -r
+sleep 5
 ```
+
+---
+
+**Why background execution is mandatory:**
+- Tests can hang or timeout, blocking you for minutes
+- Early error detection lets you fix issues faster
+- You can reset the board and retry without waiting
+- The user sees progress instead of wondering if you're stuck
+- Device errors require board reset before continuing
+
+---
 
 **Why save to logs/?**
 - The user needs to see what happened during the test run
@@ -616,8 +699,63 @@ With `pytest -n auto`:
    pytest tests/test_*_stress.py -x -v --timeout=300 2>&1 | tee logs/sequential_run.log
    ```
 
+### 12. Running Tests in Blocking Mode ❌ (CRITICAL)
+**Wrong:** Running pytest as a blocking command and waiting for completion
+**Right:** Run tests in background, monitor output, detect errors early, react quickly
+
+**Why this matters:**
+- If a test hangs, you're stuck waiting for the timeout (potentially minutes)
+- You can't see errors as they happen
+- You can't reset the board or try a different approach
+- The user sees you "doing nothing" while waiting
+
+**Wrong:**
+```bash
+# Blocking - you wait for the entire test to complete or timeout
+pytest tests/test_stress.py -v --timeout=300 2>&1 | tee logs/run.log
+```
+
+**Right:**
+```bash
+# Background execution with monitoring
+# Use Bash tool with run_in_background: true, then check output with tail/Read
+
+# Start test in background
+pytest tests/test_stress.py -v --timeout=300 2>&1 | tee logs/run.log &
+
+# Check progress every 10-15 seconds
+tail -50 logs/run.log
+
+# If errors detected: cancel, analyze, reset board, try again
+```
+
+**The pattern:**
+1. Start test in background
+2. Wait 10-15 seconds
+3. Check output file for errors/completion
+4. React: continue waiting, cancel and fix, or celebrate success
+5. Reset board after device errors before retrying
+
+### 13. Device Contention with Parallel Workers ❌
+**Wrong:** Using `pytest -n auto` with a fixture that creates a new device per test
+**Right:** Understand that hardware tests with parallel workers need shared device management
+
+With `-n auto`, pytest creates multiple worker processes. If each test tries to open the device:
+- Multiple processes fight for the same physical hardware
+- You get errors like `Read unexpected run_mailbox value`
+- This is NOT the error you're trying to reproduce
+
+**Solutions:**
+1. **Run sequentially first** to verify the test works: `pytest test.py -x -v`
+2. **Use session-scoped fixtures** if parallel execution is needed
+3. **Loop iterations inside a single test** instead of parametrizing with parallel workers
+4. **Match the original CI's approach** - check if CI uses `-n auto` with the same test
+
 ## Important Notes
 
+- **⚠️ ALWAYS RUN TESTS IN BACKGROUND** - Use `run_in_background: true` in Bash tool, then monitor with `tail`/`Read`. Never block waiting for a test to complete.
+- **⚠️ MONITOR OUTPUT EVERY 10-15 SECONDS** - Check logs for errors, don't wait for timeouts
+- **⚠️ RESET BOARD AFTER DEVICE ERRORS** - Run `tt-smi -r` before retrying after device failures
 - **⚠️ EVERY pytest command MUST save output to logs/** - Use `2>&1 | tee logs/run_N.log` - the user CANNOT see your terminal
 - **Set environment variables FIRST** - Extract ALL variables from CI YAML and logs
 - **Match the original test's device setup** - Use the same fixture or initialization method as the failing test
@@ -626,7 +764,7 @@ With `pytest -n auto`:
 - **Isolate and simplify** - Don't reproduce the whole test suite
 - **Be specific** - Target the exact failing operation and error type
 - **Make it tunable** - Use CLI args so parameters can be adjusted
-- **Use parallel execution** - `pytest -n auto` adds resource contention stress
+- **Run sequential first** - Verify test works before adding `-n auto` parallel stress
 - **Run sequential for clean logs** - After reproducing with parallel, run sequential to get clean stack traces
 
 ## Success Criteria
@@ -737,8 +875,11 @@ pytest test_gather_device_timeout.py -x -v --timeout=60 2>&1 | tee logs/sequenti
 
 Before telling the user you're done, verify:
 
+- [ ] **Ran tests in BACKGROUND mode** - Used `run_in_background: true` and monitored output, didn't block waiting
+- [ ] **Monitored output and reacted to errors** - Checked logs every 10-15 seconds, reset board after device errors
 - [ ] **ALL pytest commands used `2>&1 | tee logs/<name>.log`** - The user CANNOT see your terminal. If you didn't save output, go back and re-run with logging.
 - [ ] **Device setup matches original test** - Used same fixture or initialization method
 - [ ] **Used `-x` flag** - Tests stop on first failure
+- [ ] **Ran sequential first before parallel** - Verified test works before adding `-n auto`
 - [ ] **Log files exist in logs/ folder** - Run `ls -la logs/` to verify files were created
 - [ ] **README.md documents how to run** - Including the exact command with `| tee logs/...`
