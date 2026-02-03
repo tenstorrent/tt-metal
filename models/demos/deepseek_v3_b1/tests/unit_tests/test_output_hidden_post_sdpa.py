@@ -5,12 +5,14 @@
 """
 TTNN Output Hidden Post SDPA Fused Op Test
 
-Tests the output_hidden_post_sdpa fused operation which implements:
-- Matmul: [1, 512] x [512, 128] -> [1, 128]
-- Distributed across 64 cores (8x8 grid)
-- Each core computes [1, 512] x [512, 128] -> [1, 128]
-- Gather collects results to core (11, 9) -> [1, 8192]
-- Mcast broadcasts result to 8x12 grid (96 cores)
+Tests the full output_hidden_post_sdpa fused operation which implements:
+- Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (8x8)
+- Gather1: Collect to [1, 8192] on gather core (11, 9)
+- Mcast: Broadcast [1, 8192] to 96 cores (12x8)
+- Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 96 cores
+- Gather2: Collect to [1, 6144] on gather core (11, 9)
+
+Full operation: [1, 512] @ [512, 8192] @ [8192, 6144] -> [1, 6144]
 """
 
 import pytest
@@ -23,81 +25,82 @@ from models.demos.deepseek_v3_b1.fused_ops.output_hidden_post_sdpa.op import Out
 
 
 @pytest.mark.parametrize(
-    "M, K, N, in0_dtype, in1_dtype",
+    "M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype",
     [
-        # Main target shape
-        (1, 512, 8192, ttnn.bfloat16, ttnn.bfloat8_b),
+        # Main target shape: [1,512] @ [512,8192] @ [8192,6144] -> [1,6144]
+        (1, 512, 8192, 8192, 6144, ttnn.bfloat16, ttnn.bfloat8_b),
     ],
 )
-def test_output_hidden_post_sdpa(device, M, K, N, in0_dtype, in1_dtype):
-    """Test output_hidden_post_sdpa fused operation with distributed matmul + gather + mcast"""
+def test_output_hidden_post_sdpa(device, M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype):
+    """Test full output_hidden_post_sdpa fused operation"""
 
     # Tile dimensions
-    a_tile = ttnn.Tile([M, 32])  # 1x32 tiles for input
+    a_tile = ttnn.Tile([M, 32])  # 1x32 tiles for input/activation
     b_tile = ttnn.Tile([32, 32])  # 32x32 tiles for weights
-    out_tile = ttnn.Tile([M, 32])  # 1x32 tiles for output
 
-    # Grid configuration: 8x8 = 64 cores for matmul
-    MATMUL_GRID_X = 8  # columns
-    MATMUL_GRID_Y = 8  # rows
-    num_matmul_cores = MATMUL_GRID_X * MATMUL_GRID_Y  # 64
+    # ========================================================================
+    # Grid configuration
+    # ========================================================================
+    # Matmul1 grid: 8x8 = 64 cores
+    MATMUL1_GRID_X = 8
+    MATMUL1_GRID_Y = 8
+    num_matmul1_cores = MATMUL1_GRID_X * MATMUL1_GRID_Y  # 64
 
-    # Mcast grid: 8x12 = 96 cores
-    MCAST_GRID_X = 12  # columns
-    MCAST_GRID_Y = 8  # rows
-    num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 96
+    # Matmul2/Mcast grid: 12x8 = 96 cores
+    MATMUL2_GRID_X = 12
+    MATMUL2_GRID_Y = 8
+    num_matmul2_cores = MATMUL2_GRID_X * MATMUL2_GRID_Y  # 96
 
-    # Calculate per-core dimensions
-    assert N % num_matmul_cores == 0, f"N ({N}) must be divisible by num_matmul_cores ({num_matmul_cores})"
-    n_per_core = N // num_matmul_cores  # 8192 / 64 = 128
+    # Per-core dimensions
+    n1_per_core = intermediate // num_matmul1_cores  # 8192 / 64 = 128
+    n2_per_core = output_size // num_matmul2_cores  # 6144 / 96 = 64
 
-    # Calculate tiles
-    num_tiles_k = K // a_tile.tile_shape[1]  # 512 / 32 = 16
-    num_tiles_n_per_core = n_per_core // b_tile.tile_shape[1]  # 128 / 32 = 4
+    logger.info(f"Testing full output_hidden_post_sdpa fused op:")
+    logger.info(f"  Matmul1: [{M}, {K1}] x [{K1}, {intermediate}] on {num_matmul1_cores} cores")
+    logger.info(f"  Mcast: [{M}, {intermediate}] to {num_matmul2_cores} cores")
+    logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} cores")
+    logger.info(f"  Output: [{M}, {output_size}]")
 
-    logger.info(f"Testing output_hidden_post_sdpa fused op with shape [{M}, {K}] x [{K}, {N}]")
-    logger.info(f"Matmul grid: {MATMUL_GRID_X}x{MATMUL_GRID_Y} = {num_matmul_cores} cores")
-    logger.info(f"Mcast grid: {MCAST_GRID_X}x{MCAST_GRID_Y} = {num_mcast_cores} cores")
-    logger.info(f"Per-core: K={num_tiles_k} tiles, N={num_tiles_n_per_core} tiles")
-
-    # Create matmul core grid
-    matmul_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(MATMUL_GRID_X - 1, MATMUL_GRID_Y - 1))]
+    # Create core grids
+    matmul1_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(MATMUL1_GRID_X - 1, MATMUL1_GRID_Y - 1))]
     )
-
-    # Gather receiver core: (11, 9)
+    matmul2_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(MATMUL2_GRID_X - 1, MATMUL2_GRID_Y - 1))]
+    )
     gather_core = ttnn.CoreCoord(11, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
-    # Mcast grid: 8x12 = 96 cores (x=0-7, y=0-11)
-    mcast_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(MCAST_GRID_X - 1, MCAST_GRID_Y - 1))]
-    )
-
-    # Create input and weights PyTorch tensors
+    # ========================================================================
+    # Create PyTorch tensors
+    # ========================================================================
     torch.manual_seed(0)
-    # Input: [1, 512] - same input on all cores for simplicity
-    # (In actual usage, there may be 8 unique shards, each replicated to 8 cores)
-    torch_input = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_input = torch_input.repeat(num_matmul_cores, 1)  # Replicate for 64 cores
-    logger.info(f"Input shape: {torch_input.shape}")
 
-    torch_weights = torch.randn((K, N), dtype=torch.bfloat16)
+    # Input: [1, 512] - replicated to 64 matmul1 cores
+    torch_input_single = torch.randn((M, K1), dtype=torch.bfloat16)
+    torch_input = torch_input_single.repeat(num_matmul1_cores, 1)  # [64, 512]
 
-    # Compute reference output using PyTorch
-    # Note: Each core gets the same [1, 512] input, so we compute golden reference
-    # using only the first row (M=1), not the full [64, 512] tensor
-    torch_input_single = torch_input[0:1, :]  # Take first row: [1, 512]
-    torch_expected = OutputHiddenPostSDPA.golden(torch_input_single.float(), torch_weights.float()).bfloat16()
+    # Weights1: [512, 8192]
+    torch_weights1 = torch.randn((K1, intermediate), dtype=torch.bfloat16)
+
+    # Weights2: [8192, 6144]
+    torch_weights2 = torch.randn((K2, output_size), dtype=torch.bfloat16)
 
     # ========================================================================
-    # Create input tensor (height-sharded across matmul cores)
-    # 8 unique shards, each replicated to 8 cores
-    # Each core gets [1, 512] input
+    # Compute golden reference: input @ weights1 @ weights2
     # ========================================================================
-    input_shard_shape = (M, K)  # [1, 512] per core
+    torch_expected = OutputHiddenPostSDPA.golden(
+        torch_input_single.float(), torch_weights1.float(), torch_weights2.float()
+    ).bfloat16()
+    logger.info(f"Golden output shape: {torch_expected.shape}")
+
+    # ========================================================================
+    # Create input tensor (height-sharded across matmul1 cores)
+    # Each core gets [1, 512]
+    # ========================================================================
+    input_shard_shape = (M, K1)  # [1, 512] per core
     input_shard_spec = ttnn.ShardSpec(
-        matmul_grid,
+        matmul1_grid,
         input_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -111,126 +114,129 @@ def test_output_hidden_post_sdpa(device, M, K, N, in0_dtype, in1_dtype):
         memory_config=input_mem_config,
         tile=a_tile,
     )
-
-    logger.info(f"Created input tensor with shard shape {input_shard_shape}")
+    logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores")
 
     # ========================================================================
-    # Create weights tensor (width-sharded across matmul cores)
+    # Create weights1 tensor (width-sharded across matmul1 cores)
     # Each core gets [512, 128]
     # ========================================================================
-    weights_shard_shape = (K, n_per_core)  # [512, 128] per core
-    weights_shard_spec = ttnn.ShardSpec(
-        matmul_grid,
-        weights_shard_shape,
+    weights1_shard_shape = (K1, n1_per_core)  # [512, 128] per core
+    weights1_shard_spec = ttnn.ShardSpec(
+        matmul1_grid,
+        weights1_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    weights_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, weights_shard_spec
+    weights1_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, weights1_shard_spec
     )
 
-    ttnn_weights = ttnn.from_torch(
-        torch_weights,
+    ttnn_weights1 = ttnn.from_torch(
+        torch_weights1,
         dtype=in1_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=weights_mem_config,
+        memory_config=weights1_mem_config,
         tile=b_tile,
     )
-
-    logger.info(f"Created weights tensor with shard shape {weights_shard_shape}")
+    logger.info(f"Created weights1 tensor: shard {weights1_shard_shape} on {num_matmul1_cores} cores")
 
     # ========================================================================
-    # Create gather output tensor (height-sharded on gather core)
-    # This is an intermediate tensor for the gather result
+    # Create weights2 tensor (width-sharded across matmul2 cores)
+    # Each core gets [8192, 64]
     # ========================================================================
-    gather_output_shard_shape = (M, N)  # Full output on gather core: [1, 8192]
-    gather_output_shard_spec = ttnn.ShardSpec(
+    weights2_shard_shape = (K2, n2_per_core)  # [8192, 64] per core
+    weights2_shard_spec = ttnn.ShardSpec(
+        matmul2_grid,
+        weights2_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    weights2_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, weights2_shard_spec
+    )
+
+    ttnn_weights2 = ttnn.from_torch(
+        torch_weights2,
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=weights2_mem_config,
+        tile=b_tile,
+    )
+    logger.info(f"Created weights2 tensor: shard {weights2_shard_shape} on {num_matmul2_cores} cores")
+
+    # ========================================================================
+    # Create gather1 output tensor (intermediate [1, 8192] on gather core)
+    # ========================================================================
+    gather1_output_shard_shape = (M, intermediate)  # [1, 8192]
+    gather1_output_shard_spec = ttnn.ShardSpec(
         gather_core_grid,
-        gather_output_shard_shape,
+        gather1_output_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    gather_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gather_output_shard_spec
+    gather1_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gather1_output_shard_spec
     )
 
-    torch_gather_output_zeros = torch.zeros((M, N), dtype=torch.bfloat16)
-    ttnn_gather_output = ttnn.from_torch(
-        torch_gather_output_zeros,
+    torch_gather1_zeros = torch.zeros((M, intermediate), dtype=torch.bfloat16)
+    ttnn_gather1_output = ttnn.from_torch(
+        torch_gather1_zeros,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=gather_output_mem_config,
-        tile=out_tile,
+        memory_config=gather1_output_mem_config,
+        tile=a_tile,
     )
-
-    logger.info(
-        f"Created gather output tensor with shard shape {gather_output_shard_shape} on core ({gather_core.x}, {gather_core.y})"
-    )
+    logger.info(f"Created gather1 output tensor: {gather1_output_shard_shape} on gather core")
 
     # ========================================================================
-    # Create mcast output tensor (height-sharded on mcast grid)
-    # Each core in mcast grid gets [1, 8192]
-    # Total: 96 cores * [1, 8192] = [96, 8192]
+    # Create final output tensor ([1, 6144] on gather core)
     # ========================================================================
-    mcast_output_shard_shape = (M, N)  # [1, 8192] per core
-    mcast_output_shard_spec = ttnn.ShardSpec(
-        mcast_grid,
-        mcast_output_shard_shape,
+    output_shard_shape = (M, output_size)  # [1, 6144]
+    output_shard_spec = ttnn.ShardSpec(
+        gather_core_grid,
+        output_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    mcast_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, mcast_output_shard_spec
-    )
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
-    # Create tensor with shape [num_mcast_cores, N] to hold all mcast outputs
-    torch_mcast_output_zeros = torch.zeros((num_mcast_cores, N), dtype=torch.bfloat16)
-    ttnn_mcast_output = ttnn.from_torch(
-        torch_mcast_output_zeros,
+    torch_output_zeros = torch.zeros((M, output_size), dtype=torch.bfloat16)
+    ttnn_output = ttnn.from_torch(
+        torch_output_zeros,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=mcast_output_mem_config,
-        tile=out_tile,
+        memory_config=output_mem_config,
+        tile=a_tile,
     )
-
-    logger.info(f"Created mcast output tensor with shard shape {mcast_output_shard_shape} on {num_mcast_cores} cores")
+    logger.info(f"Created output tensor: {output_shard_shape} on gather core")
 
     # ========================================================================
-    # Run output_hidden_post_sdpa fused operation
+    # Run fused operation
     # ========================================================================
-    logger.info("Running output_hidden_post_sdpa fused operation...")
+    logger.info("Running full output_hidden_post_sdpa fused operation...")
     ttnn_result = OutputHiddenPostSDPA.op(
         ttnn_input,
-        ttnn_weights,
-        ttnn_gather_output,
-        ttnn_mcast_output,
+        ttnn_weights1,
+        ttnn_weights2,
+        ttnn_gather1_output,
+        ttnn_output,
         fp32_dest_acc_en=False,
     )
 
     # Convert back to torch for comparison
     output_torch = ttnn.to_torch(ttnn_result)
+    logger.info(f"Output shape: {output_torch.shape}")
 
-    # Verify output shape - should be [num_mcast_cores, N] since mcast broadcasts to all cores
-    expected_shape = (num_mcast_cores, N)
+    # ========================================================================
+    # Verify results
+    # ========================================================================
+    # Output should be [1, 6144] on gather core
+    expected_shape = (M, output_size)
     assert output_torch.shape == expected_shape, f"Expected shape {expected_shape}, got {output_torch.shape}"
 
-    # Verify results - each mcast core should have the same output as torch_expected
-    logger.info("Verifying output_hidden_post_sdpa results...")
+    # Compare with golden reference
+    passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.99)
+    logger.info(f"PCC comparison: {pcc_message}")
 
-    # Compare first core's output with expected
-    first_core_output = output_torch[0:1, :]
-    passing, pcc_message = comp_pcc(torch_expected, first_core_output, 0.99)
-    logger.info(f"First core PCC: {pcc_message}")
-
-    assert passing, f"First core failed: {pcc_message}"
-
-    # Verify all cores received the same data (mcast broadcast)
-    for i in range(1, num_mcast_cores):
-        core_output = output_torch[i : i + 1, :]
-        core_passing, core_pcc = comp_pcc(first_core_output, core_output, 0.9999)
-        if not core_passing:
-            logger.warning(f"Core {i} differs from core 0: {core_pcc}")
-        assert core_passing, f"Core {i} differs from core 0: {core_pcc}"
-
-    logger.info(f"✓ All {num_mcast_cores} mcast cores verified!")
-    logger.info("✓ Output hidden post SDPA fused op test passed!")
+    assert passing, f"PCC check failed: {pcc_message}"
+    logger.info("✓ Output hidden post SDPA full fused op test passed!")

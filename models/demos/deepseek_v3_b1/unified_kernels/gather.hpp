@@ -95,9 +95,7 @@ struct Gather {
             // ================================================================
             if constexpr (IsSenderCore) {
                 // Wait for source CB data to be ready
-                // DPRINT<<"Waiting for source CB data to be ready"<<ENDL();
                 cb_wait_front(args.src_cb, args.src_num_pages);
-                // DPRINT<<TSLICE(args.src_cb, 0, SliceRange::h0_w0_32(), TSLICE_INPUT_CB, TSLICE_RD_PTR)<<ENDL();
                 //  Get source address from CB
                 uint32_t input_data_addr = get_read_ptr(args.src_cb);
 
@@ -126,7 +124,6 @@ struct Gather {
             // ================================================================
             if constexpr (IsReceiverCore) {
                 // Reserve space in destination CB
-                DPRINT << "Reserving space in destination CB" << ENDL();
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
 
                 uint32_t noc0_receiver_semaphore_addr = get_semaphore(args.noc0_receiver_semaphore_id);
@@ -144,11 +141,6 @@ struct Gather {
                 cb_push_back(args.dst_cb, args.dst_num_pages);
                 // Note: TSLICE doesn't work with sharded tensor CBs, print values directly
                 volatile tt_l1_ptr uint16_t* dst_ptr = (volatile tt_l1_ptr uint16_t*)get_read_ptr(args.dst_cb);
-                DPRINT << "After gather: ";
-                for (int i = 0; i < 32; i++) {
-                    DPRINT << BF16(dst_ptr[i]) << " ";
-                }
-                DPRINT << ENDL();
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
