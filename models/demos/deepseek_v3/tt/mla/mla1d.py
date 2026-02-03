@@ -1140,9 +1140,12 @@ class MLA1D(AbstractModule):
 
         # KV RoPE
         # 1,1,32,64 1x2 [32,32]
+
+        # TODO: merge the following two once illia has his pr
         tt_kv_rope = ttnn.transpose(
-            tt_kv_rope, 1, 2, **cfg["kv_rope_reshard"]
+            tt_kv_rope, 1, 2
         )  # [1, bsz, 1, qk_rope_head_dim]        # 1,32,1,64 interleaved | should be: 4x8 [32,64]
+        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
             rope_tensors["cos_matrix"],
@@ -1150,6 +1153,8 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
+        # TODO: remoe the to memory config after illia's pr is merged
+        tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, memory_config=ttnn.L1_MEMORY_CONFIG)
         # 1,32,1,64 4x8 [32,64]
         tt_kv_rope = ttnn.transpose(
             tt_kv_rope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
