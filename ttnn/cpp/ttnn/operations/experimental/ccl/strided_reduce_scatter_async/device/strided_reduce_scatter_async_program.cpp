@@ -414,7 +414,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> mm_cores_y,
     std::optional<uint32_t> mm_block_ht,
     std::optional<uint32_t> mm_block_wt,
-    std::optional<uint32_t> mm_M_block_ht,
     std::optional<uint32_t> mm_N_block_wt,
     std::optional<uint32_t> chunk_width_in_mm_blocks) {
     auto* mesh_device = input_tensor.device();
@@ -531,7 +530,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     uint32_t mm_cores_y_val = mm_cores_y.value_or(1);
     uint32_t mm_block_ht_val = mm_block_ht.value_or(slice_Ht);
     uint32_t mm_block_wt_val = mm_block_wt.value_or(slice_Wt);
-    uint32_t mm_M_block_ht_val = mm_M_block_ht.value_or(slice_Ht);
     uint32_t mm_N_block_wt_val = mm_N_block_wt.value_or(slice_Wt);
     uint32_t chunk_width_in_mm_blocks_val = chunk_width_in_mm_blocks.value_or(2);
     uint32_t chunk_width_in_tiles_val = chunk_width_in_mm_blocks_val * mm_block_wt_val;
@@ -674,7 +672,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_N_blocks_per_slice,
             mm_block_ht_val,
             mm_cores_y_val,
-            mm_M_block_ht_val,
+            mm_N_block_wt_val,
             chunk_width_in_tiles_val,
             chunks_per_mm_N_block_val);
 
@@ -722,7 +720,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             mm_N_blocks_per_slice,
             mm_block_ht_val,
             mm_cores_y_val,
-            mm_M_block_ht_val,
+            mm_N_block_wt_val,
             chunk_width_in_tiles_val,
             chunks_per_mm_N_block_val);
 
@@ -1043,7 +1041,6 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.mm_cores_y,
         operation_attributes.mm_block_ht,
         operation_attributes.mm_block_wt,
-        operation_attributes.mm_M_block_ht,
         operation_attributes.mm_N_block_wt,
         operation_attributes.chunk_width_in_mm_blocks);
 

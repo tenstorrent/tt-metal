@@ -27,7 +27,6 @@ ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
     std::optional<uint32_t> mm_cores_y,
     std::optional<uint32_t> mm_block_ht,
     std::optional<uint32_t> mm_block_wt,
-    std::optional<uint32_t> mm_M_block_ht,
     std::optional<uint32_t> mm_N_block_wt,
     std::optional<uint32_t> chunk_width_in_mm_blocks) {
     int32_t rank = input_tensor.logical_shape().rank();
@@ -81,7 +80,6 @@ ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
         mm_cores_y,
         mm_block_ht,
         mm_block_wt,
-        mm_M_block_ht,
         mm_N_block_wt,
         chunk_width_in_mm_blocks);
 
