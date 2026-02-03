@@ -14,28 +14,26 @@ void kernel_main() {
     // Get Receiver Side Data Cores through RTAs populated by host Socket Queries
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
+
+    uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
+    uint32_t data_addr_hi = sender_socket.d2h.data_addr_hi;
+
     uint32_t outstanding_data_size = data_size;
     set_sender_socket_page_size(sender_socket, page_size);
 
     uint32_t data_addr = local_l1_buffer_addr;
-    // Sends 1 page at a time and does handshake with receiver, can be optimized
-    // to notify receiver after writing larger chunks
+
     while (outstanding_data_size) {
         socket_reserve_pages(sender_socket, 1);
-        // noc_async_read into local CB + barrier
-        // fabric write from local CB to data cores + barrier
-        // Issuing the write requires the wptr from the socket itself
-        // The user can get the wptr directly from the sender_socket, or
-        // we can add wrappers issue the write itself
-        for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
-            sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
-            noc_async_write(
-                data_addr,
-                get_noc_addr(downstream_enc.d2d.downstream_noc_x, downstream_enc.d2d.downstream_noc_y, sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
-                page_size);
-        }
+        noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
+        // write_ptr is a relative offset, add downstream_fifo_addr to get the full low 32-bit address
+        uint64_t pcie_data_addr = ((static_cast<uint64_t>(data_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
+                                  sender_socket.write_ptr;
+        noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            noc_index, data_addr, pcie_xy_enc, pcie_data_addr, page_size, 1);
         data_addr += page_size;
         outstanding_data_size -= page_size;
+        noc_async_write_barrier();
         socket_push_pages(sender_socket, 1);
         socket_notify_receiver(sender_socket);
     }
