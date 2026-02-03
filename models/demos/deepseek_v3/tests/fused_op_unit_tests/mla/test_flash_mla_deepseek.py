@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -13,15 +14,24 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def create_paged_kvpe_cache(device, num_users, max_seq_len, head_dim, num_blocks, block_size):
+def create_paged_kvpe_cache(device, num_users, max_seq_len, head_dim, num_blocks, block_size, mapping):
     """Create a paged KVPE cache for testing."""
     # Cache is organized as [num_users, 1, num_blocks * block_size, head_dim]
-    cache_shape = (num_users, 1, num_blocks * block_size, head_dim)
+    cache_shape = (num_users, 1, max_seq_len, head_dim)
     cache = torch.randn(cache_shape, dtype=torch.bfloat16) * 0.1
+
+    paged_cache = cache.reshape(num_users, 1, -1, block_size, head_dim)
+    paged_cache = paged_cache.transpose(1, 2)
+    paged_cache = paged_cache.reshape(num_blocks, 1, block_size, head_dim)
+    inverse_mapping = torch.argsort(mapping.view(-1))
+    paged_cache = paged_cache[inverse_mapping]
+
+    print(cache)
+    print(paged_cache)
 
     # Convert to ttnn with DRAM memory (matching model configuration)
     tt_cache = ttnn.from_torch(
-        cache,
+        paged_cache,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -36,7 +46,7 @@ def create_page_table(device, num_users, num_blocks):
     # Page table shape: [num_users, max_num_blocks_per_user]
     # For simplicity, use identity mapping
     blocks_per_user = num_blocks // num_users
-    page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(num_users, blocks_per_user)
+    page_table = torch.randperm(num_blocks, dtype=torch.int32).reshape(num_users, blocks_per_user)
 
     # Convert to ttnn
     tt_page_table = ttnn.from_torch(
@@ -90,7 +100,7 @@ def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_
                 "num_users": 4,  # Per device: 32 users / 8 devices = 4
                 "max_seq_len": 2048,
                 "head_dim": 576,  # kv_lora_rank + qk_rope_head_dim
-                "num_blocks": 64,
+                "num_blocks": 256,
                 "block_size": 32,
                 "kv_lora_rank": 512,
             },
@@ -153,17 +163,17 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     # Create Q tensor
     torch_q = torch.randn(q_shape, dtype=torch.bfloat16) * 0.1
 
-    # Create paged KVPE cache
-    tt_kvpe_cache, torch_kvpe_cache = create_paged_kvpe_cache(
-        device, num_users, max_seq_len, head_dim, num_blocks, block_size
-    )
-
     # Create page table
     tt_page_table, torch_page_table = create_page_table(device, num_users, num_blocks)
 
+    # Create paged KVPE cache
+    tt_kvpe_cache, torch_kvpe_cache = create_paged_kvpe_cache(
+        device, num_users, max_seq_len, head_dim, num_blocks, block_size, torch_page_table
+    )
+
     # Create position indices (current position for each user)
     cache_size = num_blocks * block_size
-    position_idxs = torch.randint(1, cache_size - 1, (num_users,), dtype=torch.int32)
+    position_idxs = np.linspace(0, max_seq_len // 2, num_users, dtype=np.int32)
 
     # Convert Q to ttnn with L1 interleaved first
     tt_q = ttnn.from_torch(
@@ -240,7 +250,6 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     logger.info(f"  Output shard shape: {output_shard_shape}")
     logger.info(f"  Num cores: {num_cores}")
     logger.info(f"  Scale: {scale}")
-    print("here", tt_q.shape, tt_kvpe_cache.shape)
 
     # Pass only K cache; V is read from first head_dim_v (kv_lora_rank) dims of K (MLA semantics, matches mla1d.py).
     tt_output = ttnn.transformer.paged_flash_multi_latent_attention_decode(
@@ -316,15 +325,16 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     # Device Q has batch 1 (single user); run reference for user 0 only so shapes and semantics match.
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_torch(tt_output)
-    print("here", torch_q.shape, torch_kvpe_cache.shape)
+
     torch_output = scaled_dot_product_attention_reference(
-        torch_q,
-        torch_kvpe_cache[0:1],  # K: user 0 only, [1, 1, 2048, 576]
-        torch_kvpe_cache[0:1, ..., :kv_lora_rank],  # V: user 0 only, first 512 dims
-        position_idxs[0:1],  # start index for user 0
+        torch_q.permute(1, 2, 0, 3),
+        torch_kvpe_cache,  # K: user 0 only, [1, 1, 2048, 576]
+        torch_kvpe_cache[..., :kv_lora_rank],  # V: user 0 only, first 512 dims
+        position_idxs,
         padded_layer_len,
         scale,
     )
+    torch_output = torch_output.permute(2, 0, 1, 3)
     assert list(tt_output.shape) == output_shape, f"Shape mismatch: {list(tt_output.shape)} != {output_shape}"
     assert_with_pcc(torch_output, tt_output, pcc=0.99)
 
