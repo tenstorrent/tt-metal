@@ -38,9 +38,9 @@ struct Core {
     static constexpr bool is_sender_core = get_named_compile_time_arg_val("is_sender_core") == 1;
     static constexpr bool is_mcast_grid_core = get_named_compile_time_arg_val("is_mcast_grid_core") == 1;
     static constexpr bool is_gate_mm_core = get_named_compile_time_arg_val("is_gate_mm_core") == 1;
-    static constexpr bool is_dram_mm_silu_core = get_named_compile_time_arg_val("is_dram_mm_silu_core") == 1;
+    static constexpr bool is_gate_proj_core = get_named_compile_time_arg_val("is_gate_proj_core") == 1;
     // Cores that need to receive the input mcast (routing matmul OR dram matmul)
-    static constexpr bool is_input_mcast_receiver = is_gate_mm_core || is_dram_mm_silu_core;
+    static constexpr bool is_input_mcast_receiver = is_gate_mm_core || is_gate_proj_core;
 };
 
 void kernel_main() {
@@ -92,14 +92,19 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     deepseek_b1_ops::Mcast::ReceiverArgs index_mcast_args{
         get_named_compile_time_arg_val("index_mcast_receiver_semaphore"),
-        get_named_compile_time_arg_val("dram_mm_silu_cb_index"),
+        get_named_compile_time_arg_val("gate_proj_cb_index"),
         get_named_compile_time_arg_val("index_mcast_num_pages"),
     };
 
     // ------------------------------------------------------------------------
     // DRAM Streaming Matmul (reader - no-op, cb_in0 reuses mcast_dst_cb)
     // ------------------------------------------------------------------------
-    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs;
+    using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs;
+
+    // ------------------------------------------------------------------------
+    // up_proj Matmul (reader - no-op, cb_in0 reuses mcast_dst_cb)
+    // ------------------------------------------------------------------------
+    using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs;
 
     // ------------------------------------------------------------------------
     // Setup sharded persistent buffers
@@ -177,7 +182,7 @@ void kernel_main() {
     // Index Mcast (sender) - reuses same mcast Op, just different args
     // ------------------------------------------------------------------------
     constexpr uint32_t index_mcast_src_cb = get_named_compile_time_arg_val("gate_output_indices_cb");
-    constexpr uint32_t index_mcast_dst_cb = get_named_compile_time_arg_val("dram_mm_silu_cb_index");
+    constexpr uint32_t index_mcast_dst_cb = get_named_compile_time_arg_val("gate_proj_cb_index");
     deepseek_b1_ops::Mcast::SenderArgs index_mcast_args{
         get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
@@ -195,22 +200,42 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // DRAM Streaming Matmul (writer)
     // ------------------------------------------------------------------------
-    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs<
-        get_named_compile_time_arg_val("dram_mm_silu_cb_in1"),
-        get_named_compile_time_arg_val("dram_mm_silu_cb_out"),
-        get_named_compile_time_arg_val("dram_mm_silu_in1_tensor_addr"),
-        get_named_compile_time_arg_val("dram_mm_silu_in1_page_size"),
-        get_named_compile_time_arg_val("dram_mm_silu_in1_num_pages"),
-        get_named_compile_time_arg_val("dram_mm_silu_subblock_k"),
-        get_named_compile_time_arg_val("dram_mm_silu_per_core_n"),
-        get_named_compile_time_arg_val("dram_mm_silu_in1_block_size_bytes"),
-        get_named_compile_time_arg_val("dram_mm_silu_out_num_tiles"),
-        get_named_compile_time_arg_val("dram_mm_silu_num_subblocks_k"),
-        get_named_compile_time_arg_val("dram_mm_silu_bank_id"),
-        get_named_compile_time_arg_val("dram_mm_silu_vc"),
+    using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs<
+        get_named_compile_time_arg_val("gate_proj_cb_in1"),
+        get_named_compile_time_arg_val("gate_proj_cb_out"),
+        get_named_compile_time_arg_val("gate_proj_in1_tensor_addr"),
+        get_named_compile_time_arg_val("gate_proj_in1_page_size"),
+        get_named_compile_time_arg_val("gate_proj_in1_num_pages"),
+        get_named_compile_time_arg_val("gate_proj_subblock_k"),
+        get_named_compile_time_arg_val("gate_proj_per_core_n"),
+        get_named_compile_time_arg_val("gate_proj_in1_block_size_bytes"),
+        get_named_compile_time_arg_val("gate_proj_out_num_tiles"),
+        get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
+        get_named_compile_time_arg_val("gate_proj_bank_id"),
+        get_named_compile_time_arg_val("gate_proj_vc"),
         1,  // enable_indexing = true
-        get_named_compile_time_arg_val("dram_mm_silu_cb_index"),
-        get_named_compile_time_arg_val("dram_mm_silu_index_offset")>;
+        get_named_compile_time_arg_val("gate_proj_cb_index"),
+        get_named_compile_time_arg_val("gate_proj_index_offset")>;
+
+    // ------------------------------------------------------------------------
+    // up_proj Matmul (writer)
+    // ------------------------------------------------------------------------
+    using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs<
+        get_named_compile_time_arg_val("up_proj_cb_in1"),
+        get_named_compile_time_arg_val("up_proj_cb_out"),
+        get_named_compile_time_arg_val("up_proj_in1_tensor_addr"),
+        get_named_compile_time_arg_val("up_proj_in1_page_size"),
+        get_named_compile_time_arg_val("up_proj_in1_num_pages"),
+        get_named_compile_time_arg_val("up_proj_subblock_k"),
+        get_named_compile_time_arg_val("up_proj_per_core_n"),
+        get_named_compile_time_arg_val("up_proj_in1_block_size_bytes"),
+        get_named_compile_time_arg_val("up_proj_out_num_tiles"),
+        get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
+        get_named_compile_time_arg_val("up_proj_bank_id"),
+        get_named_compile_time_arg_val("up_proj_vc"),
+        1,  // enable_indexing = true
+        get_named_compile_time_arg_val("up_proj_cb_index"),
+        get_named_compile_time_arg_val("up_proj_index_offset")>;
 
 #elif defined(COMPILE_FOR_TRISC)
     // ------------------------------------------------------------------------
@@ -258,16 +283,30 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // DRAM Streaming Matmul (compute)
     // ------------------------------------------------------------------------
-    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
-        get_named_compile_time_arg_val("dram_mm_silu_cb_in0"),
-        get_named_compile_time_arg_val("dram_mm_silu_cb_in1"),
-        get_named_compile_time_arg_val("dram_mm_silu_cb_out"),
-        get_named_compile_time_arg_val("dram_mm_silu_subblock_k"),
-        get_named_compile_time_arg_val("dram_mm_silu_per_core_n"),
-        get_named_compile_time_arg_val("dram_mm_silu_subblock_w"),
-        get_named_compile_time_arg_val("dram_mm_silu_num_subblocks_k"),
-        get_named_compile_time_arg_val("dram_mm_silu_tile_r_dim"),
-        get_named_compile_time_arg_val("dram_mm_silu_fuse_silu")>;
+    using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+        get_named_compile_time_arg_val("gate_proj_cb_in0"),
+        get_named_compile_time_arg_val("gate_proj_cb_in1"),
+        get_named_compile_time_arg_val("gate_proj_cb_out"),
+        get_named_compile_time_arg_val("gate_proj_subblock_k"),
+        get_named_compile_time_arg_val("gate_proj_per_core_n"),
+        get_named_compile_time_arg_val("gate_proj_subblock_w"),
+        get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
+        get_named_compile_time_arg_val("gate_proj_tile_r_dim"),
+        get_named_compile_time_arg_val("gate_proj_fuse_silu")>;
+
+    // ------------------------------------------------------------------------
+    // up_proj Matmul (compute)
+    // ------------------------------------------------------------------------
+    using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+        get_named_compile_time_arg_val("up_proj_cb_in0"),
+        get_named_compile_time_arg_val("up_proj_cb_in1"),
+        get_named_compile_time_arg_val("up_proj_cb_out"),
+        get_named_compile_time_arg_val("up_proj_subblock_k"),
+        get_named_compile_time_arg_val("up_proj_per_core_n"),
+        get_named_compile_time_arg_val("up_proj_subblock_w"),
+        get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
+        get_named_compile_time_arg_val("up_proj_tile_r_dim"),
+        get_named_compile_time_arg_val("up_proj_fuse_silu")>;
 #endif
 
     // ============================================================================
@@ -326,12 +365,23 @@ void kernel_main() {
     }
 
     // ========================================================================
-    // 6. DRAM Streaming Matmul + SiLU: Expert computation on DRAM matmul cores
+    // 6. DRAM Streaming Matmul + SiLU (gate_proj): Expert computation on DRAM matmul cores
+    //    PopIn0=false to keep input for up_proj
     // ========================================================================
     {
-        DeviceZoneScopedN("DRAM_STREAMING_MATMUL");
-        deepseek_b1_ops::DRAMStreamingMatmul::Op<DRAMMMCTArgs, Core::is_dram_mm_silu_core> dram_mm;
-        dram_mm();
+        DeviceZoneScopedN("GATE_PROJ");
+        deepseek_b1_ops::DRAMStreamingMatmul::Op<GateProjCTArgs, Core::is_gate_proj_core, false> gate_proj_mm;
+        gate_proj_mm();
+    }
+
+    // ========================================================================
+    // 7. up_proj Matmul: Expert computation on DRAM matmul cores (no SiLU)
+    //    PopIn0=true to release input after use
+    // ========================================================================
+    {
+        DeviceZoneScopedN("UP_PROJ");
+        deepseek_b1_ops::DRAMStreamingMatmul::Op<UpProjCTArgs, Core::is_gate_proj_core, true> up_proj;
+        up_proj();
     }
 
     // Only need one teardown since both mcasts reuse the same semaphores

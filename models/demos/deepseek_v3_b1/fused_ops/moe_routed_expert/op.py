@@ -50,6 +50,107 @@ def get_max_page_size_and_num_pages(device, num_tiles, tile_size):
     return page_size, num_pages
 
 
+def setup_dram_matmul(
+    device,
+    weights_tensor,
+    output_tensor,
+    core_ranges,
+    cb_in1_index,
+    cb_out_index,
+    fp32_dest_acc_en=False,
+    num_subblocks_k=4,
+):
+    """
+    Set up parameters and CB descriptors for a DRAM streaming matmul operation.
+
+    Args:
+        device: TT device
+        weights_tensor: Weight tensor (WIDTH_SHARDED in DRAM)
+        output_tensor: Output tensor (WIDTH_SHARDED in L1)
+        core_ranges: CoreRangeSet for compute cores
+        cb_in1_index: CB index for weights working buffer
+        cb_out_index: CB index for output
+        fp32_dest_acc_en: Whether FP32 dest accumulation is enabled
+        num_subblocks_k: Number of K subblocks (default 4)
+
+    Returns:
+        Dictionary with all computed parameters and CB descriptors
+    """
+    # Get parameters from weights tensor
+    weights_tile = weights_tensor.get_tile()
+    weights_dtype = weights_tensor.dtype
+    weights_tile_size = weights_tile.get_tile_size(weights_dtype)
+    weights_shard_shape = weights_tensor.memory_config().shard_spec.shape
+    K = weights_shard_shape[0]
+    per_core_n = weights_shard_shape[1] // weights_tile.tile_shape[1]
+    Kt = K // weights_tile.tile_shape[0]
+
+    # Calculate subblock_k
+    subblock_k = Kt // num_subblocks_k
+    assert Kt % num_subblocks_k == 0, f"Kt ({Kt}) must be divisible by num_subblocks ({num_subblocks_k})"
+
+    # Calculate page size for NOC transfers
+    in1_page_size, in1_num_pages = get_max_page_size_and_num_pages(device, subblock_k, weights_tile_size)
+    in1_block_size_bytes = subblock_k * weights_tile_size
+
+    # CB in1: weights working buffer
+    num_in1_buffers = 3 * num_subblocks_k
+    assert num_in1_buffers <= 15, f"num_in1_buffers ({num_in1_buffers}) exceeds NOC_MAX_TRANSACTION_ID (15)"
+    in1_CB_tiles = subblock_k * num_in1_buffers
+    in1_CB_size = in1_CB_tiles * weights_tile_size
+
+    weights_tile_desc = ttnn.TileDescriptor(weights_tile)
+    cb_in1_format = ttnn.CBFormatDescriptor(
+        buffer_index=cb_in1_index,
+        data_format=weights_dtype,
+        page_size=weights_tile_size,
+        tile=weights_tile_desc,
+    )
+    cb_in1_descriptor = ttnn.CBDescriptor(
+        total_size=in1_CB_size,
+        core_ranges=core_ranges,
+        format_descriptors=[cb_in1_format],
+    )
+
+    # CB out: output (tensor-backed)
+    cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
+
+    # Calculate subblock_w based on fp32_dest_acc_en and per_core_n
+    if fp32_dest_acc_en:
+        max_subblock_w = 8 if per_core_n <= 8 else 4
+    else:
+        max_subblock_w = 16 if per_core_n <= 16 else 8
+
+    subblock_w = max_subblock_w
+    while subblock_w > 1 and per_core_n % subblock_w != 0:
+        subblock_w -= 1
+
+    # Tile dimensions
+    tile_r_dim = weights_tile.tile_shape[0]
+
+    return {
+        # Dimension parameters
+        "per_core_n": per_core_n,
+        "Kt": Kt,
+        "tile_r_dim": tile_r_dim,
+        # Subblock parameters
+        "num_subblocks_k": num_subblocks_k,
+        "subblock_k": subblock_k,
+        "subblock_w": subblock_w,
+        # NOC transfer parameters
+        "in1_page_size": in1_page_size,
+        "in1_num_pages": in1_num_pages,
+        "in1_block_size_bytes": in1_block_size_bytes,
+        # Output parameters
+        "out_num_tiles": per_core_n,
+        # Buffer address
+        "in1_tensor_addr": weights_tensor.buffer_address(),
+        # CB descriptors
+        "cb_in1_descriptor": cb_in1_descriptor,
+        "cb_out_descriptor": cb_out_descriptor,
+    }
+
+
 class MoeRoutedExpert:
     """
     MoE Routed Expert fused operation implementation using ttnn.generic_op.
@@ -65,7 +166,8 @@ class MoeRoutedExpert:
         input_tensor,
         routing_weights_tensor,
         bias_tensor,
-        expert_weights_dict=None,
+        gate_proj_weights_dict=None,
+        up_proj_weights_dict=None,
         eps=1e-20,
         scaling_factor=2.5,
     ):
@@ -76,15 +178,16 @@ class MoeRoutedExpert:
             input_tensor: Input tensor (torch.Tensor) [1, K]
             routing_weights_tensor: Routing matmul weights (torch.Tensor) [K, N_routing]
             bias_tensor: Gate bias tensor (torch.Tensor) [1, 8, 32] or [16, 16]
-            expert_weights_dict: Dict mapping expert_idx -> weights [1, 1, K, N_expert] (optional)
+            gate_proj_weights_dict: Dict mapping expert_idx -> gate_proj weights [1, 1, K, N_expert] (optional)
+            up_proj_weights_dict: Dict mapping expert_idx -> up_proj weights [1, 1, K, N_expert] (optional)
             eps: Epsilon for numerical stability in gate
             scaling_factor: Scaling factor for gate scores
 
         Returns:
-            If expert_weights_dict is None:
+            If gate_proj_weights_dict is None:
                 Tuple of (top8_scores, top8_indices) tensors
             Else:
-                Tuple of (top8_scores, top8_indices, expert_output) tensors
+                Tuple of (top8_scores, top8_indices, gate_proj_output, up_proj_output) tensors
         """
         import torch
 
@@ -101,18 +204,22 @@ class MoeRoutedExpert:
             gate_input, bias_tensor.float(), eps, scaling_factor, enable_sigmoid=False
         )
 
-        # 3. Expert matmul + SiLU (if expert weights provided)
-        if expert_weights_dict is not None:
+        # 3. Expert matmuls (if expert weights provided)
+        if gate_proj_weights_dict is not None:
             # Get the first selected expert index
             selected_expert_idx = int(top8_indices[0, 0].item())
-            selected_expert_weights = expert_weights_dict[selected_expert_idx]
 
-            # Compute: input @ expert_weights + SiLU
+            # gate_proj: input @ weights + SiLU
+            gate_proj_weights = gate_proj_weights_dict[selected_expert_idx]
             input_for_expert = input_tensor.reshape(1, 1, 1, -1).float()
-            expert_output = input_for_expert @ selected_expert_weights.float()
-            expert_output = torch.nn.functional.silu(expert_output)
+            gate_proj_output = input_for_expert @ gate_proj_weights.float()
+            gate_proj_output = torch.nn.functional.silu(gate_proj_output)
 
-            return top8_scores, top8_indices, expert_output
+            # up_proj: input @ weights (no activation)
+            up_proj_weights = up_proj_weights_dict[selected_expert_idx]
+            up_proj_output = input_for_expert @ up_proj_weights.float()
+
+            return top8_scores, top8_indices, gate_proj_output, up_proj_output
 
         return top8_scores, top8_indices
 
@@ -127,9 +234,11 @@ class MoeRoutedExpert:
         gate_indices_tensor,
         gate_output_scores_tensor,
         gate_output_indices_tensor,
-        dram_mm_silu_index_tensor,
-        dram_mm_silu_weights_tensor,
-        dram_mm_silu_output_tensor,
+        gate_proj_index_tensor,
+        gate_proj_weights_tensor,
+        gate_proj_output_tensor,
+        up_proj_weights_tensor,
+        up_proj_output_tensor,
     ):
         """
         Execute mcast + matmul + sigmoid + gather + gate + index_mcast + dram_matmul + silu fused operation.
@@ -145,12 +254,14 @@ class MoeRoutedExpert:
             gate_indices_tensor: Gate indices tensor [16, 16] on sender core
             gate_output_scores_tensor: Gate output scores tensor [1, 16] on sender core
             gate_output_indices_tensor: Gate output indices tensor [1, 16] on sender core
-            dram_mm_silu_index_tensor: DRAM matmul+SiLU index tensor [1, 16] on mcast grid (receives mcasted indices)
-            dram_mm_silu_weights_tensor: Expert weights [K, N_expert] width-sharded in DRAM (first expert)
-            dram_mm_silu_output_tensor: Expert matmul+SiLU output [1, N_expert] width-sharded on DRAM matmul cores
+            gate_proj_index_tensor: DRAM matmul+SiLU index tensor [1, 16] on mcast grid (receives mcasted indices)
+            gate_proj_weights_tensor: Expert gate_proj weights [K, N_expert] width-sharded in DRAM (first expert)
+            gate_proj_output_tensor: Expert gate_proj matmul+SiLU output [1, N_expert] width-sharded on DRAM matmul cores
+            up_proj_weights_tensor: Expert up_proj weights [K, N_expert] width-sharded in DRAM (first expert)
+            up_proj_output_tensor: Expert up_proj matmul output [1, N_expert] width-sharded on DRAM matmul cores
 
         Returns:
-            Tuple of (gate_output_scores_tensor, gate_output_indices_tensor, dram_mm_silu_output_tensor)
+            Tuple of (gate_output_scores_tensor, gate_output_indices_tensor, gate_proj_output_tensor, up_proj_output_tensor)
         """
         # Hardcoded parameters
         fp32_dest_acc_en = False  # Gate transpose doesn't support fp32
@@ -189,8 +300,8 @@ class MoeRoutedExpert:
         device_grid_size = device.compute_with_storage_grid_size()
 
         # Get DRAM matmul cores from output tensor's shard spec
-        dram_mm_silu_output_memory_config = dram_mm_silu_output_tensor.memory_config()
-        dram_mm_silu_core_ranges = dram_mm_silu_output_memory_config.shard_spec.grid
+        gate_proj_output_memory_config = gate_proj_output_tensor.memory_config()
+        gate_proj_core_ranges = gate_proj_output_memory_config.shard_spec.grid
 
         # Get matmul grid bounds (for gather sender grid)
         gate_mm_grid_ranges = list(gate_mm_weights_core_grid.ranges())
@@ -224,7 +335,7 @@ class MoeRoutedExpert:
 
         # CB indices
         input_cb = 0  # Input tensor (sharded on sender core)
-        gate_mm_input_cb = 1  # Mcast destination CB (receives input on all cores) - also used as dram_mm_silu_cb_in0
+        gate_mm_input_cb = 1  # Mcast destination CB (receives input on all cores) - also used as expert matmul input
         gate_mm_weights_cb = 2  # Matmul weights (sharded on all cores)
         gate_mm_output_cb = 3  # Matmul output (intermediate on compute cores)
         gate_input_cb = 4  # Gate input (gathered output, tensor-backed on sender core)
@@ -232,9 +343,11 @@ class MoeRoutedExpert:
         gate_indices_cb = 6  # Gate indices (tensor-backed on sender core)
         gate_output_cb = 7  # Gate output scores (tensor-backed on sender core)
         gate_output_indices_cb = 8  # Gate output indices (tensor-backed on sender core)
-        dram_mm_silu_cb_in1 = 9  # DRAM matmul weights working buffer
-        dram_mm_silu_cb_index = 10  # DRAM matmul index (receives mcasted indices)
-        dram_mm_silu_cb_out = 11  # DRAM matmul output (tensor-backed on compute cores)
+        gate_proj_cb_in1 = 9  # DRAM matmul weights working buffer
+        gate_proj_cb_index = 10  # DRAM matmul index (receives mcasted indices)
+        gate_proj_cb_out = 11  # DRAM matmul output (tensor-backed on compute cores)
+        up_proj_cb_in1 = 12  # up_proj matmul weights working buffer
+        up_proj_cb_out = 13  # up_proj matmul output (tensor-backed on compute cores)
 
         # CB descriptors
         # CB 0: Input tensor (sharded on sender core)
@@ -268,94 +381,47 @@ class MoeRoutedExpert:
             gate_output_indices_cb, gate_output_indices_tensor
         )
 
-        # ========== DRAM Streaming Matmul CBs ==========
-        # Get DRAM matmul parameters from weights tensor
-        dram_mm_silu_weights_tile = dram_mm_silu_weights_tensor.get_tile()
-        dram_mm_silu_weights_dtype = dram_mm_silu_weights_tensor.dtype
-        dram_mm_silu_weights_tile_size = dram_mm_silu_weights_tile.get_tile_size(dram_mm_silu_weights_dtype)
-        dram_mm_silu_weights_shard_shape = dram_mm_silu_weights_tensor.memory_config().shard_spec.shape
-        dram_mm_silu_K = dram_mm_silu_weights_shard_shape[0]
-        dram_mm_silu_per_core_n = dram_mm_silu_weights_shard_shape[1] // dram_mm_silu_weights_tile.tile_shape[1]
-        dram_mm_silu_Kt = dram_mm_silu_K // dram_mm_silu_weights_tile.tile_shape[0]
-
-        # Use 4 subblocks for DRAM matmul (num_in1_buffers = 3 * 4 = 12 <= 15)
-        dram_mm_silu_num_subblocks_k = 4
-        dram_mm_silu_subblock_k = dram_mm_silu_Kt // dram_mm_silu_num_subblocks_k
-        assert (
-            dram_mm_silu_Kt % dram_mm_silu_num_subblocks_k == 0
-        ), f"dram_mm_silu_Kt ({dram_mm_silu_Kt}) must be divisible by num_subblocks ({dram_mm_silu_num_subblocks_k})"
-
-        # Calculate page size for NOC transfers
-        dram_mm_silu_in1_page_size, dram_mm_silu_in1_num_pages = get_max_page_size_and_num_pages(
-            device, dram_mm_silu_subblock_k, dram_mm_silu_weights_tile_size
+        # ========== DRAM Streaming Matmul Setup ==========
+        gate_proj_params = setup_dram_matmul(
+            device=device,
+            weights_tensor=gate_proj_weights_tensor,
+            output_tensor=gate_proj_output_tensor,
+            core_ranges=gate_proj_core_ranges,
+            cb_in1_index=gate_proj_cb_in1,
+            cb_out_index=gate_proj_cb_out,
+            fp32_dest_acc_en=fp32_dest_acc_en,
         )
-        dram_mm_silu_in1_block_size_bytes = dram_mm_silu_subblock_k * dram_mm_silu_weights_tile_size
+        gate_proj_cb_in1_descriptor = gate_proj_params["cb_in1_descriptor"]
+        gate_proj_cb_out_descriptor = gate_proj_params["cb_out_descriptor"]
 
-        # CB 9: DRAM matmul weights working buffer
-        num_in1_buffers = 3 * dram_mm_silu_num_subblocks_k
-        assert num_in1_buffers <= 15, f"num_in1_buffers ({num_in1_buffers}) exceeds NOC_MAX_TRANSACTION_ID (15)"
-        dram_mm_silu_in1_CB_tiles = dram_mm_silu_subblock_k * num_in1_buffers
-        dram_mm_silu_in1_CB_size = dram_mm_silu_in1_CB_tiles * dram_mm_silu_weights_tile_size
-
-        dram_mm_silu_weights_tile_desc = ttnn.TileDescriptor(dram_mm_silu_weights_tile)
-        dram_mm_silu_cb_in1_format = ttnn.CBFormatDescriptor(
-            buffer_index=dram_mm_silu_cb_in1,
-            data_format=dram_mm_silu_weights_dtype,
-            page_size=dram_mm_silu_weights_tile_size,
-            tile=dram_mm_silu_weights_tile_desc,
+        # ========== up_proj Matmul Setup ==========
+        up_proj_params = setup_dram_matmul(
+            device=device,
+            weights_tensor=up_proj_weights_tensor,
+            output_tensor=up_proj_output_tensor,
+            core_ranges=gate_proj_core_ranges,  # Same cores as gate_proj
+            cb_in1_index=up_proj_cb_in1,
+            cb_out_index=up_proj_cb_out,
+            fp32_dest_acc_en=fp32_dest_acc_en,
         )
-        dram_mm_silu_cb_in1_descriptor = ttnn.CBDescriptor(
-            total_size=dram_mm_silu_in1_CB_size,
-            core_ranges=dram_mm_silu_core_ranges,
-            format_descriptors=[dram_mm_silu_cb_in1_format],
-        )
+        up_proj_cb_in1_descriptor = up_proj_params["cb_in1_descriptor"]
+        up_proj_cb_out_descriptor = up_proj_params["cb_out_descriptor"]
 
         # CB 10: DRAM matmul index (receives mcasted indices from gate)
-        # Tensor-backed for consistent addresses across all cores in mcast grid
-        dram_mm_silu_cb_index_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            dram_mm_silu_cb_index, dram_mm_silu_index_tensor
+        gate_proj_cb_index_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            gate_proj_cb_index, gate_proj_index_tensor
         )
 
         # Get index tile size for compile-time args
-        index_tile = dram_mm_silu_index_tensor.get_tile()
-        index_dtype = dram_mm_silu_index_tensor.dtype
+        index_tile = gate_proj_index_tensor.get_tile()
+        index_dtype = gate_proj_index_tensor.dtype
         index_tile_size = index_tile.get_tile_size(index_dtype)
-
-        # CB 11: DRAM matmul output (tensor-backed on compute cores)
-        dram_mm_silu_cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            dram_mm_silu_cb_out, dram_mm_silu_output_tensor
-        )
-
-        # DRAM matmul output tiles
-        dram_mm_silu_out_num_tiles = dram_mm_silu_per_core_n
-
-        # DRAM matmul tile dimensions
-        dram_mm_silu_tile_r_dim = dram_mm_silu_weights_tile.tile_shape[0]
-
-        # Calculate dram_mm_silu_subblock_w based on fp32_dest_acc_en and per_core_N
-        if fp32_dest_acc_en:
-            if dram_mm_silu_per_core_n <= 8:
-                max_subblock_w = 8
-            else:
-                max_subblock_w = 4
-        else:
-            if dram_mm_silu_per_core_n <= 16:
-                max_subblock_w = 16
-            else:
-                max_subblock_w = 8
-
-        dram_mm_silu_subblock_w = max_subblock_w
-        while dram_mm_silu_subblock_w > 1 and dram_mm_silu_per_core_n % dram_mm_silu_subblock_w != 0:
-            dram_mm_silu_subblock_w -= 1
 
         # Index mcast parameters - reuse same semaphores as input mcast
         index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
         index_mcast_receiver_semaphore_id = mcast_data_receiver_semaphore_id
         index_mcast_num_pages = 1  # Single index tile
         index_mcast_data_size_bytes = index_tile_size
-
-        # DRAM matmul buffer address (first expert tensor)
-        dram_mm_silu_in1_tensor_addr = dram_mm_silu_weights_tensor.buffer_address()
 
         # Mcast page counts
         mcast_src_num_pages = num_tiles_k
@@ -419,7 +485,7 @@ class MoeRoutedExpert:
             ("gate_input_indices_cb", gate_indices_cb),
             # Index mcast receiver args (compute cores)
             ("index_mcast_receiver_semaphore", index_mcast_receiver_semaphore_id),
-            ("dram_mm_silu_cb_index", dram_mm_silu_cb_index),
+            ("gate_proj_cb_index", gate_proj_cb_index),
             ("index_mcast_num_pages", index_mcast_num_pages),
         ]
 
@@ -453,19 +519,32 @@ class MoeRoutedExpert:
             ("index_mcast_receiver_semaphore", index_mcast_receiver_semaphore_id),
             ("index_mcast_data_size_bytes", index_mcast_data_size_bytes),
             ("index_mcast_num_pages", index_mcast_num_pages),
-            ("dram_mm_silu_cb_index", dram_mm_silu_cb_index),
+            ("gate_proj_cb_index", gate_proj_cb_index),
             # DRAM streaming matmul writer args (compute cores)
-            ("dram_mm_silu_cb_in1", dram_mm_silu_cb_in1),
-            ("dram_mm_silu_cb_out", dram_mm_silu_cb_out),
-            ("dram_mm_silu_in1_tensor_addr", dram_mm_silu_in1_tensor_addr),
-            ("dram_mm_silu_in1_page_size", dram_mm_silu_in1_page_size),
-            ("dram_mm_silu_in1_num_pages", dram_mm_silu_in1_num_pages),
-            ("dram_mm_silu_subblock_k", dram_mm_silu_subblock_k),
-            ("dram_mm_silu_per_core_n", dram_mm_silu_per_core_n),
-            ("dram_mm_silu_in1_block_size_bytes", dram_mm_silu_in1_block_size_bytes),
-            ("dram_mm_silu_out_num_tiles", dram_mm_silu_out_num_tiles),
-            ("dram_mm_silu_num_subblocks_k", dram_mm_silu_num_subblocks_k),
-            ("dram_mm_silu_index_offset", 0),  # Always use first index from the mcasted index tensor
+            ("gate_proj_cb_in1", gate_proj_cb_in1),
+            ("gate_proj_cb_out", gate_proj_cb_out),
+            ("gate_proj_in1_tensor_addr", gate_proj_params["in1_tensor_addr"]),
+            ("gate_proj_in1_page_size", gate_proj_params["in1_page_size"]),
+            ("gate_proj_in1_num_pages", gate_proj_params["in1_num_pages"]),
+            ("gate_proj_subblock_k", gate_proj_params["subblock_k"]),
+            ("gate_proj_per_core_n", gate_proj_params["per_core_n"]),
+            ("gate_proj_in1_block_size_bytes", gate_proj_params["in1_block_size_bytes"]),
+            ("gate_proj_out_num_tiles", gate_proj_params["out_num_tiles"]),
+            ("gate_proj_num_subblocks_k", gate_proj_params["num_subblocks_k"]),
+            ("gate_proj_index_offset", 0),  # Always use first index from the mcasted index tensor
+            # up_proj matmul writer args (compute cores)
+            ("up_proj_cb_in1", up_proj_cb_in1),
+            ("up_proj_cb_out", up_proj_cb_out),
+            ("up_proj_in1_tensor_addr", up_proj_params["in1_tensor_addr"]),
+            ("up_proj_in1_page_size", up_proj_params["in1_page_size"]),
+            ("up_proj_in1_num_pages", up_proj_params["in1_num_pages"]),
+            ("up_proj_subblock_k", up_proj_params["subblock_k"]),
+            ("up_proj_per_core_n", up_proj_params["per_core_n"]),
+            ("up_proj_in1_block_size_bytes", up_proj_params["in1_block_size_bytes"]),
+            ("up_proj_out_num_tiles", up_proj_params["out_num_tiles"]),
+            ("up_proj_num_subblocks_k", up_proj_params["num_subblocks_k"]),
+            ("up_proj_cb_index", gate_proj_cb_index),  # Reuses same index CB as gate_proj
+            ("up_proj_index_offset", 0),  # Same expert index as gate_proj
         ]
 
         # Gate parameters (eps and scaling_factor as uint32 bit patterns)
@@ -494,15 +573,25 @@ class MoeRoutedExpert:
             ("gate_scaling_factor", gate_scaling_factor),
             ("gate_enable_sigmoid", gate_enable_sigmoid),
             # DRAM streaming matmul compute args (compute cores)
-            ("dram_mm_silu_cb_in0", gate_mm_input_cb),  # Reuses mcasted input
-            ("dram_mm_silu_cb_in1", dram_mm_silu_cb_in1),
-            ("dram_mm_silu_cb_out", dram_mm_silu_cb_out),
-            ("dram_mm_silu_subblock_k", dram_mm_silu_subblock_k),
-            ("dram_mm_silu_per_core_n", dram_mm_silu_per_core_n),
-            ("dram_mm_silu_subblock_w", dram_mm_silu_subblock_w),
-            ("dram_mm_silu_num_subblocks_k", dram_mm_silu_num_subblocks_k),
-            ("dram_mm_silu_tile_r_dim", dram_mm_silu_tile_r_dim),
-            ("dram_mm_silu_fuse_silu", 1),  # Always use SiLU for expert computation
+            ("gate_proj_cb_in0", gate_mm_input_cb),  # Reuses mcasted input
+            ("gate_proj_cb_in1", gate_proj_cb_in1),
+            ("gate_proj_cb_out", gate_proj_cb_out),
+            ("gate_proj_subblock_k", gate_proj_params["subblock_k"]),
+            ("gate_proj_per_core_n", gate_proj_params["per_core_n"]),
+            ("gate_proj_subblock_w", gate_proj_params["subblock_w"]),
+            ("gate_proj_num_subblocks_k", gate_proj_params["num_subblocks_k"]),
+            ("gate_proj_tile_r_dim", gate_proj_params["tile_r_dim"]),
+            ("gate_proj_fuse_silu", 1),  # Always use SiLU for expert computation
+            # up_proj matmul compute args (compute cores)
+            ("up_proj_cb_in0", gate_mm_input_cb),  # Reuses mcasted input (same as gate_proj)
+            ("up_proj_cb_in1", up_proj_cb_in1),
+            ("up_proj_cb_out", up_proj_cb_out),
+            ("up_proj_subblock_k", up_proj_params["subblock_k"]),
+            ("up_proj_per_core_n", up_proj_params["per_core_n"]),
+            ("up_proj_subblock_w", up_proj_params["subblock_w"]),
+            ("up_proj_num_subblocks_k", up_proj_params["num_subblocks_k"]),
+            ("up_proj_tile_r_dim", up_proj_params["tile_r_dim"]),
+            ("up_proj_fuse_silu", 0),  # No SiLU for up_proj
         ]
 
         # Semaphore descriptors
@@ -540,14 +629,14 @@ class MoeRoutedExpert:
         # Each DRAM matmul core gets a unique bank_id based on its optimal DRAM bank assignment
         # IMPORTANT: Use get_optimal_dram_bank_to_logical_worker_assignment() to get the correct
         # core-to-bank mapping. Do NOT use corerange_to_cores() iteration order as bank_id!
-        dram_mm_silu_optimal_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        gate_proj_optimal_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
         # Build mapping from core to bank_id based on optimal assignment
         core_to_bank_id = {}
-        for bank_id, core in enumerate(dram_mm_silu_optimal_workers):
+        for bank_id, core in enumerate(gate_proj_optimal_workers):
             core_to_bank_id[(core.x, core.y)] = bank_id
         bank_id_core_values = []
         vc_core_values = []
-        for core in dram_mm_silu_optimal_workers:
+        for core in gate_proj_optimal_workers:
             bank_id = core_to_bank_id[(core.x, core.y)]
             vc = bank_id & 0x3
             bank_id_core_values.append((core, bank_id))
@@ -587,20 +676,31 @@ class MoeRoutedExpert:
                     other_value=0,
                 ),
                 UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_dram_mm_silu_core",
-                    core_range=dram_mm_silu_core_ranges,
+                    named_compile_time_arg="is_gate_proj_core",
+                    core_range=gate_proj_core_ranges,
                     value=1,
                     other_value=0,
                 ),
             ],
             per_core_compile_time_descriptors=[
                 PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="dram_mm_silu_bank_id",
+                    named_compile_time_arg="gate_proj_bank_id",
                     core_values=bank_id_core_values,
                     other_value=0,
                 ),
                 PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="dram_mm_silu_vc",
+                    named_compile_time_arg="gate_proj_vc",
+                    core_values=vc_core_values,
+                    other_value=0,
+                ),
+                # up_proj uses same cores as gate_proj, so same bank_id and vc
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="up_proj_bank_id",
+                    core_values=bank_id_core_values,
+                    other_value=0,
+                ),
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="up_proj_vc",
                     core_values=vc_core_values,
                     other_value=0,
                 ),
@@ -620,9 +720,11 @@ class MoeRoutedExpert:
                 gate_indices_cb_descriptor,
                 gate_output_cb_descriptor,
                 gate_output_indices_cb_descriptor,
-                dram_mm_silu_cb_in1_descriptor,
-                dram_mm_silu_cb_index_descriptor,
-                dram_mm_silu_cb_out_descriptor,
+                gate_proj_cb_in1_descriptor,
+                gate_proj_cb_index_descriptor,
+                gate_proj_cb_out_descriptor,
+                up_proj_cb_in1_descriptor,
+                up_proj_cb_out_descriptor,
             ],
             semaphores=[
                 mcast_sender_semaphore_descriptor,
@@ -644,10 +746,12 @@ class MoeRoutedExpert:
             gate_indices_tensor,
             gate_output_scores_tensor,
             gate_output_indices_tensor,
-            dram_mm_silu_index_tensor,
-            dram_mm_silu_weights_tensor,
-            dram_mm_silu_output_tensor,
+            gate_proj_index_tensor,
+            gate_proj_weights_tensor,
+            gate_proj_output_tensor,
+            up_proj_weights_tensor,
+            up_proj_output_tensor,
         ]
         ttnn.generic_op(io_tensors, program_descriptor)
 
-        return gate_output_scores_tensor, gate_output_indices_tensor, dram_mm_silu_output_tensor
+        return gate_output_scores_tensor, gate_output_indices_tensor, gate_proj_output_tensor, up_proj_output_tensor
