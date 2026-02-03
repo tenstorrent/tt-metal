@@ -57,3 +57,8 @@ for i in {1..50}; do
 done
 
 echo "All 50 iterations completed!"
+
+# Calls the analysis script on the output logs
+echo "Calling analysis script on output logs..."
+./tools/scaleout/exabox/analyze_validation_results.sh "$OUTPUT_PATH" | tee "$OUTPUT_PATH/validation_analysis.log"
+echo "Analysis complete! Summary logged to $OUTPUT_PATH/validation_analysis.log"
