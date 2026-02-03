@@ -891,7 +891,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
         total_allocated);
 
     if (blocking_buffers.empty()) {
-        // Could not allocate any buffer - skip test
+        // Could not allocate any buffer - fail test
         mesh_device_->end_mesh_trace(0, trace_id);
         mesh_device_->release_mesh_trace(trace_id);
         ASSERT_TRUE(false) << "Could not allocate any blocking buffers for overlap test";
@@ -915,18 +915,6 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetection) {
         }
     }
     ASSERT_TRUE(overlap_detected) << "Overlap detected - trace buffer conflicted with allocations made during trace";
-#if 0
-    if (overlap_detected) {
-        SUCCEED() << "Successfully detected trace buffer overlap";
-    } else {
-        // No overlap detected - the trace fit in the remaining space
-        // This is still valid, release the trace and log it
-        mesh_device_->release_mesh_trace(trace_id);
-        log_info(
-            tt::LogTest, "No overlap detected with {} bytes allocated - trace fit in remaining space", total_allocated);
-        SUCCEED() << "No overlap detected (trace fit in available space)";
-    }
-#endif
 }
 
 TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithTopDownAllocationsDetectsOverlap) {
@@ -964,7 +952,7 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithTopDownAllocationsDetectsOv
     try {
         top_down_buffer = MeshBuffer::create(global_buffer_config, top_down_config, mesh_device_.get());
     } catch (...) {
-        // If we can't allocate the buffer, skip the test
+        // If we can't allocate the buffer, fail the test
         mesh_device_->end_mesh_trace(0, trace_id);
         mesh_device_->release_mesh_trace(trace_id);
         ASSERT_TRUE(false) << "Could not allocate large top-down buffer for overlap test";
@@ -991,23 +979,10 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceWithTopDownAllocationsDetectsOv
         }
     }
     ASSERT_TRUE(overlap_detected) << "Overlap detected - trace buffer conflicted with top-down allocation";
-
-#if 0
-    if (overlap_detected) {
-        SUCCEED() << "Successfully detected trace buffer overlap with top-down allocation";
-    } else {
-        // No overlap - the trace buffer fit without conflicting
-        mesh_device_->release_mesh_trace(trace_id);
-        log_info(tt::LogTest, "No overlap detected - trace buffer did not conflict with top-down allocation");
-        SUCCEED() << "No overlap detected (trace fit in available space)";
-    }
-#endif
 }
 
-TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocationsBeforeAndDuring) {
-    // Verify that high water mark tracks allocations made both before AND during trace capture
-    // Allocations made before trace starts are not tracked, but allocations during trace are
-    // Even if buffers are deallocated, the high water mark remembers the maximum extent reached
+TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocationsBefore) {
+    // Verify that high water mark tracks allocations made before trace capture that are deallocated during trace.
     MeshCoordinateRange all_devices(mesh_device_->shape());
 
     // Create a workload
@@ -1055,34 +1030,6 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
     // Begin trace capture - this starts tracking at 0
     auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
 
-#if 0
-    // Allocate more buffers DURING trace capture to increase the high water mark
-    std::vector<std::shared_ptr<MeshBuffer>> during_trace_buffers;
-    size_t during_trace_allocated = 0;
-    current_buffer_size = max_buffer_size;
-    while (current_buffer_size >= min_buffer_size && during_trace_allocated < total_allocated) {
-        try {
-            ReplicatedBufferConfig global_buffer_config{.size = current_buffer_size};
-            DeviceLocalBufferConfig device_local_config{
-                .page_size = current_buffer_size,
-                .buffer_type = BufferType::DRAM,
-                .bottom_up = true
-            };
-            auto buffer = MeshBuffer::create(global_buffer_config, device_local_config, mesh_device_.get());
-            during_trace_buffers.push_back(buffer);
-            during_trace_allocated += current_buffer_size;
-        } catch (...) {
-            current_buffer_size /= 2;
-        }
-    }
-
-    log_info(
-        tt::LogTest,
-        "Allocated {} bytes DURING trace capture (pre-existing: {} bytes)",
-        during_trace_allocated,
-        total_allocated);
-#endif
-
     // Record many command iterations to make the trace buffer larger
     for (uint32_t i = 0; i < 1000; i++) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
@@ -1091,9 +1038,6 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
     // Deallocate all buffers (both pre-existing and during-trace) BEFORE ending trace
     // The high water mark should remember the during-trace allocations
     pre_existing_buffers.clear();
-#if 0
-    during_trace_buffers.clear();
-#endif
 
     log_info(tt::LogTest, "Deallocated all buffers before ending trace");
 
@@ -1113,20 +1057,6 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, TraceOverlapDetectionWithAllocations
         }
     }
     ASSERT_TRUE(overlap_detected) << "Overlap detected - trace buffer conflicted with allocations made during trace";
-#if 0
-    if (overlap_detected) {
-        SUCCEED() << "Successfully detected trace buffer overlap with allocations made during trace";
-    } else {
-        // No overlap detected - the trace fit in the remaining space
-        // This is still valid, release the trace and log it
-        mesh_device_->release_mesh_trace(trace_id);
-        log_info(
-            tt::LogTest,
-            "No overlap detected with {} bytes allocated during trace - trace fit in remaining space",
-            during_trace_allocated);
-        SUCCEED() << "No overlap detected (trace fit in available space)";
-    }
-#endif
 }
 
 }  // namespace

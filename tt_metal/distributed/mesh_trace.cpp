@@ -199,7 +199,6 @@ void MeshTrace::populate_mesh_buffer(
     // In dynamic allocation mode, validate that trace buffer doesn't overlap with allocations during trace
     DeviceAddr dram_high_water_mark = std::max(dram_allocation_high_water_mark, dram_deletion_high_water_mark);
     if (trace_region_size == 0 && dram_high_water_mark > 0) {
-        // Get the address of the trace buffer (it's allocated top-down, so we check the start address)
         DeviceAddr trace_buffer_address = trace_buffer->mesh_buffer->address();
         if (trace_buffer_address < dram_high_water_mark) {
             // Determine which high water mark caused the overlap for a more specific error message
