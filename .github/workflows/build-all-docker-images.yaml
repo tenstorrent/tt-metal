@@ -178,13 +178,6 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: network=host
-          buildkitd-config-inline: |
-            [registry."docker.io"]
-              mirrors = ["mirror.gcr.io"]
       - name: Build and push CI Build image
         id: build-ci-build
         uses: docker/build-push-action@v6
@@ -255,84 +248,6 @@ jobs:
           pull: true
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
-      - name: 📊 Show Ubuntu 22.04 image sizes
-        run: |
-          # Function to get image size in human-readable format
-          get_image_size() {
-            local image_tag="$1"
-            # Get total size from manifest (sum of all layer sizes)
-            local size_bytes=$(docker buildx imagetools inspect "$image_tag" --raw | jq '[.layers[].size] | add // 0')
-            if [ "$size_bytes" = "0" ] || [ -z "$size_bytes" ]; then
-              # Try alternative: get from manifest list
-              size_bytes=$(docker manifest inspect "$image_tag" 2>/dev/null | jq '[.layers[]?.size // 0] | add // 0')
-            fi
-            # Convert to human-readable
-            if [ -n "$size_bytes" ] && [ "$size_bytes" != "0" ] && [ "$size_bytes" != "null" ]; then
-              echo "$size_bytes" | awk '{
-                if ($1 >= 1073741824) printf "%.2f GB", $1/1073741824
-                else if ($1 >= 1048576) printf "%.2f MB", $1/1048576
-                else if ($1 >= 1024) printf "%.2f KB", $1/1024
-                else printf "%d B", $1
-              }'
-            else
-              echo "N/A"
-            fi
-          }
-
-          echo "## Ubuntu 22.04 Docker Image Sizes" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Image | Compressed Size | Digest |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-----------------|--------|" >> $GITHUB_STEP_SUMMARY
-
-          CI_BUILD_TAG="${{ needs.check-images.outputs.ubuntu-2204-ci-build-tag }}"
-          CI_TEST_TAG="${{ needs.check-images.outputs.ubuntu-2204-ci-test-tag }}"
-          DEV_TAG="${{ needs.check-images.outputs.ubuntu-2204-dev-tag }}"
-          BASIC_DEV_TAG="${{ needs.check-images.outputs.ubuntu-2204-basic-dev-tag }}"
-          BASIC_TTNN_TAG="${{ needs.check-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}"
-
-          echo "| CI Build | $(get_image_size "$CI_BUILD_TAG") | \`${{ steps.build-ci-build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| CI Test | $(get_image_size "$CI_TEST_TAG") | \`${{ steps.build-ci-test.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Dev | $(get_image_size "$DEV_TAG") | \`${{ steps.build-dev.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Basic Dev | $(get_image_size "$BASIC_DEV_TAG") | \`${{ steps.build-basic-dev.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Basic TTNN Runtime | $(get_image_size "$BASIC_TTNN_TAG") | \`${{ steps.build-basic-ttnn-runtime.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Raw Image Inspection" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>CI Build image details</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect "$CI_BUILD_TAG" >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Failed to inspect" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>CI Test image details</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect "$CI_TEST_TAG" >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Failed to inspect" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>Dev image details</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect "$DEV_TAG" >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Failed to inspect" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>Basic Dev image details</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect "$BASIC_DEV_TAG" >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Failed to inspect" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>Basic TTNN Runtime image details</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect "$BASIC_TTNN_TAG" >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Failed to inspect" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
 
   # Build Ubuntu 24.04 images
   build-ubuntu-2404:
@@ -352,13 +267,6 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: network=host
-          buildkitd-config-inline: |
-            [registry."docker.io"]
-              mirrors = ["mirror.gcr.io"]
       - name: Build and push CI Build image
         id: build-ci-build
         uses: docker/build-push-action@v6
@@ -429,84 +337,6 @@ jobs:
           pull: true
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
-      - name: 📊 Show Ubuntu 24.04 image sizes
-        run: |
-          # Function to get image size in human-readable format
-          get_image_size() {
-            local image_tag="$1"
-            # Get total size from manifest (sum of all layer sizes)
-            local size_bytes=$(docker buildx imagetools inspect "$image_tag" --raw | jq '[.layers[].size] | add // 0')
-            if [ "$size_bytes" = "0" ] || [ -z "$size_bytes" ]; then
-              # Try alternative: get from manifest list
-              size_bytes=$(docker manifest inspect "$image_tag" 2>/dev/null | jq '[.layers[]?.size // 0] | add // 0')
-            fi
-            # Convert to human-readable
-            if [ -n "$size_bytes" ] && [ "$size_bytes" != "0" ] && [ "$size_bytes" != "null" ]; then
-              echo "$size_bytes" | awk '{
-                if ($1 >= 1073741824) printf "%.2f GB", $1/1073741824
-                else if ($1 >= 1048576) printf "%.2f MB", $1/1048576
-                else if ($1 >= 1024) printf "%.2f KB", $1/1024
-                else printf "%d B", $1
-              }'
-            else
-              echo "N/A"
-            fi
-          }
-
-          echo "## Ubuntu 24.04 Docker Image Sizes" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Image | Compressed Size | Digest |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-----------------|--------|" >> $GITHUB_STEP_SUMMARY
-
-          CI_BUILD_TAG="${{ needs.check-images.outputs.ubuntu-2404-ci-build-tag }}"
-          CI_TEST_TAG="${{ needs.check-images.outputs.ubuntu-2404-ci-test-tag }}"
-          DEV_TAG="${{ needs.check-images.outputs.ubuntu-2404-dev-tag }}"
-          BASIC_DEV_TAG="${{ needs.check-images.outputs.ubuntu-2404-basic-dev-tag }}"
-          BASIC_TTNN_TAG="${{ needs.check-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}"
-
-          echo "| CI Build | $(get_image_size "$CI_BUILD_TAG") | \`${{ steps.build-ci-build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| CI Test | $(get_image_size "$CI_TEST_TAG") | \`${{ steps.build-ci-test.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Dev | $(get_image_size "$DEV_TAG") | \`${{ steps.build-dev.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Basic Dev | $(get_image_size "$BASIC_DEV_TAG") | \`${{ steps.build-basic-dev.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Basic TTNN Runtime | $(get_image_size "$BASIC_TTNN_TAG") | \`${{ steps.build-basic-ttnn-runtime.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Raw Image Inspection" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>CI Build image details</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect "$CI_BUILD_TAG" >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Failed to inspect" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>CI Test image details</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect "$CI_TEST_TAG" >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Failed to inspect" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>Dev image details</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect "$DEV_TAG" >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Failed to inspect" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>Basic Dev image details</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect "$BASIC_DEV_TAG" >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Failed to inspect" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>Basic TTNN Runtime image details</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect "$BASIC_TTNN_TAG" >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Failed to inspect" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
 
   # Build ManyLinux image
   build-manylinux:
@@ -526,13 +356,6 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: network=host
-          buildkitd-config-inline: |
-            [registry."docker.io"]
-              mirrors = ["mirror.gcr.io"]
       - name: Build and push ManyLinux image
         id: build-manylinux
         uses: docker/build-push-action@v6
@@ -545,44 +368,6 @@ jobs:
           pull: true
           outputs: |
             type=image,compression=zstd,compression-level=9,force-compression=true,oci-mediatypes=true
-      - name: 📊 Show ManyLinux image size
-        run: |
-          # Function to get image size in human-readable format
-          get_image_size() {
-            local image_tag="$1"
-            # Get total size from manifest (sum of all layer sizes)
-            local size_bytes=$(docker buildx imagetools inspect "$image_tag" --raw | jq '[.layers[].size] | add // 0')
-            if [ "$size_bytes" = "0" ] || [ -z "$size_bytes" ]; then
-              # Try alternative: get from manifest list
-              size_bytes=$(docker manifest inspect "$image_tag" 2>/dev/null | jq '[.layers[]?.size // 0] | add // 0')
-            fi
-            # Convert to human-readable
-            if [ -n "$size_bytes" ] && [ "$size_bytes" != "0" ] && [ "$size_bytes" != "null" ]; then
-              echo "$size_bytes" | awk '{
-                if ($1 >= 1073741824) printf "%.2f GB", $1/1073741824
-                else if ($1 >= 1048576) printf "%.2f MB", $1/1048576
-                else if ($1 >= 1024) printf "%.2f KB", $1/1024
-                else printf "%d B", $1
-              }'
-            else
-              echo "N/A"
-            fi
-          }
-
-          MANYLINUX_TAG="${{ needs.check-images.outputs.manylinux-tag }}"
-
-          echo "## ManyLinux Docker Image Size" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Image | Compressed Size | Digest |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-----------------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ManyLinux | $(get_image_size "$MANYLINUX_TAG") | \`${{ steps.build-manylinux.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Raw Image Inspection" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect "$MANYLINUX_TAG" >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Failed to inspect" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
   # Update latest tags on main
   tag-latest:
     name: "🔄 Update latest tags"
