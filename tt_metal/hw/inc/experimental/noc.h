@@ -119,8 +119,6 @@ public:
                 // Busy-wait until sufficient transactions are available for the configured transaction ID.
             }
         }
-        DPRINT << "async_read: src_ptr: " << get_src_ptr<AddressType::NOC>(src, src_args)
-               << " dst_ptr: " << get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args) << ENDL();
         noc_async_read<max_page_size, enable_noc_tracing>(
             get_src_ptr<AddressType::NOC>(src, src_args),
             get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
@@ -276,8 +274,6 @@ public:
                 trid);
             WAYPOINT("NWPD");
         } else {
-            DPRINT << "async_write: src_ptr: " << get_src_ptr<AddressType::LOCAL_L1>(src, src_args)
-                   << " dst_ptr: " << get_dst_ptr<AddressType::NOC>(dst, dst_args) << ENDL();
             noc_async_write<max_page_size, enable_noc_tracing, posted>(
                 get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
                 get_dst_ptr<AddressType::NOC>(dst, dst_args),
