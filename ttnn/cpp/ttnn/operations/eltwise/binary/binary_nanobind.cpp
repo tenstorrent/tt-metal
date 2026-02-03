@@ -151,7 +151,7 @@ void bind_binary_operation(
                * - {5}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {6}
         )doc",
@@ -285,7 +285,7 @@ void bind_binary_gcd_lcm_operation(
                * - {4}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -374,7 +374,7 @@ void bind_binary_unary_max_operation(
                * - {3}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {4}
         )doc",
@@ -502,7 +502,7 @@ void bind_binary_unary_operation(
                * - {5}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {6}
         )doc",
@@ -629,7 +629,7 @@ void bind_binary_with_float_param(
                * - {4}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -703,7 +703,7 @@ void bind_bitwise_binary_ops_operation(
                * - {5}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {6}
         )doc",
@@ -825,7 +825,7 @@ void bind_logical_binary_ops_operation(
                * - {5}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {6}
         )doc",
@@ -908,7 +908,7 @@ void bind_binary_composite(
                * - {4}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -974,7 +974,7 @@ void bind_binary_composite_with_rtol_atol(
                * - BFLOAT16
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
         )doc",
 
         operation.base_name(),
@@ -1045,7 +1045,7 @@ void bind_binary_composite_overload(
                * - {3}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {4}
         )doc",
@@ -1120,7 +1120,7 @@ void bind_prelu(
                * - {3}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {4}
         )doc",
@@ -1212,7 +1212,7 @@ void bind_div(
                * - BFLOAT16
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
         )doc",
 
@@ -1355,7 +1355,7 @@ void bind_binary_operation_with_fast_approx(
                * - {4}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1489,7 +1489,7 @@ void bind_polyval(
                * - {4}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1557,7 +1557,7 @@ void bind_binary_overload_operation(
                * - {4}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1643,7 +1643,7 @@ void bind_inplace_operation(
                 * - {4}
                   - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1757,7 +1757,7 @@ void bind_inplace_operation_with_fast_approx(
                * - {4}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1873,7 +1873,7 @@ void bind_logical_inplace_operation(
                * - {4}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -1957,7 +1957,7 @@ void bind_binary_inplace_operation(
                * - {4}
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {5}
         )doc",
@@ -2067,7 +2067,7 @@ void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const
                * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE, ROW_MAJOR
 
-            ROW_MAJOR layout is only supported for the 2nd input tensor.
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
 
             {2}
         )doc",
