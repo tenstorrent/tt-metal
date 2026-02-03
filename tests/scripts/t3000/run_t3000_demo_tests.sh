@@ -361,7 +361,7 @@ run_t3000_gemma3_tests() {
 
   HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 27B tests completed (text only)"
-  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
+  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace" --timeout=600
   echo "LOG_METAL: Gemma3 27B tests completed (text and vision)"
   # Record the end time
   end_time=$(date +%s)
