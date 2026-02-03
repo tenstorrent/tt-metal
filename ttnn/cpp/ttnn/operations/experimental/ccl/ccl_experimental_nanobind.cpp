@@ -26,6 +26,7 @@
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/strided_reduce_scatter_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/deepseek_minimal_broadcast_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/deepseek_minimal_all_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.hpp"
@@ -47,6 +48,7 @@ void py_module(nb::module_& mod) {
     ccl::bind_matmul_reduce_scatter_async(mod);
     ccl::bind_rs_matmul(mod);
     ccl::bind_reduce_scatter_minimal_async(mod);
+    ccl::bind_strided_reduce_scatter_async(mod);
     ccl::bind_all_reduce_async(mod);
     ccl::bind_llama_reduce_scatter(mod);
     ccl::bind_llama_rs_create_heads(mod);
