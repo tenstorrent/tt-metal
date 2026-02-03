@@ -7,10 +7,9 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr auto cb_exps = tt::CBIndex::c_24;
@@ -126,4 +125,3 @@ void MAIN {
         cb_pop_front(cb_max, onetile);
     }
 }
-}  // namespace NAMESPACE

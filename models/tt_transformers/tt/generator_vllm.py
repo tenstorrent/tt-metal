@@ -605,7 +605,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         tt_data_parallel=1,
         optimizations: str = "performance",
     ):
-        from models.demos.gemma3.demo.vision_demo import create_multimodal_model
+        from models.demos.multimodal.gemma3.demo.vision_demo import create_multimodal_model
 
         optimizations = (
             DecodersPrecision.from_string(optimizations) if optimizations is not None else DecodersPrecision.performance
@@ -676,8 +676,6 @@ class GptOssForCausalLM(Generator):
         assert optimizations is None, "Custom optimizations are not supported for this model"
         from models.demos.gpt_oss.tt.common import create_tt_model
 
-        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
-
         model_args = []
         model = []
         state_dict = None
@@ -686,7 +684,10 @@ class GptOssForCausalLM(Generator):
         # This must be selected at model init time to ensure correct sharding
         # and input preparation.
         users_row_sharded = bool(mesh_device.shape[0] > 1 and max_batch_size > 32)
-
+        if users_row_sharded:
+            # For users_row_sharded, we internally manage DP=4 in attention so we don't need to create submeshes
+            tt_data_parallel = 1
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
         for submesh in submesh_devices:
             # Use the existing create_tt_model function
             model_args_i, model_i, _, state_dict = create_tt_model(

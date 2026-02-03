@@ -78,6 +78,9 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
                                      T,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 return MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory{};
+            } else if constexpr (
+                std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+                return MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory{};
             } else {
                 TT_THROW("Unknown program config type");
             }
@@ -603,6 +606,53 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     input_tensor_b.memory_config().memory_layout());
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
+                                     operations::matmul::
+                                         MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+                // Batch-sharded DRAM matmul validations
+                // For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
+                // Sharded by batch dimension - each worker handles B/num_workers complete matmuls
+                // Input A: HEIGHT_SHARDED in L1 (batch-sharded, each core has B/12 complete [M, N] matrices)
+                // Input B: HEIGHT_SHARDED in DRAM (batch-sharded, each bank has B/12 complete [N, K] matrices)
+                // Output: HEIGHT_SHARDED in L1 (batch-sharded, each core outputs B/12 complete [M, K] matrices)
+                TT_FATAL(input_tensor_a.is_sharded(), "Input tensor A must be sharded for batch-sharded DRAM matmul");
+                TT_FATAL(
+                    attributes.output_mem_config.is_sharded(),
+                    "Output memory config must be sharded for batch-sharded DRAM matmul");
+                TT_FATAL(
+                    input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                    "Input A memory layout must be HEIGHT_SHARDED for batch-sharded DRAM matmul, got: {}",
+                    input_tensor_a.memory_config().memory_layout());
+                TT_FATAL(
+                    input_tensor_a.memory_config().buffer_type() == attributes.output_mem_config.buffer_type(),
+                    "Input A and output buffer types must match, got input: {} vs output: {}",
+                    input_tensor_a.memory_config().buffer_type(),
+                    attributes.output_mem_config.buffer_type());
+                TT_FATAL(
+                    input_tensor_a.memory_config().memory_layout() == attributes.output_mem_config.memory_layout(),
+                    "Input A and output memory layouts must match, got input: {} vs output: {}",
+                    input_tensor_a.memory_config().memory_layout(),
+                    attributes.output_mem_config.memory_layout());
+                TT_FATAL(
+                    input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+                    "Input A shard orientation must be ROW_MAJOR, got: {}",
+                    input_tensor_a.shard_spec().value().orientation);
+
+                // For batch sharding, the contracted dimension (N in A, N in B) must be divisible by in0_block_w
+                const auto N_dim =
+                    operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);  // K dim of A = N
+                TT_FATAL(
+                    N_dim % program_config.in0_block_w == 0,
+                    "N dimension ({}) must be divisible by in0_block_w ({})",
+                    N_dim,
+                    program_config.in0_block_w);
+
+                // tensor in1: HEIGHT_SHARDED in DRAM (batch-sharded)
+                TT_FATAL(
+                    input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                    "Input B memory layout must be HEIGHT_SHARDED for batch-sharded DRAM matmul, got: {}",
+                    input_tensor_b.memory_config().memory_layout());
+            } else if constexpr (std::is_same_v<
+                                     ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 check_tensor_in_grid(input_tensor_a, program_config.compute_with_storage_grid_size);
                 check_tensor_in_grid(input_tensor_b, program_config.compute_with_storage_grid_size);
@@ -1053,6 +1103,27 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         ShardOrientation::ROW_MAJOR};
                     auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    return {TensorSpec(
+                        output_shape,
+                        TensorLayout(
+                            attributes.output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
+                } else if constexpr (std::is_same_v<
+                                         ProgramConfigType,
+                                         operations::matmul::
+                                             MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+                    // For batched DRAM sharded matmul, use the user-provided output shard spec
+                    TT_FATAL(
+                        attributes.output_mem_config.shard_spec().has_value(),
+                        "Output memory config must have a shard spec for batched DRAM sharded matmul");
+
+                    uint32_t per_core_N = program_config.per_core_N;
+
+                    TT_FATAL(
+                        per_core_N % tile_width_ratio == 0,
+                        "per_core_N must be divisible by override output tile width");
+
+                    // Use the user-provided shard spec directly
+                    auto mem_config = attributes.output_mem_config;
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(

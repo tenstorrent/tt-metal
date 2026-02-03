@@ -33,6 +33,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 
 enum class AddressableCoreType : uint8_t;
 
@@ -154,6 +155,7 @@ private:
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
     bool supports_cbs_ = false;
+    bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
     dev_msgs::Factory dev_msgs_factory_;
     tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory_;
@@ -169,6 +171,7 @@ public:
         std::vector<uint32_t> eth_fw_mailbox_msgs,
         std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names,
         bool supports_cbs,
+        bool supports_dfbs,
         bool supports_receiving_multicast_cmds,
         dev_msgs::Factory dev_msgs_factory,
         tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory) :
@@ -181,6 +184,7 @@ public:
         mem_map_sizes_(std::move(mem_map_sizes)),
         eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
         supports_cbs_(supports_cbs),
+        supports_dfbs_(supports_dfbs),
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
         dev_msgs_factory_(dev_msgs_factory),
         fabric_telemetry_factory_(fabric_telemetry_factory) {}
@@ -390,6 +394,11 @@ public:
     float get_nan() const { return nan_; }
     float get_inf() const { return inf_; }
 
+    // NUM_CIRCULAR_BUFFERS is a temporary constant pending DFB migration
+    uint32_t get_arch_num_circular_buffers() const {
+        return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS;
+    }
+
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const
         -> decltype(noc_size - 1 - coord) {
@@ -455,6 +464,8 @@ public:
     uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
 
     bool get_supports_cbs(uint32_t programmable_core_type_index) const;
+
+    bool get_supports_dfbs(uint32_t programmable_core_type_index) const;
 
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
@@ -642,6 +653,10 @@ inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) cons
 
 inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_cbs_;
+}
+
+inline bool Hal::get_supports_dfbs(uint32_t programmable_core_type_index) const {
+    return this->core_info_[programmable_core_type_index].supports_dfbs_;
 }
 
 inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const {

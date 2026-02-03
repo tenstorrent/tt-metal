@@ -1650,6 +1650,8 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
     routing_l1_info_t routing_info = {};
+    routing_info.state_manager.command = RouterCommand::RUN;
+    routing_info.state_manager.state = RouterState::INITIALIZING;
     routing_info.my_mesh_id = *mesh_id;
     routing_info.my_device_id = chip_id;
 
@@ -2091,7 +2093,7 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
     auto fabric_router_channels_on_chip =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_chip_id);
+        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(*this, physical_chip_id);
 
     // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
     if (fabric_router_channels_on_chip.contains(chan_id)) {
