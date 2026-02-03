@@ -172,10 +172,10 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
 )
 @pytest.mark.parametrize(
     "model_type",
-    ["t2v"],  # , "i2v"],
+    ["t2v", "i2v"],
     ids=[
         "t2v",
-        # "i2v",
+        "i2v",
     ],
 )
 def test_pipeline_performance(
