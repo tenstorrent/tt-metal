@@ -281,6 +281,8 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
     uint32_t output_page_size, num_input_units;
     uint32_t input_cb_index = tt::CBIndex::c_0;
+    uint32_t scratch_cb_index = tt::CBIndex::c_1;
+    uint32_t num_trids = 4;
     uint32_t out_cb_index = input_cb_index;
     output_page_size = 512;
     num_input_units = 128;
@@ -290,6 +292,12 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
+
+    uint32_t scratch_page_size = output_page_size;
+    tt::tt_metal::CircularBufferConfig scratch_cb_config =
+        tt::tt_metal::CircularBufferConfig(num_trids * output_page_size, {{scratch_cb_index, output_cb_data_format}})
+            .set_page_size(scratch_cb_index, scratch_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, scratch_cb_config);
 
     workload.add_program(device_range, std::move(program));
 
@@ -336,6 +344,8 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
     uint32_t output_page_size, num_input_units;
     uint32_t input_cb_index = tt::CBIndex::c_0;
+    uint32_t scratch_cb_index = tt::CBIndex::c_1;
+    uint32_t num_trids = 4;
     uint32_t out_cb_index = input_cb_index;
     output_page_size = 512;
     num_input_units = 128;
@@ -345,6 +355,12 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
+
+    uint32_t scratch_page_size = output_page_size;
+    tt::tt_metal::CircularBufferConfig scratch_cb_config =
+        tt::tt_metal::CircularBufferConfig(num_trids * output_page_size, {{scratch_cb_index, output_cb_data_format}})
+            .set_page_size(scratch_cb_index, scratch_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, scratch_cb_config);
 
     workload.add_program(device_range, std::move(program));
 
@@ -546,12 +562,14 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderRowMajor) {
     std::vector<uint32_t> compile_args;
     std::vector<uint32_t> runtime_args;
     CoreCoord master_core_coord = {0, 0};
+    uint32_t num_trids = 4;
 
     compile_args.push_back(0);        // input_cb_index
     compile_args.push_back(1);        // scratch_cb_index
     compile_args.push_back(2048);     // num_units_per_row
     compile_args.push_back(2);        // isDram = true
     compile_args.push_back(test_id);  // test_id
+    compile_args.push_back(num_trids);  // num_trids
 
     runtime_args.push_back(2560032);  // src_buffer->address(),
     runtime_args.push_back(2048);     // num_units_per_row,
@@ -589,12 +607,14 @@ TEST_F(MeshDeviceFixture, TensixDataMovementI2SL1InterleavedReaderRowMajor) {
     std::vector<uint32_t> compile_args;
     std::vector<uint32_t> runtime_args;
     CoreCoord master_core_coord = {0, 0};
+    uint32_t num_trids = 4;
 
     compile_args.push_back(0);        // input_cb_index
     compile_args.push_back(1);        // scratch_cb_index
     compile_args.push_back(2048);     // num_units_per_row
     compile_args.push_back(0);        // isDram = false
     compile_args.push_back(test_id);  // test_id
+    compile_args.push_back(num_trids);  // num_trids
 
     runtime_args.push_back(1024);  // src_buffer->address(),
     runtime_args.push_back(2048);  // num_units_per_row,
