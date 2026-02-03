@@ -1059,7 +1059,7 @@ def pytest_runtest_teardown(item, nextitem):
             pci_ids = getattr(item.parent, "pci_ids", None)
         if pci_ids is not None:
             logger.info(f"In custom teardown, open device ids: {set(pci_ids)}")
-            reset_tensix(set(pci_ids))
+            # reset_tensix(set(pci_ids))
 
 
 def reset_tensix(tt_open_devices=None):
