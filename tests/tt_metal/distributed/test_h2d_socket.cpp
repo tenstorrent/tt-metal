@@ -87,7 +87,7 @@ void test_h2d_socket(
     for (int i = 0; i < num_iterations; i++) {
         std::iota(src_vec.begin(), src_vec.end(), i);
         for (uint32_t j = 0; j < num_writes; j++) {
-            input_socket.write(src_vec.data() + j * page_size_words, 1);
+            input_socket.write(src_vec.data() + (j * page_size_words), 1);
         }
         input_socket.barrier();
         std::vector<uint32_t> recv_data_readback(data_size / sizeof(uint32_t));
