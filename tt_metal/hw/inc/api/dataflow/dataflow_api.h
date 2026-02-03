@@ -497,6 +497,7 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
  * | dst_local_l1_addr                 | Address in local L1 memory                         | uint32_t  | 0..1MB                           | True     |
  * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                           | True     |
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
+ * | use_vc (template argument)        | Enable custom VC usage                             | bool      | True/False                       | False    |   
  */
 // clang-format on
 template <bool enable_noc_tracing = true, bool use_vc = false>
@@ -542,6 +543,7 @@ FORCE_INLINE void noc_async_read_one_packet(
  * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                           | True     |
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
  * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number              | False    |
+ * | use_vc (template argument)        | Enable custom VC usage                             | bool      | True or False                    | False    |
  */
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1, bool enable_noc_tracing = true, bool use_vc = false>
