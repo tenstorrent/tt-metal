@@ -99,6 +99,13 @@ void copy_to_host(
     bool blocking = true,
     std::optional<QueueId> cq_id = std::nullopt);
 
+void copy_to_host(
+    distributed::MeshCommandQueue& queue,
+    const Tensor& device_tensor,
+    std::byte* dst,
+    const std::optional<BufferRegion>& region = std::nullopt,
+    bool blocking = true);
+
 Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
@@ -106,6 +113,12 @@ Tensor to_device(
     std::optional<QueueId> cq_id = std::nullopt);
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
+
+void copy_to_device(
+    distributed::MeshCommandQueue& queue,
+    const std::byte* src,
+    Tensor& device_tensor,
+    const std::optional<BufferRegion>& region = std::nullopt);
 
 // ======================================================================================
 //                                  .to_layout()
