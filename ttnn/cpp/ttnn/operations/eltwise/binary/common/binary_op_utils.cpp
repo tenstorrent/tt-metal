@@ -250,6 +250,11 @@ std::map<std::string, std::string> get_defines_fp32(
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
                 new_defines.insert({"BINOP_INIT", fmt::format("rsub_int_tile_init();")});
                 op_name = "rsub_int32_tile";
+            } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                       (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
+                // UINT8 is treated like UINT16 - values are zero-extended when loaded
+                new_defines.insert({"BINOP_INIT", fmt::format("rsub_int_tile_init();")});
+                op_name = "rsub_uint16_tile";
             } else {
                 new_defines.insert({"BINOP_INIT", fmt::format("rsub_binary_tile_init();")});
                 op_name = "rsub_binary_tile";
