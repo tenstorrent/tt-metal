@@ -31,6 +31,7 @@ def test_demo_dual(repeat_batches):
         random_weights=False,
         max_new_tokens=128,
         repeat_batches=repeat_batches,
+        enable_trace=True,
     )
 
     # Check output
