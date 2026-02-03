@@ -23,6 +23,24 @@ class StatsReporter:
         # Create architecture-specific subdirectory
         self.output_dir = os.path.join(output_dir, arch)
 
+    @staticmethod
+    def transform_pattern_for_riscv(pattern: str, riscv: str) -> str:
+        """
+        Transform pattern based on RISC-V processor type.
+
+        This is only applied when a test logs both RISC-V processors (read + write).
+        For tests that log only one processor, the pattern from test_information.yaml is used as-is.
+
+        Convention: riscv_1 = reader (pulls data), riscv_0 = writer (pushes data)
+        - For riscv_1 (reader): patterns with '_to_' become '_from_' (e.g., one_to_one -> one_from_one)
+        - For riscv_0 (writer): patterns with '_from_' become '_to_' (e.g., one_from_one -> one_to_one)
+        """
+        if riscv == "riscv_1" and "_to_" in pattern:
+            return pattern.replace("_to_", "_from_")
+        elif riscv == "riscv_0" and "_from_" in pattern:
+            return pattern.replace("_from_", "_to_")
+        return pattern
+
     def print_stats(self):
         # Print stats per runtime host id
         for riscv1_run, riscv0_run in itertools.zip_longest(
@@ -134,6 +152,16 @@ class StatsReporter:
 
                 writer.writerow(header)
 
+                # Check if this test has data for both RISC-V processors
+                test_has_both_riscv = all(
+                    any(
+                        run_stats["attributes"].get("Test id") == test_id
+                        for run_stats in self.aggregate_stats[r].values()
+                    )
+                    for r in ["riscv_0", "riscv_1"]
+                    if r in self.aggregate_stats
+                )
+
                 for riscv in self.aggregate_stats.keys():
                     for run_host_id, run_stats in self.aggregate_stats[riscv].items():
                         attributes = run_stats["attributes"]
@@ -152,7 +180,10 @@ class StatsReporter:
                             standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
                             for field in standard_fields:
                                 if field in test_metadata:
-                                    row.append(test_metadata[field])
+                                    value = test_metadata[field]
+                                    if field == "pattern" and test_has_both_riscv:
+                                        value = self.transform_pattern_for_riscv(value, riscv)
+                                    row.append(value)
 
                             # Add any additional optional fields in alphabetical order
                             optional_fields = sorted([k for k in test_metadata.keys() if k not in standard_fields])
