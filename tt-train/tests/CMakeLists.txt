@@ -33,6 +33,7 @@ set(SOURCES
     datasets/generators_test.cpp
     datasets/dataloader_test.cpp
     optimizers/adamw_test.cpp
+    optimizers/muon_test.cpp
     optimizers/sgd_fused_test.cpp
     optimizers/adamw_fused_test.cpp
     optimizers/adamw_full_precision_test.cpp
