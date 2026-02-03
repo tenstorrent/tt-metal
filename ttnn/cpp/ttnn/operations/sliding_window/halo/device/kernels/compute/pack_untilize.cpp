@@ -21,11 +21,19 @@ void kernel_main() {
     compute_kernel_lib::untilize_init<tiles_per_row, src_cb_id, out_cb_id0>();
 
     for (uint32_t block_idx = 0; block_idx < total_blocks; block_idx++) {
-        // Use unified untilize with init=false, uninit=false since we handle those outside the loop
+        // Use unified untilize with Neither mode since we handle init/uninit outside the loop
         if (block_idx % 2 == 0) {
-            compute_kernel_lib::untilize<tiles_per_row, src_cb_id, out_cb_id0, false, false>(1, block_size);
+            compute_kernel_lib::untilize<
+                tiles_per_row,
+                src_cb_id,
+                out_cb_id0,
+                compute_kernel_lib::untilize_config::InitUninitMode::Neither>(block_size);
         } else {
-            compute_kernel_lib::untilize<tiles_per_row, src_cb_id, out_cb_id1, false, false>(1, block_size);
+            compute_kernel_lib::untilize<
+                tiles_per_row,
+                src_cb_id,
+                out_cb_id1,
+                compute_kernel_lib::untilize_config::InitUninitMode::Neither>(block_size);
         }
     }
 

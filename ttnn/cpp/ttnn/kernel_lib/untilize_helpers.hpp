@@ -139,6 +139,40 @@ constexpr uint32_t compute_num_blocks(uint32_t total_width, uint32_t max_block_w
     return total_width;  // fallback: 1 tile per block
 }
 
+// =============================================================================
+// Standalone Init/Uninit Wrapper Functions
+// =============================================================================
+
+/**
+ * @brief Initialize untilize operation (standalone wrapper)
+ *
+ * This is a convenience wrapper for manual init/uninit control.
+ * Prefer using the unified untilize() function with InitUninitMode enums.
+ *
+ * @tparam block_width_tiles Width in tiles
+ * @tparam input_cb Input circular buffer ID
+ * @tparam output_cb Output circular buffer ID
+ */
+template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
+ALWI void untilize_init();
+
+/**
+ * @brief Uninitialize untilize operation (standalone wrapper)
+ *
+ * This is a convenience wrapper for manual init/uninit control.
+ * Prefer using the unified untilize() function with InitUninitMode enums.
+ *
+ * @tparam block_width_tiles Width in tiles
+ * @tparam input_cb Input circular buffer ID
+ * @tparam output_cb Output circular buffer ID
+ */
+template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
+ALWI void untilize_uninit();
+
+// =============================================================================
+// Main Untilize Function
+// =============================================================================
+
 /**
  * @brief Unified untilize function with type-safe API and automatic dispatch
  *

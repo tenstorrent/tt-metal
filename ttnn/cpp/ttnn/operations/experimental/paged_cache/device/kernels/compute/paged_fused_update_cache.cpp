@@ -33,11 +33,13 @@ void kernel_main() {
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
-    // Untilize input (single block, no uninit needed)
+    // Untilize input (single block, init only - no uninit needed)
     if (!is_input1) {
-        compute_kernel_lib::untilize<Wt, in2_cb, untilized_in_cb, true, false>(1);
+        compute_kernel_lib::
+            untilize<Wt, in2_cb, untilized_in_cb, compute_kernel_lib::untilize_config::InitUninitMode::InitOnly>(1);
     } else {
-        compute_kernel_lib::untilize<Wt, in1_cb, untilized_in_cb, true, false>(1);
+        compute_kernel_lib::
+            untilize<Wt, in1_cb, untilized_in_cb, compute_kernel_lib::untilize_config::InitUninitMode::InitOnly>(1);
     }
 
     reconfig_data_format_srca(in_cb, cache_cb);

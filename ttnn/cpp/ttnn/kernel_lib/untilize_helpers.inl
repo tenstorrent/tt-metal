@@ -13,6 +13,44 @@
 
 namespace compute_kernel_lib {
 
+// =============================================================================
+// Standalone Init/Uninit Wrapper Functions Implementations
+// =============================================================================
+
+template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
+ALWI void untilize_init() {
+    constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
+    constexpr bool is_integer = is_integer_format<input_cb>();
+    constexpr bool use_standard_path = (block_width_tiles > dest_limit && !is_integer);
+    constexpr uint32_t num_sub_blocks = use_standard_path ? 1 : compute_num_blocks(block_width_tiles, dest_limit);
+    constexpr uint32_t sub_block_width = use_standard_path ? block_width_tiles : (block_width_tiles / num_sub_blocks);
+
+    if constexpr (use_standard_path) {
+        ::untilize_init(input_cb);
+    } else if constexpr (num_sub_blocks > 1) {
+        pack_untilize_init<sub_block_width, block_width_tiles>(input_cb, output_cb);
+    } else {
+        pack_untilize_init<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+    }
+}
+
+template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
+ALWI void untilize_uninit() {
+    constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
+    constexpr bool is_integer = is_integer_format<input_cb>();
+    constexpr bool use_standard_path = (block_width_tiles > dest_limit && !is_integer);
+
+    if constexpr (use_standard_path) {
+        ::untilize_uninit(input_cb);
+    } else {
+        pack_untilize_uninit(output_cb);
+    }
+}
+
+// =============================================================================
+// Main Untilize Function Implementation
+// =============================================================================
+
 template <
     uint32_t block_width_tiles,
     uint32_t input_cb,
