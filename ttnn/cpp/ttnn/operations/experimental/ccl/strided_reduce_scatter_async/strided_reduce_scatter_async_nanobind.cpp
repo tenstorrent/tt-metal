@@ -47,7 +47,6 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
                std::optional<uint32_t> mm_cores_y,
                std::optional<uint32_t> mm_block_ht,
                std::optional<uint32_t> mm_block_wt,
-               std::optional<uint32_t> mm_M_block_ht,
                std::optional<uint32_t> mm_N_block_wt,
                std::optional<uint32_t> chunk_width_in_mm_blocks) -> ttnn::Tensor {
                 return self(
@@ -68,7 +67,6 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
                     mm_cores_y,
                     mm_block_ht,
                     mm_block_wt,
-                    mm_M_block_ht,
                     mm_N_block_wt,
                     chunk_width_in_mm_blocks);
             },
@@ -90,7 +88,6 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
             nb::arg("mm_cores_y") = nb::none(),
             nb::arg("mm_block_ht") = nb::none(),
             nb::arg("mm_block_wt") = nb::none(),
-            nb::arg("mm_M_block_ht") = nb::none(),
             nb::arg("mm_N_block_wt") = nb::none(),
             nb::arg("chunk_width_in_mm_blocks") = nb::none()});
 }
@@ -125,7 +122,6 @@ void bind_strided_reduce_scatter_async(nb::module_& mod) {
             mm_cores_y (Optional[int]): Number of cores in Y direction for matmul output layout.
             mm_block_ht (Optional[int]): Matmul block height in tiles.
             mm_block_wt (Optional[int]): Matmul block width in tiles.
-            mm_M_block_ht (Optional[int]): Matmul M block height in tiles.
             mm_N_block_wt (Optional[int]): Matmul N block width in tiles.
             chunk_width_in_mm_blocks (Optional[int]): Chunk width in matmul blocks.
 

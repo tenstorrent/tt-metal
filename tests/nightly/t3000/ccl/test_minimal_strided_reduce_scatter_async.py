@@ -36,7 +36,6 @@ class ReduceScatterTestConfig:
     mm_cores_y: object = None  # Optional[int]
     mm_block_ht: object = None  # Optional[int]
     mm_block_wt: object = None  # Optional[int]
-    mm_M_block_ht: object = None  # Optional[int]
     mm_N_block_wt: object = None  # Optional[int]
     chunk_width_in_mm_blocks: object = None  # Optional[int]
 
@@ -77,7 +76,6 @@ def run_reduce_scatter_impl(
     mm_cores_y=None,
     mm_block_ht=None,
     mm_block_wt=None,
-    mm_M_block_ht=None,
     mm_N_block_wt=None,
     chunk_width_in_mm_blocks=None,
 ):
@@ -217,7 +215,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=mm_cores_y,
                 mm_block_ht=mm_block_ht,
                 mm_block_wt=mm_block_wt,
-                mm_M_block_ht=mm_M_block_ht,
                 mm_N_block_wt=mm_N_block_wt,
                 chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
             )
@@ -380,7 +377,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_M_block_ht=2,
                 mm_N_block_wt=2,
                 chunk_width_in_mm_blocks=1,
             ),
@@ -404,7 +400,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_M_block_ht=2,
                 mm_N_block_wt=2,
                 chunk_width_in_mm_blocks=1,
             ),
@@ -428,7 +423,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_M_block_ht=2,
                 mm_N_block_wt=2,
                 chunk_width_in_mm_blocks=1,
             ),
@@ -452,7 +446,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_M_block_ht=2,
                 mm_N_block_wt=2,
                 chunk_width_in_mm_blocks=1,
             ),
@@ -476,7 +469,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_M_block_ht=2,
                 mm_N_block_wt=4,
                 chunk_width_in_mm_blocks=1,
             ),
@@ -500,7 +492,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_M_block_ht=4,
                 mm_N_block_wt=4,
                 chunk_width_in_mm_blocks=1,
             ),
@@ -524,7 +515,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_M_block_ht=4,
                 mm_N_block_wt=4,
                 chunk_width_in_mm_blocks=2,
             ),
@@ -548,7 +538,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_M_block_ht=2,
                 mm_N_block_wt=2,
                 chunk_width_in_mm_blocks=1,
             ),
@@ -572,7 +561,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=1,
                 mm_block_ht=4,
                 mm_block_wt=4,
-                mm_M_block_ht=8,
                 mm_N_block_wt=8,
                 chunk_width_in_mm_blocks=2,
             ),
@@ -596,7 +584,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=4,
                 mm_block_wt=4,
-                mm_M_block_ht=8,
                 mm_N_block_wt=8,
                 chunk_width_in_mm_blocks=2,
             ),
@@ -620,7 +607,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=4,
                 mm_block_wt=4,
-                mm_M_block_ht=8,
                 mm_N_block_wt=10,
                 chunk_width_in_mm_blocks=2,
             ),
@@ -644,7 +630,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=4,
                 mm_block_wt=4,
-                mm_M_block_ht=8,
                 mm_N_block_wt=10,
                 chunk_width_in_mm_blocks=2,
             ),
@@ -668,7 +653,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=2,
                 mm_block_ht=2,
                 mm_block_wt=2,
-                mm_M_block_ht=2,
                 mm_N_block_wt=10,
                 chunk_width_in_mm_blocks=4,
             ),
@@ -692,7 +676,6 @@ def run_reduce_scatter_impl(
                 mm_cores_y=4,
                 mm_block_ht=8,
                 mm_block_wt=8,
-                mm_M_block_ht=8,
                 mm_N_block_wt=8,
                 chunk_width_in_mm_blocks=1,
             ),
@@ -751,7 +734,6 @@ def test_strided_reduce_scatter_async(
         mm_cores_y,
         mm_block_ht,
         mm_block_wt,
-        mm_M_block_ht,
         mm_N_block_wt,
         chunk_width_in_mm_blocks,
     ) = astuple(test_config)
@@ -780,7 +762,6 @@ def test_strided_reduce_scatter_async(
         mm_cores_y=mm_cores_y,
         mm_block_ht=mm_block_ht,
         mm_block_wt=mm_block_wt,
-        mm_M_block_ht=mm_M_block_ht,
         mm_N_block_wt=mm_N_block_wt,
         chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
     )

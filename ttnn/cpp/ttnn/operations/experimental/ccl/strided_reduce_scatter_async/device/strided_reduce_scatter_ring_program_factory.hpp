@@ -65,7 +65,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     std::optional<uint32_t> mm_cores_y,
     std::optional<uint32_t> mm_block_ht,
     std::optional<uint32_t> mm_block_wt,
-    std::optional<uint32_t> mm_M_block_ht,
     std::optional<uint32_t> mm_N_block_wt,
     std::optional<uint32_t> chunk_width_in_mm_blocks);
 

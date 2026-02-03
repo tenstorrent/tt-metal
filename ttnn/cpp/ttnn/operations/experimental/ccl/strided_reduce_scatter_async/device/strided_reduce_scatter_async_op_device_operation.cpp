@@ -163,7 +163,6 @@ tt::stl::hash::hash_t StridedReduceScatterAsyncDeviceOperation::compute_program_
         operation_attributes.mm_cores_y,
         operation_attributes.mm_block_ht,
         operation_attributes.mm_block_wt,
-        operation_attributes.mm_M_block_ht,
         operation_attributes.mm_N_block_wt,
         operation_attributes.chunk_width_in_mm_blocks,
         input_tensor.logical_shape(),
@@ -298,7 +297,6 @@ ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail::Strid
         std::optional<uint32_t> mm_cores_y,
         std::optional<uint32_t> mm_block_ht,
         std::optional<uint32_t> mm_block_wt,
-        std::optional<uint32_t> mm_M_block_ht,
         std::optional<uint32_t> mm_N_block_wt,
         std::optional<uint32_t> chunk_width_in_mm_blocks) {
     using OperationType = ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail::
@@ -323,7 +321,6 @@ ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail::Strid
         mm_cores_y,
         mm_block_ht,
         mm_block_wt,
-        mm_M_block_ht,
         mm_N_block_wt,
         chunk_width_in_mm_blocks};
     auto tensor_args = OperationType::tensor_args_t{input_tensor, optional_intermediate_tensor, optional_output_tensor};
