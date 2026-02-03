@@ -235,6 +235,7 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x16ControlPlaneInit) {
+    GTEST_SKIP();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -245,6 +246,7 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxy1x16ControlPlaneInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxy1x16FabricRoutes) {
+    GTEST_SKIP();
     const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto";

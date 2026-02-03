@@ -8,7 +8,6 @@ We\'ll go through this code section by section. Note that we have this exact, fu
 
 To build and execute, you may use the following commands:
 ```bash
-    export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
     ./build/programming_examples/loopback
 ```
