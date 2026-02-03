@@ -881,7 +881,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
         log_info(tt::LogTest, "Testing writing from pinned memory to shard at coord {}", coord);
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
         distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
-        mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/true);
+        mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
 
         // Read back via hugepage
         std::fill(dst.begin(), dst.end(), 0);
@@ -941,7 +941,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage
         auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
         distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
 
-        mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/true);
+        mesh_device_->mesh_command_queue().enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
 
         // Read back via hugepage
         std::fill(dst.begin(), dst.end(), 0);
