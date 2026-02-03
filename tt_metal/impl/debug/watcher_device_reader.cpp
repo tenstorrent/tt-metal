@@ -788,6 +788,14 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
                 "NOC posted writes sent barrier).";
             break;
         }
+        case dev_msgs::DebugAssertRtaOutOfBounds: {
+            error_msg += "accessed unique runtime arg index out of bounds.";
+            break;
+        }
+        case dev_msgs::DebugAssertCrtaOutOfBounds: {
+            error_msg += "accessed common runtime arg index out of bounds.";
+            break;
+        }
         default:
             LogRunningKernels();
             TT_THROW(
@@ -1047,10 +1055,11 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
     }
 
     uint32_t operand_start_stream = hal.get_operand_start_stream();
+    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
 
     // Read back all of the stream state, most of it is unused
     std::vector<uint32_t> data;
-    for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
+    for (uint32_t operand = 0; operand < max_cbs; operand++) {
         uint32_t base = NOC_OVERLAY_START_ADDR + ((operand_start_stream + operand) * NOC_STREAM_REG_SPACE_SIZE);
 
         uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));

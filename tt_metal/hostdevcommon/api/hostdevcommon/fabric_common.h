@@ -9,6 +9,8 @@
 #include <array>
 #include <type_traits>
 
+#include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+
 namespace tt::tt_fabric {
 
 // Forward declaration to avoid including heavy host-only headers here
@@ -333,6 +335,68 @@ inline void encode_1d_multicast(uint8_t start_hop, uint8_t range_hops, uint32_t*
     }
 }
 
+/**
+ * Canonical 1D sparse multicast routing pattern encoder
+ *
+ * Generates bit pattern for multicast routing based on a supplied hop mask
+ * Each bit in the hop mask represents a single hop in the target direction
+ * If the bit is 1, the router will perform the WRITE operation at that hop.
+ * If the bit is 0, the router will simply forward the packet to the next hop.
+ * This continues until the last set bit, which will perform a WRITE operation and not forward the packet any further.
+ * For instance, a hop mask of 0b1010 means that devices 2 and 4 hops away from sender will have the data written to
+ * them. This function converts the hop mask into a fabric multicast packet header routing field, following the 2-bit
+ * encoding shown in encode_1d_multicast.
+ *
+ * @param hop_mask Bitmask of hops to write. Currently only supports uint16_t, tracked in #36581
+ * @param buffer Output buffer (uint32_t, will be expanded into array in future, tracked in #36581)
+ *
+ * Example: hop mask 0b1010 would be converted into the following routing fields:
+ *   - Hop 0 (0): FORWARD_ONLY (0b10)
+ *   - Hop 1 (1): WRITE_AND_FORWARD (0b11)
+ *   - Hop 2 (0): FORWARD_ONLY (0b10)
+ *   - Hop 3 (1): WRITE_ONLY (0b01)
+ *   Resulting routing field: 0b01'10'11'10
+ *
+ * Router consumes fields LSB-first (hop 0 at bits 0-1, hop 1 at bits 2-3, etc.)
+ */
+template <typename HopMaskType>
+inline void encode_1d_sparse_multicast(HopMaskType hop_mask, uint32_t& buffer) {
+    using LowLatencyFields = RoutingFieldsConstants::LowLatency;
+
+    static_assert(
+        std::is_unsigned_v<HopMaskType> && (sizeof(HopMaskType) == sizeof(uint16_t)),
+        "hop_mask must be an unsigned integer and currently only supports uint16_t, tracked in #36581");
+
+    auto set_hop_field = [&](uint32_t hop_index, uint32_t field_value) {
+        const uint32_t bit_pos = (hop_index % LowLatencyFields::BASE_HOPS) * LowLatencyFields::FIELD_WIDTH;
+        buffer |= (field_value << bit_pos);
+    };
+
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+    ASSERT(hop_mask > 0);
+#endif
+
+    buffer = 0;
+    uint32_t hop_index = 0;
+    // Treat hop_mask like a shift register, checking LSB each time
+    while (hop_mask > 0) {
+        // Case 1: We've arrived at the last hop. Write and stop.
+        if (hop_mask == 1) {
+            set_hop_field(hop_index, LowLatencyFields::WRITE_ONLY);
+        }
+        // Case 2: This hop involves a write operation. Write and forward.
+        else if (hop_mask & 1) {
+            set_hop_field(hop_index, LowLatencyFields::WRITE_AND_FORWARD);
+        }
+        // Case 3: This hop does not involve a write operation. Forward only.
+        else {
+            set_hop_field(hop_index, LowLatencyFields::FORWARD_ONLY);
+        }
+        hop_index++;
+        hop_mask >>= 1;
+    }
+}
+
 //=============================================================================
 // 2D Routing Encoders
 //=============================================================================
@@ -490,11 +554,39 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
+enum class RouterCommand : std::uint32_t {
+    // The main state where messages and credits are forwarded
+    RUN = 0,
+
+    // The router enters the pause state, which is the "hub" transitionary state to other states.
+    // When paused, no messages/credits are processed by the router
+    PAUSE = 1,
+
+    // The router accepts messages but drops them instead of forwarding them.
+    // The pipe to /dev/null of TT-Fabric
+    DRAIN = 3,
+
+    // Commands the router to make one link retrain attempt
+    RETRAIN = 4
+};
+
+struct RouterStateManager {
+    RouterState state;  // 4B, written by device, read by host
+    uint8_t padding0[12];     //
+    RouterCommand command;    // 4B, written by host, read by device
+    uint8_t padding1[12];     //
+
+    // template <bool ENABLE_RISC_CPU_DATA_CACHE>
+    bool is_non_run_command_pending() const {
+        // router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        return command != RouterCommand::RUN;
+    }
+};
+
 struct routing_l1_info_t {
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
-    //       these fabric node ids should be another struct as really commonly used data
-    uint16_t my_mesh_id = 0;    // Current mesh ID
-    uint16_t my_device_id = 0;  // Current chip ID
+    RouterStateManager state_manager{};  // 32 bytes
+    uint16_t my_mesh_id = 0;           // Current mesh ID // 2 bytes
+    uint16_t my_device_id = 0;         // Current chip ID // 2 bytes
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
@@ -509,7 +601,10 @@ struct routing_l1_info_t {
 
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};               // 1024 bytes
     uint8_t padding[12] = {};                                        // pad to 16-byte alignment
-} __attribute__((packed));
+};
+static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 516);
+static_assert(offsetof(routing_l1_info_t, state_manager) % 16 == 0);
+static_assert(sizeof(routing_l1_info_t) % 16 == 0);
 
 // 64 chips * 16 bytes = 1024
 static_assert(
@@ -525,8 +620,8 @@ static_assert(
 
 // Verify total struct size
 static_assert(
-    sizeof(routing_l1_info_t) == 2544,
-    "routing_l1_info_t must be 2544 bytes: base(484) + union(1024) + exit(1024) + pad(12)");
+    sizeof(routing_l1_info_t) == 2576,
+    "routing_l1_info_t must be 2576 bytes: base(516) + union(1024) + exit(1024) + pad(12)");
 
 struct worker_routing_l1_info_t {
     routing_l1_info_t routing_info{};

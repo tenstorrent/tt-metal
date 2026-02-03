@@ -24,9 +24,7 @@ namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 namespace generic = kutil::generic;
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
@@ -46,7 +44,7 @@ void MAIN {
     constexpr auto cb_out = tt::CBIndex::c_16;    // output
     constexpr auto cb_gamma = tt::CBIndex::c_5;
     constexpr auto cb_beta = tt::CBIndex::c_6;
-    uint32_t cb_xmm = tt::CBIndex::c_24;          // x minus mean
+    constexpr uint32_t cb_xmm = tt::CBIndex::c_24;  // x minus mean
     constexpr auto cb_ex = tt::CBIndex::c_18;     // E[x]
     constexpr auto cb_ex2 = tt::CBIndex::c_19;    // E[(x-E[x])^2]
     constexpr auto cb_xmm2 = tt::CBIndex::c_20;   // xmm^2
@@ -361,4 +359,3 @@ void MAIN {
         cb_pop_front(cb_ex2pe, onetile);
     }  // NCHt loop
 }
-}  // namespace NAMESPACE

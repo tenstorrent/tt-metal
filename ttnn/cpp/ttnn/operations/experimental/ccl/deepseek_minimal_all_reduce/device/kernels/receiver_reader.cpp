@@ -30,6 +30,7 @@ void kernel_main() {
     constexpr uint32_t num_standard_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t cb_residual = get_compile_time_arg_val(7);  // CB for residual tensor (optional)
     constexpr uint32_t has_residual = get_compile_time_arg_val(8);
+    constexpr bool using_persistent_buffer = get_compile_time_arg_val(9);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
     constexpr uint8_t sender_num_hops = 1;
@@ -47,13 +48,18 @@ void kernel_main() {
 
     const uint64_t sender_sem_noc_addr = get_noc_addr(remote_sender_noc_x, remote_sender_noc_y, sender_semaphore_addr);
 
-    auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
-    fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, sender_num_hops);
-    sem_header_ptr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1});
+    if constexpr (!using_persistent_buffer) {
+        auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
+        fabric_set_unicast_route(fabric_connection, sem_header_ptr, 0);
+        sem_header_ptr->to_chip_unicast(sender_num_hops);
 
-    auto& connection = fabric_connection.get(0).sender;
-    connection.wait_for_empty_write_slot();
-    connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
+        sem_header_ptr->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1});
+
+        auto& connection = fabric_connection.get(0).sender;
+        connection.wait_for_empty_write_slot();
+        connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
+    }
 
     // Push local and residual tiles to compute immediately (they're ready)
     // This allows compute to start (local + residual) while waiting for remote data

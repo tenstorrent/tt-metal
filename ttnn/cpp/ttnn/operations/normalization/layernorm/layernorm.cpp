@@ -11,16 +11,18 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::normalization {}  // namespace ttnn::operations::normalization
 
-ttnn::Tensor ExecuteLayerNorm::invoke(
-    const ttnn::Tensor& input_tensor,
+namespace ttnn {
+
+Tensor layer_norm(
+    const Tensor& input_tensor,
     float epsilon,
-    const std::optional<const ttnn::Tensor>& weight,
-    const std::optional<const ttnn::Tensor>& bias,
-    const std::optional<const ttnn::Tensor>& residual_input_tensor,
+    const std::optional<const Tensor>& weight,
+    const std::optional<const Tensor>& bias,
+    const std::optional<const Tensor>& residual_input_tensor,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
+    const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().rank();
@@ -51,4 +53,4 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
         kernel_config_val);
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn

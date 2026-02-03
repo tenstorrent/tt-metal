@@ -480,10 +480,10 @@ struct SDPABackwardTestConfig {
     uint32_t num_query_heads;
     uint32_t num_kv_heads;
     float dropout_prob = 0.0F;
-    bool fp32_dest_acc_en = true;
     float atol = 3e-2F;
     float rtol = 3e-2F;
     std::string test_name = "SDPA Backward Test";
+    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Arbitrary;
 };
 
 void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
@@ -496,9 +496,9 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const uint32_t qD = config.query_dim;
     const uint32_t kvD = config.key_value_dim;
     const float dropout_probability = config.dropout_prob;
-    const bool fp32_dest_acc_en = config.fp32_dest_acc_en;
     const float atol = config.atol;
     const float rtol = config.rtol;
+    const ttml::metal::AttentionMaskType mask_type = config.mask_type;
     const float scale_factor = 1.0F / std::sqrt(static_cast<float>(qD));
 
     auto* device = &autograd::ctx().get_device();
@@ -573,27 +573,28 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         query,
         key,
         value,
-        ttml::metal::AttentionMaskType::Arbitrary,
-        attn_mask,
+        mask_type,
+        mask_type == ttml::metal::AttentionMaskType::Arbitrary ? std::make_optional(attn_mask) : std::nullopt,
         dropout_probability,
         /*return_intermediates=*/true);
-    // Note: Using Arbitrary mask type for backward test since sdpa_bw currently only supports arbitrary masks
 
     // sdpa_fw returns std::vector<std::optional<ttnn::Tensor>>, unwrap with .value()
     const auto kernel_attn_output = sdpa_fw_result[0].value();
     const auto kernel_intermediates = sdpa_fw_result[1].value();
 
     // ========== SDPA Backward Kernel (using forward kernel outputs) ==========
+    // For Causal mask: both sdpa_bw_q and sdpa_bw_kv now support on-the-fly causal mask generation
+    // For Arbitrary mask: pass the mask tensor
     const auto op_result = ttml::metal::sdpa_bw(
         grad_output,
         kernel_attn_output,
         query,
         key,
         value,
-        attn_mask,
         kernel_intermediates,
-        dropout_probability,
-        fp32_dest_acc_en);
+        mask_type,
+        mask_type == ttml::metal::AttentionMaskType::Arbitrary ? std::make_optional(attn_mask) : std::nullopt,
+        dropout_probability);
 
     // Convert forward kernel outputs for comparison
     const xt::xarray<float> kernel_attn_output_cpu = core::to_xtensor(kernel_attn_output);
@@ -670,7 +671,6 @@ TEST_F(SDPABackwardTest, SmallBatch) {
         .num_query_heads = 4U,
         .num_kv_heads = 4U,
         .dropout_prob = 0.0F,
-        .fp32_dest_acc_en = true,
         .atol = 3e-2F,
         .rtol = 3e-2F,
         .test_name = "SmallBatch (B=2, S=128, D=64, H=4)"};
@@ -687,7 +687,6 @@ TEST_F(SDPABackwardTest, NanoGPTConfig) {
         .num_query_heads = 6U,
         .num_kv_heads = 6U,
         .dropout_prob = 0.0F,
-        .fp32_dest_acc_en = true,
         .atol = 3e-2F,
         .rtol = 3e-2F,
         .test_name = "NanoGPTConfig (B=64, S=256, D=128, H=6)"};
@@ -703,7 +702,6 @@ TEST_F(SDPABackwardTest, LargerSequence) {
         .num_query_heads = 8U,
         .num_kv_heads = 8U,
         .dropout_prob = 0.0F,
-        .fp32_dest_acc_en = true,
         .atol = 3e-2F,
         .rtol = 3e-2F,
         .test_name = "LargerSequence (B=4, S=512, D=128, H=8)"};
@@ -720,7 +718,6 @@ TEST_F(SDPABackwardTest, GroupedQueryAttention) {
         .num_query_heads = 8U,
         .num_kv_heads = 2U,  // 4 query heads per kv head
         .dropout_prob = 0.0F,
-        .fp32_dest_acc_en = true,
         .atol = 3e-2F,
         .rtol = 3e-2F,
         .test_name = "GroupedQueryAttention (qH=8, kvH=2)"};
@@ -740,9 +737,61 @@ TEST_F(SDPABackwardTest, TinyLlamaConfig) {
         .num_query_heads = 32U,  // num_heads from config
         .num_kv_heads = 4U,      // num_groups from config (8 query heads per kv head)
         .dropout_prob = 0.0F,
-        .fp32_dest_acc_en = true,
         .atol = 3e-2F,
         .rtol = 3e-2F,
         .test_name = "TinyLlamaConfig (B=1, S=256, D=64, qH=32, kvH=4)"};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, CausalMask_MHA) {
+    // Test causal mask with Multi-Head Attention
+    // Both sdpa_bw_q and sdpa_bw_kv support on-the-fly causal mask generation
+    SDPABackwardTestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 128U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 4U,
+        .num_kv_heads = 4U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "CausalMask_MHA (B=2, S=128, D=64, H=4)",
+        .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, CausalMask_GQA) {
+    // Test causal mask with Grouped Query Attention
+    // Both sdpa_bw_q and sdpa_bw_kv support on-the-fly causal mask generation
+    SDPABackwardTestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 256U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 8U,
+        .num_kv_heads = 2U,  // GQA: 4 query heads per KV head
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "CausalMask_GQA (B=2, S=256, D=64, qH=8, kvH=2)",
+        .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, CausalMask_LargerSequence) {
+    // Test causal mask with larger sequence length
+    SDPABackwardTestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 512U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 4U,
+        .num_kv_heads = 4U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "CausalMask_LargerSeq (B=1, S=512, D=64, H=4)",
+        .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
 }
