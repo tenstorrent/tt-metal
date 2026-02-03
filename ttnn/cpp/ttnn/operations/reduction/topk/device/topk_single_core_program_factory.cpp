@@ -71,7 +71,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     // Pipeline Flow:
     // Input CB -> Reader Kernel -> Transposed CBs -> Compute Kernel -> Result Prep CBs -> Output CBs -> Writer Kernel
     const uint32_t num_cb_unit = 2;                         // Base unit for double buffering
-    const uint32_t cb_in_units = 2 * num_cb_unit;           // 4 units total for input double buffering
+    const uint32_t cb_in_units = num_cb_unit;               // 4 units total for input double buffering
     const uint32_t input_cb_tile_count = cb_in_units;       // Input stream buffer size
     const uint32_t transposed_cb_tile_count = 4;            // Transposed data staging
     const uint32_t result_prep_cb_tile_count = 2 * Ktiles;  // Intermediate TopK results (double-buffered)
@@ -134,6 +134,13 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
             .set_page_size(output_ind_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, output_ind_cb_config);
 
+    constexpr uint32_t synchronization_cb_index = tt::CBIndex::c_8;
+    constexpr uint32_t synchronization_cb_size = tt::constants::TILE_HW * sizeof(uint8_t);
+    const tt::tt_metal::CircularBufferConfig synchronization_cb_config =
+        tt::tt_metal::CircularBufferConfig(synchronization_cb_size, {{synchronization_cb_index, tt::DataFormat::UInt8}})
+            .set_page_size(synchronization_cb_index, synchronization_cb_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, synchronization_cb_config);
+
     // Kernel Creations:
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_index,                       // Input values
@@ -184,6 +191,7 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
         Wt,                                        // Width in tiles
         Ktiles,                                    // K value in tiles
         static_cast<std::uint32_t>(args.largest),  // Sort order: largest (true) or smallest (false)
+        synchronization_cb_index,
     };
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,

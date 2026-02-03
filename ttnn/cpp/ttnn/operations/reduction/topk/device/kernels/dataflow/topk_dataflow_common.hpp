@@ -51,7 +51,27 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
             }  // k loop
         }  // j loop
     }  // i loop
-
+    // volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
+    // for (int subtile_i = 0; subtile_i < 2; subtile_i++) {
+    //     // Iterate through 16 rows within each subtile row
+    //     for (int local_row = 0; local_row < 16; local_row++) {
+    //         // Calculate the actual row in original matrix
+    //         int row = subtile_i * 16 + local_row;
+    //         // Iterate through 2x2 subtiles horizontally
+    //         for (int subtile_j = 0; subtile_j < 2; subtile_j++) {
+    //             // Iterate through 16 columns within each subtile
+    //             for (int local_col = 0; local_col < 16; local_col++) {
+    //                 // Calculate the actual column in original matrix
+    //                 int col = subtile_j * 16 + local_col;
+    //                 // Calculate index using only multiplication and addition
+    //                 auto index = local_row * 16 + local_col + subtile_i * 512 + subtile_j * 256;
+    //                 DPRINT << ptr[index] << ", " ;
+    //             }
+    //         }
+    //         DPRINT << ENDL();
+    //     }
+    // }
+    // DPRINT << ENDL();
     // Push the tile
     cb_push_back(cb_id, one_tile);
 }
