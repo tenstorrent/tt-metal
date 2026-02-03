@@ -18,12 +18,12 @@ on:
         default: false
         type: boolean
       glx_4x_deepseekv3_tests:
-        description: 'Run Galaxy 4x DeepSeek V3 tests'
+        description: 'Run Galaxy 4x DeepSeekV3 tests'
         required: false
         default: false
         type: boolean
       glx_4x_teacher_forced:
-        description: 'Run Galaxy 4x teacher forced test'
+        description: 'Run Galaxy 4x DeepSeekV3 accuracy test'
         required: false
         default: false
         type: boolean
