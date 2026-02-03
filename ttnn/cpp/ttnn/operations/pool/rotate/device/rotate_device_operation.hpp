@@ -59,6 +59,10 @@ struct RotateDeviceOperation {
             tt::tt_metal::KernelHandle writer_kernel_id{};
             std::size_t num_cores{};
             std::size_t num_cores_y{};
+            bool is_input_sharded{};
+            bool is_output_sharded{};
+            std::vector<CoreCoord> logical_cores;
+            tt::tt_metal::CBHandle output_cb_handle{};
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

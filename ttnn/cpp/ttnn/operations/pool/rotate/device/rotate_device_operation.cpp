@@ -53,6 +53,15 @@ void RotateDeviceOperation::validate_inputs(
         operation_attributes.interpolation_mode == "nearest" || operation_attributes.interpolation_mode == "bilinear",
         "Only 'nearest' and 'bilinear' interpolation_mode are supported, got '{}'",
         operation_attributes.interpolation_mode);
+
+    // Memory layout validation - width sharding is not supported
+    if (input.is_sharded()) {
+        auto mem_layout = input.memory_config().memory_layout();
+        TT_FATAL(
+            mem_layout != tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
+            "Width sharding is not supported for rotate operation. Got memory layout {}",
+            static_cast<int>(mem_layout));
+    }
 }
 
 void RotateDeviceOperation::validate_on_program_cache_miss(

@@ -21,7 +21,7 @@ void kernel_main() {
     uint32_t sin_angle_bits = get_arg_val<uint32_t>(4);
     uint32_t center_x_bits = get_arg_val<uint32_t>(5);
     uint32_t center_y_bits = get_arg_val<uint32_t>(6);
-    uint32_t fill_value_bf16 = get_arg_val<uint32_t>(7);
+    uint32_t fill_value_bits = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(1);
@@ -32,13 +32,14 @@ void kernel_main() {
     constexpr uint32_t fill_cb_index = get_compile_time_arg_val(6);
     constexpr uint32_t input_channels = get_compile_time_arg_val(7);
     constexpr bool fill_is_zero = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t element_size = get_compile_time_arg_val(9);
 
     const int32_t cos_angle_q16 = static_cast<int32_t>(cos_angle_bits);
     const int32_t sin_angle_q16 = static_cast<int32_t>(sin_angle_bits);
     const int32_t center_x_q16 = static_cast<int32_t>(center_x_bits);
     const int32_t center_y_q16 = static_cast<int32_t>(center_y_bits);
 
-    constexpr auto src_args = TensorAccessorArgs<9>();
+    constexpr auto src_args = TensorAccessorArgs<10>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes);
 
     constexpr uint32_t hw_size = input_height * input_width;
@@ -50,14 +51,21 @@ void kernel_main() {
         zero_out_page<fill_cb_index>(fill_stick_addr);
     } else {
         volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
-        const uint32_t fill_value_packed = (fill_value_bf16 << 16) | fill_value_bf16;
-        const uint32_t num_pairs = input_channels / 2;
-        for (uint32_t c = 0; c < num_pairs; c++) {
-            fill_ptr32[c] = fill_value_packed;
-        }
-        if (input_channels & 1) {
-            volatile tt_l1_ptr uint16_t* fill_ptr16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(fill_stick_addr);
-            fill_ptr16[input_channels - 1] = static_cast<uint16_t>(fill_value_bf16);
+        if constexpr (element_size == 2) {
+            const uint32_t fill_value_packed = (fill_value_bits << 16) | fill_value_bits;
+            const uint32_t num_pairs = input_channels / 2;
+            for (uint32_t c = 0; c < num_pairs; c++) {
+                fill_ptr32[c] = fill_value_packed;
+            }
+            if (input_channels & 1) {
+                volatile tt_l1_ptr uint16_t* fill_ptr16 =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(fill_stick_addr);
+                fill_ptr16[input_channels - 1] = static_cast<uint16_t>(fill_value_bits);
+            }
+        } else {
+            for (uint32_t c = 0; c < input_channels; c++) {
+                fill_ptr32[c] = fill_value_bits;
+            }
         }
     }
     noc_async_read_barrier();
@@ -95,20 +103,15 @@ void kernel_main() {
         const int32_t h_frac_inv_q16 = fixed_one_minus(h_frac_q16);
         const int32_t w_frac_inv_q16 = fixed_one_minus(w_frac_q16);
 
-        const bool h0_valid = is_coordinate_valid(h0, input_height);
-        const bool h1_valid = is_coordinate_valid(h1, input_height);
-        const bool w0_valid = is_coordinate_valid(w0, input_width);
-        const bool w1_valid = is_coordinate_valid(w1, input_width);
+        const int32_t weight_nw_q16 = fixed_mul(h_frac_inv_q16, w_frac_inv_q16);
+        const int32_t weight_ne_q16 = fixed_mul(h_frac_inv_q16, w_frac_q16);
+        const int32_t weight_sw_q16 = fixed_mul(h_frac_q16, w_frac_inv_q16);
+        const int32_t weight_se_q16 = fixed_mul(h_frac_q16, w_frac_q16);
 
-        const int32_t weight_nw_q16 = (h0_valid && w0_valid) ? fixed_mul(h_frac_inv_q16, w_frac_inv_q16) : 0;
-        const int32_t weight_ne_q16 = (h0_valid && w1_valid) ? fixed_mul(h_frac_inv_q16, w_frac_q16) : 0;
-        const int32_t weight_sw_q16 = (h1_valid && w0_valid) ? fixed_mul(h_frac_q16, w_frac_inv_q16) : 0;
-        const int32_t weight_se_q16 = (h1_valid && w1_valid) ? fixed_mul(h_frac_q16, w_frac_q16) : 0;
-
-        const uint16_t weight_nw_bf = float_to_bfloat16(fixed_to_float(weight_nw_q16));
-        const uint16_t weight_ne_bf = float_to_bfloat16(fixed_to_float(weight_ne_q16));
-        const uint16_t weight_sw_bf = float_to_bfloat16(fixed_to_float(weight_sw_q16));
-        const uint16_t weight_se_bf = float_to_bfloat16(fixed_to_float(weight_se_q16));
+        const uint16_t weight_nw_bf = fixed_to_bf16(weight_nw_q16);
+        const uint16_t weight_ne_bf = fixed_to_bf16(weight_ne_q16);
+        const uint16_t weight_sw_bf = fixed_to_bf16(weight_sw_q16);
+        const uint16_t weight_se_bf = fixed_to_bf16(weight_se_q16);
 
         cb_reserve_back(input_cb_index, 1);
         const uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);

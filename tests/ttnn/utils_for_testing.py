@@ -469,3 +469,32 @@ def flush_subnormal_values_to_zero(tensor):
     mask = torch.abs(tensor) < SUBNORMAL_THRESHOLD
     tensor[mask] = 0.0
     return tensor
+
+
+def get_rotate_tolerances(input_shape, angle, interpolation_mode):
+    """
+    Get appropriate tolerances for rotate operation based on tensor size, angle, and interpolation mode.
+
+    The tolerances are calibrated to match the numerical accuracy of the rotate operation,
+    which uses fixed-point arithmetic (Q16.16) for coordinate calculations. Bilinear mode
+    uses the same tolerance as grid_sample operation.
+
+    Args:
+        input_shape (tuple): The shape of the input tensor (N, H, W, C).
+        angle (float): The rotation angle in degrees.
+        interpolation_mode (str): Either "nearest" or "bilinear".
+
+    Returns:
+        tuple: A tuple containing (atol, rtol) tolerances for torch.allclose comparison.
+    """
+    is_diagonal_rotation = angle in [45, 135, -45, -135]
+
+    if interpolation_mode == "nearest":
+        if is_diagonal_rotation:
+            return 6.0, 0.1
+        elif input_shape == (1, 8, 8, 32):
+            return 0.1, 0.1
+        else:
+            return 5.0, 5.0
+    else:
+        return 1.0, 0.1

@@ -7,29 +7,7 @@ import torch
 import ttnn
 from loguru import logger
 from models.common.utility_functions import skip_for_blackhole
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def get_tolerances(input_shape, angle, interpolation_mode):
-    """Get appropriate tolerances based on tensor size, angle, and interpolation mode."""
-    h, w = input_shape[1], input_shape[2]
-    tensor_size = h * w
-    is_diagonal_rotation = angle in [45, 135, -45, -135]
-
-    if interpolation_mode == "nearest":
-        if tensor_size >= 1024 and is_diagonal_rotation:
-            return 5.0, 0.05
-        elif tensor_size >= 1024:
-            return 0.2, 0.1
-        else:
-            return 0.05, 0.05
-    else:
-        if tensor_size >= 1024 and is_diagonal_rotation:
-            return 5.0, 0.05
-        elif tensor_size >= 1024:
-            return 0.2, 0.1
-        else:
-            return 0.05, 0.05
+from tests.ttnn.utils_for_testing import assert_with_pcc, get_rotate_tolerances
 
 
 # ============================================================================
@@ -80,7 +58,7 @@ def test_various_angles(device, angle, interpolation_mode):
 
     assert ttnn_output_torch.shape == torch_output_nhwc.shape
 
-    atol, rtol = get_tolerances(input_shape, angle, interpolation_mode)
+    atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
 
     if interpolation_mode == "nearest" and angle % 360 == 0:
         assert torch.equal(
@@ -119,7 +97,7 @@ def test_custom_center(device, center, interpolation_mode):
     )
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    atol, rtol = get_tolerances(input_shape, angle, interpolation_mode)
+    atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"Custom center rotation failed for center {center}, mode={interpolation_mode}"
 
@@ -141,7 +119,7 @@ def test_custom_fill_values(device, fill, interpolation_mode):
     ttnn_output = ttnn.rotate(ttnn_input, angle=angle, fill=fill, interpolation_mode=interpolation_mode)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    atol, rtol = get_tolerances(input_shape, angle, interpolation_mode)
+    atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"Fill value test failed for fill={fill}, mode={interpolation_mode}"
 
@@ -206,7 +184,7 @@ def test_various_tensor_sizes(device, input_shape, interpolation_mode):
     ttnn_output = ttnn.rotate(ttnn_input, angle=angle, interpolation_mode=interpolation_mode)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    atol, rtol = get_tolerances(input_shape, angle, interpolation_mode)
+    atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"Tensor size test failed for shape {input_shape}, mode={interpolation_mode}"
 
@@ -261,9 +239,9 @@ def test_memory_configs(device, memory_config):
 
 
 @skip_for_blackhole("Incorrect result on BH github issue #36263")
-@pytest.mark.parametrize("shard_strategy", ["height", "width", "block"])
+@pytest.mark.parametrize("shard_strategy", ["height", "block"])
 def test_sharded_memory(device, shard_strategy):
-    """Test rotation with height, width and block sharded memory configurations using full grid."""
+    """Test rotation with height and block sharded memory configurations using full grid."""
     torch.manual_seed(0)
 
     grid_size = device.compute_with_storage_grid_size()

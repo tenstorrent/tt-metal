@@ -5,31 +5,9 @@
 import pytest
 import torch
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, get_rotate_tolerances
 
 import ttnn
-
-
-def get_tolerances(input_shape, angle, interpolation_mode):
-    """Get appropriate tolerances based on tensor size, angle, and interpolation mode."""
-    h, w = input_shape[1], input_shape[2]
-    tensor_size = h * w
-    is_diagonal_rotation = angle in [45, 135, -45, -135]
-
-    if interpolation_mode == "nearest":
-        if input_shape == (1, 8, 8, 32):
-            return 0.1, 0.1
-        else:
-            return 5.0, 5.0
-    else:
-        if tensor_size >= 4096:
-            return 5.0, 1.0
-        elif tensor_size >= 1024 and is_diagonal_rotation:
-            return 5.0, 0.05
-        elif tensor_size >= 1024:
-            return 0.2, 0.1
-        else:
-            return 0.05, 0.05
 
 
 # ============================================================================
@@ -75,7 +53,7 @@ def test_various_angles(device, input_shape, angle, interpolation_mode):
         ttnn_output_torch.shape == torch_output_nhwc.shape
     ), f"Shape mismatch: ttnn={ttnn_output_torch.shape}, torch={torch_output_nhwc.shape}"
 
-    atol, rtol = get_tolerances(input_shape, angle, interpolation_mode)
+    atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"Test failed (mode={interpolation_mode}, angle={angle}°, atol={atol}, rtol={rtol})"
 
@@ -103,7 +81,7 @@ def test_identity_rotation(device, input_shape, interpolation_mode):
     ttnn_output = ttnn.rotate(ttnn_input, angle=0.0, interpolation_mode=interpolation_mode)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    atol, rtol = get_tolerances(input_shape, 0, interpolation_mode)
+    atol, rtol = get_rotate_tolerances(input_shape, 0, interpolation_mode)
 
     if interpolation_mode == "bilinear":
         pcc_passed, pcc_message = assert_with_pcc(torch_input_nhwc, ttnn_output_torch, pcc=0.999)
@@ -189,7 +167,7 @@ def test_fill_values(device, input_shape, fill_value, interpolation_mode):
     ttnn_output = ttnn.rotate(ttnn_input, angle=angle, interpolation_mode=interpolation_mode, fill=fill_value)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    atol, rtol = get_tolerances(input_shape, angle, interpolation_mode)
+    atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"Fill value test failed (mode={interpolation_mode}, fill={fill_value})"
 
@@ -416,12 +394,12 @@ def test_custom_center(device, input_shape, center, interpolation_mode):
     if interpolation_mode == "bilinear":
         pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
         logger.info(f"{interpolation_mode} custom center {center}: {pcc_message}")
-        atol, rtol = 0.05, 0.05
+        atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
         allclose_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
         assert pcc_passed, f"{interpolation_mode} test failed with center={center}"
         assert allclose_passed, f"{interpolation_mode} allclose failed with center={center}"
     else:
-        atol, rtol = get_tolerances(input_shape, angle, interpolation_mode)
+        atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
         comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
         assert comparison_passed, f"{interpolation_mode} custom center test failed for center {center}"
 
