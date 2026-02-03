@@ -303,9 +303,11 @@ void DeviceManager::initialize_devices(const std::vector<ChipId>& device_ids) {
 
     // Need to reserve eth cores for fabric before we initialize individual devices to maintain consistent state
     // while initializing default sub device state.
-    // This call will be a no-op if fabric is disabled.
+    // Only set default FABRIC_1D if no fabric config has been set yet.
     // May be called again below
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+    if (tt::tt_metal::MetalContext::instance().get_fabric_config() == tt::tt_fabric::FabricConfig::DISABLED) {
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    }
 
     // Mock devices don't support fabric operations
     bool is_mock =
@@ -316,8 +318,6 @@ void DeviceManager::initialize_devices(const std::vector<ChipId>& device_ids) {
             fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
             tt::tt_fabric::SetFabricConfig(
                 fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-            // Call initialize again because previously it was a no-op
-            tt::tt_metal::MetalContext::instance().initialize_fabric_config();
             log_info(
                 tt::LogMetal,
                 "Enabling {} only for dispatch. If your workload requires fabric, please set the fabric config "

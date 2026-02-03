@@ -75,11 +75,22 @@ using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId
 
 class ControlPlane {
 public:
-    ControlPlane();
-    explicit ControlPlane(const std::string& mesh_graph_desc_file);
+    ControlPlane() = default;
+    explicit ControlPlane(
+        FabricConfig fabric_config,
+        FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED);
     explicit ControlPlane(
         const std::string& mesh_graph_desc_file,
-        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        FabricConfig fabric_config,
+        FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED);
+    explicit ControlPlane(
+        const std::string& mesh_graph_desc_file,
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping = {},
+        FabricConfig fabric_config = FabricConfig::DISABLED,
+        FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED);
 
     ~ControlPlane();
 
@@ -90,8 +101,7 @@ public:
     void print_all_ethernet_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
-    void configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
+    void configure_routing_tables_for_fabric_ethernet_channels();
     void write_routing_tables_to_all_chips() const;
     void write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const;
 
@@ -181,7 +191,7 @@ public:
     // Return ethernet channels on a chip that face other chips within the same mesh (intra-mesh)
     std::vector<chan_id_t> get_intramesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
 
-    void initialize_fabric_context(tt_fabric::FabricConfig fabric_config, const FabricRouterConfig& router_config);
+    void initialize_fabric_context(const FabricRouterConfig& router_config);
 
     FabricContext& get_fabric_context() const;
 
@@ -286,10 +296,7 @@ private:
     void load_physical_chip_mapping(
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
-    void initialize_dynamic_routing_plane_counts(
-        const IntraMeshConnectivity& intra_mesh_connectivity,
-        tt_fabric::FabricConfig fabric_config,
-        tt_fabric::FabricReliabilityMode reliability_mode);
+    void initialize_dynamic_routing_plane_counts(const IntraMeshConnectivity& intra_mesh_connectivity);
     void trim_ethernet_channels_not_mapped_to_live_routing_planes();
 
     void validate_mesh_connections(MeshId mesh_id) const;
@@ -398,6 +405,10 @@ private:
 
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;
+    FabricConfig fabric_config_ = FabricConfig::DISABLED;
+    tt_fabric::FabricReliabilityMode reliability_mode_ =
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    FabricTensixConfig fabric_tensix_config_ = FabricTensixConfig::DISABLED;
 
     // Distributed contexts for each multi-host mesh, that this host is part of - this is typically a single mesh.
     std::unordered_map<MeshId, std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>

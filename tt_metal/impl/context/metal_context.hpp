@@ -112,7 +112,6 @@ public:
         tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED,
         tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT,
         tt_fabric::FabricRouterConfig router_config = tt_fabric::FabricRouterConfig{});
-    void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
     tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
