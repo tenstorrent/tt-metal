@@ -21,12 +21,14 @@ struct PreAllGatherWelfordProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const DitLayernormPreAllGatherParams& operation_attributes, const Tensor& tensor_args, Tensor& output);
+        const DitLayernormPreAllGatherParams& operation_attributes,
+        const DitLayernormPreAllGatherInputs& tensor_args,
+        Tensor& output);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const DitLayernormPreAllGatherParams& operation_attributes,
-        const Tensor& tensor_args,
+        const DitLayernormPreAllGatherInputs& tensor_args,
         Tensor& output);
 };
 
