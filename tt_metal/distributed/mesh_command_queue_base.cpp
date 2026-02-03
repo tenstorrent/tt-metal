@@ -281,9 +281,11 @@ void MeshCommandQueueBase::enqueue_write(
     for (const auto& host_buffer_coord : host_buffer.shard_coords()) {
         auto buf = host_buffer.get_shard(host_buffer_coord);
         if (buf.has_value()) {
-            shard_data_transfers.push_back(distributed::ShardDataTransfer{MeshCoordinate(host_buffer_coord)}
+            auto shard_data_transfer = distributed::ShardDataTransfer{MeshCoordinate(host_buffer_coord)}
                                                .host_data(buf->view_bytes().data())
-                                               .region(BufferRegion(0, buf->view_bytes().size())));
+                                               .region(BufferRegion(0, buf->view_bytes().size()));
+            experimental::ShardDataTransferSetPinnedMemory(shard_data_transfer, experimental::HostBufferGetPinnedMemory(*buf));
+            shard_data_transfers.push_back(std::move(shard_data_transfer));
         }
     }
 
