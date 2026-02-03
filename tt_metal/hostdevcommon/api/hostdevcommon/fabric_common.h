@@ -571,10 +571,10 @@ enum class RouterCommand : std::uint32_t {
 };
 
 struct RouterStateManager {
-    RouterState state;      // 4B, written by device, read by host
-    uint8_t padding0[12];   //
-    RouterCommand command;  // 4B, written by host, read by device
-    uint8_t padding1[12];   //
+    RouterState state;  // 4B, written by device, read by host
+    uint8_t padding0[12];     //
+    RouterCommand command;    // 4B, written by host, read by device
+    uint8_t padding1[12];     //
 
     // template <bool ENABLE_RISC_CPU_DATA_CACHE>
     bool is_non_run_command_pending() const {
@@ -585,8 +585,8 @@ struct RouterStateManager {
 
 struct routing_l1_info_t {
     RouterStateManager state_manager{};  // 32 bytes
-    uint16_t my_mesh_id = 0;             // Current mesh ID // 2 bytes
-    uint16_t my_device_id = 0;           // Current chip ID // 2 bytes
+    uint16_t my_mesh_id = 0;           // Current mesh ID // 2 bytes
+    uint16_t my_device_id = 0;         // Current chip ID // 2 bytes
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available

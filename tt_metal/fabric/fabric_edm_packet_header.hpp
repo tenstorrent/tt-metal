@@ -15,7 +15,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "api/debug/dprint.h"
 #else
 #include <tt_stl/assert.hpp>
 #endif
