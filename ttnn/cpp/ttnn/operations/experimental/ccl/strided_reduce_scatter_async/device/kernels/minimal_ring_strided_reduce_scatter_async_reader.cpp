@@ -216,7 +216,10 @@ void kernel_main() {
                             cb_reserve_back(cb_in0, tile_granularity);
                             uint32_t l1_write_addr = get_write_ptr(cb_in0);
                             uint32_t intermediate_l1_write_addr;
-                            uint32_t global_tile_idx;
+                            if (do_reduce) {
+                                cb_reserve_back(cb_intermediate_id, tile_granularity);
+                                intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
+                            }
 
                             for (uint32_t j = 0; j < tiles_to_read_in_this_step; ++j) {
                                 auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
@@ -230,6 +233,23 @@ void kernel_main() {
                                     mm_block_ht,
                                     mm_block_ht,
                                     chunk_width_in_tiles);
+                                uint32_t slice_tile_idx =
+                                    slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
+                                uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
+                                    slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
+                                DPRINT << "global_tile_idx: " << global_tile_idx << ENDL();
+                                uint32_t input_tile_id = global_tile_idx + batch_offset;
+
+                                uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
+                                noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                                l1_write_addr += page_size;
+                                if (do_reduce) {
+                                    uint64_t intermediate_noc_read_addr =
+                                        get_noc_addr(global_tile_idx, intermediate_tensor_addrgen);
+                                    noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
+                                    intermediate_l1_write_addr += page_size;
+                                }
+
                                 get_next_tile_coordinates(
                                     first_tile_row_in_mm_M_block,
                                     first_chunk_col_in_tiles,
@@ -238,29 +258,10 @@ void kernel_main() {
                                     effective_chunk_piece_size,
                                     effective_chunk_width_in_tiles,
                                     mm_block_ht);
-                                uint32_t slice_tile_idx =
-                                    slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
-                                global_tile_idx = slice_coordinates_to_global_tile_index(
-                                    slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
-                                DPRINT << "global_tile_idx: " << global_tile_idx << ENDL();
-                                uint32_t input_tile_id = global_tile_idx + batch_offset;
-                                uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
-                                noc_async_read(noc_read_addr, l1_write_addr, page_size);
-                                l1_write_addr += page_size;
                             }
                             noc_async_read_barrier();
                             cb_push_back(cb_in0, tile_granularity);
-
                             if (do_reduce) {
-                                cb_reserve_back(cb_intermediate_id, tile_granularity);
-                                intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
-                                for (uint32_t j = 0; j < tiles_to_read_in_this_step; ++j) {
-                                    uint32_t intermediate_tile_id = global_tile_idx;
-                                    uint64_t intermediate_noc_read_addr =
-                                        get_noc_addr(intermediate_tile_id, intermediate_tensor_addrgen);
-                                    noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, page_size);
-                                    intermediate_l1_write_addr += page_size;
-                                }
                                 noc_async_read_barrier();
                                 cb_push_back(cb_intermediate_id, tile_granularity);
                             }
