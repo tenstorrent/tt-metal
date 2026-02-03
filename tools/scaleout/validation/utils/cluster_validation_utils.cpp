@@ -242,9 +242,9 @@ void configure_local_kernels(
                     // Store kernel info for later
                     kernel_infos.push_back(KernelInfo{
                         .chip_id = curr_chip_id,
-                        .coord = curr_coord,
+                        .coord = CoreCoord(curr_coord.x, curr_coord.y),
                         .neighbor_chip_id = neighbor_chip_id,
-                        .neighbor_coord = neighbor_coord});
+                        .neighbor_coord = CoreCoord(neighbor_coord.x, neighbor_coord.y)});
 
                     kernel_coords[curr_chip_id].push_back(curr_coord);
                     kernel_coords[neighbor_chip_id].push_back(neighbor_coord);
@@ -374,7 +374,8 @@ void configure_cross_host_kernels(
             }
 
             // Store kernel info for later
-            kernel_infos.push_back(KernelInfo{.chip_id = my_chip, .coord = my_coord, .is_sender = sender});
+            kernel_infos.push_back(
+                KernelInfo{.chip_id = my_chip, .coord = CoreCoord(my_coord.x, my_coord.y), .is_sender = sender});
         }
     }
 
