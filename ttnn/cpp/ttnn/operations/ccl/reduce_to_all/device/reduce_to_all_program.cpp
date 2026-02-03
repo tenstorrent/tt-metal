@@ -45,15 +45,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     const auto& output_tensor_l = output_tensors.at(1)[0];  // Only L output (normalized)
 
     // Use intermediate tensors as receive buffers.
-    // These are MeshDevice tensors created ONCE at the mesh level, so they have
-    // the SAME L1 address on ALL devices. This is critical for fabric sends!
     //
     // - R1 receive buffer: Use fw_intermediate_tensor (for R1 neighbor data)
     // - R2 receive buffer: Use bw_intermediate_tensor (for R2 neighbor data)
     //
-    // The original design uses these tensors differently across device types,
-    // but the key insight is that fw_intermediate and bw_intermediate have the
-    // same address on all devices, allowing cross-device sends to work.
     const auto& r1_recv_tensor = output_tensors.at(0)[0];  // fw_intermediate
     const auto& r2_recv_tensor = output_tensors.at(0)[1];  // bw_intermediate
 
@@ -96,17 +91,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     const uint32_t ms_tile_size_bytes = aligned_page_size;                       // Single combined MS tile
     const uint32_t total_packet_size = payload_size_bytes + ms_tile_size_bytes;  // L + MS
 
-    // =========================================================================
-    // Use intermediate tensors as receive buffers
-    // =========================================================================
-    // The intermediate tensors (r1_recv_tensor, r2_recv_tensor) are MeshDevice tensors
-    // created ONCE at the mesh level via create_output_tensors(). They have the SAME
-    // L1 buffer address on ALL devices, which is critical for fabric sends.
-    //
-    // This replaces the per-device MeshBuffer::create() approach which was broken
-    // because it created different buffer instances (with different addresses) for
-    // each device.
-
     // Scale encoding
     union {
         float f;
@@ -115,9 +99,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     scale_union.f = scale_fp32;
     uint32_t scale_val = scale_union.u;
 
-    // =========================================================================
-    // Create Program
-    // =========================================================================
     tt::tt_metal::Program program{};
 
     const auto tiny_tile = tt::tt_metal::Tile({8, 32});
@@ -125,7 +106,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_l.dtype());
 
     // =========================================================================
-    // Define CB indices
+    // CB indices
     // =========================================================================
     // R1 local input (aliased to input tensor shard)
     constexpr auto cb_local_l = tt::CBIndex::c_0;
@@ -338,26 +319,20 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // =========================================================================
 
     // Reader compile-time args
-    // Note: cb_r1_neighbor_l and cb_r2_neighbor_l are aliased to receive buffers (zero-copy for L)
-    // MS needs memcpy from buffer since we can't alias at offsets
     std::vector<uint32_t> reader_ct_args = {
-        Sq_chunk_t,             // 0
-        vDHt,                   // 1
-        input_page_size_bytes,  // 2
-        l1_alignment,           // 3
-        cb_local_l,             // 4
-        cb_local_ms,            // 5
-        cb_r1_neighbor_l,       // 6
-        cb_r1_neighbor_ms,      // 7
-        cb_r2_neighbor_l,       // 8
-        cb_r2_neighbor_ms,      // 9
-        payload_size_bytes,     // 10 - offset to MS data in receive buffer
-        ms_tile_size_bytes,     // 11 - size of MS data to copy
+        cb_local_l,          // 0
+        cb_local_ms,         // 1
+        cb_r1_neighbor_l,    // 2
+        cb_r1_neighbor_ms,   // 3
+        cb_r2_neighbor_l,    // 4
+        cb_r2_neighbor_ms,   // 5
+        Sq_chunk_t,          // 6
+        vDHt,                // 7
+        payload_size_bytes,  // 8 - offset to MS data in receive buffer
+        ms_tile_size_bytes,  // 9 - size of MS data to copy
     };
 
     // Writer compile-time args
-    // The writer builds packets and writes them to forwarder slots via NoC,
-    // then increments forwarder semaphore.
     std::vector<uint32_t> writer_ct_args = {
         cb_local_l,                 // 0
         cb_local_ms,                // 1
@@ -373,14 +348,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         slot_size,                  // 11: forwarder slot size (L1-aligned)
     };
 
-    // Compute compile-time args (15 total for optimized compute)
-    // Layout matches compute.cpp expectations:
-    // - 0-1: Local input CBs (L, MS)
-    // - 2-3: R1 neighbor CBs
-    // - 4-5: R1 result CBs
-    // - 6-7: R2 neighbor CBs
-    // - 8-9: Output CBs (L, MS intermediate)
-    // - 10-14: scale, block_size, num_blocks, cb_compute_to_writer_sync, cb_writer_to_compute_sync
+    // Compute compile-time args
     std::vector<uint32_t> compute_ct_args = {
         cb_local_l,                 // 0
         cb_local_ms,                // 1
@@ -427,7 +395,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         });
 
     // Create forwarder kernels (BRISC for FWD, NCRISC for BWD)
-    // Both use the same kernel code - direction is implicit in fabric connection rt args
     auto forwarder_brisc_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/reduce_to_all/device/kernels/forwarder.cpp",
