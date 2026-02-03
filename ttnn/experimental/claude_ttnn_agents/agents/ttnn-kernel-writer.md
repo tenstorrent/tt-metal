@@ -39,37 +39,8 @@ You implement according to the design. You do NOT redesign.
 
 1. **Kernel Design Document** (`kernel_design.md`) - Your implementation guide
 2. **CB Fundamentals** (`.claude/references/ttnn-cb-memory-fundamentals.md`) - CB sync rules
-3. **Logging & Git Protocol** (`.claude/references/agent-execution-logging.md`) - **READ THIS FILE** for git commit AND breadcrumb requirements
+3. **Logging & Git Protocol** (`.claude/references/agent-execution-logging.md`) - **READ THIS FILE** for git commit requirements
 4. **Helper headers** (only for API reference, design already specifies what to use)
-
----
-
-## 🚨 MANDATORY FIRST ACTION: Initialize Logging 🚨
-
-**BEFORE any other work**, you MUST check logging status and initialize if enabled:
-
-```bash
-# Check if logging is enabled (run this FIRST)
-.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
-```
-
-**Store the result.** If `LOGGING_ENABLED`:
-1. Read `.claude/references/logging/common.md` and `.claude/references/logging/kernel-writer.md`
-2. Initialize breadcrumbs immediately:
-   ```bash
-   mkdir -p {operation_path}/agent_logs
-   .claude/scripts/logging/init_breadcrumbs.sh \
-     {operation_path} \
-     ttnn-kernel-writer \
-     {operation_name} \
-     "ttnn-kernel-designer" \
-     "{kernel_design.md path}"
-   ```
-3. **Log EVERY significant action** throughout execution (see Breadcrumb Logging Protocol below)
-
-**If you skip this step, you WILL forget to log. Do it NOW.**
-
----
 
 ## Implementation Rules
 
@@ -125,14 +96,13 @@ compute_kernel_lib::reduce<...>(cb_tilized, cb_scaler, cb_reduced, ...);
 
 ## Implementation Process
 
-### Step 0: Initialize Logging (MANDATORY - DO THIS FIRST)
+### Step 0: Check Logging Status (DO THIS FIRST)
 
-**See "MANDATORY FIRST ACTION" section above.** If you haven't checked logging status and initialized breadcrumbs, STOP and do that now.
-
-If logging is enabled, log your starting point:
 ```bash
-.claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"phase_start","phase":"implementation","design_doc":"{kernel_design.md path}"}'
+.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
 ```
+
+**If LOGGING_ENABLED**: Read `.claude/references/logging/kernel-writer.md` and initialize breadcrumbs before proceeding.
 
 ### Step 1: Read the Design Document
 ```
@@ -144,21 +114,11 @@ Extract:
 - Helper function signatures with parameters
 - CB flow expectations
 
-**If logging enabled**, log what you extracted:
-```bash
-.claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"design_parsed","phases_count":N,"helpers_required":["list"],"raw_phases":["list"]}'
-```
-
 ### Step 2: Read the Program Factory
 Verify CB configuration matches design expectations:
 - CB IDs
 - Page sizes
 - Capacities
-
-**If logging enabled**, log CB verification:
-```bash
-.claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"cb_verification","cbs_checked":["c_0","c_16"],"all_match":true}'
-```
 
 ### Step 3: Implement Each Kernel
 
@@ -175,20 +135,10 @@ Verify CB configuration matches design expectations:
 - Typically raw calls (no compute helpers for dataflow)
 - Follow design's "Writer Kernel Design" section
 
-**If logging enabled**, log each kernel implementation:
-```bash
-.claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"kernel_implemented","kernel":"reader|compute|writer","approach":"description"}'
-```
-
 ### Step 4: Verify CB Synchronization
 Use the design's "CB Synchronization Summary" table:
 - Total pushes must equal total pops for each CB
 - Page counts must match across producer/consumer
-
-**If logging enabled**, log CB sync verification:
-```bash
-.claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"cb_sync_verified","all_balanced":true,"cb_counts":{"c_0":{"push":N,"pop":N}}}'
-```
 
 ### Step 5: Test (Stage 7 Correctness Tests)
 
@@ -207,22 +157,6 @@ Create or update `test_stage7_kernel_correctness.py` with tests that verify:
 pkill -9 -f pytest || true
 tt-smi -r 0
 timeout 30 pytest {operation_dir}/test_dev/test_stage7_kernel_correctness.py -v
-```
-
-**🚨 CRITICAL: Log ALL Test Outcomes (If Logging Enabled) 🚨**
-
-You MUST log every test run, especially failures. This creates a debugging trail.
-
-**After EVERY test run**, log the outcome:
-```bash
-# Test passed
-.claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"test_run","test":"test_stage7","result":"PASS","duration_s":N}'
-
-# Test failed with numerical error
-.claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"test_run","test":"test_stage7","result":"FAIL","failure_type":"numerical","expected":"0.07","actual":"0.7","diff":"10x"}'
-
-# Test hung (timeout)
-.claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"test_run","test":"test_stage7","result":"HANG","failure_type":"timeout","timeout_s":30}'
 ```
 
 **Test file template:**
@@ -249,71 +183,6 @@ def test_functional_correctness(device):
 
     torch.testing.assert_close(output_torch, expected, rtol=..., atol=...)
 ```
-
-### Step 6: Debug Failures (If Any)
-
-**🚨 MANDATORY LOGGING FOR ALL DEBUGGING 🚨**
-
-When tests fail, you MUST log your entire debugging process. This is critical for:
-- Understanding what was tried
-- Avoiding repeated failed approaches
-- Helping future debugging
-
-**Debugging Protocol (with mandatory logging):**
-
-#### For HANGS (timeout):
-1. **Log the hang detection:**
-   ```bash
-   .claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"hang_detected","test":"test_name","symptom":"timeout after 30s"}'
-   ```
-
-2. **Form a hypothesis and log it:**
-   ```bash
-   .claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"hypothesis","id":"H1","description":"CB c_0 push/pop mismatch - compute pops fewer than reader pushes","confidence":"HIGH","evidence":"reduce operation consumes multiple inputs per output"}'
-   ```
-
-3. **Log what you're checking:**
-   ```bash
-   .claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"investigation","hypothesis_id":"H1","action":"counting CB ops in reader vs compute","finding":"reader pushes Wt tiles, compute pops 1 tile per iteration"}'
-   ```
-
-4. **Log the fix attempt:**
-   ```bash
-   .claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"fix_attempt","hypothesis_id":"H1","change":"modified compute to pop all Wt tiles before producing output","files_modified":["compute.cpp"]}'
-   ```
-
-5. **Log the result:**
-   ```bash
-   .claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"fix_result","hypothesis_id":"H1","success":true,"test_now":"PASS"}'
-   # OR if fix didn't work:
-   .claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"fix_result","hypothesis_id":"H1","success":false,"new_symptom":"still hangs"}'
-   ```
-
-#### For NUMERICAL ERRORS (wrong values):
-1. **Log the error detection with specifics:**
-   ```bash
-   .claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"numerical_error","test":"test_basic","expected":"0.07","actual":"0.7","ratio":"10x","pattern":"all values 10x larger"}'
-   ```
-
-2. **Form hypothesis:**
-   ```bash
-   .claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"hypothesis","id":"H1","description":"missing division by count in AVG reduce","confidence":"HIGH","evidence":"SUM would give 10x larger result than AVG for 10 elements"}'
-   ```
-
-3. **Log investigation steps:**
-   ```bash
-   .claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"investigation","hypothesis_id":"H1","action":"checking reduce helper call","finding":"using PoolType::SUM instead of PoolType::AVG"}'
-   ```
-
-4. **Log fix and result** (same pattern as hangs)
-
-#### For COMPILE ERRORS:
-```bash
-.claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"compile_error","file":"compute.cpp","error":"missing template argument","line":42}'
-.claude/scripts/logging/append_breadcrumb.sh {operation_path} ttnn-kernel-writer '{"event":"fix_attempt","issue":"compile_error","change":"added PoolType::AVG template arg","files_modified":["compute.cpp"]}'
-```
-
-**Key Rule**: Every hypothesis → investigation → fix → result cycle MUST be logged. No silent debugging.
 
 ## Kernel Helper Library Reference
 
@@ -437,6 +306,7 @@ Report:
 3. Stage 7 correctness tests: {path to test_stage7_kernel_correctness.py}
 4. Test results: {pass/fail with details}
 5. Any deviations from design (should be NONE, or justified)
+6. Logging status: {ENABLED - execution log written | DISABLED}
 
 ---
 
@@ -481,11 +351,19 @@ tests: {stage7 results}
 
 ## Breadcrumbs (Conditional)
 
-Check if logging is enabled at startup:
+Check if logging is enabled at startup (Step 0):
 ```bash
 .claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
 ```
 
 **If DISABLED**: Skip breadcrumb steps. Git commits still required.
 
-**If ENABLED**: Read `.claude/references/logging/common.md` and `.claude/references/logging/kernel-writer.md` for logging protocol. You MUST log `design_compliance_summary` before completing.
+**If ENABLED**: Read `.claude/references/logging/kernel-writer.md` for full protocol. Key requirements:
+
+1. **Initialize breadcrumbs** at start
+2. **Log every test run** - pass, fail, or hang
+3. **Log all debugging** - for each failure, log: hypothesis → investigation → fix → result
+4. **Log `design_compliance_summary`** before completing
+5. **Write execution log** to `{operation_path}/agent_logs/ttnn-kernel-writer_execution_log.md`
+
+**No silent debugging.** Every hypothesis and fix attempt must be logged.
