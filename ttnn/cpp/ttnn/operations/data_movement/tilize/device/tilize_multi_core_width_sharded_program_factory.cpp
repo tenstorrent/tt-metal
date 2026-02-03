@@ -70,13 +70,13 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_width_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_width_sharded.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_width_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/writer_unary_width_sharded.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -84,7 +84,7 @@ TilizeMultiCoreWidthShardedProgramFactory::cached_program_t TilizeMultiCoreWidth
 
     tt::tt_metal::KernelHandle unary_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/kernel/compute/tilize_compute_width_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/tilize_compute_width_sharded.cpp",
         total_cores,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_llk_acc,
