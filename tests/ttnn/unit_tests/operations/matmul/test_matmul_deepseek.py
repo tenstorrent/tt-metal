@@ -40,10 +40,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 896,
-            "n": 2112,  # this pads up to 2304
+            "n": 2112,  # pads to 2304 (72 tiles), out_core_grid must divide 72
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
-            "in0_core_grid": (7, 1),
-            "out_core_grid": (8, 1),
+            "in0_core_grid": (1, 7),
+            "out_core_grid": (1, 8),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat16,
@@ -59,10 +59,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 1536,
-            "n": 3072,
+            "n": 3072,  # already aligned (96 tiles), out_core_grid must divide 96
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
-            "in0_core_grid": (8, 2),
-            "out_core_grid": (8, 2),
+            "in0_core_grid": (2, 8),
+            "out_core_grid": (2, 8),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat16,
@@ -79,10 +79,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 16384,
-            "n": 896,  # this pads up to 1152
+            "n": 896,  # pads to 1152 (36 tiles), out_core_grid must divide 36
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
-            "in0_core_grid": (8, 1),
-            "out_core_grid": (8, 1),
+            "in0_core_grid": (1, 8),
+            "out_core_grid": (1, 6),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat16,
@@ -98,10 +98,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 8192,
-            "n": 1280,
+            "n": 1280,  # pads to 1536 (48 tiles), out_core_grid must divide 48
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
-            "in0_core_grid": (8, 1),
-            "out_core_grid": (8, 1),
+            "in0_core_grid": (1, 8),
+            "out_core_grid": (1, 8),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat16,
@@ -117,10 +117,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 7168,
-            "n": 3584,  # 2304, padded up
+            "n": 3584,  # pads to 3840 (120 tiles), out_core_grid must divide 120
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
-            "out_core_grid": (7, 8),
+            "out_core_grid": (5, 8),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -135,11 +135,11 @@ def pad_to_tile(dim, tile_size):
         # mlp ff2
         {
             "m": 32,
-            "k": 3584,  # 2304, padded up
-            "n": 7168,
+            "k": 3584,
+            "n": 7168,  # pads to 7296 (228 tiles), out_core_grid must divide 228
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
-            "out_core_grid": (7, 8),
+            "out_core_grid": (2, 6),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -155,10 +155,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 16,
             "k": 7168,
-            "n": 256,
+            "n": 256,  # pads to 384 (12 tiles), out_core_grid must divide 12
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
-            "out_core_grid": (1, 8),
+            "out_core_grid": (1, 4),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -174,10 +174,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 7168,
-            "n": 384,  # 256, padded up
+            "n": 384,  # already aligned (12 tiles), out_core_grid must divide 12
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
-            "out_core_grid": (3, 4),
+            "out_core_grid": (2, 6),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -193,10 +193,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 256,
-            "n": 7168,
+            "n": 7168,  # pads to 7296 (228 tiles), out_core_grid must divide 228
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (1, 8),
-            "out_core_grid": (7, 8),
+            "out_core_grid": (2, 6),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -212,10 +212,10 @@ def pad_to_tile(dim, tile_size):
         {
             "m": 32,
             "k": 7168,
-            "n": 16512,  # 16160 padded
+            "n": 16512,  # already aligned (516 tiles), out_core_grid must divide 516
             "in0_shard_strategy": ttnn.ShardStrategy.WIDTH,
             "in0_core_grid": (7, 8),
-            "out_core_grid": (8, 8),
+            "out_core_grid": (2, 6),
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat4_b,
             "out_dtype": ttnn.bfloat16,
@@ -294,7 +294,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     # The code calculates: num_blocks_x = ((N_tiles - 1) / per_core_N) + 1
     # and num_cores = num_blocks_x * num_blocks_y
     # We need to ensure num_cores <= available cores (64 for 8x8 grid)
-    N_tiles = n // out_tile_w
+    N_tiles = n_padded // out_tile_w
     M_tiles = m // out_tile_h
     num_blocks_y = ((M_tiles - 1) // per_core_M) + 1
     # Maximum number of blocks in x direction to stay within available cores
@@ -312,7 +312,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     else:
         min_per_core_N = N_tiles
     # Use the larger of the two: what we want for sharding vs what fits in available cores
-    desired_per_core_N = n // num_out_cores // out_tile_w
+    desired_per_core_N = n_padded // num_out_cores // out_tile_w
     per_core_N = max(min_per_core_N, desired_per_core_N)
 
     # Create torch tensors
@@ -349,9 +349,9 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
         memory_config=in1_memory_config,
     )
 
-    # Output: L1 width-sharded memory config
+    # Output: L1 width-sharded memory config using padded dimensions
     out_memory_config = ttnn.create_sharded_memory_config(
-        [1, 1, m, n],
+        [1, 1, m, n_padded],
         core_grid=out_core_grid,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -374,7 +374,6 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
         packer_l1_acc=True,
     )
 
-    # Run matmul - do it three times for perf
     for itr in range(num_iters):
         output_t = ttnn.matmul(
             in0_t,
