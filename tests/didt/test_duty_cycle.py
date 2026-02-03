@@ -167,32 +167,6 @@ class DutyCycleRandomizedTest(OpTestBase):
             rng = random.Random(self.random_seed)
             rng.shuffle(operations)
 
-            # log the random seed and operation order
-            logger.info(f"Random seed: {self.random_seed}, Operation order: {operations}")
-            # log the number of matmul and cos operations
-            logger.info(
-                f"Number of matmul operations: {operations.count('matmul')}, Number of cos operations: {operations.count('cos')}"
-            )
-            # log the longest sequence of matmul operations and cos operations
-            longest_sequence_matmul = 0
-            longest_sequence_cos = 0
-            current_sequence_matmul = 0
-            current_sequence_cos = 0
-            for op in operations:
-                if op == "matmul":
-                    current_sequence_matmul += 1
-                    current_sequence_cos = 0
-                elif op == "cos":
-                    current_sequence_cos += 1
-                    current_sequence_matmul = 0
-                if current_sequence_matmul > longest_sequence_matmul:
-                    longest_sequence_matmul = current_sequence_matmul
-                if current_sequence_cos > longest_sequence_cos:
-                    longest_sequence_cos = current_sequence_cos
-            logger.info(
-                f"Longest sequence of matmul operations: {longest_sequence_matmul}, Longest sequence of cos operations: {longest_sequence_cos}"
-            )
-
             self.trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             for op in operations:
                 if op == "matmul":
