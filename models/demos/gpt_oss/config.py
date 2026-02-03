@@ -157,6 +157,7 @@ class MeshConfig:
         #     memory_config=memory_config,
         #     barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         # )
+        ttnn.synchronize_device(ccl_manager.mesh_device)
         gathered = ttnn.all_reduce(
             tensor,
             cluster_axis=axis,
@@ -164,6 +165,7 @@ class MeshConfig:
             memory_config=memory_config,
             topology=ttnn.Topology.Linear if axis == 0 else ttnn.Topology.Ring,
         )
+        ttnn.synchronize_device(ccl_manager.mesh_device)
 
         # Remove padding if applied
         if padded:
@@ -191,7 +193,8 @@ class MeshConfig:
         #     memory_config=memory_config,
         #     barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         # )
-        return ttnn.all_gather(
+        ttnn.synchronize_device(ccl_manager.mesh_device)
+        out = ttnn.all_gather(
             tensor,
             dim=dim,
             cluster_axis=axis,
@@ -199,6 +202,8 @@ class MeshConfig:
             memory_config=memory_config,
             topology=ttnn.Topology.Linear if axis == 0 else ttnn.Topology.Ring,
         )
+        ttnn.synchronize_device(ccl_manager.mesh_device)
+        return out
 
     def __repr__(self):
         decode_dp = self.total_devices // (self.decode.tp * self.decode.ep)
