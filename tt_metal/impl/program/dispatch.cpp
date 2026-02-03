@@ -69,7 +69,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 
 #include <impl/dispatch/dispatch_mem_map.hpp>
-#include "hostdevcommon/common_values.hpp"
+#include "hostdev/rta_constants.h"
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
