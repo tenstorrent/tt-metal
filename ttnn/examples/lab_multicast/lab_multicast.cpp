@@ -3,41 +3,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- This example demonstrates how to create a 32x32 data tile and multicast it from a sender (coordinator) core to multiple
+ This example demonstrates how to multicast a tensor from a sender (coordinator) core to multiple
  receiver cores.  It covers the setup of semaphores and multicore addressing on Tenstorrent hardware.  In the original
  configuration, (0,0) is the sender core, while (1,0), (2,0), and (3,0) are the receiver cores.  The user can modify
  these coordinates as desired.
-
- This version uses ttnn::Tensor for cleaner buffer management, abstracting away DRAM buffer internals.
 */
-
+#include <chrono>
 #include <cstdint>
-#include <vector>
-#include <memory>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <thread>
-#include <chrono>
+#include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/constants.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-using namespace tt;
-using namespace tt::tt_metal;
-using namespace tt::constants;
 using namespace std;
+using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
 using namespace ttnn;
-using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
 // Define prefix path for kernel files to be an empty string if not set in the makefile.
 // This prefix enables overriding the default kernel path with a custom path, so that the
@@ -116,28 +112,28 @@ ProgramState init_program() {
  * | Argument  | Description                                               |
  * |-----------|-----------------------------------------------------------|
  * | program   | The program to which the circular buffer will be added    |
- * | core      | Core specification (CoreCoord, CoreRange, or CoreRangeSet)|
+ * | cores     | Cores where the circular buffer will be created           |
  * | num_tiles | Number of tiles to allocate in the circular buffer        |
  * | cb_index  | Circular buffer index (c_0 to c_31)                       |
  */
 // clang-format on
-void create_cb(Program& program, const CoreSpec& core, uint32_t num_tiles, tt::CBIndex cb_index) {
+void create_cb(Program& program, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& cores, uint32_t num_tiles, tt::CBIndex cb_index) {
     constexpr uint32_t single_tile_bytes = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
     constexpr tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
 
     // Technically, circular buffers operate on pages, not tiles. However, it is most common to have one tile per page.
     CircularBufferConfig cb_config = CircularBufferConfig(num_tiles * single_tile_bytes, {{cb_index, cb_data_format}})
                                          .set_page_size(cb_index, single_tile_bytes);
-    tt_metal::CreateCircularBuffer(program, core, cb_config);
+    tt_metal::CreateCircularBuffer(program, cores, cb_config);
 }
 
 // clang-format off
 /**
- * Verify that received tiles match the golden (original) tile.
+ * Verify that received tiles match the reference (original) tile.
  *
  * | Argument       | Description                                               |
  * |----------------|-----------------------------------------------------------|
- * | golden_tile    | The original tile data that was multicast                 |
+ * | ref_tile       | The original tile data that was multicast                 |
  * | received_tiles | Vector containing all received tiles from receiver cores  |
  * | num_tiles      | Number of receiver tiles to verify                        |
  * | verbose_verify | If true, print full tile contents for debugging           |
@@ -146,11 +142,11 @@ void create_cb(Program& program, const CoreSpec& core, uint32_t num_tiles, tt::C
  */
 // clang-format on
 bool verify_tiles(
-    const std::vector<bfloat16>& golden_tile,
+    const std::vector<bfloat16>& ref_tile,
     const std::vector<bfloat16>& received_tiles,
     int num_tiles,
     bool verbose_verify) {
-    fmt::print("\n=========== MULTICASTED TILE VERIFICATION ===========\n");
+    log_info(tt::LogAlways, "\n=========== MULTICAST TILE VERIFICATION ===========\n");
 
     ////////// LAMBDAS FOR ITERATING AND VERBOSE PRINTING TILES //////////
     auto tile_elem_idx = [](int tile, int i, int j) {
@@ -160,23 +156,23 @@ bool verify_tiles(
     auto print_tile =
         [&](const std::string& label, const std::vector<bfloat16>& data, std::optional<int> tile_num = std::nullopt) {
             if (tile_num.has_value()) {
-                fmt::print("\n[{} TILE {}]\n", label, tile_num.value() + 1);
+                log_info(tt::LogAlways, "\n[{} TILE {}]\n", label, tile_num.value() + 1);
             } else {
-                fmt::print("\n[{} TILE]\n", label);
+                log_info(tt::LogAlways, "\n[{} TILE]\n", label);
             }
 
             for (int i = 0; i < TILE_HEIGHT; i++) {
                 for (int j = 0; j < TILE_WIDTH; j++) {
                     int idx = tile_num.has_value() ? tile_elem_idx(tile_num.value(), i, j) : (i * TILE_WIDTH) + j;
-                    fmt::print("{} ", static_cast<float>(data[idx]));
+                    log_info(tt::LogAlways, "{} ", static_cast<float>(data[idx]));
                 }
-                fmt::print("\n");
+                log_info(tt::LogAlways, "\n");
             }
         };
 
     ////////// VERIFICATION FLOW //////////
     if (verbose_verify) {
-        print_tile("ORIGINAL", golden_tile);
+        print_tile("ORIGINAL", ref_tile);
     }
 
     bool all_match = true;  // verification loop primer.
@@ -187,32 +183,30 @@ bool verify_tiles(
         if (verbose_verify) {
             print_tile("RECEIVED", received_tiles, tile);
         }
-        // iterate over ith tile's elements, check whether they match with golden's elements.
+        // Iterate over ith tile's elements, check whether they match the reference tile.
         for (int i = 0; i < TILE_HEIGHT && tile_match; i++) {
             for (int j = 0; j < TILE_WIDTH; j++) {
                 int idx = tile_elem_idx(tile, i, j);
-                float received = static_cast<float>(received_tiles[idx]);
-                float golden = static_cast<float>(golden_tile[(i * TILE_WIDTH) + j]);
-                if (received != golden) {
+                if (received_tiles[idx] != ref_tile[(i * TILE_WIDTH) + j]) {
                     tile_match = false;
                     break;
                 }
             }
         }
         if (tile_match) {
-            fmt::print("[PASS] Receiver tile {} matches the golden tile.\n", tile + 1);
+            log_info(tt::LogAlways, "[PASS] Receiver tile {} matches the reference tile.\n", tile + 1);
         } else {
-            fmt::print("[FAIL] Receiver tile {} does not match the golden tile.\n", tile + 1);
+            log_error(tt::LogAlways, "[FAIL] Receiver tile {} does not match the reference tile.\n", tile + 1);
         }
 
         all_match &= tile_match;
     }
     if (all_match) {
-        fmt::print("[PASS] All {} receiver tiles match the golden tile.\n", num_tiles);
+        log_info(tt::LogAlways, "[PASS] All {} receiver tiles match the reference tile.\n", num_tiles);
     } else {
-        fmt::print("[FAIL] One or more tiles did not match the golden tile.\n");
+        log_error(tt::LogAlways, "[FAIL] One or more tiles did not match the reference tile.\n");
     }
-    fmt::print("=====================================================\n\n");
+    log_info(tt::LogAlways, "=====================================================\n\n");
 
     return all_match;
 }
@@ -220,7 +214,6 @@ bool verify_tiles(
 // clang-format off
 /**
  * Perform multicast operation: send a tile from coordinator core to multiple receiver cores.
- * Uses ttnn::Tensor for clean buffer management while demonstrating multicast concepts.
  *
  * | Argument        | Description                                               |
  * |-----------------|-----------------------------------------------------------|
@@ -393,27 +386,9 @@ void multicast_tile_tensix(
         tile_index++;
     }
 
-    ////////// PROGRAM LAUNCH //////////
-    fmt::print("Launching program\n");
-    fmt::print(
-        "Hello, Core ({}, {}) on Device {}, please multicast the tile to your neighbors.\n",
-        sender_core_logical.x,
-        sender_core_logical.y,
-        0);
-
     prog_state.workload.add_program(prog_state.device_range, std::move(prog_state.program));
     // Last argument is set to true to wait for the workload to complete (blocking call).
     tt_metal::distributed::EnqueueMeshWorkload(prog_state.cq, prog_state.workload, true);
-
-    fmt::print(
-        "Thank you, Core ({}, {}) on Device {}, for the multicast.\n",
-        sender_core_logical.x,
-        sender_core_logical.y,
-        0);
-
-    // Introduce artificial delay to avoid jumbling host-side tile verification prints with
-    // potentially echoing device-side DPRINTs. Delay may be adjusted or removed as needed.
-    this_thread::sleep_for(chrono::milliseconds(200));
 
     // Read the result back from device using Tensor::to_vector
     output_tiles = dst_tensor.to_vector<bfloat16>();
