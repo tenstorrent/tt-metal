@@ -828,7 +828,8 @@ Tensor ExecutePower::invoke(
     const std::optional<Tensor>& output_tensor) {
     float exponent_floor = std::floor(exponent);
     if (static_cast<int32_t>(exponent_floor) == exponent) {
-        return ExecutePower::invoke(input_a, static_cast<int32_t>(exponent), output_mem_config, output_tensor);
+        int32_t exp = exponent;
+        return ExecutePower::invoke(input_a, exp, output_mem_config, output_tensor);
     }
     return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER>::invoke(
         input_a, exponent, output_mem_config, output_tensor);
@@ -842,8 +843,9 @@ Tensor ExecutePower::invoke(
     const std::optional<Tensor>& output_tensor) {
     // For exponents 0, 1, 2, 3: use iterative approach
     if (exponent == 0 || exponent == 1 || exponent == 2 || exponent == 3) {
+        uint32_t exp = exponent;
         return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER_ITERATIVE>::
-            invoke(input, static_cast<uint32_t>(exponent), output_mem_config, output_tensor);
+            invoke(input, exp, output_mem_config, output_tensor);
     }
     return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER>::invoke(
         input, exponent, output_mem_config, output_tensor);
