@@ -31,7 +31,6 @@ struct ExecuteStridedReduceScatterAsync {
         std::optional<uint32_t> mm_cores_y = std::nullopt,
         std::optional<uint32_t> mm_block_ht = std::nullopt,
         std::optional<uint32_t> mm_block_wt = std::nullopt,
-        std::optional<uint32_t> mm_M_block_ht = std::nullopt,
         std::optional<uint32_t> mm_N_block_wt = std::nullopt,
         std::optional<uint32_t> chunk_width_in_mm_blocks = std::nullopt);
 };
