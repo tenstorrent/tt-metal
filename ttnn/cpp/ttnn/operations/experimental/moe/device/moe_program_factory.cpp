@@ -8,6 +8,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
 #include <numeric>
@@ -16,15 +17,31 @@
 #include <vector>
 
 namespace ttnn::operations::experimental::moe::program {
+namespace detail {
+
+std::string serialize_physical_core_coords(const ttnn::CoreRangeSet& coreranges, const ttnn::MeshDevice& device) {
+    std::vector<uint32_t> flat_physical_core_coords;
+    flat_physical_core_coords.reserve(2 * coreranges.num_cores());
+
+    for (const auto& c : corerange_to_cores(coreranges)) {
+        const auto pc = device.worker_core_from_logical_core(c);
+        flat_physical_core_coords.push_back(pc.x);
+        flat_physical_core_coords.push_back(pc.y);
+    }
+
+    return ccl::common::stringify(flat_physical_core_coords);
+}
+}  // namespace detail
 
 MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t&) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
+    auto* device = tensor_args.input_tensor.device();
+
     // Get the cores for the program
     const auto dram_bank2core_coords =
-        tensor_args.input_tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(
-            tt::tt_metal::NOC::RISCV_0_default);
+        device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
 
     const uint32_t num_cores = dram_bank2core_coords.size();
     auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
@@ -95,7 +112,8 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     const uint32_t num_tokens_total = operation_attributes.num_tokens_total;
     const uint32_t output_height_shard_dim = operation_attributes.output_height_shard_dim;
     const uint32_t output_width_shard_dim = operation_attributes.output_width_shard_dim;
-    const uint32_t output_shard_width_tiles = tensor_args.output_tensor.logical_shape()[-1] / tile_width;
+    const uint32_t output_shard_width_tiles = operation_attributes.hidden_dim / tile_width / output_width_shard_dim;
+    const auto input_dataformat = std::get<2>(sharded_cb_specs.back());
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"num_experts", operation_attributes.num_experts},
@@ -104,10 +122,11 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         {"combine_shard_width_tiles", output_shard_width_tiles},
         {"tile_height", tile_height},
         {"tile_width", tile_width},
+        {"tile_width_size_bytes", tile_width * tt::datum_size(input_dataformat)},
+
         {"num_tokens_total", num_tokens_total},
         {"height_shard_dim", output_height_shard_dim},
         {"width_shard_dim", output_width_shard_dim},
-
     };
 
     // Create kernels for the program
@@ -121,6 +140,10 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .compile_args = compile_args,
             .named_compile_args = named_compile_time_args});
 
+    const auto& output_shard_core_ranges = operation_attributes.output_shard_core_ranges;
+    std::map<std::string, std::string> dm1_defines = {
+        {"OUTPUT_SHARD_CORE_MAP", detail::serialize_physical_core_coords(output_shard_core_ranges, *device)}};
+
     auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/moe/device/kernels/dm1.cpp",
@@ -129,6 +152,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
             .compile_args = compile_args,
+            .defines = dm1_defines,
             .named_compile_args = named_compile_time_args});
 
     auto compute_kernel_handle = tt::tt_metal::CreateKernel(
@@ -153,7 +177,6 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
     // Sort cores by (descending y, descending x) to create a ring that flows naturally
     std::vector<uint32_t> ring_pos2bank_id(num_cores);
     std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
-    auto device = tensor_args.input_tensor.device();
 
     std::sort(
         ring_pos2bank_id.begin(),

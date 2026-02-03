@@ -43,18 +43,22 @@ std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tenso
     const Tensor& w0_w1_tensor,
     const Tensor& w2_tensor,
     const Tensor& output_tensor,
+    const uint32_t hidden_dim,
     const uint32_t num_experts,
     const uint32_t layer_id,
     const uint32_t num_tokens_total,
     const uint32_t output_height_shard_dim,
-    const uint32_t output_width_shard_dim) {
+    const uint32_t output_width_shard_dim,
+    const CoreRangeSet& output_shard_core_ranges) {
     return {
         operation_attributes_t{
+            .hidden_dim = hidden_dim,
             .num_experts = num_experts,
             .layer_id = layer_id,
             .num_tokens_total = num_tokens_total,
             .output_height_shard_dim = output_height_shard_dim,
-            .output_width_shard_dim = output_width_shard_dim},
+            .output_width_shard_dim = output_width_shard_dim,
+            .output_shard_core_ranges = output_shard_core_ranges},
         tensor_args_t{
             .input_tensor = input_tensor,
             .w0_w1_tensor = w0_w1_tensor,

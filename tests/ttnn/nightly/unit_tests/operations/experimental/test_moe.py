@@ -23,19 +23,20 @@ FULL_CORES = {0, 1, 8, 9}
 PAD_CORES = {2, 3, 4, 5, 6, 7, 10, 11}
 
 
-def create_torch_input(L, in0_num_cores, E, M, K):
+def create_torch_input(L, in0_core_coords, all_core_range_set, E, M, K):
     """
     Create torch input tensor with unique integer values per layer/expert.
 
     Args:
         L: Number of layers
-        in0_num_cores: Number of input cores
+        in0_core_coords: List of core coordinates that receive input data shards
+        all_core_range_set: all core coordinates
         E: Number of experts
         M: Sequence length
         K: Input dimension
 
     Returns:
-        torch_input: Tensor of shape (L, in0_num_cores, 2, M, K)
+        torch_input: Tensor of shape (L, all_core_range_set.num_cores(), 2, M, K)
     """
     # torch_input = torch.empty((L, in0_num_cores, E, M, K), dtype=torch.bfloat16)
     # le_val = 1
@@ -57,8 +58,17 @@ def create_torch_input(L, in0_num_cores, E, M, K):
     #         torch_input[..., i] = -0.25
     # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
     torch_input = torch.rand((L, 2, M, K), dtype=torch.bfloat16) - 0.5
-    torch_input = torch_input.unsqueeze(1).repeat(1, in0_num_cores, 1, 1, 1)
-    return torch_input
+    torch_input = torch_input.unsqueeze(1).repeat(1, len(in0_core_coords), 1, 1, 1)
+
+    torch_input_shard_placed = torch.zeros([L, all_core_range_set.num_cores(), 2, M, K])
+
+    sidx = 0
+    for idx, c in enumerate(ttnn.corerange_to_cores(all_core_range_set)):
+        if c in in0_core_coords:
+            torch_input_shard_placed[:, idx, :, :, :] = torch_input[:, sidx, :, :, :]
+            sidx += 1
+
+    return torch_input_shard_placed
 
 
 def create_torch_w0(L, E, K, N):
@@ -385,6 +395,18 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     # --------------------------------------------------------------------------
     # Shard grid
     # --------------------------------------------------------------------------
+
+    all_core_grid = device.compute_with_storage_grid_size()
+    all_core_range_set = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(all_core_grid.x - 1, all_core_grid.y - 1),
+            ),
+        }
+    )
+    all_num_cores = all_core_range_set.num_cores()
+
     in0_core_coords = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, 0)
     core2dram = {}
     for dram_bank_id, core_coords in enumerate(in0_core_coords):
@@ -415,14 +437,28 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     dram_core_range_set = ttnn.CoreRangeSet(dram_core_range)
 
     # --------------------------------------------------------------------------
+    # Output shard configuration
+    # --------------------------------------------------------------------------
+
+    output_height_shard_dim = 4
+    output_width_shard_dim = 4
+
+    unused_core_range_set = all_core_range_set.subtract(dram_core_range_set).subtract(in0_core_range_set)
+    output_shard_core_ranges = [ttnn.CoreRange(c, c) for c in ttnn.corerange_to_cores(unused_core_range_set)][
+        : output_height_shard_dim * output_width_shard_dim
+    ]
+
+    output_shard_core_range_set = ttnn.CoreRangeSet(output_shard_core_ranges)
+
+    # --------------------------------------------------------------------------
     # Tensor shapes and memory configurations
     # --------------------------------------------------------------------------
     # Define tensor shapes - same for both accuracy and performance testing
-    input_shape = (in0_num_cores, 2, M, K)
+    input_shape = (all_num_cores, 2, M, K)
 
     in0_shard_spec = ttnn.ShardSpec(
-        grid=in0_core_range_set,
-        shard_shape=(2 * M, K),  # Your shard dimensions
+        grid=all_core_range_set,
+        shard_shape=(2 * M, K),  # Your shard dimensions. Make M 32
         shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
 
@@ -461,7 +497,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     # Prepare the tensors
     # --------------------------------------------------------------------------
     if check_accuracy:
-        torch_input = create_torch_input(L, in0_num_cores, E, M, K)
+        torch_input = create_torch_input(L, in0_core_coords, all_core_range_set, E, M, K)
         torch_w0 = create_torch_w0(L, E, K, N)
         torch_w1 = create_torch_w1(L, E, K, N)
         torch_w2 = create_torch_w2(L, E, N, K)
@@ -532,8 +568,13 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             w0_w1_tensor=tt_w0_w1,
             w2_tensor=tt_w2,
             output_tensor=tt_input,
+            hidden_dim=K,
             num_experts=E,
             layer_id=layer_id,
+            num_tokens_total=M,
+            output_height_shard_dim=output_height_shard_dim,
+            output_width_shard_dim=output_width_shard_dim,
+            output_shard_core_ranges=output_shard_core_range_set,
         )
 
         # Output is produced in-place on the input tensor

@@ -30,11 +30,13 @@ void bind_moe(nb::module_& mod) {
             nb::arg("w0_w1_tensor"),
             nb::arg("w2_tensor"),
             nb::arg("output_tensor"),
+            nb::arg("hidden_dim"),
             nb::arg("num_experts"),
             nb::arg("layer_id"),
             nb::arg("num_tokens_total"),
             nb::arg("output_height_shard_dim"),
-            nb::arg("output_width_shard_dim")});
+            nb::arg("output_width_shard_dim"),
+            nb::arg("output_shard_core_ranges")});
 }
 
 }  // namespace ttnn::operations::experimental::moe::detail

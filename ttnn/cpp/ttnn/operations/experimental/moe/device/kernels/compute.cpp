@@ -235,8 +235,8 @@ void kernel_main() {
 
         // Restore normal packer state after untilize
     }  // end for (expert_id)
-    // cb_reserve_back(cb_c2w_rdy, 1);
-    // cb_push_back(cb_c2w_rdy, 1);
+    cb_reserve_back(cb_c2w_rdy, 1);
+    cb_push_back(cb_c2w_rdy, 1);
     pack_untilize_uninit(cb_c2s_out_untilized);
 
     // Drain the pipeline - the last dummy push
