@@ -407,7 +407,7 @@ void JitBuildState::compile_one(
     const JitBuildSettings* settings,
     const string& src,
     const string& obj,
-    const string& obj_temp_path) const {
+    [[maybe_unused]] const string& obj_temp_path) const {
     // ZoneScoped;
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
@@ -458,7 +458,9 @@ void JitBuildState::compile_one(
 
     // Append common args provided by the build state
     std::string obj_path = out_dir + obj;
-    fs::path temp_d_path = obj_temp_path;
+    // Use final object path for compilation to enable ccache across different runners
+    // Temporary .d file path for dependency tracking
+    fs::path temp_d_path = obj_path;
     temp_d_path.replace_extension("d");
     cmd += this->cflags_;
     cmd += this->includes_;
@@ -466,7 +468,7 @@ void JitBuildState::compile_one(
     if (settings) {
         settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
     }
-    cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, src, temp_d_path.string());
+    cmd += fmt::format("-c -o {} {} -MF {} ", obj_path, src, temp_d_path.string());
     cmd += defines;
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
@@ -477,15 +479,14 @@ void JitBuildState::compile_one(
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
-    // log file and dephash file can be renamed after compilation, but the .o file
-    // needs to be renamed after link step to avoid LTO reading inconsistent object files.
+    // Compile directly to final object path for ccache compatibility
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
     jit_build::utils::FileRenamer dephash_file(obj_path + ".dephash");
-    jit_build::write_dependency_hashes(out_dir, obj_temp_path, dephash_file.path());
+    jit_build::write_dependency_hashes(out_dir, obj_path, dephash_file.path());
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
@@ -501,236 +502,236 @@ size_t JitBuildState::compile(
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         if (need_compile(out_dir, this->objs_[i])) {
             launch_build_step(
-                [this, &out_dir, settings, i, obj_temp_path = renamer.generate_temp_path(i)]() {
-                    this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i], obj_temp_path);
-                },
-                events);
+            // Compile directly to final object path for ccache compatibility across runners
+            launch_build_step(
+                [this, &out_dir, settings, i]() {
+                this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i], "" events);
         } else {
-            log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
+                log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
+        }
+        }
+
+        sync_build_steps(events);
+
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+            dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
+        }
+        return events.size();
+    }
+
+    bool JitBuildState::need_link(const string& out_dir) const {
+        std::string elf_path = out_dir + this->target_name_ + ".elf";
+        return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
+    }
+
+    void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
+        string cmd{"cd " + out_dir + " && " + env_.gpp_};
+        string lflags = this->lflags_;
+        lflags += tt_metal::MetalContext::instance().hal().get_jit_build_query().linker_flags(
+            {.is_fw = this->is_fw_,
+             .core_type = this->core_type_,
+             .processor_class = this->processor_class_,
+             .processor_id = static_cast<uint32_t>(this->processor_id_)});
+        lflags += fmt::format("-T{} ", this->linker_script_);
+        if (!this->is_fw_) {
+            // Emit relocations, so we can relocate the resulting binary
+            lflags += "-Wl,--emit-relocs ";
+        }
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
+            lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
+            lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
+        }
+
+        // Append user args
+        cmd += fmt::format("-{} ", settings ? settings->get_linker_opt_level() : this->default_linker_opt_level_);
+
+        // Elf file has dependencies other than object files:
+        // 1. Linker script
+        // 2. Weakened firmware elf (for kernels)
+        std::vector<std::string> link_deps = {this->linker_script_};
+        if (!this->is_fw_) {
+            std::string weakened = weakened_firmware_name();
+            link_deps.push_back(weakened);
+            if (!this->firmware_is_kernel_object_) {
+                cmd += "-Wl,--just-symbols=";
+            }
+            cmd += weakened + " ";
+        }
+
+        // Append common args provided by the build state
+        cmd += lflags;
+        cmd += link_objs;
+        std::string elf_name = out_dir + this->target_name_ + ".elf";
+        jit_build::utils::FileRenamer elf_file(elf_name);
+        cmd += "-o " + elf_file.path();
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
+            log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
+        }
+        jit_build::utils::FileRenamer log_file(elf_name + ".log");
+        fs::remove(log_file.path());
+        if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
+            build_failure(this->target_name_, "link", cmd, log_file.path());
+        }
+        jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
+        std::ofstream hash_file(dephash_file.path());
+        jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
+        hash_file.close();
+        if (hash_file.fail()) {
+            // Don't leave incomplete hash file
+            std::filesystem::remove(dephash_file.path());
         }
     }
 
-    sync_build_steps(events);
+    // Given this elf (A) and a later elf (B):
+    // weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of
+    // the same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to
+    // remain strong so to propogate link addresses
+    void JitBuildState::weaken(const string& out_dir) const {
+        // ZoneScoped;
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
-        dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
-    }
-    return events.size();
-}
+        std::string pathname_in = out_dir + target_name_ + ".elf";
+        jit_build::utils::FileRenamer out_file(weakened_firmware_name());
 
-bool JitBuildState::need_link(const string& out_dir) const {
-    std::string elf_path = out_dir + this->target_name_ + ".elf";
-    return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
-}
-
-void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
-    string cmd{"cd " + out_dir + " && " + env_.gpp_};
-    string lflags = this->lflags_;
-    lflags += tt_metal::MetalContext::instance().hal().get_jit_build_query().linker_flags(
-        {.is_fw = this->is_fw_,
-         .core_type = this->core_type_,
-         .processor_class = this->processor_class_,
-         .processor_id = static_cast<uint32_t>(this->processor_id_)});
-    lflags += fmt::format("-T{} ", this->linker_script_);
-    if (!this->is_fw_) {
-        // Emit relocations, so we can relocate the resulting binary
-        lflags += "-Wl,--emit-relocs ";
-    }
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
-        lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
-        lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
-    }
-
-    // Append user args
-    cmd += fmt::format("-{} ", settings ? settings->get_linker_opt_level() : this->default_linker_opt_level_);
-
-    // Elf file has dependencies other than object files:
-    // 1. Linker script
-    // 2. Weakened firmware elf (for kernels)
-    std::vector<std::string> link_deps = {this->linker_script_};
-    if (!this->is_fw_) {
-        std::string weakened = weakened_firmware_name();
-        link_deps.push_back(weakened);
-        if (!this->firmware_is_kernel_object_) {
-            cmd += "-Wl,--just-symbols=";
+        ll_api::ElfFile elf;
+        elf.ReadImage(pathname_in);
+        static const std::string_view strong_names[] = {"__fw_export_*", "__global_pointer$"};
+        elf.WeakenDataSymbols(strong_names);
+        if (this->firmware_is_kernel_object_) {
+            elf.ObjectifyExecutable();
         }
-        cmd += weakened + " ";
+        elf.WriteImage(out_file.path());
     }
 
-    // Append common args provided by the build state
-    cmd += lflags;
-    cmd += link_objs;
-    std::string elf_name = out_dir + this->target_name_ + ".elf";
-    jit_build::utils::FileRenamer elf_file(elf_name);
-    cmd += "-o " + elf_file.path();
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
-        log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
+    std::string JitBuildState::weakened_firmware_name() const {
+        const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
+        const std::string weakened_firmware_target_name = jit_build_query.weakened_firmware_target_name(
+            {this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_});
+        std::string_view name = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
+        return fmt::format(
+            "{}{}/{}_{}",
+            this->env_.out_firmware_root_,
+            weakened_firmware_target_name,
+            weakened_firmware_target_name,
+            name);
     }
-    jit_build::utils::FileRenamer log_file(elf_name + ".log");
-    fs::remove(log_file.path());
-    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
-        build_failure(this->target_name_, "link", cmd, log_file.path());
-    }
-    jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
-    std::ofstream hash_file(dephash_file.path());
-    jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
-    hash_file.close();
-    if (hash_file.fail()) {
-        // Don't leave incomplete hash file
-        std::filesystem::remove(dephash_file.path());
-    }
-}
 
-// Given this elf (A) and a later elf (B):
-// weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
-// same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
-// strong so to propogate link addresses
-void JitBuildState::weaken(const string& out_dir) const {
-    // ZoneScoped;
+    void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
+        // ZoneScoped;
+        static std::atomic<bool> new_log = true;
+        if (tt::tt_metal::getDeviceProfilerState()) {
+            if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
+                std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
+            }
 
-    std::string pathname_in = out_dir + target_name_ + ".elf";
-    jit_build::utils::FileRenamer out_file(weakened_firmware_name());
+            if (!std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
+                tt::jit_build::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
+            }
 
-    ll_api::ElfFile elf;
-    elf.ReadImage(pathname_in);
-    static const std::string_view strong_names[] = {"__fw_export_*", "__global_pointer$"};
-    elf.WeakenDataSymbols(strong_names);
-    if (this->firmware_is_kernel_object_) {
-        elf.ObjectifyExecutable();
-    }
-    elf.WriteImage(out_file.path());
-}
-
-std::string JitBuildState::weakened_firmware_name() const {
-    const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
-    const std::string weakened_firmware_target_name = jit_build_query.weakened_firmware_target_name(
-        {this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_});
-    std::string_view name = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
-    return fmt::format(
-        "{}{}/{}_{}",
-        this->env_.out_firmware_root_,
-        weakened_firmware_target_name,
-        weakened_firmware_target_name,
-        name);
-}
-
-void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
-    // ZoneScoped;
-    static std::atomic<bool> new_log = true;
-    if (tt::tt_metal::getDeviceProfilerState()) {
-        if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
-            std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
+            auto cmd = fmt::format("grep KERNEL_PROFILER {}*.o.log", out_dir);
+            tt::jit_build::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
         }
-
-        if (!std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
-            tt::jit_build::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
-        }
-
-        auto cmd = fmt::format("grep KERNEL_PROFILER {}*.o.log", out_dir);
-        tt::jit_build::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
     }
-}
 
-void JitBuildState::build(const JitBuildSettings* settings) const {
-    // ZoneScoped;
-    string out_dir = (settings == nullptr)
-                         ? this->out_path_ + this->target_name_ + "/"
-                         : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
+    void JitBuildState::build(const JitBuildSettings* settings) const {
+        // ZoneScoped;
+        string out_dir = (settings == nullptr)
+                             ? this->out_path_ + this->target_name_ + "/"
+                             : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
 
-    fs::create_directories(out_dir);
-    {
-        // object files will be created at unique names and renamed after linking
-        std::vector<std::string> obj_paths;
-        obj_paths.reserve(this->objs_.size());
-        for (const auto& obj : this->objs_) {
-            obj_paths.push_back(out_dir + obj);
-        }
-        jit_build::utils::FileGroupRenamer renamer(std::move(obj_paths));
+        fs::create_directories(out_dir);
+        {
+            // Compile directly to final object paths for ccache compatibility
+            std::vector<std::string> obj_paths;
+            obj_paths.reserve(this->objs_.size());
+            for (const auto& obj : this->objs_) {
+                obj_paths.push_back(out_dir + obj);
+            }
+            jit_build::utils::FileGroupRenamer renamer(std::move(obj_paths));
 
-        if (compile(out_dir, settings, renamer) > 0 || need_link(out_dir)) {
-            string link_objs = fmt::format("{} {} ", this->extra_link_objs_, fmt::join(renamer.paths(), " "));
-            link(out_dir, settings, link_objs);
-            if (this->is_fw_) {
-                weaken(out_dir);
+            if (compile(out_dir, settings, renamer) > 0 || need_link(out_dir)) {
+                string link_objs = fmt::format("{} {} ", this->extra_link_objs_, fmt::join(obj_paths, " "));
+                link(out_dir, settings, link_objs);
+                if (this->is_fw_) {
+                    weaken(out_dir);
+                }
             }
         }
+
+        // `extract_zone_src_locations` must be called every time, because it writes to a global file
+        // that gets cleared in each run.
+        extract_zone_src_locations(out_dir);
     }
 
-    // `extract_zone_src_locations` must be called every time, because it writes to a global file
-    // that gets cleared in each run.
-    extract_zone_src_locations(out_dir);
-}
+    void JitBuildState::link_to_processor(const JitBuildState& processor_build_state, const JitBuildSettings* settings)
+        const {
+        TT_ASSERT(!this->is_fw_);
+        TT_ASSERT(!processor_build_state.is_fw_);
+        TT_ASSERT(settings != nullptr);
 
-void JitBuildState::link_to_processor(
-    const JitBuildState& processor_build_state, const JitBuildSettings* settings) const {
-    TT_ASSERT(!this->is_fw_);
-    TT_ASSERT(!processor_build_state.is_fw_);
-    TT_ASSERT(settings != nullptr);
+        TT_ASSERT(this->core_type_ == processor_build_state.core_type_);
+        TT_ASSERT(this->processor_class_ == processor_build_state.processor_class_);
 
-    TT_ASSERT(this->core_type_ == processor_build_state.core_type_);
-    TT_ASSERT(this->processor_class_ == processor_build_state.processor_class_);
+        const string orig_processor_out_dir = processor_build_state.out_path_ + settings->get_full_kernel_name() +
+                                              processor_build_state.target_name_ + "/";
+        TT_ASSERT(fs::exists(orig_processor_out_dir));
 
-    const string orig_processor_out_dir =
-        processor_build_state.out_path_ + settings->get_full_kernel_name() + processor_build_state.target_name_ + "/";
-    TT_ASSERT(fs::exists(orig_processor_out_dir));
+        const string out_dir = this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
 
-    const string out_dir = this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
+        fs::create_directories(out_dir);
 
-    fs::create_directories(out_dir);
+        string link_objs;
+        for (const string& obj : processor_build_state.objs_) {
+            const string obj_path = orig_processor_out_dir + obj;
+            TT_ASSERT(fs::exists(obj_path));
+            link_objs += obj_path + " ";
+        }
+        for (const auto& obj : tt_metal::MetalContext::instance().hal().get_jit_build_query().link_objs(
+                 {.is_fw = processor_build_state.is_fw_,
+                  .core_type = processor_build_state.core_type_,
+                  .processor_class = processor_build_state.processor_class_,
+                  .processor_id = static_cast<uint32_t>(processor_build_state.processor_id_)})) {
+            link_objs += this->env_.root_ + obj + " ";
+        }
 
-    string link_objs;
-    for (const string& obj : processor_build_state.objs_) {
-        const string obj_path = orig_processor_out_dir + obj;
-        TT_ASSERT(fs::exists(obj_path));
-        link_objs += obj_path + " ";
-    }
-    for (const auto& obj : tt_metal::MetalContext::instance().hal().get_jit_build_query().link_objs(
-             {.is_fw = processor_build_state.is_fw_,
-              .core_type = processor_build_state.core_type_,
-              .processor_class = processor_build_state.processor_class_,
-              .processor_id = static_cast<uint32_t>(processor_build_state.processor_id_)})) {
-        link_objs += this->env_.root_ + obj + " ";
+        link(out_dir, settings, link_objs);
     }
 
-    link(out_dir, settings, link_objs);
-}
+    void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
+        // ZoneScoped;
 
-void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
-    // ZoneScoped;
-
-    build.build(settings);
-    write_successful_jit_build_marker(build, settings);
-}
-
-void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
-    std::vector<std::shared_future<void>> events;
-    for (const auto& build : build_subset) {
-        // Capture the necessary objects by reference
-        launch_build_step([&build, settings] { build.build(settings); }, events);
-    }
-
-    sync_build_steps(events);
-    for (const auto& build : build_subset) {
+        build.build(settings);
         write_successful_jit_build_marker(build, settings);
     }
-}
 
-void jit_link_additional_processor(
-    const JitBuildState& orig_processor_build_state,
-    const JitBuildState& additional_processor_build_state,
-    const JitBuildSettings* additional_processor_settings) {
-    additional_processor_build_state.link_to_processor(orig_processor_build_state, additional_processor_settings);
-    write_successful_jit_build_marker(additional_processor_build_state, additional_processor_settings);
-}
+    void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
+        std::vector<std::shared_future<void>> events;
+        for (const auto& build : build_subset) {
+            // Capture the necessary objects by reference
+            launch_build_step([&build, settings] { build.build(settings); }, events);
+        }
 
-void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
-    events.emplace_back(detail::async(build_func));
-}
-
-void sync_build_steps(std::vector<std::shared_future<void>>& events) {
-    for (auto& event : events) {
-        event.get();
+        sync_build_steps(events);
+        for (const auto& build : build_subset) {
+            write_successful_jit_build_marker(build, settings);
+        }
     }
-}
+
+    void jit_link_additional_processor(
+        const JitBuildState& orig_processor_build_state,
+        const JitBuildState& additional_processor_build_state,
+        const JitBuildSettings* additional_processor_settings) {
+        additional_processor_build_state.link_to_processor(orig_processor_build_state, additional_processor_settings);
+        write_successful_jit_build_marker(additional_processor_build_state, additional_processor_settings);
+    }
+
+    void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
+        events.emplace_back(detail::async(build_func));
+    }
+
+    void sync_build_steps(std::vector<std::shared_future<void>> & events) {
+        for (auto& event : events) {
+            event.get();
+        }
+    }
 
 }  // namespace tt::tt_metal
