@@ -26,6 +26,13 @@ def pytest_addoption(parser):
 def pytest_make_parametrize_id(config, val, argname):
     if isinstance(val, ModuleType):
         val = val.__name__
+    # Handle FastOperation objects to avoid memory addresses in test IDs
+    # This ensures deterministic test names for pytest-xdist compatibility
+    elif hasattr(val, "python_fully_qualified_name"):
+        val = val.python_fully_qualified_name
+    # Handle TensorSpec objects - create deterministic ID from shape/dtype/layout
+    elif type(val).__name__ == "TensorSpec":
+        val = f"TensorSpec({val.shape},{val.dtype},{val.layout})"
     return f"{argname}={val}"
 
 
