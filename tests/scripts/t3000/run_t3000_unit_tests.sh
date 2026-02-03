@@ -178,10 +178,10 @@ run_t3000_falcon7b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
-  pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py ; fail+=$?
-  pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py ; fail+=$?
-  pytest -n auto models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_decoder.py ; fail+=$?
-  #pytest models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py
+  pytest -n auto models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_decoder.py ; fail+=$?
+  #pytest models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py
 
   # Record the end time
   end_time=$(date +%s)
@@ -199,7 +199,7 @@ run_t3000_falcon40b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
-  pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_1_layer_t3000.py ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon40b/tests/ci/test_falcon_end_to_end_1_layer_t3000.py ; fail+=$?
 
 
   # Record the end time
@@ -520,7 +520,7 @@ run_t3000_qwen25_vl_unit_tests() {
   start_time=$(date +%s)
 
   # install qwen25_vl requirements
-  uv pip install -r models/demos/qwen25_vl/requirements.txt
+  uv pip install -r models/demos/nlp/llms/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -530,7 +530,7 @@ run_t3000_qwen25_vl_unit_tests() {
   tt_cache_72b=$TT_CACHE_HOME/$qwen25_vl_72b
 
   # run unit tests
-  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/nlp/llms/qwen25_vl/tests/ --ignore=models/demos/nlp/llms/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/nlp/llms/qwen25_vl/tests/conftest.py
 
   # Record the end time
   end_time=$(date +%s)
@@ -540,7 +540,7 @@ run_t3000_qwen25_vl_unit_tests() {
 
 run_t3000_qwen3_vl_unit_tests() {
   # install qwen3_vl requirements
-  uv pip install -r models/demos/qwen3_vl/requirements.txt
+  uv pip install -r models/demos/nlp/llms/qwen3_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -549,15 +549,15 @@ run_t3000_qwen3_vl_unit_tests() {
   tt_cache_32b=$TT_CACHE_HOME/$qwen3_vl_32b
 
   # run unit tests
-  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen3_vl/tests/conftest.py
+  MESH_DEVICE=T3K HF_MODEL=$qwen3_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/nlp/llms/qwen3_vl/tests/ --ignore=models/demos/nlp/llms/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/nlp/llms/qwen3_vl/tests/conftest.py
 }
 
 run_t3000_deepseek_tests() {
-  uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+  uv pip install -r models/demos/nlp/llms/deepseek_v3/reference/deepseek/requirements.txt
 
   export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
   export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
-  MESH_DEVICE=T3K pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
+  MESH_DEVICE=T3K pytest models/demos/nlp/llms/deepseek_v3/tests/unit --timeout 60 --durations=0
 }
 
 run_t3000_ccl_tests() {
@@ -701,13 +701,13 @@ run_t3000_gpt_oss_unit_tests() {
   echo "LOG_METAL: Running run_t3000_gpt_oss_unit_tests"
 
   # Install gpt-oss requirements
-  uv pip install -r models/demos/gpt_oss/requirements.txt
+  uv pip install -r models/demos/nlp/llms/gpt_oss/requirements.txt
 
   # Test GPT-OSS 20B model
-  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 600 models/demos/gpt_oss/tests/unit -k "1x8"; fail+=$?
+  HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-20b pytest -n auto --timeout 600 models/demos/nlp/llms/gpt_oss/tests/unit -k "1x8"; fail+=$?
 
   # Test GPT-OSS 120B model
-  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 600 models/demos/gpt_oss/tests/unit -k "1x8"; fail+=$?
+  HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=$TT_CACHE_HOME/openai--gpt-oss-120b pytest -n auto --timeout 600 models/demos/nlp/llms/gpt_oss/tests/unit -k "1x8"; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

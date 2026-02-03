@@ -10,7 +10,7 @@ run_t3000_falcon40b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_falcon40b_perplexity_tests"
 
   # Falcon40B perplexity tests
-  pytest -n auto models/demos/t3000/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -34,7 +34,7 @@ run_t3000_llama70b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_llama70b_perplexity_tests"
 
   # Llama-70B perplexity tests
-  pytest -n auto models/demos/t3000/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -53,8 +53,8 @@ run_t3000_mixtral8x7b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_mixtral8x7b_perplexity_tests"
 
   # Mixtral8x7B perplexity tests
-  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_perplexity.py --timeout=3600 ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_topk.py --timeout=3600 ; fail+=$?
+  # pytest -n auto models/demos/nlp/llms/mixtral8x7b/tests/test_mixtral_perplexity.py --timeout=3600 ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/mixtral8x7b/tests/test_mixtral_topk.py --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

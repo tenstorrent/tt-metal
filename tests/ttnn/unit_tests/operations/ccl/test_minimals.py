@@ -13,7 +13,7 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 
 
 from conftest import is_6u
-from models.demos.llama3_70b_galaxy.tt.model_config import (
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc

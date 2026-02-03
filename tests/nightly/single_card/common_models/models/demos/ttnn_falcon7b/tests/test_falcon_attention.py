@@ -1,1 +1,1 @@
-../../../../../../../../models/demos/ttnn_falcon7b/tests/test_falcon_attention.py
+../../../../../../../../models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/test_falcon_attention.py

@@ -8,8 +8,8 @@ import torch
 import transformers
 import ttnn
 from ttnn.tracer import trace, visualize
-from models.demos.bert.tt import ttnn_bert
-from models.demos.bert.tt import ttnn_optimized_bert
+from models.demos.nlp.encoder.bert.tt import ttnn_bert
+from models.demos.nlp.encoder.bert.tt import ttnn_optimized_bert
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 

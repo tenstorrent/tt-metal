@@ -52,14 +52,14 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 60,
-              "cmd": "TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch --timeout=600 && TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device --timeout=600",
+              "cmd": "TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/nlp/llms/llama3_70b/galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch --timeout=600 && TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/nlp/llms/llama3_70b/galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device --timeout=600",
               "owner_id": "U053W15B6JF"
             }, # Djordje Ivanovic
             {
               "name": "Llama Galaxy Perf Unit Tests",
               "model-name": "llama_unit_tests",
               "arch": "wormhole_b0",
-              "cmd": "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/tests/tg_perf_unit_tests",
+              "cmd": "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/nlp/llms/llama3_70b/galaxy/tests/tg_perf_unit_tests",
               "timeout": 100,
               "tracy": true,
               "save-perf-data": true,
@@ -72,7 +72,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 60,
-              "cmd": "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_prefill_device_perf.py::test_llama_TG_perf_device --timeout=1000",
+              "cmd": "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/nlp/llms/llama3_70b/galaxy/tests/test_prefill_device_perf.py::test_llama_TG_perf_device --timeout=1000",
               "owner_id": "U03PUAKE719"
             }, # Miguel Tairum
             {
@@ -81,7 +81,7 @@ jobs:
               "model-type": "sentence_bert",
               "model-name": "sentence_bert",
               "save-perf-data": false,
-              "cmd": "pytest models/demos/tg/sentence_bert/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py",
+              "cmd": "pytest models/demos/nlp/encoder/sentence_bert/tg/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py",
               "timeout": 30,
               "owner_id": "U088413NP0Q"
             } # Ashai Reddy

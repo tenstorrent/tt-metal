@@ -54,15 +54,15 @@ run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
     local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
     local MESH_DEVICE="DUAL"
 
-    local TEST_CASE="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/tests"
-    local TEST_TEACHER_FORCED="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy"
+    local TEST_CASE="source ./python_env/bin/activate && pytest -svvv models/demos/nlp/llms/deepseek_v3/tests"
+    local TEST_TEACHER_FORCED="source ./python_env/bin/activate && pytest -svvv models/demos/nlp/llms/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy"
 
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
         bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
 
     # Run test_demo_dual test on DUAL galaxy setup
-    local TEST_DEMO_DUAL="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual"
+    local TEST_DEMO_DUAL="source ./python_env/bin/activate && pytest -svvv models/demos/nlp/llms/deepseek_v3/demo/test_demo_dual.py::test_demo_dual"
 
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
@@ -87,7 +87,7 @@ run_quad_galaxy_deepseekv3_unit_tests() {
     local DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
     local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
     local MESH_DEVICE="QUAD"
-    local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests/unit"
+    local TEST_CASE="pytest -svvv models/demos/nlp/llms/deepseek_v3/tests/unit"
 
     tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \

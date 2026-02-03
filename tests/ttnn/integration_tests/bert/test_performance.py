@@ -13,9 +13,9 @@ import transformers
 
 import ttnn
 
-from models.demos.bert.tt import ttnn_bert
-from models.demos.bert.tt import ttnn_optimized_bert
-from models.demos.bert.tt import ttnn_optimized_sharded_bert
+from models.demos.nlp.encoder.bert.tt import ttnn_bert
+from models.demos.nlp.encoder.bert.tt import ttnn_optimized_bert
+from models.demos.nlp.encoder.bert.tt import ttnn_optimized_sharded_bert
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 from ttnn.model_preprocessing import preprocess_model_parameters

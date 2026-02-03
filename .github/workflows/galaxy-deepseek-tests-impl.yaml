@@ -102,19 +102,19 @@ jobs:
         if: ${{ matrix.test-group.test-type == 'unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
+          uv pip install -r models/demos/nlp/llms/deepseek_v3/reference/deepseek/requirements.txt
+          pytest models/demos/nlp/llms/deepseek_v3/tests/unit --timeout 60 --durations=0
       - name: Validate weight cache
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: 10
         run: |
-          python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
+          python3 models/demos/nlp/llms/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
       - name: Run DeepSeek module tests
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 600  --durations=0
+          uv pip install -r models/demos/nlp/llms/deepseek_v3/reference/deepseek/requirements.txt
+          pytest models/demos/nlp/llms/deepseek_v3/tests --ignore=models/demos/nlp/llms/deepseek_v3/tests/unit --timeout 600  --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
