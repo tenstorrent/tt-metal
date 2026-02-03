@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -52,7 +52,7 @@ def test_binary_uint8_arithmetic(a_shape, b_shape, ttnn_fn, device):
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
-    assert torch.allclose(output_tensor.to(torch.float32), torch_output_tensor.to(torch.float32), atol=1e-2)
+    assert torch.equal(output_tensor, torch_output_tensor)
 
 
 @pytest.mark.parametrize(

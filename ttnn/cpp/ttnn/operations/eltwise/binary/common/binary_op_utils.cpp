@@ -366,7 +366,8 @@ std::map<std::string, std::string> get_defines_fp32(
         case BinaryOpType::SQUARED_DIFFERENCE:
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
                 op_name = "sub_int32_tile";
-            } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
+            } else if ((input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) ||
+                       (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 op_name = "sub_uint32_tile";
             } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
                        (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
@@ -440,7 +441,9 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         // applied on A-B
         case BinaryOpType::GT:
-            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+            if ((input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) ||
+                (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 new_defines.insert({"GT_INT32_INIT", fmt::format("gt_int32_tile_init();")});
                 op_name = "gt_int32_tile";
             } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
@@ -454,7 +457,9 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::LT:
-            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+            if ((input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) ||
+                (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 new_defines.insert({"LT_INT32_INIT", fmt::format("lt_int32_tile_init();")});
                 op_name = "lt_int32_tile";
             } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
@@ -468,7 +473,9 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::GE:
-            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+            if ((input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) ||
+                (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 new_defines.insert({"GE_INT32_INIT", fmt::format("ge_int32_tile_init();")});
                 op_name = "ge_int32_tile";
             } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
@@ -482,7 +489,9 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::LE:
-            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+            if ((input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) ||
+                (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
+                (input_a_dtype == DataType::UINT8 && input_b_dtype == DataType::UINT8)) {
                 new_defines.insert({"LE_INT32_INIT", fmt::format("le_int32_tile_init();")});
                 op_name = "le_int32_tile";
             } else if ((input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) ||
