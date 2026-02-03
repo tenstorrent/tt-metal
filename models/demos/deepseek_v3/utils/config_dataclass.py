@@ -115,10 +115,10 @@ class AllGatherAsyncConfig(OpConfigBase):
     dim: int | None = None
     cluster_axis: int | None = None
     mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
-    topology: ttnn._ttnn.operations.ccl.Topology | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = ttnn.Topology.Ring
     multi_device_global_semaphore: ttnn._ttnn.operations.experimental.ccl_experimental.GlobalSemaphoreArg | None = None
     persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
-    num_links: int | None = None
+    num_links: int | None = 4
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     use_optimal_ccl_for_llama: bool | None = None
@@ -161,7 +161,7 @@ class ReduceScatterAsyncMinimalConfig(OpConfigBase):
 
     dim: int
     multi_device_global_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
-    num_links: int | None = None
+    num_links: int | None = 4
     persistent_output_buffers: ttnn.Tensor | None = None
     barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
@@ -180,7 +180,7 @@ class PointToPointConfig(OpConfigBase):
 
     receiver_coord: ttnn.MeshCoordinate | None = None
     sender_coord: ttnn.MeshCoordinate | None = None
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    topology: ttnn.Topology = ttnn.Topology.Ring
     output_tensor: ttnn.Tensor | None = None
 
 
@@ -193,7 +193,7 @@ class AllGatherConfig(OpConfigBase):
     num_workers: int | None = None
     num_buffers_per_channel: int | None = None
     topology: ttnn.Topology = ttnn.Topology.Ring
-    num_links: int = 1
+    num_links: int = 4
 
 
 @dataclass
@@ -206,7 +206,7 @@ class ReduceScatterConfig(OpConfigBase):
     cluster_axis: int | None = None
     memory_config: ttnn.MemoryConfig = None
     topology: ttnn.Topology = ttnn.Topology.Ring
-    num_links: int = 1
+    num_links: int = 4
 
 
 @dataclass
@@ -305,7 +305,7 @@ class AllToAllDispatchConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    topology: ttnn.Topology = ttnn.Topology.Ring
     subdevice_id: int | None = None
 
 
@@ -316,7 +316,7 @@ class AllToAllCombineConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    topology: ttnn.Topology = ttnn.Topology.Ring
 
 
 @dataclass
