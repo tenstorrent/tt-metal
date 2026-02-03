@@ -3,18 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fused_rmsnorm_post_all_gather_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather {
+namespace ttnn::experimental::prim {
 
 FusedRMSNormPostAllGatherDeviceOperation::program_factory_t
 FusedRMSNormPostAllGatherDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::FusedRMSNormPostAllGatherProgramFactory{};
+    return FusedRMSNormPostAllGatherProgramFactory{};
 }
 
 void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_hit(
@@ -148,7 +149,7 @@ void FusedRMSNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t FusedRMSNormPostAllGatherDeviceOperation::compute_output_specs(
+TensorSpec FusedRMSNormPostAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto output_shape = input_tensor.logical_shape();
@@ -161,17 +162,16 @@ spec_return_value_t FusedRMSNormPostAllGatherDeviceOperation::compute_output_spe
             args.dtype.value_or(input_tensor.dtype()), tt::tt_metal::PageConfig(Layout::TILE), args.memory_config));
 }
 
-tensor_return_value_t FusedRMSNormPostAllGatherDeviceOperation::create_output_tensors(
+Tensor FusedRMSNormPostAllGatherDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::tensor_return_value_t
-fused_rmsnorm_post_all_gather(
+Tensor fused_rmsnorm_post_all_gather(
     const Tensor& input_tensor,
     const Tensor& stats_tensor,
     float eps,
@@ -183,8 +183,7 @@ fused_rmsnorm_post_all_gather(
     const MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype) {
-    using OperationType = ttnn::operations::experimental::transformer::fused_rmsnorm_post_all_gather::
-        FusedRMSNormPostAllGatherDeviceOperation;
+    using OperationType = ttnn::experimental::prim::FusedRMSNormPostAllGatherDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .eps = eps,

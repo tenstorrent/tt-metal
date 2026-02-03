@@ -26,7 +26,13 @@
 #include <utility>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
-namespace ttnn::operations::conv::conv2d::program {
+namespace ttnn::prim {
+
+namespace unary = ttnn::operations::unary;
+using ttnn::operations::conv::conv_skip_mcast;
+using ttnn::operations::conv::get_num_cores_channels_from_parallel_config;
+using ttnn::operations::conv::is_1d_depthwise_conv;
+using ttnn::operations::conv::SkipMcast;
 
 // Compute kernel addressing mode divides addresses with 16
 constexpr uint32_t COMPUTE_KERNEL_ADDRESS_DIVISOR = 16;
@@ -164,7 +170,7 @@ ActivationReuseConfig calculate_activation_reuse_params(
 }
 
 Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output_tensor) {
+    const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
@@ -1376,8 +1382,8 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
 
 void Conv2dShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const Conv2dParams& /*operation_attributes*/,
+    const Conv2dInputs& tensor_args,
     Tensor& output_tensor) {
     auto* src_buffer_a = tensor_args.a.buffer();
     auto* src_buffer_b = tensor_args.b.buffer();
@@ -1407,4 +1413,4 @@ void Conv2dShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::conv::conv2d::program
+}  // namespace ttnn::prim

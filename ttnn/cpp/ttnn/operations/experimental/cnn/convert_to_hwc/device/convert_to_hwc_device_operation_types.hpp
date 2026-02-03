@@ -6,15 +6,15 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::cnn {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct ConvertToHwcParams {
     const tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
 };
 
-struct tensor_args_t {
+struct ConvertToHwcInputs {
     const Tensor& input;
 };
 
-}  // namespace ttnn::operations::experimental::cnn
+}  // namespace ttnn::experimental::prim

@@ -6,18 +6,18 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct NlpCreateQkvHeadsSegformerParams {
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct NlpCreateQkvHeadsSegformerInputs {
     Tensor input_tensor;
     std::vector<std::optional<Tensor>> optional_output_tensors;
 };
 
-using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
-using spec_return_value_t = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
+using NlpCreateQkvHeadsSegformerResult = std::tuple<Tensor, Tensor, Tensor>;
+using NlpCreateQkvHeadsSegformerResultSpec = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
 
-}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer
+}  // namespace ttnn::experimental::prim

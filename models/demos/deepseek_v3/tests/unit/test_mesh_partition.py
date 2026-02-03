@@ -72,9 +72,9 @@ def test_mesh_partition_deepseek(mesh_device, shape, dim, dtype, mem_config, lay
     tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
     coords = list(tt_out_tensors.tensor_topology().mesh_coords())
-    view = mesh_device.get_view()
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
     for coord, tt_out, torch_ref in zip(coords, ttnn.get_device_tensors(tt_out_tensors), torch_references):
-        if not view.is_local(coord):
+        if view is not None and not view.is_local(coord):
             continue
         torch_out = ttnn.to_torch(tt_out)
         eq, output = comp_equal(torch_out, torch_ref)

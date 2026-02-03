@@ -454,6 +454,12 @@ bool operator==(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs) 
     return lhs.start_coord() == rhs.start_coord() && lhs.end_coord() == rhs.end_coord();
 }
 bool operator!=(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs) { return !(lhs == rhs); }
+bool operator<(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs) {
+    if (lhs.start_coord() != rhs.start_coord()) {
+        return lhs.start_coord() < rhs.start_coord();
+    }
+    return lhs.end_coord() < rhs.end_coord();
+}
 
 std::ostream& operator<<(std::ostream& os, const MeshCoordinateRange& range) {
     os << "MeshCoordinateRange(start=" << range.start_coord() << ", end=" << range.end_coord() << ")";

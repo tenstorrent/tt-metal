@@ -5,14 +5,14 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::reduction::prod_all {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct ProdAllParams {
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct ProdAllInputs {
     Tensor input;
 };
 
-}  // namespace ttnn::operations::reduction::prod_all
+}  // namespace ttnn::prim

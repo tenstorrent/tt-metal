@@ -63,6 +63,9 @@ jobs:
           - name: ccl nightly tests
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
             timeout: 60
+          - name: DRAM prefetcher unit tests
+            cmd: pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
+            timeout: 5
           - name: ttnn udm unit tests
             cmd: ./build/test/ttnn/unit_tests_ttnn_udm
             timeout: 5

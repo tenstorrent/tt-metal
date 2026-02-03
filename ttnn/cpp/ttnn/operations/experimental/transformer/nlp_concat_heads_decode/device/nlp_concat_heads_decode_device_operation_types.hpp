@@ -6,20 +6,17 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::nlp_concat_heads_decode {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct NlpConcatHeadsDecodeParams {
     uint32_t num_heads{};
     bool on_subcoregrids{};
     std::optional<CoreRangeSet> sub_core_grids;
 };
 
-struct tensor_args_t {
+struct NlpConcatHeadsDecodeInputs {
     Tensor input;
     std::optional<Tensor> preallocated_output;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode
+}  // namespace ttnn::experimental::prim

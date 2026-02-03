@@ -12,7 +12,7 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import DEEPLAB
     [
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k panoptic_deeplab_20_cores",
-            30_539_964,
+            31_038_454,
             PANOPTIC_DEEPLAB,
             PANOPTIC_DEEPLAB,
             1,
@@ -22,7 +22,7 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import DEEPLAB
         ),
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k deeplab_v3_plus_20_cores",
-            21_926_462,
+            22_145_034,
             DEEPLAB_V3_PLUS,
             DEEPLAB_V3_PLUS,
             1,
@@ -54,7 +54,7 @@ def test_device_perf_pdl_20_cores(
     [
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k panoptic_deeplab_110_cores",
-            12_445_978,
+            6_412_537,
             PANOPTIC_DEEPLAB,
             PANOPTIC_DEEPLAB,
             1,
@@ -64,7 +64,7 @@ def test_device_perf_pdl_20_cores(
         ),
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k deeplab_v3_plus_110_cores",
-            8_471_069,
+            4_252_383,
             DEEPLAB_V3_PLUS,
             DEEPLAB_V3_PLUS,
             1,

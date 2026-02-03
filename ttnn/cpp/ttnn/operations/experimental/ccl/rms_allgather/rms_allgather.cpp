@@ -11,7 +11,7 @@ namespace ttnn::operations::fused::normalization {
 
 ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const ttnn::Tensor& input_tensor,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const ttnn::prim::LayerNormProgramConfig& program_config,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& semaphore,

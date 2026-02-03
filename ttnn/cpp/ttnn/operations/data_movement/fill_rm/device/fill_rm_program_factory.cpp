@@ -8,10 +8,10 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-namespace ttnn::operations::data_movement::fill_rm::program {
+namespace ttnn::prim {
 
 FillRMProgramFactory::cached_program_t FillRMProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const FillRmParams& operation_attributes, const FillRmInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
     const Tensor& input = tensor_args.input;
@@ -77,8 +77,8 @@ FillRMProgramFactory::cached_program_t FillRMProgramFactory::create(
 
 void FillRMProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& /*tensor_args*/,
+    const FillRmParams& /*operation_attributes*/,
+    const FillRmInputs& /*tensor_args*/,
     Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
@@ -93,4 +93,4 @@ void FillRMProgramFactory::override_runtime_arguments(
     runtime_args[0] = dst_buffer->address();
 }
 
-}  // namespace ttnn::operations::data_movement::fill_rm::program
+}  // namespace ttnn::prim

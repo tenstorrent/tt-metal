@@ -10,6 +10,7 @@
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -37,8 +38,9 @@ void MeshPartitionDeviceOperation::validate_on_program_cache_miss(
             tensor_args.optional_output_tensor.value().tensor_spec() == output_spec,
             "Output tensor spec must match computed output spec");
     }
-    const auto& output_shape = output_spec.logical_shape();
     const auto& input_shape = input_tensor.logical_shape();
+    const auto& output_shape = output_spec.padded_shape();
+    const auto& output_padded_shape = output_spec.padded_shape();
 
     TT_FATAL(
         !(operation_attributes.cluster_axis.has_value() && operation_attributes.cluster_axis.value() > 1),
@@ -60,10 +62,10 @@ void MeshPartitionDeviceOperation::validate_on_program_cache_miss(
 
     if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
         TT_FATAL(
-            output_shape == output_spec.padded_shape(),
-            "output shape {} must be equal to padded shape {} for tiled inputs",
-            output_shape,
-            output_spec.padded_shape());
+            output_shape[operation_attributes.dim] == output_padded_shape[operation_attributes.dim],
+            "for tiled inputs, partitioning along dim {} should not create padding in output shape {}",
+            operation_attributes.dim,
+            output_shape);
     }
 }
 

@@ -14,14 +14,14 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache::fill::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
 
 PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const PagedFillCacheParams& operation_attributes,
+    const PagedFillCacheInputs& tensor_args,
     Tensor& /*tensor_return_value*/) {
     Program program{};
 
@@ -198,8 +198,8 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
 
 void PagedFillCacheProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const PagedFillCacheParams& operation_attributes,
+    const PagedFillCacheInputs& tensor_args,
     Tensor& /*tensor_return_value*/) {
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
@@ -251,9 +251,9 @@ void PagedFillCacheProgramFactory::override_runtime_arguments(
 }
 
 PagedFillCacheMeshWorkloadFactory::cached_mesh_workload_t PagedFillCacheMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const PagedFillCacheParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
+    const PagedFillCacheInputs& tensor_args,
     Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
@@ -297,7 +297,7 @@ PagedFillCacheMeshWorkloadFactory::cached_mesh_workload_t PagedFillCacheMeshWork
             for (const auto& mesh_coord : dummy_coords) {
                 const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
                 // Create operation attributes with noop=true for dummy programs
-                operation_attributes_t dummy_attrs{
+                PagedFillCacheParams dummy_attrs{
                     .batch_idx_fallback = operation_attributes.batch_idx_fallback,
                     .mesh_coords = operation_attributes.mesh_coords,
                     .noop = true};
@@ -325,8 +325,8 @@ PagedFillCacheMeshWorkloadFactory::cached_mesh_workload_t PagedFillCacheMeshWork
 
 void PagedFillCacheMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    const PagedFillCacheParams& operation_attributes,
+    const PagedFillCacheInputs& tensor_args,
     Tensor& tensor_return_value) {
     PagedFillCacheProgramFactory program_factory;
 
@@ -345,7 +345,7 @@ void PagedFillCacheMeshWorkloadFactory::override_runtime_arguments(
         bool is_dummy = operation_attributes.mesh_coords.has_value() && !mesh_coords_set.contains(coord);
 
         // Create modified operation_attributes with correct noop value for this coordinate
-        operation_attributes_t coord_attrs{
+        PagedFillCacheParams coord_attrs{
             .batch_idx_fallback = operation_attributes.batch_idx_fallback,
             .mesh_coords = operation_attributes.mesh_coords,
             .noop = is_dummy};
@@ -355,4 +355,4 @@ void PagedFillCacheMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::fill::program
+}  // namespace ttnn::experimental::prim

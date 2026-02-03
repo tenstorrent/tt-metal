@@ -5,15 +5,15 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::reduction::prod_nc {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct ProdNcParams {
     int64_t dim;
 };
 
-struct tensor_args_t {
+struct ProdNcInputs {
     Tensor input;
     Tensor output;  // Note: output is passed as input (inplace pattern)
 };
 
-}  // namespace ttnn::operations::reduction::prod_nc
+}  // namespace ttnn::prim

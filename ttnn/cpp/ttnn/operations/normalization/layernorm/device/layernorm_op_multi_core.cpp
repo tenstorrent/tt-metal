@@ -22,7 +22,7 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization::layer_norm {
+namespace ttnn::prim {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -87,7 +87,7 @@ bool CB_can_fit_in_L1(
 }  // namespace
 
 LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
@@ -252,7 +252,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         im2_t * single_tile_size,
         reciprocal_CB_size_bytes,
         a.device()->l1_size_per_core());
-    if (!rms_norm and !use_row_major_kernel) {
+    if (!use_row_major_kernel) {
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handeled by the single pass
             large_tensor_needed = true;
@@ -333,6 +333,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     }
 
     if (rms_norm) {
+        reader_defines["RMSNORM"] = "1";
         compute_defines["RMSNORM"] = "1";
     }
 
@@ -432,12 +433,10 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         CircularBufferConfig(im2_t * single_tile_size, {{tt::CBIndex::c_19, cb_data_format}})
             .set_page_size(tt::CBIndex::c_19, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_intermed2_config);
-    if (!(rms_norm && !b.has_value())) {
-        CircularBufferConfig cb_intermed0_config =
-            CircularBufferConfig(im0_t * single_tile_size, {{tt::CBIndex::c_24, cb_data_format}})
-                .set_page_size(tt::CBIndex::c_24, single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_intermed0_config);
-    }
+    CircularBufferConfig cb_intermed0_config =
+        CircularBufferConfig(im0_t * single_tile_size, {{tt::CBIndex::c_24, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_24, single_tile_size);
+    CreateCircularBuffer(program, all_cores, cb_intermed0_config);
     if (!use_welford) {
         CircularBufferConfig c_intermed3_config =
             CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_20, cb_data_format}})
@@ -548,8 +547,8 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
 
 void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const LayerNormParams& /*operation_attributes*/,
+    const LayerNormInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto* const src_a_dram_buffer = tensor_args.input.buffer();
     const auto& src_b_tensor = tensor_args.residual_input_tensor;
@@ -588,4 +587,4 @@ void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::normalization::layer_norm
+}  // namespace ttnn::prim

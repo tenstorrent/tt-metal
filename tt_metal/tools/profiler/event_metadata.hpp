@@ -46,19 +46,21 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         SEMAPHORE_INC = 27,
         SEMAPHORE_WAIT = 28,
         SEMAPHORE_SET = 29,
+        SEMAPHORE_SET_REMOTE = 30,
+        SEMAPHORE_SET_MULTICAST = 31,
 
         // NOTE: fabric events should be contiguous to allow quick range check!
-        FABRIC_UNICAST_WRITE = 30,
-        FABRIC_UNICAST_INLINE_WRITE = 31,
-        FABRIC_UNICAST_ATOMIC_INC = 32,
-        FABRIC_FUSED_UNICAST_ATOMIC_INC = 33,
-        FABRIC_MULTICAST_WRITE = 34,
-        FABRIC_MULTICAST_ATOMIC_INC = 35,
-        FABRIC_UNICAST_SCATTER_WRITE = 36,
-        FABRIC_ROUTING_FIELDS_1D = 37,
-        FABRIC_ROUTING_FIELDS_2D = 38,
+        FABRIC_UNICAST_WRITE = 32,
+        FABRIC_UNICAST_INLINE_WRITE = 33,
+        FABRIC_UNICAST_ATOMIC_INC = 34,
+        FABRIC_FUSED_UNICAST_ATOMIC_INC = 35,
+        FABRIC_MULTICAST_WRITE = 36,
+        FABRIC_MULTICAST_ATOMIC_INC = 37,
+        FABRIC_UNICAST_SCATTER_WRITE = 38,
+        FABRIC_ROUTING_FIELDS_1D = 39,
+        FABRIC_ROUTING_FIELDS_2D = 40,
 
-        UNSUPPORTED = 39,
+        UNSUPPORTED = 41,
     };
 
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
@@ -93,6 +95,14 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         uint64_t src_addr_4b : 22;     // Source address / 4 (4-byte aligned base)
         uint64_t src_addr_offset : 4;  // Byte offset within 4-byte chunk (0-15)
         uint64_t counter_value : 12;   // Counter value
+
+        LocalNocEventDstTrailer() = default;
+
+        // Prevent accidental construction from raw integers due to bit fields above. Use
+        // EMD::getLocalNocEventDstTrailer() instead.
+        explicit LocalNocEventDstTrailer(uint64_t) = delete;
+        explicit LocalNocEventDstTrailer(uint32_t) = delete;
+        explicit LocalNocEventDstTrailer(int) = delete;
 
         void setDstAddr(uint32_t addr) {
             dst_addr_4b = addr >> 2;

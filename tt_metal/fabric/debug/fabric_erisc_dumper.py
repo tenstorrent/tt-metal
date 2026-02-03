@@ -109,10 +109,10 @@ class ERISCDumper:
             return all_devices
 
         filtered_devices = []
-        available_device_ids = [device._id for device in all_devices]
+        available_device_ids = [device.id for device in all_devices]
 
         for device in all_devices:
-            if device._id in device_ids:
+            if device.id in device_ids:
                 filtered_devices.append(device)
 
         # Report which requested devices were not found
@@ -146,7 +146,7 @@ class ERISCDumper:
             eth_locations = device.get_block_locations("eth")
 
             if not eth_locations:
-                print(f"Warning: No ethernet cores found for device {device._id}")
+                print(f"Warning: No ethernet cores found for device {device.id}")
                 return []
 
             filtered_locations = []
@@ -219,7 +219,7 @@ class ERISCDumper:
                 return filtered_locations
 
         except Exception as e:
-            print(f"Error getting ethernet cores for device {device._id}: {e}")
+            print(f"Error getting ethernet cores for device {device.id}: {e}")
             return []
 
     def read_address(self, device, coord: OnChipCoordinate, address: int) -> Optional[int]:
@@ -235,7 +235,7 @@ class ERISCDumper:
         """
         try:
             # Read 4 bytes (32-bit value) from the specific address using ttexalens API
-            read_data = read_from_device(coord, address, device._id, 4, self.context)
+            read_data = read_from_device(coord, address, device.id, 4, self.context)
 
             # Convert bytes to 32-bit integer (little endian)
             if isinstance(read_data, bytes) and len(read_data) >= 4:
@@ -247,12 +247,12 @@ class ERISCDumper:
                 return read_data
             else:
                 coord_str = coord.to_user_str() if hasattr(coord, "to_user_str") else str(coord)
-                print(f"Warning: Unexpected data type from device {device._id} core {coord_str}: {type(read_data)}")
+                print(f"Warning: Unexpected data type from device {device.id} core {coord_str}: {type(read_data)}")
                 return None
 
         except Exception as e:
             coord_str = coord.to_user_str() if hasattr(coord, "to_user_str") else str(coord)
-            print(f"Error reading address 0x{address:08x} from device {device._id} core {coord_str}: {e}")
+            print(f"Error reading address 0x{address:08x} from device {device.id} core {coord_str}: {e}")
             return None
 
     def dump_values(
@@ -281,7 +281,7 @@ class ERISCDumper:
         current_buffer_address = None
 
         for device in devices:
-            device_id = device._id
+            device_id = device.id
             results[device_id] = {}
 
             eth_cores = self.get_ethernet_cores(
@@ -384,7 +384,7 @@ class ERISCDumper:
         # Build list of all device/core combinations to monitor
         polling_targets = []
         for device in devices:
-            device_id = device._id
+            device_id = device.id
             eth_cores = self.get_ethernet_cores(
                 device, filter_active=filter_active, check_reset=check_reset, core_filter_coords=core_filter_coords
             )
@@ -563,7 +563,7 @@ class ERISCDumper:
         results = {}
 
         for device in devices:
-            device_id = device._id
+            device_id = device.id
             results[device_id] = {}
 
             # Detect architecture for masking decision
@@ -699,7 +699,7 @@ class ERISCDumper:
         """Read buffer data from memory and return as list of slots, each containing words."""
         try:
             total_size = num_elements * slot_size
-            raw_data = read_from_device(coord, address, device._id, total_size, self.context)
+            raw_data = read_from_device(coord, address, device.id, total_size, self.context)
 
             if raw_data is None:
                 return None

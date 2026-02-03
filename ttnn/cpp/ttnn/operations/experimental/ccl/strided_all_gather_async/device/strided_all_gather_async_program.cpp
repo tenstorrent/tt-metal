@@ -8,7 +8,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/strided_all_gather_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -34,7 +34,7 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl::strided_all_gather_async::program {
+namespace ttnn::experimental::prim {
 
 namespace detail {
 
@@ -129,10 +129,10 @@ void strided_fabric_mux_connection_rt_args(
 }  // namespace detail
 
 StridedAllGatherAsyncProgramFactory::cached_mesh_workload_t StridedAllGatherAsyncProgramFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const StridedAllGatherAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const StridedAllGatherAsyncInputs& tensor_args,
+    Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& coord : tensor_coords.coords()) {
@@ -146,9 +146,9 @@ StridedAllGatherAsyncProgramFactory::cached_mesh_workload_t StridedAllGatherAsyn
 void StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program(
     const shared_variables_t& shared_variables,
     tt::tt_metal::Program& program,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const StridedAllGatherAsyncParams& attributes,
+    const StridedAllGatherAsyncInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& reader_kernel_ids = shared_variables.reader_kernel_ids;
     const auto& writer_kernel_ids = shared_variables.writer_kernel_ids;
     const auto& all_cores = shared_variables.all_cores;
@@ -191,9 +191,9 @@ void StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program
 
 void StridedAllGatherAsyncProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const StridedAllGatherAsyncParams& attributes,
+    const StridedAllGatherAsyncInputs& tensor_args,
+    Tensor& output_tensor) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         override_runtime_arguments_per_program(shared_variables, program, attributes, tensor_args, output_tensor);
@@ -202,10 +202,10 @@ void StridedAllGatherAsyncProgramFactory::override_runtime_arguments(
 
 ttnn::device_operation::CachedProgram<StridedAllGatherAsyncProgramFactory::shared_variables_t>
 StridedAllGatherAsyncProgramFactory::create_at(
-    const operation_attributes_t& attributes,
+    const StridedAllGatherAsyncParams& attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const StridedAllGatherAsyncInputs& tensor_args,
+    Tensor& output_tensor) {
     uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
         tensor_args.input_tensor, mesh_coordinate, attributes.cluster_axis);
 
@@ -669,4 +669,4 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
         num_cores_per_link};
 }
 
-}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async::program
+}  // namespace ttnn::experimental::prim

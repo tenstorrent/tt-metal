@@ -21,6 +21,11 @@ static volatile uint32_t* const fabric_postcode_ptr =
 
 #define POSTCODE(status) (*fabric_postcode_ptr = static_cast<uint32_t>(status))
 
+static volatile uint32_t* const fabric_scratch_ptr =
+    reinterpret_cast<volatile uint32_t*>(eth_l1_mem::address_map::AERISC_FABRIC_SCRATCH_BASE);
+
+#define ROUTER_SCRATCH_WRITE(id, val) (fabric_scratch_ptr[id]) = val;
+
 struct eth_channel_sync_t {
     // Do not reorder fields without also updating the corresponding APIs that use
     // any of them

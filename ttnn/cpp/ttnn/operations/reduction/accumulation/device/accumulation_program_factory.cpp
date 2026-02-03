@@ -13,7 +13,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::reduction::accumulation {
+namespace ttnn::prim {
 
 // calculate the offset between consecutive tiles between accumulation axis and last dimension
 uint32_t AccumulationProgramFactory::calc_input_tile_offset(const Shape& input_shape, const int32_t& dim) {
@@ -32,7 +32,9 @@ uint32_t AccumulationProgramFactory::calc_input_tile_offset(const Shape& input_s
 }
 
 AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const AccumulationParams& operation_attributes,
+    const AccumulationInputs& tensor_args,
+    Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -182,8 +184,8 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
 
 void AccumulationProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const AccumulationParams& /*operation_attributes*/,
+    const AccumulationInputs& tensor_args,
     Tensor& tensor_return_value) {
     const auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.accumulation_reader_kernel_id;
@@ -227,4 +229,4 @@ KernelHandle AccumulationProgramFactory::create_kernel(
     return kernel_id;
 }
 
-}  // namespace ttnn::operations::reduction::accumulation
+}  // namespace ttnn::prim

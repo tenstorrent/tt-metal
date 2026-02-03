@@ -3,16 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/device/nlp_create_qkv_heads_segformer_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer {
+namespace ttnn::experimental::prim {
 
 NlpCreateHeadsSegformerDeviceOperation::program_factory_t
 NlpCreateHeadsSegformerDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return program::NlpCreateQkvHeadsSegformerProgramFactory{};
+    return NlpCreateQkvHeadsSegformerProgramFactory{};
 }
 
 void NlpCreateHeadsSegformerDeviceOperation::validate_on_program_cache_hit(
@@ -63,7 +64,7 @@ void NlpCreateHeadsSegformerDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t NlpCreateHeadsSegformerDeviceOperation::compute_output_specs(
+NlpCreateQkvHeadsSegformerResultSpec NlpCreateHeadsSegformerDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (args.output_mem_config.is_sharded()) {
         TT_FATAL(false, "Sharded output memory config is not supported for nlp_create_qkv_heads_segformer");
@@ -87,7 +88,7 @@ spec_return_value_t NlpCreateHeadsSegformerDeviceOperation::compute_output_specs
     return {spec, spec, spec};
 }
 
-tensor_return_value_t NlpCreateHeadsSegformerDeviceOperation::create_output_tensors(
+NlpCreateQkvHeadsSegformerResult NlpCreateHeadsSegformerDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& optional_output_tensors = tensor_args.optional_output_tensors;
     if (!optional_output_tensors.empty()) {
@@ -103,7 +104,7 @@ tensor_return_value_t NlpCreateHeadsSegformerDeviceOperation::create_output_tens
         create_device_tensor(std::get<2>(output_specs), tensor_args.input_tensor.device())};
 }
 
-}  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
@@ -111,8 +112,7 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads_segformer(
     const Tensor& input_tensor,
     const MemoryConfig& output_mem_config,
     const std::vector<std::optional<Tensor>>& optional_output_tensors) {
-    using OperationType = ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer::
-        NlpCreateHeadsSegformerDeviceOperation;
+    using OperationType = ttnn::experimental::prim::NlpCreateHeadsSegformerDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .output_mem_config = output_mem_config,

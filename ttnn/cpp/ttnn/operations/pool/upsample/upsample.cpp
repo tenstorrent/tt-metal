@@ -78,34 +78,43 @@ static tt::tt_metal::MemoryConfig compute_bilinear_autoshard_memory_config(const
 
 ttnn::Tensor ExecuteUpSample::invoke(
     const ttnn::Tensor& input_tensor,
-    std::variant<int, tt::tt_metal::Array2D> scale_factor,
+    std::variant<int, std::array<int, 2>, float, std::array<float, 2>> scale_factor,
     const std::string& mode,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     tt::tt_metal::MemoryConfig mem_config = output_mem_config.value_or(input_tensor.memory_config());
 
-    int scale_h = 1;
-    int scale_w = 1;
+    // Parse scale factors from variant - extract as floats
+    float scale_h = 1.0f;
+    float scale_w = 1.0f;
+
     std::visit(
         [&scale_h, &scale_w](auto&& sf) {
             using T = std::decay_t<decltype(sf)>;
             if constexpr (std::is_same_v<T, int>) {
+                scale_h = static_cast<float>(sf);
+                scale_w = static_cast<float>(sf);
+            } else if constexpr (std::is_same_v<T, std::array<int, 2>>) {
+                scale_h = static_cast<float>(sf[0]);
+                scale_w = static_cast<float>(sf[1]);
+            } else if constexpr (std::is_same_v<T, float>) {
                 scale_h = sf;
                 scale_w = sf;
-            } else if constexpr (std::is_same_v<T, tt::tt_metal::Array2D>) {
-                scale_h = sf.at(0);
-                scale_w = sf.at(1);
+            } else if constexpr (std::is_same_v<T, std::array<float, 2>>) {
+                scale_h = sf[0];
+                scale_w = sf[1];
             } else {
-                // static_assert(false, "Unsupported scale factor");
                 static_assert(sizeof(T) != 0, "Type check failed.");
             }
         },
         scale_factor);
 
+    // Validation is handled by the device operation's validate_on_program_cache_miss
+
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
         ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
 
-    // For bilinear mode, call halo preprocessing step before the upsample operation (like pool2d)
+    // For bilinear mode, call halo preprocessing step before the upsample operation
     if (mode == "bilinear") {
         // Autoshard if needed
         ttnn::Tensor input_for_halo = input_tensor;
@@ -118,9 +127,11 @@ ttnn::Tensor ExecuteUpSample::invoke(
             output_mem_config_to_use = sharded_memory_config;
         }
 
-        // Apply halo preprocessing
+        // Apply halo preprocessing (requires integer scales)
+        int scale_h_int = static_cast<int>(scale_h);
+        int scale_w_int = static_cast<int>(scale_w);
         std::pair<tt::tt_metal::Tensor, sliding_window::SlidingWindowConfig> halo_result =
-            apply_bilinear_halo_preprocessing(input_for_halo, scale_h, scale_w);
+            apply_bilinear_halo_preprocessing(input_for_halo, scale_h_int, scale_w_int);
         tt::tt_metal::Tensor haloed_tensor = halo_result.first;
         sliding_window::SlidingWindowConfig sliding_window_config = halo_result.second;
 
@@ -135,8 +146,7 @@ ttnn::Tensor ExecuteUpSample::invoke(
         return output_tensor;
     }
 
-    // For nearest mode (or any other non-bilinear mode), pass the ORIGINAL input tensor
-    ttnn::Tensor output_tensor = ttnn::prim::upsample(input_tensor, scale_h, scale_w, mode, mem_config, config);
-    return output_tensor;
+    // For nearest mode, pass to unified prim (device op handles factory selection)
+    return ttnn::prim::upsample(input_tensor, scale_h, scale_w, mode, mem_config, config);
 }
 }  // namespace ttnn::operations::upsample

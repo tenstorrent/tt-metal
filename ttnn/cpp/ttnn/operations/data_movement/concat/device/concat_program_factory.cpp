@@ -11,10 +11,10 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::data_movement::concat::program {
+namespace ttnn::prim {
 
 ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value) {
+    const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
@@ -167,7 +167,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     writer_kernel_id = CreateKernel(
         program,
         rm_layout
-            ? "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
+            ? "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
             : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         WriterDataMovementConfig(writer_compile_time_args));
@@ -223,8 +223,8 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
 void ConcatProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const ConcatParams& /*operation_attributes*/,
+    const ConcatInputs& tensor_args,
     Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
@@ -250,4 +250,4 @@ void ConcatProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::concat::program
+}  // namespace ttnn::prim

@@ -153,6 +153,16 @@ void ProfilerStateManager::add_runtime_id_to_trace(ChipId device_id, uint32_t tr
     device_profiler.addRuntimeIdToTrace(trace_id, runtime_id);
 }
 
+void ProfilerStateManager::signal_debug_dump_read() {
+    if (this->debug_dump_thread.joinable()) {
+        std::unique_lock<std::mutex> lock{this->debug_dump_thread_mutex};
+        this->force_read_complete = false;
+        this->force_read_debug_dump = true;
+        this->stop_debug_dump_thread_cv.notify_all();
+        this->force_read_complete_cv.wait(lock, [&] { return this->force_read_complete.load(); });
+    }
+}
+
 void ProfilerStateManager::start_debug_dump_thread(
     std::vector<IDevice*> active_devices, std::unordered_map<ChipId, std::vector<CoreCoord>> virtual_cores_map) {
     TT_ASSERT(!this->debug_dump_thread.joinable());
@@ -176,8 +186,12 @@ void ProfilerStateManager::start_debug_dump_thread(
             }
 
             std::unique_lock<std::mutex> lock{this->debug_dump_thread_mutex};
-            if (this->stop_debug_dump_thread_cv.wait_for(
-                    lock, interval, [&] { return this->stop_debug_dump_thread.load(); })) {
+            if (this->stop_debug_dump_thread_cv.wait_for(lock, interval, [&] {
+                    return this->stop_debug_dump_thread.load() || this->force_read_debug_dump.load();
+                })) {
+                bool was_force_read = this->force_read_debug_dump.exchange(false);
+                bool is_stopping = this->stop_debug_dump_thread.load();
+
                 for (auto* device : active_devices) {
                     {
                         auto profiler_it = this->device_profiler_map.find(device->id());
@@ -188,12 +202,17 @@ void ProfilerStateManager::start_debug_dump_thread(
                     }
                     constexpr auto state = ProfilerReadState::LAST_FD_READ;
                     detail::ReadDeviceProfilerResultsInternal(
-                        device->get_mesh_device().get(), device, virtual_cores_map.at(device->id()), state, {});
+                        device->get_mesh_device().get(),
+                        device,
+                        virtual_cores_map.at(device->id()),
+                        state,
+                        {},
+                        was_force_read);
 
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());
                     DeviceProfiler& profiler = profiler_it->second;
-                    if (MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+                    if (MetalContext::instance().rtoptions().get_profiler_trace_only() || was_force_read) {
                         profiler.processResults(
                             device,
                             virtual_cores_map.at(device->id()),
@@ -206,7 +225,15 @@ void ProfilerStateManager::start_debug_dump_thread(
                     }
                     // cleanup_device_profilers() handles the final dump
                 }
-                break;
+
+                if (was_force_read) {
+                    this->force_read_complete = true;
+                    this->force_read_complete_cv.notify_all();
+                }
+
+                if (is_stopping) {
+                    break;
+                }
             }
         }
     });

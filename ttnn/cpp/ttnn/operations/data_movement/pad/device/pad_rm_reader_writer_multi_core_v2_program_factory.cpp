@@ -14,7 +14,9 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::float_to_uint16;
+using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
 uint32_t get_num_stick_per_barrier(const Tensor& input_tensor) {
@@ -113,7 +115,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }  // namespace
 
 PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output) {
+    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& pad_value = operation_attributes.pad_value;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
@@ -261,8 +263,8 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
 
 void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const PadParams& /*operation_attributes*/,
+    const PadInputs& tensor_args,
     Tensor& output) {
     const auto& src_tensor = tensor_args.input;
 
@@ -318,4 +320,4 @@ void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim

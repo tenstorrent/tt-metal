@@ -15,7 +15,7 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 
-namespace ttnn::operations::normalization::layer_norm {
+namespace ttnn::prim {
 
 struct LayerNormShardedSharedVariables {
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
@@ -35,15 +35,13 @@ struct LayerNormShardedProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        Tensor& tensor_return_value);
+        const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::normalization::layer_norm
+}  // namespace ttnn::prim

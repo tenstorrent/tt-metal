@@ -122,32 +122,10 @@ void bind_minimal_matmul(nb::module_& mod) {
 
         Notes on Implementation
         -----------------------
-        - Data movement reads A in MxK blocks and B in KxN blocks with serpentine ordering and reuse across
-          subblocks to reduce NOC pressure; writes are deferred to reduce congestion.
+        - Data movement reads A in MxK blocks and B in KxN blocks in row-major order with in0 reuse when
+          striding across N blocks; writes are deferred to reduce congestion.
         - K is processed in blocks of size `K_block_size`, with zero-padding as needed when K is not a multiple.
         - If `fused_activation` is provided, it is applied per tile just before packing to the output buffer.
-
-        Example
-        -------
-        >>> import ttnn
-        >>> a = ...  # TILE tensor with shape [M, K], dtype=ttnn.bfloat16, on device
-        >>> b = ...  # TILE tensor with shape [K, N], same dtype/device as `a`
-        >>> bias = ...  # Optional TILE tensor with shape [N]
-        >>> y = ttnn.experimental.minimal_matmul(
-        ...     input_tensor=a,
-        ...     weight_tensor=b,
-        ...     bias_tensor=bias,
-        ...     fused_activation=(ttnn.UnaryOpType.GELU, False),
-        ...     config=ttnn.MinimalMatmulConfig(
-        ...         M_block_size=8,
-        ...         K_block_size=8,
-        ...         N_block_size=8,
-        ...         subblock_h=2,
-        ...         subblock_w=2,
-        ...         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        ...     ),
-        ... )
-        >>> y.shape  # [M, N]
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("input_tensor"),

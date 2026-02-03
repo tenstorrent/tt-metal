@@ -6,16 +6,16 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement::concat {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct ConcatParams {
     uint32_t dim;
     unsigned int groups;
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct tensor_args_t {
+struct ConcatInputs {
     std::vector<Tensor> input_tensors;
 };
 
-}  // namespace ttnn::operations::data_movement::concat
+}  // namespace ttnn::prim

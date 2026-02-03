@@ -10,9 +10,12 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::data_movement::pad::program {
+namespace ttnn::prim {
+using ttnn::operations::data_movement::float_to_uint16;
+using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
+
 PadRmShardedWidthOnlyProgramFactory::cached_program_t PadRmShardedWidthOnlyProgramFactory::create(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, Tensor& output) {
+    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
     const auto& pad_value = operation_attributes.pad_value;
@@ -138,8 +141,8 @@ PadRmShardedWidthOnlyProgramFactory::cached_program_t PadRmShardedWidthOnlyProgr
 
 void PadRmShardedWidthOnlyProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
+    const PadParams& /*operation_attributes*/,
+    const PadInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto* input_buffer = tensor_args.input.buffer();
     auto* output_buffer = tensor_return_value.buffer();
@@ -150,4 +153,4 @@ void PadRmShardedWidthOnlyProgramFactory::override_runtime_arguments(
         cached_program.program, cached_program.shared_variables.output_shard_cb, *output_buffer);
 }
 
-}  // namespace ttnn::operations::data_movement::pad::program
+}  // namespace ttnn::prim

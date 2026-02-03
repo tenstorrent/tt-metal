@@ -17,15 +17,14 @@
 #include "all_to_all_async_device_operation_types.hpp"
 #include "all_to_all_async_program_factory.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental::prim {
 
 struct AllToAllAsyncDeviceOperation {
-    using operation_attributes_t = all_to_all_async::operation_attributes_t;
-    using tensor_args_t = all_to_all_async::tensor_args_t;
+    using operation_attributes_t = AllToAllAsyncParams;
+    using tensor_args_t = AllToAllAsyncInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    using AllToAllAsyncProgram = all_to_all_async::AllToAllAsyncProgram;
     using program_factory_t = std::variant<AllToAllAsyncProgram>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -38,11 +37,7 @@ struct AllToAllAsyncDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::experimental::ccl
-
-namespace ttnn::prim {
-
-ttnn::operations::experimental::ccl::AllToAllAsyncDeviceOperation::tensor_return_value_t all_to_all_async(
+Tensor all_to_all_async(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& persistent_intermediate_buffer,
     ttnn::Tensor& persistent_output_buffer,
@@ -54,4 +49,4 @@ ttnn::operations::experimental::ccl::AllToAllAsyncDeviceOperation::tensor_return
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 
-}  // namespace ttnn::prim
+}  // namespace ttnn::experimental::prim

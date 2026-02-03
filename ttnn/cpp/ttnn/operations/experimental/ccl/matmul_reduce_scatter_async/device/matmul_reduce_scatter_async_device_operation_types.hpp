@@ -11,22 +11,21 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async {
+namespace ttnn::experimental::prim {
 
 // Type alias for the reduce scatter operation attributes used in fusion
-using ReduceScatterMinimalAsyncParams =
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::detail::operation_attributes_t;
+using ReduceScatterMinimalAsyncParams = ttnn::experimental::prim::ReduceScatterMinimalAsyncParams;
 
-struct operation_attributes_t {
+struct MatmulReduceScatterAsyncParams {
     ReduceScatterMinimalAsyncParams reduce_scatter_params;
-    ttnn::operations::matmul::operation_attributes_t matmul_struct;
+    ttnn::prim::MatmulParams matmul_struct;
     CoreCoord reduce_scatter_core_grid_offset;
     std::vector<IDevice*> devices;
 
     // Constructor required because operation structs are not default constructible.
-    operation_attributes_t(
+    MatmulReduceScatterAsyncParams(
         ReduceScatterMinimalAsyncParams reduce_scatter_params,
-        ttnn::operations::matmul::operation_attributes_t matmul_struct,
+        ttnn::prim::MatmulParams matmul_struct,
         CoreCoord reduce_scatter_core_grid_offset,
         std::vector<IDevice*> devices) :
         reduce_scatter_params(std::move(reduce_scatter_params)),
@@ -40,17 +39,17 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_return_value_t {
+struct MatmulReduceScatterAsyncResult {
     Tensor mm;
     Tensor reduce_scatter;
 };
 
-struct spec_return_value_t {
+struct MatmulReduceScatterAsyncResultSpec {
     TensorSpec mm;
     TensorSpec reduce_scatter;
 };
 
-struct tensor_args_t {
+struct MatmulReduceScatterAsyncInputs {
     Tensor input;
     Tensor weight;
     std::optional<Tensor> bias;
@@ -58,4 +57,4 @@ struct tensor_args_t {
     Tensor persistent_output;
 };
 
-}  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async
+}  // namespace ttnn::experimental::prim

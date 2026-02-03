@@ -8,18 +8,18 @@
 
 #include <optional>
 
-namespace ttnn::operations::reduction::ema {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct EmaParams {
     float alpha{};
     CoreCoord grid_size;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct tensor_args_t {
+struct EmaInputs {
     Tensor input;
     std::optional<Tensor> optional_output_tensor;
 };
 
-}  // namespace ttnn::operations::reduction::ema
+}  // namespace ttnn::prim

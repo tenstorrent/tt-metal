@@ -37,6 +37,7 @@ using DeviceIdentifier = std::variant<
     std::pair<MeshId, MeshCoordinate>  // [mesh_id, [row, col]]
     >;
 
+using CoreConfig = std::variant<tt::tt_metal::CoreCoord, std::string>;
 // A map to hold various parametrization options parsed from the YAML.
 using ParametrizationValues = std::variant<std::vector<std::string>, std::vector<uint32_t>>;
 using ParametrizationOptionsMap = std::unordered_map<std::string, ParametrizationValues>;
@@ -44,7 +45,7 @@ using ParametrizationOptionsMap = std::unordered_map<std::string, Parametrizatio
 // Parsed structures (before resolution) - use DeviceIdentifier
 struct ParsedDestinationConfig {
     std::optional<DeviceIdentifier> device;
-    std::optional<CoreCoord> core;
+    std::optional<CoreConfig> core;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
@@ -62,7 +63,8 @@ struct ParsedTrafficPatternConfig {
 
 struct ParsedSenderConfig {
     DeviceIdentifier device = FabricNodeId(MeshId{0}, 0);
-    std::optional<CoreCoord> core;
+    std::optional<CoreConfig> core;
+    std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<ParsedTrafficPatternConfig> patterns;
     std::optional<uint32_t> link_id;  // Link ID for multi-link tests
 };
@@ -100,6 +102,7 @@ struct TrafficPatternConfig {
 struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);
     std::optional<CoreCoord> core;
+    std::optional<tt::tt_metal::NOC> noc_id;
     std::vector<TrafficPatternConfig> patterns;
     uint32_t link_id = 0;  // Link ID for multi-link tests
 };
@@ -121,6 +124,7 @@ enum class HighLevelTrafficPattern {
     HalfRing,
     AllDevicesUniformPattern,
     NeighborExchange,
+    SequentialNeighborExchange,
     SequentialAllToAll,
 };
 
@@ -130,11 +134,13 @@ struct TestFabricSetup {
     std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
+    std::optional<uint32_t> max_packet_size;  // Custom max packet size for router
 };
 
 struct HighLevelPatternConfig {
     std::string type;
     std::optional<uint32_t> iterations;
+    bool is_sequential = false;
 };
 
 struct ParsedTestConfig {
@@ -160,6 +166,7 @@ struct ParsedTestConfig {
     bool skip_packet_validation = false;  // Enable benchmark mode in sender and receiver kernels (skips validation)
     uint32_t seed{};
     uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
+    bool from_sequential_pattern = false;  // True if this test was expanded from a sequential high-level pattern
 };
 
 struct TestConfig {
@@ -184,6 +191,7 @@ struct TestConfig {
     bool enable_flow_control = false;  // Enable flow control for all patterns in this test
     bool skip_packet_validation = false;  // Enable benchmark mode in sender and receiver kernels (skips validation)
     uint32_t seed{};
+    bool from_sequential_pattern = false;  // True if this test was expanded from a sequential high-level pattern
 };
 
 // Latency test results structure (parallel to bandwidth results)

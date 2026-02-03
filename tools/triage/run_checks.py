@@ -85,7 +85,7 @@ class DeviceDescription:
 
 
 def device_description_serializer(device_desc: DeviceDescription) -> str:
-    return hex(device_desc.device.unique_id) if device_desc.use_unique_id else str(device_desc.device._id)
+    return hex(device_desc.device.unique_id) if device_desc.use_unique_id else str(device_desc.device.id)
 
 
 @dataclass
@@ -106,7 +106,7 @@ class PerCoreCheckResult(PerBlockCheckResult):
 def is_galaxy(device: Device) -> bool:
     import tt_umd
 
-    return device._context.cluster_descriptor.get_board_type(device._id) == tt_umd.BoardType.GALAXY
+    return device._context.cluster_descriptor.get_board_type(device.id) == tt_umd.BoardType.GALAXY
 
 
 def get_idle_eth_block_locations(device: Device) -> list[OnChipCoordinate]:
@@ -115,7 +115,7 @@ def get_idle_eth_block_locations(device: Device) -> list[OnChipCoordinate]:
     # These are blocks on wormhole mmio capable devices with connections to remote devices
     # If board type is galaxy, we remove idle eth blocks at locations e0,0 e0,1 e0,2 e0,3 and e0,15,
     # if not we just remove e0,15
-    if device.is_wormhole() and device._has_mmio:
+    if device.is_wormhole() and device.is_local:
         locations_to_remove = {"e0,0", "e0,1", "e0,2", "e0,3", "e0,15"} if is_galaxy(device) else {"e0,15"}
         block_locations = [loc for loc in block_locations if loc.to_str("logical") not in locations_to_remove]
 
@@ -189,8 +189,8 @@ class RunChecks:
         self.metal_device_id_mapping = metal_device_id_mapping
         # If any device has a metal<->exalens mismatch, show all devices as hex unique_id
         self._use_unique_id = any(
-            metal_device_id_mapping.has_metal_device_id(device._id)
-            and metal_device_id_mapping.get_unique_id(device._id) != device.unique_id
+            metal_device_id_mapping.has_metal_device_id(device.id)
+            and metal_device_id_mapping.get_unique_id(device.id) != device.unique_id
             for device in devices
         )
         self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {

@@ -122,6 +122,17 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
             qS,
             qS);
     }
+
+    // Validate mask type and mask tensor consistency
+    TT_FATAL(
+        !(operation_attributes.mask_type == AttentionMaskType::Arbitrary && !tensor_args.attn_mask.has_value()),
+        "AttentionMaskType::Arbitrary requires a mask tensor to be provided.");
+
+    TT_FATAL(
+        !(operation_attributes.mask_type != AttentionMaskType::Arbitrary && tensor_args.attn_mask.has_value()),
+        "Mask tensor provided but mask_type is not Arbitrary. "
+        "Use AttentionMaskType::Arbitrary to apply a custom mask, "
+        "or remove the mask tensor for None/Causal modes.");
 }
 
 SDPABackwardKVDeviceOperation::spec_return_value_t SDPABackwardKVDeviceOperation::compute_output_specs(
@@ -168,6 +179,7 @@ ttsl::hash::hash_t SDPABackwardKVDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto hash = tt::tt_metal::operation::hash_operation<SDPABackwardKVDeviceOperation>(
         operation_attributes,
+        operation_attributes.mask_type,
         tensor_args.query.logical_shape(),
         tensor_args.key.logical_shape(),
         tensor_args.intermediates.logical_shape(),
@@ -186,16 +198,16 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
     const ttnn::Tensor& query_tensor,
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
+    ttml::metal::AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
     const float dropout_probability,
-    const bool fp32_dest_acc_en,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{
-        .fp32_dest_acc_en = fp32_dest_acc_en, .dropout_probability = dropout_probability};
+    auto operation_attributes =
+        OperationType::operation_attributes_t{.mask_type = mask_type, .dropout_probability = dropout_probability};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,

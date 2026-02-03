@@ -65,10 +65,11 @@ def test_all_broadcast_deepseek(
 
     tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
     for tt_out_tensor in tt_out_tensors:
         coords = list(tt_out_tensor.tensor_topology().mesh_coords())
         for coord, tt_out in zip(coords, ttnn.get_device_tensors(tt_out_tensor)):
-            if not mesh_device.get_view().is_local(coord):
+            if view is not None and not view.is_local(coord):
                 continue
             torch_out = ttnn.to_torch(tt_out)
             eq, output = comp_equal(torch_out, torch_reference)

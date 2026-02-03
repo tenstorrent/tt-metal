@@ -181,8 +181,7 @@ public:
     // Return ethernet channels on a chip that face other chips within the same mesh (intra-mesh)
     std::vector<chan_id_t> get_intramesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
 
-    // The following apis should probably be private, and exposed only to some Metal runtime objects
-    void initialize_fabric_context(tt_fabric::FabricConfig fabric_config);
+    void initialize_fabric_context(tt_fabric::FabricConfig fabric_config, const FabricRouterConfig& router_config);
 
     FabricContext& get_fabric_context() const;
 
