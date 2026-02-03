@@ -16,6 +16,20 @@ from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
 )
 
 
+# Mesh graph descriptor paths for different mesh configurations
+MESH_GRAPH_DESC_16x1 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
+)
+MESH_GRAPH_DESC_1x16 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
+)
+
+
+def is_mesh_graph_descriptor_set(expected_path):
+    """Check if TT_MESH_GRAPH_DESC_PATH is set to the expected path."""
+    return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
+
+
 def create_fabric_router_config(*, max_payload_size=None):
     """Helper to create FabricRouterConfig with custom max payload size."""
     config = ttnn.FabricRouterConfig()
@@ -27,16 +41,6 @@ def create_fabric_router_config(*, max_payload_size=None):
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from tracy import signpost
-
-
-@pytest.fixture
-def set_mesh_graph_descriptor_16x1():
-    """Set the mesh graph descriptor for 16x1 mesh configuration."""
-    os.environ[
-        "TT_MESH_GRAPH_DESC_PATH"
-    ] = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_16x1_torus_graph_descriptor.textproto"
-    yield
-    os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
 
 
 def gen_expert_mapping_new_format_from_old(expert_mapping_old, mesh_shape):
@@ -616,6 +620,11 @@ def run_all_to_all_dispatch_metadata_test(
 
 
 # Correctness test - single focused test case for pipeline validation
+# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 16x1 mesh descriptor before running
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1),
+    reason=f"Requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_16x1}",
+)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -637,7 +646,6 @@ def run_all_to_all_dispatch_metadata_test(
     indirect=["mesh_device"],
 )
 def test_correctness(
-    set_mesh_graph_descriptor_16x1,
     mesh_device,
     mesh_shape,
     cluster_axis,
@@ -681,7 +689,7 @@ def test_correctness(
 
 
 # Performance sweep test - disabled by default (too resource intensive for pipelines)
-# Enable with: RUN_ALL_TO_ALL_PERF=1 pytest ...
+# Enable with: RUN_ALL_TO_ALL_PERF=1 and TT_MESH_GRAPH_DESC_PATH set to the appropriate mesh descriptor
 @pytest.mark.skipif(
     os.environ.get("RUN_ALL_TO_ALL_PERF") != "1",
     reason="Resource intensive sweep test - enable with RUN_ALL_TO_ALL_PERF=1",
@@ -758,6 +766,14 @@ def test_decode_perf(
     use_persistent_mode,
     worker_mode,
 ):
+    # Skip based on mesh shape and required mesh graph descriptor
+    if mesh_shape == (16, 1):
+        if not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1):
+            pytest.skip(f"16x1 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_16x1}")
+    elif mesh_shape == (1, 16):
+        if not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16):
+            pytest.skip(f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}")
+
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:
