@@ -1419,15 +1419,15 @@ void LatencyResultsManager::compare_latency_results_with_golden() {
         log_warning(tt::LogTest, "Skipping golden latency comparison - no golden file found");
         return;
     }
-    if (results_.size() != golden_latency_entries_.size()) {
+    if (results_summary_.size() != golden_latency_entries_.size()) {
         log_warning(
             tt::LogTest,
             "Number of latency results ({}) does not match number of golden entries ({})",
-            results_.size(),
+            results_summary_.size(),
             golden_latency_entries_.size());
     }
 
-    for (const auto& test_result : results_) {
+    for (const auto& test_result : results_summary_) {
         auto golden_it = std::find_if(
             golden_latency_entries_.begin(), golden_latency_entries_.end(), [&](const GoldenLatencyEntry& golden) {
                 return golden.test_name == test_result.test_name && golden.ftype == test_result.ftype &&
