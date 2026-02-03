@@ -13,7 +13,12 @@ from typing import Tuple, TYPE_CHECKING
 
 from ..mock_tensor import MockTensor
 from ..roofline import matmul_roofline
-from .operation import RooflineFunctionContext, RooflineFunction
+from .operation import (
+    RooflineFunctionContext,
+    RooflineFunction,
+    create_grad_tensor,
+    create_activation_tensor,
+)
 
 if TYPE_CHECKING:
     from ..roofline import RooflineContext
@@ -67,7 +72,7 @@ class MockMatMulOp(RooflineFunction):
         roofline_ctx.add_perf_result(estimate)
 
         output_shape = A.shape[:-1] + (N,)
-        return MockTensor(output_shape, A.dtype, A.layout, requires_grad=True)
+        return create_activation_tensor(output_shape, A.dtype, A.layout)
 
     @staticmethod
     def backward(
@@ -103,7 +108,7 @@ class MockMatMulOp(RooflineFunction):
             phase="backward",
         )
         roofline_ctx.add_perf_result(estimate)
-        grad_A = MockTensor(A.shape, A.dtype, A.layout, requires_grad=False)
+        grad_A = create_grad_tensor(A.shape, A.dtype, A.layout, name="grad_A")
 
         # grad_B = A.T @ grad_output
         estimate = matmul_roofline(
@@ -116,6 +121,6 @@ class MockMatMulOp(RooflineFunction):
             phase="backward",
         )
         roofline_ctx.add_perf_result(estimate)
-        grad_B = MockTensor(B.shape, B.dtype, B.layout, requires_grad=False)
+        grad_B = create_grad_tensor(B.shape, B.dtype, B.layout, name="grad_B")
 
         return grad_A, grad_B

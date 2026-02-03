@@ -56,12 +56,12 @@ class MockLinearLayer(MockModule):
 
         # Weight: [1, 1, out_features, in_features]
         self.weight = MockParameter(
-            MockTensor((1, 1, out_features, in_features), dtype=dtype)
+            (1, 1, out_features, in_features), dtype=dtype, name="weight"
         )
 
         # Bias: [1, 1, 1, out_features]
         if has_bias:
-            self.bias = MockParameter(MockTensor((1, 1, 1, out_features), dtype=dtype))
+            self.bias = MockParameter((1, 1, 1, out_features), dtype=dtype, name="bias")
         else:
             self.bias = None
 

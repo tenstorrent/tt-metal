@@ -174,7 +174,7 @@ BLACKHOLE_P100 = HardwareSpec(
 
 BLACKHOLE_P150 = HardwareSpec(
     name="Blackhole",
-    tensix_cores_per_chip=140,
+    tensix_cores_per_chip=120,
     clock_ghz=1.35,
     dram_gb_per_chip=32,
     dram_bw_gb_s=512,

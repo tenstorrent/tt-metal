@@ -10,13 +10,14 @@ multiple operations in a forward/backward pass.
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Dict, TYPE_CHECKING
+from typing import List, Dict, Optional, Tuple, TYPE_CHECKING
 
 from ..hardware import HardwareSpec, BottleneckType, MathFidelity
+from ..memory_tracker import MemoryTracker
 
 if TYPE_CHECKING:
     from ..modules import MockModule
-    from ..mock_tensor import MockTensor
+    from ..mock_tensor import MockTensor, TensorLabel
 
 
 def fpu_eltwise_flops_per_core_per_cycle(
@@ -161,8 +162,26 @@ class RooflineContext:
     hw: HardwareSpec
     estimates: List[RooflineEstimate] = field(default_factory=list)
 
-    # Track activation memory for memory estimation
-    _activation_tensors: List["MockTensor"] = field(default_factory=list)
+    # Memory tracker for detailed allocation tracking
+    memory_tracker: Optional[MemoryTracker] = field(default=None)
+
+    def __post_init__(self):
+        """Initialize and enable memory tracking."""
+        if self.memory_tracker is None:
+            self.memory_tracker = MemoryTracker()
+        self.enable_memory_tracking()
+
+    def enable_memory_tracking(self) -> None:
+        """Enable global memory tracking for MockTensor allocations."""
+        from ..mock_tensor import set_global_memory_tracker
+
+        set_global_memory_tracker(self.memory_tracker)
+
+    def disable_memory_tracking(self) -> None:
+        """Disable global memory tracking."""
+        from ..mock_tensor import set_global_memory_tracker
+
+        set_global_memory_tracker(None)
 
     def add(self, estimate: RooflineEstimate) -> None:
         """Add an estimate to the context."""
@@ -174,10 +193,6 @@ class RooflineContext:
         This method exists for backwards compatibility and is equivalent to add().
         """
         self.add(result)
-
-    def track_activation(self, tensor: "MockTensor") -> None:
-        """Track a tensor for activation memory estimation."""
-        self._activation_tensors.append(tensor)
 
     # =========================================================================
     # Aggregate metrics
@@ -236,13 +251,6 @@ class RooflineContext:
         for name, param in module.parameters().items():
             total_bytes += param.bytes()
         return total_bytes
-
-    def estimate_activation_memory(self) -> int:
-        """Estimate peak activation memory.
-
-        Returns memory for tracked activation tensors.
-        """
-        return sum(t.bytes() for t in self._activation_tensors)
 
     def estimate_gradient_memory(self, module: "MockModule") -> int:
         """Estimate memory for gradients (same as parameters).
@@ -332,20 +340,6 @@ class RooflineContext:
         lines.append(f"  Achieved BW:     {self.achieved_bandwidth_gb_s():.1f} GB/s")
         lines.append("")
 
-        # Memory (if module provided)
-        if module is not None:
-            param_mem = self.estimate_parameter_memory(module)
-            grad_mem = self.estimate_gradient_memory(module)
-            act_mem = self.estimate_activation_memory()
-            total_mem = param_mem + grad_mem + act_mem
-
-            lines.append("MEMORY ESTIMATE:")
-            lines.append(f"  Parameters:   {param_mem/1e9:.3f} GB")
-            lines.append(f"  Gradients:    {grad_mem/1e9:.3f} GB")
-            lines.append(f"  Activations:  {act_mem/1e9:.3f} GB")
-            lines.append(f"  Total:        {total_mem/1e9:.3f} GB")
-            lines.append("")
-
         # Bottleneck breakdown
         breakdown = self.bottleneck_breakdown()
         lines.append("BOTTLENECK BREAKDOWN:")
@@ -372,4 +366,52 @@ class RooflineContext:
     def clear(self) -> None:
         """Clear all accumulated estimates."""
         self.estimates.clear()
-        self._activation_tensors.clear()
+        if self.memory_tracker is not None:
+            self.memory_tracker.clear()
+
+    # =========================================================================
+    # Memory tracking methods
+    # =========================================================================
+
+    def peak_memory_tracked(self) -> Tuple[int, Dict["TensorLabel", int]]:
+        """Get peak memory usage from tracked allocations.
+
+        Returns:
+            Tuple of (peak_bytes, breakdown_by_label)
+        """
+        if self.memory_tracker is None:
+            from ..mock_tensor import TensorLabel
+
+            return 0, {label: 0 for label in TensorLabel}
+        return self.memory_tracker.peak_memory()
+
+    def print_peak_memory(self) -> None:
+        """Print peak memory usage with breakdown by label."""
+        if self.memory_tracker is not None:
+            self.memory_tracker.print_peak_memory()
+
+    def plot_memory_usage(
+        self,
+        filename: str = "memory_usage.png",
+        title: str = "Memory Usage Over Time",
+        stacked: bool = True,
+    ) -> None:
+        """Generate a memory usage plot.
+
+        Args:
+            filename: Output filename for the plot
+            title: Plot title
+            stacked: If True, stacked area plot. If False, separate line plots per category.
+        """
+        if self.memory_tracker is not None:
+            self.memory_tracker.plot_memory_usage(filename, title, stacked=stacked)
+
+    def get_memory_timeline(self):
+        """Get memory timeline from tracker.
+
+        Returns:
+            List of MemorySnapshot objects
+        """
+        if self.memory_tracker is not None:
+            return self.memory_tracker.get_memory_timeline()
+        return []

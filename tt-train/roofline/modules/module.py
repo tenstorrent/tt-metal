@@ -18,25 +18,50 @@ if TYPE_CHECKING:
 
 
 class MockParameter:
-    """Wrapper marking a MockTensor as a trainable parameter.
+    """A trainable parameter tensor.
 
-    This class is used to explicitly mark tensors as parameters
-    during module construction.
+    Creates a MockTensor with PARAMETER label for memory tracking.
+    This class wraps the tensor and can be used directly in module attributes.
 
     Example:
         >>> class MyModule(MockModule):
         ...     def __init__(self):
         ...         super().__init__()
-        ...         self.weight = MockParameter(MockTensor((64, 32)))
+        ...         self.weight = MockParameter((64, 32), name="weight")
     """
 
-    def __init__(self, tensor: MockTensor):
-        """Initialize a parameter wrapper.
+    def __init__(
+        self,
+        shape: tuple,
+        dtype=None,
+        layout: str = "TILE",
+        requires_grad: bool = True,
+        name: str = None,
+    ):
+        """Initialize a parameter tensor.
 
         Args:
-            tensor: The MockTensor to wrap as a parameter
+            shape: Tensor shape as tuple of ints
+            dtype: Data type (default: BFLOAT16)
+            layout: Memory layout (default: "TILE")
+            requires_grad: Whether gradients should be tracked (default: True)
+            name: Optional name for tracking
         """
-        self.tensor = tensor
+        from ..mock_tensor import TensorLabel
+        from ..hardware import DataType
+
+        if dtype is None:
+            dtype = DataType.BFLOAT16
+
+        # Create tensor with PARAMETER label from the start
+        self.tensor = MockTensor(
+            shape,
+            dtype=dtype,
+            layout=layout,
+            requires_grad=requires_grad,
+            label=TensorLabel.PARAMETER,
+            name=name,
+        )
 
 
 class MockModule:
@@ -52,8 +77,8 @@ class MockModule:
         >>> class MyLayer(MockModule):
         ...     def __init__(self, in_features, out_features):
         ...         super().__init__()
-        ...         self.weight = MockParameter(MockTensor((1, 1, out_features, in_features)))
-        ...         self.bias = MockParameter(MockTensor((1, 1, 1, out_features)))
+        ...         self.weight = MockParameter((1, 1, out_features, in_features), name="weight")
+        ...         self.bias = MockParameter((1, 1, 1, out_features), name="bias")
         ...
         ...     def forward(self, ctx: RooflineContext, x: MockTensor) -> MockTensor:
         ...         # Perform roofline estimation

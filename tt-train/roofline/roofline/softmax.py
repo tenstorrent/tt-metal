@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from .roofline import RooflineEstimate
 
 
-# TODO: We currently have composite softmax, so this is incorrect
 def softmax_roofline(
     hw: HardwareSpec,
     num_rows: int,
@@ -74,12 +73,8 @@ def softmax_roofline(
         # Total: ~8 ops per element
         total_flops = 8 * num_elements
     else:
-        # Backward:
-        # - Read grad_output, softmax_output
-        # - Compute grad_output * softmax, sum
-        # - Compute grad_input
         total_bytes = int(4 * num_elements * bytes_per_elem)
-        total_flops = 6 * num_elements
+        total_flops = 4 * num_elements
 
     # Compute time
     ops_per_cycle = sfpu_flops_per_core_per_cycle(fidelity)

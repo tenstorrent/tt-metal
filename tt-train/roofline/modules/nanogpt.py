@@ -107,11 +107,11 @@ class MockNanoGPT(MockModule):
 
         # Final layer norm - using direct parameters
         self.ln_f_gamma = MockParameter(
-            MockTensor((1, 1, 1, config.n_embd), dtype=dtype)
+            (1, 1, 1, config.n_embd), dtype=dtype, name="ln_f_gamma"
         )
         if config.bias:
             self.ln_f_beta = MockParameter(
-                MockTensor((1, 1, 1, config.n_embd), dtype=dtype)
+                (1, 1, 1, config.n_embd), dtype=dtype, name="ln_f_beta"
             )
         else:
             self.ln_f_beta = None

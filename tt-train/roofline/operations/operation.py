@@ -12,10 +12,73 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple, TYPE_CHECKING
 
-from ..mock_tensor import MockTensor, BackwardNode
+from ..mock_tensor import MockTensor, BackwardNode, TensorLabel
+from ..hardware import DataType
 
 if TYPE_CHECKING:
     from ..roofline import RooflineContext
+
+
+def create_grad_tensor(
+    shape: Tuple[int, ...],
+    dtype: DataType = DataType.BFLOAT16,
+    layout: str = "TILE",
+    name: Optional[str] = None,
+) -> MockTensor:
+    """Create a gradient tensor with proper GRADIENT label.
+
+    This is a helper function for backward methods to create properly
+    labeled gradient tensors.
+
+    Args:
+        shape: Tensor shape
+        dtype: Data type (default: BFLOAT16)
+        layout: Memory layout (default: "TILE")
+        name: Optional name for tracking
+
+    Returns:
+        MockTensor with GRADIENT label
+    """
+    return MockTensor(
+        shape,
+        dtype,
+        layout,
+        requires_grad=False,
+        label=TensorLabel.GRADIENT,
+        name=name,
+    )
+
+
+def create_activation_tensor(
+    shape: Tuple[int, ...],
+    dtype: DataType = DataType.BFLOAT16,
+    layout: str = "TILE",
+    requires_grad: bool = True,
+    name: Optional[str] = None,
+) -> MockTensor:
+    """Create an activation tensor with proper ACTIVATION label.
+
+    This is a helper function for forward methods to create properly
+    labeled output tensors that will be saved for backward pass.
+
+    Args:
+        shape: Tensor shape
+        dtype: Data type (default: BFLOAT16)
+        layout: Memory layout (default: "TILE")
+        requires_grad: Whether gradients should be tracked (default: True)
+        name: Optional name for tracking
+
+    Returns:
+        MockTensor with ACTIVATION label
+    """
+    return MockTensor(
+        shape,
+        dtype,
+        layout,
+        requires_grad=requires_grad,
+        label=TensorLabel.ACTIVATION,
+        name=name,
+    )
 
 
 @dataclass
@@ -24,6 +87,9 @@ class RooflineFunctionContext:
 
     This mirrors ttml.autograd.FunctionContext, allowing operations
     to save inputs needed for backward pass computation.
+
+    Tensors saved here represent activations that must be kept in memory
+    until the backward pass completes.
     """
 
     _saved_tensors: List[Any] = field(default_factory=list)
@@ -31,15 +97,40 @@ class RooflineFunctionContext:
     def save_for_backward(self, *tensors: Any) -> None:
         """Save tensors for use in backward pass.
 
+        These tensors represent activations that must be kept in memory
+        until backward pass completes.
+
+        Note: Tensors should be created with proper labels using
+        create_activation_tensor() for activations or MockParameter for parameters.
+
         Args:
             *tensors: Tensors or other values to save
         """
+        from ..mock_tensor import TensorLabel
+
+        # Verify MockTensors have proper labels
+        for t in tensors:
+            if isinstance(t, MockTensor):
+                assert t.label in (TensorLabel.ACTIVATION, TensorLabel.PARAMETER), (
+                    f"Tensor saved for backward must be labeled as ACTIVATION or PARAMETER, "
+                    f"got {t.label}. Use create_activation_tensor() for forward outputs "
+                    f"or MockParameter for parameters."
+                )
+
         self._saved_tensors = list(tensors)
 
     @property
     def saved_tensors(self) -> Tuple[Any, ...]:
         """Retrieve tensors saved in forward pass."""
         return tuple(self._saved_tensors)
+
+    def clear_saved_tensors(self) -> None:
+        """Clear saved tensors to release activation memory.
+
+        Called after backward pass when retain_graph=False to allow
+        early deallocation of activations.
+        """
+        self._saved_tensors.clear()
 
 
 class RooflineFunction:
@@ -133,10 +224,9 @@ class RooflineFunction:
         else:
             outputs_tuple = outputs
 
-        # Track activations for memory estimation
-        for out in outputs_tuple:
-            if isinstance(out, MockTensor):
-                roofline_ctx.track_activation(out)
+        # Note: Activations are now labeled in save_for_backward()
+        # Output tensors that aren't saved for backward will remain unlabeled
+        # (they're intermediate and will be deallocated)
 
         # Collect input tensors that need gradients
         input_tensors = [
@@ -150,6 +240,7 @@ class RooflineFunction:
             def backward_fn(ctx_for_bwd: "RooflineContext"):
                 # Import here to avoid circular dependency
                 from ..roofline import elementwise_roofline
+                from ..mock_tensor import TensorLabel
 
                 # Get gradients from output tensors
                 grad_outputs = []
@@ -157,7 +248,13 @@ class RooflineFunction:
                     if isinstance(out, MockTensor):
                         grad = out.get_grad()
                         if grad is None:
-                            grad = MockTensor(out.shape, out.dtype, requires_grad=False)
+                            grad = MockTensor(
+                                out.shape,
+                                out.dtype,
+                                requires_grad=False,
+                                label=TensorLabel.GRADIENT,
+                                name=f"grad_{out.name}" if out.name else None,
+                            )
                         grad_outputs.append(grad)
                     else:
                         grad_outputs.append(None)
@@ -197,6 +294,11 @@ class RooflineFunction:
                             )
                             bwd_roofline_ctx.add_perf_result(estimate)
                         tensor.add_grad(grad)
+
+                # Clear saved tensors to allow early deallocation of activations
+                # This happens after backward computes gradients but before
+                # MockTensor.backward() clears the entire backward_fn
+                bwd_ctx.clear_saved_tensors()
 
             return backward_fn
 

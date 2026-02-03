@@ -14,11 +14,17 @@ from typing import Optional, Tuple, TYPE_CHECKING
 from ..mock_tensor import MockTensor
 from ..roofline import (
     attention_roofline,
+    fused_attention_roofline,
     heads_creation_roofline,
     heads_fusion_roofline,
     grouped_heads_creation_roofline,
 )
-from .operation import RooflineFunctionContext, RooflineFunction
+from .operation import (
+    RooflineFunctionContext,
+    RooflineFunction,
+    create_grad_tensor,
+    create_activation_tensor,
+)
 
 if TYPE_CHECKING:
     from ..roofline import RooflineContext
@@ -72,9 +78,9 @@ class MockHeadsCreationOp(RooflineFunction):
 
         # Output shapes: [B, H, S, d]
         output_shape = (batch_size, num_heads, seq_len, head_dim)
-        query = MockTensor(output_shape, qkv.dtype, qkv.layout, requires_grad=True)
-        key = MockTensor(output_shape, qkv.dtype, qkv.layout, requires_grad=True)
-        value = MockTensor(output_shape, qkv.dtype, qkv.layout, requires_grad=True)
+        query = create_activation_tensor(output_shape, qkv.dtype, qkv.layout)
+        key = create_activation_tensor(output_shape, qkv.dtype, qkv.layout)
+        value = create_activation_tensor(output_shape, qkv.dtype, qkv.layout)
 
         return query, key, value
 
@@ -118,7 +124,7 @@ class MockHeadsCreationOp(RooflineFunction):
         )
         roofline_ctx.add_perf_result(estimate)
 
-        grad_qkv = MockTensor(qkv.shape, qkv.dtype, qkv.layout, requires_grad=False)
+        grad_qkv = create_grad_tensor(qkv.shape, qkv.dtype, qkv.layout, name="grad_qkv")
 
         return (grad_qkv,)
 
@@ -181,9 +187,9 @@ class MockGroupedHeadsCreationOp(RooflineFunction):
         q_shape = (batch_size, num_heads, seq_len, head_dim)
         kv_shape = (batch_size, num_groups, seq_len, head_dim)
 
-        query = MockTensor(q_shape, q.dtype, q.layout, requires_grad=True)
-        key = MockTensor(kv_shape, kv.dtype, kv.layout, requires_grad=True)
-        value = MockTensor(kv_shape, kv.dtype, kv.layout, requires_grad=True)
+        query = create_activation_tensor(q_shape, q.dtype, q.layout)
+        key = create_activation_tensor(kv_shape, kv.dtype, kv.layout)
+        value = create_activation_tensor(kv_shape, kv.dtype, kv.layout)
 
         return query, key, value
 
@@ -227,8 +233,8 @@ class MockGroupedHeadsCreationOp(RooflineFunction):
         )
         roofline_ctx.add_perf_result(estimate)
 
-        grad_q = MockTensor(q.shape, q.dtype, q.layout, requires_grad=False)
-        grad_kv = MockTensor(kv.shape, kv.dtype, kv.layout, requires_grad=False)
+        grad_q = create_grad_tensor(q.shape, q.dtype, q.layout, name="grad_q")
+        grad_kv = create_grad_tensor(kv.shape, kv.dtype, kv.layout, name="grad_kv")
 
         return grad_q, grad_kv, None, None
 
@@ -278,8 +284,8 @@ class MockHeadsFusionOp(RooflineFunction):
 
         # Output shape: [B, 1, S, H*d]
         output_shape = (batch_size, 1, seq_len, num_heads * head_dim)
-        return MockTensor(
-            output_shape, attention_out.dtype, attention_out.layout, requires_grad=True
+        return create_activation_tensor(
+            output_shape, attention_out.dtype, attention_out.layout
         )
 
     @staticmethod
@@ -317,11 +323,11 @@ class MockHeadsFusionOp(RooflineFunction):
         )
         roofline_ctx.add_perf_result(estimate)
 
-        grad_attention_out = MockTensor(
+        grad_attention_out = create_grad_tensor(
             attention_out.shape,
             attention_out.dtype,
             attention_out.layout,
-            requires_grad=False,
+            name="grad_attention_out",
         )
 
         return (grad_attention_out,)
@@ -354,20 +360,32 @@ class MockScaledDotProductAttentionOp(RooflineFunction):
             ctx: Function context
             roofline_ctx: Roofline context for estimates
             query: Query tensor [B, H, S, d]
-            key: Key tensor [B, H, S, d]
-            value: Value tensor [B, H, S, d]
+            key: Key tensor [B, H, S, d] or [B, G, S, d] for GQA
+            value: Value tensor [B, H, S, d] or [B, G, S, d] for GQA
             mask: Optional attention mask
 
         Returns:
             Attention output tensor [B, H, S, d]
         """
-        ctx.save_for_backward(query, key, value, mask)
-
         # Parse dimensions [B, H, S, d]
         batch_size = query.shape[0]
         num_heads = query.shape[1]
         seq_len = query.shape[2]
         head_dim = query.shape[3]
+
+        # Create attention_weights tensor (B, H, S, S) - this is the softmax output
+        # that must be saved for backward pass (see scaled_dot_product_attention.cpp)
+        # This is a significant memory allocation, especially for long sequences!
+        attention_weights_shape = (batch_size, num_heads, seq_len, seq_len)
+        attention_weights = create_activation_tensor(
+            attention_weights_shape,
+            query.dtype,
+            query.layout,
+            name="attention_weights",
+        )
+
+        # Save tensors for backward - must include attention_weights
+        ctx.save_for_backward(query, key, value, mask, attention_weights)
 
         estimates = attention_roofline(
             roofline_ctx.hw,
@@ -383,7 +401,7 @@ class MockScaledDotProductAttentionOp(RooflineFunction):
             roofline_ctx.add_perf_result(estimate)
 
         # Output shape same as input: [B, H, S, d]
-        return MockTensor(query.shape, query.dtype, query.layout, requires_grad=True)
+        return create_activation_tensor(query.shape, query.dtype, query.layout)
 
     @staticmethod
     def backward(
@@ -400,8 +418,13 @@ class MockScaledDotProductAttentionOp(RooflineFunction):
 
         Returns:
             (grad_query, grad_key, grad_value, None) tuple
+            (None for mask which doesn't need gradients)
+
+        Note:
+            attention_weights is saved for backward but is not an input,
+            so we don't return a gradient for it.
         """
-        query, key, value, mask = ctx.saved_tensors
+        query, key, value, mask, attention_weights = ctx.saved_tensors
 
         batch_size = query.shape[0]
         num_heads = query.shape[1]
@@ -421,12 +444,126 @@ class MockScaledDotProductAttentionOp(RooflineFunction):
         for estimate in estimates:
             roofline_ctx.add_perf_result(estimate)
 
-        grad_query = MockTensor(
-            query.shape, query.dtype, query.layout, requires_grad=False
+        grad_query = create_grad_tensor(
+            query.shape, query.dtype, query.layout, name="grad_query"
         )
-        grad_key = MockTensor(key.shape, key.dtype, key.layout, requires_grad=False)
-        grad_value = MockTensor(
-            value.shape, value.dtype, value.layout, requires_grad=False
+        grad_key = create_grad_tensor(key.shape, key.dtype, key.layout, name="grad_key")
+        grad_value = create_grad_tensor(
+            value.shape, value.dtype, value.layout, name="grad_value"
         )
 
+        # No gradient for mask (it's optional and doesn't require grad)
+        return grad_query, grad_key, grad_value, None
+
+
+class MockScaledDotProductAttentionFusedOp(RooflineFunction):
+    """Roofline estimation for fused scaled dot-product attention (Flash Attention style).
+
+    Fused SDPA: softmax(Q @ K^T / sqrt(d_k)) @ V computed in a single kernel.
+
+    Key benefits over unfused SDPA:
+    1. Memory: O(S) instead of O(S²) - no need to materialize full attention matrix
+    2. Speed: Single fused kernel with better memory access patterns
+    3. Backward: Uses recomputation instead of storing attention weights
+
+    This models hardware-optimized attention like Flash Attention, where the
+    attention matrix is computed and consumed in tiles without full materialization.
+    """
+
+    @staticmethod
+    def forward(
+        ctx: RooflineFunctionContext,
+        roofline_ctx: "RooflineContext",
+        query: MockTensor,
+        key: MockTensor,
+        value: MockTensor,
+        mask: Optional[MockTensor] = None,
+    ) -> MockTensor:
+        """Forward pass: compute fused scaled dot-product attention.
+
+        Args:
+            ctx: Function context
+            roofline_ctx: Roofline context for estimates
+            query: Query tensor [B, H, S, d]
+            key: Key tensor [B, H, S, d] or [B, G, S, d] for GQA
+            value: Value tensor [B, H, S, d] or [B, G, S, d] for GQA
+            mask: Optional attention mask (not used in fused kernel)
+
+        Returns:
+            Attention output tensor [B, H, S, d]
+        """
+        # Parse dimensions [B, H, S, d]
+        batch_size = query.shape[0]
+        num_heads = query.shape[1]
+        seq_len = query.shape[2]
+        head_dim = query.shape[3]
+
+        # Fused attention does NOT save attention_weights!
+        # This is the key memory savings - no (B, H, S, S) tensor needed.
+        # Instead, backward will recompute attention on-the-fly.
+        ctx.save_for_backward(query, key, value, mask)
+
+        estimate = fused_attention_roofline(
+            roofline_ctx.hw,
+            batch_size,
+            num_heads,
+            seq_len,
+            head_dim,
+            dtype=query.dtype,
+            operation="FusedSDPA",
+            phase="forward",
+        )
+        roofline_ctx.add_perf_result(estimate)
+
+        # Output shape same as input: [B, H, S, d]
+        return create_activation_tensor(query.shape, query.dtype, query.layout)
+
+    @staticmethod
+    def backward(
+        ctx: RooflineFunctionContext,
+        roofline_ctx: "RooflineContext",
+        grad_output: MockTensor,
+    ) -> Tuple[MockTensor, MockTensor, MockTensor, None]:
+        """Backward pass: compute gradients for Q, K, V using recomputation.
+
+        Fused backward recomputes attention weights on-the-fly instead of
+        reading them from memory. This trades compute for memory bandwidth.
+
+        Args:
+            ctx: Function context with saved tensors
+            roofline_ctx: Roofline context for estimates
+            grad_output: Gradient tensor [B, H, S, d]
+
+        Returns:
+            (grad_query, grad_key, grad_value, None) tuple
+            (None for mask which doesn't need gradients)
+        """
+        query, key, value, mask = ctx.saved_tensors
+
+        batch_size = query.shape[0]
+        num_heads = query.shape[1]
+        seq_len = query.shape[2]
+        head_dim = query.shape[3]
+
+        estimate = fused_attention_roofline(
+            roofline_ctx.hw,
+            batch_size,
+            num_heads,
+            seq_len,
+            head_dim,
+            dtype=query.dtype,
+            operation="FusedSDPA",
+            phase="backward",
+        )
+        roofline_ctx.add_perf_result(estimate)
+
+        grad_query = create_grad_tensor(
+            query.shape, query.dtype, query.layout, name="grad_query"
+        )
+        grad_key = create_grad_tensor(key.shape, key.dtype, key.layout, name="grad_key")
+        grad_value = create_grad_tensor(
+            value.shape, value.dtype, value.layout, name="grad_value"
+        )
+
+        # No gradient for mask
         return grad_query, grad_key, grad_value, None

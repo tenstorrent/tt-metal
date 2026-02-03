@@ -20,6 +20,7 @@ from .rmsnorm import rmsnorm_roofline
 from .softmax import softmax_roofline
 from .attention import (
     attention_roofline,
+    fused_attention_roofline,
     heads_creation_roofline,
     heads_fusion_roofline,
     grouped_heads_creation_roofline,
@@ -27,6 +28,7 @@ from .attention import (
 from .rope import rope_roofline
 from .dropout import dropout_roofline
 from .cross_entropy import cross_entropy_roofline
+from .swiglu_fused import swiglu_fused_row_mcast_roofline, swiglu_fused_mcast_roofline
 
 __all__ = [
     # Core classes
@@ -41,10 +43,14 @@ __all__ = [
     "rmsnorm_roofline",
     "softmax_roofline",
     "attention_roofline",
+    "fused_attention_roofline",
     "heads_creation_roofline",
     "heads_fusion_roofline",
     "grouped_heads_creation_roofline",
     "rope_roofline",
     "dropout_roofline",
     "cross_entropy_roofline",
+    # Fused SwiGLU
+    "swiglu_fused_row_mcast_roofline",
+    "swiglu_fused_mcast_roofline",
 ]

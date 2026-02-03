@@ -52,7 +52,7 @@ class MockRMSNormLayer(MockModule):
         self.epsilon = epsilon
 
         # Gamma (scale): [1, 1, 1, features]
-        self.gamma = MockParameter(MockTensor((1, 1, 1, features), dtype=dtype))
+        self.gamma = MockParameter((1, 1, 1, features), dtype=dtype, name="gamma")
 
     def forward(self, ctx: "RooflineContext", x: MockTensor) -> MockTensor:
         """Forward pass: apply RMS normalization.

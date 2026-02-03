@@ -51,11 +51,13 @@ class MockLayerNorm(MockModule):
         self.has_bias = bias
 
         # Gamma (scale): [1, 1, 1, embedding_dim]
-        self.gamma = MockParameter(MockTensor((1, 1, 1, embedding_dim), dtype=dtype))
+        self.gamma = MockParameter((1, 1, 1, embedding_dim), dtype=dtype, name="gamma")
 
         # Beta (shift): [1, 1, 1, embedding_dim]
         if bias:
-            self.beta = MockParameter(MockTensor((1, 1, 1, embedding_dim), dtype=dtype))
+            self.beta = MockParameter(
+                (1, 1, 1, embedding_dim), dtype=dtype, name="beta"
+            )
         else:
             self.beta = None
 

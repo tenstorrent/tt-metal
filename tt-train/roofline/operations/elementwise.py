@@ -14,7 +14,12 @@ from typing import Optional, Tuple, TYPE_CHECKING
 from ..mock_tensor import MockTensor
 from ..hardware import DataType
 from ..roofline import elementwise_roofline
-from .operation import RooflineFunctionContext, RooflineFunction
+from .operation import (
+    RooflineFunctionContext,
+    RooflineFunction,
+    create_grad_tensor,
+    create_activation_tensor,
+)
 
 if TYPE_CHECKING:
     from ..roofline import RooflineContext
@@ -63,7 +68,7 @@ class MockAddOp(RooflineFunction):
         )
         roofline_ctx.add_perf_result(estimate)
 
-        return MockTensor(a.shape, a.dtype, a.layout, requires_grad=True)
+        return create_activation_tensor(a.shape, a.dtype, a.layout)
 
     @staticmethod
     def backward(
@@ -99,8 +104,8 @@ class MockAddOp(RooflineFunction):
         )
         roofline_ctx.add_perf_result(estimate)
 
-        grad_a = MockTensor(a.shape, a.dtype, a.layout, requires_grad=False)
-        grad_b = MockTensor(b.shape, b.dtype, b.layout, requires_grad=False)
+        grad_a = create_grad_tensor(a.shape, a.dtype, a.layout, name="grad_a")
+        grad_b = create_grad_tensor(b.shape, b.dtype, b.layout, name="grad_b")
 
         return grad_a, grad_b
 
@@ -148,7 +153,7 @@ class MockMulOp(RooflineFunction):
         )
         roofline_ctx.add_perf_result(estimate)
 
-        return MockTensor(a.shape, a.dtype, a.layout, requires_grad=True)
+        return create_activation_tensor(a.shape, a.dtype, a.layout)
 
     @staticmethod
     def backward(
@@ -197,8 +202,8 @@ class MockMulOp(RooflineFunction):
         )
         roofline_ctx.add_perf_result(estimate)
 
-        grad_a = MockTensor(a.shape, a.dtype, a.layout, requires_grad=False)
-        grad_b = MockTensor(b.shape, b.dtype, b.layout, requires_grad=False)
+        grad_a = create_grad_tensor(a.shape, a.dtype, a.layout, name="grad_a")
+        grad_b = create_grad_tensor(b.shape, b.dtype, b.layout, name="grad_b")
 
         return grad_a, grad_b
 
@@ -245,7 +250,7 @@ class MockGELUOp(RooflineFunction):
         )
         roofline_ctx.add_perf_result(estimate)
 
-        return MockTensor(input.shape, input.dtype, input.layout, requires_grad=True)
+        return create_activation_tensor(input.shape, input.dtype, input.layout)
 
     @staticmethod
     def backward(
@@ -280,8 +285,8 @@ class MockGELUOp(RooflineFunction):
         )
         roofline_ctx.add_perf_result(estimate)
 
-        grad_input = MockTensor(
-            input.shape, input.dtype, input.layout, requires_grad=False
+        grad_input = create_grad_tensor(
+            input.shape, input.dtype, input.layout, name="grad_input"
         )
 
         return (grad_input,)

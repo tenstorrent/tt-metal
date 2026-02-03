@@ -7,7 +7,12 @@
 This package contains roofline-aware operation implementations.
 """
 
-from .operation import RooflineFunctionContext, RooflineFunction
+from .operation import (
+    RooflineFunctionContext,
+    RooflineFunction,
+    create_grad_tensor,
+    create_activation_tensor,
+)
 from .linear import MockLinearOp
 from .matmul import MockMatMulOp
 from .elementwise import MockAddOp, MockMulOp, MockGELUOp
@@ -21,14 +26,18 @@ from .attention import (
     MockHeadsFusionOp,
     MockGroupedHeadsCreationOp,
     MockScaledDotProductAttentionOp,
+    MockScaledDotProductAttentionFusedOp,
 )
 from .rope import MockRoPEOp
 from .cross_entropy import MockCrossEntropyLossOp
+from .swiglu_fused import MockSwiGLUFusedOp, SwiGLUFusedImpl
 
 __all__ = [
     # Base classes
     "RooflineFunctionContext",
     "RooflineFunction",
+    "create_grad_tensor",
+    "create_activation_tensor",
     # Linear/MatMul
     "MockLinearOp",
     "MockMatMulOp",
@@ -50,8 +59,12 @@ __all__ = [
     "MockHeadsFusionOp",
     "MockGroupedHeadsCreationOp",
     "MockScaledDotProductAttentionOp",
+    "MockScaledDotProductAttentionFusedOp",
     # Rotary Position Embedding
     "MockRoPEOp",
     # Loss
     "MockCrossEntropyLossOp",
+    # Fused SwiGLU
+    "MockSwiGLUFusedOp",
+    "SwiGLUFusedImpl",
 ]

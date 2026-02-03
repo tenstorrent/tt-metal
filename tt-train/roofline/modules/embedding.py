@@ -52,7 +52,7 @@ class MockEmbedding(MockModule):
 
         # Weight: [1, 1, num_embeddings, embedding_dim]
         self.weight = MockParameter(
-            MockTensor((1, 1, num_embeddings, embedding_dim), dtype=dtype)
+            (1, 1, num_embeddings, embedding_dim), dtype=dtype, name="weight"
         )
 
     def forward(self, ctx: "RooflineContext", indices: MockTensor) -> MockTensor:
@@ -110,7 +110,7 @@ class MockTrainablePositionalEmbedding(MockModule):
 
         # Weight: [1, 1, sequence_length, embedding_dim]
         self.weight = MockParameter(
-            MockTensor((1, 1, sequence_length, embedding_dim), dtype=dtype)
+            (1, 1, sequence_length, embedding_dim), dtype=dtype, name="pos_weight"
         )
 
     def forward(self, ctx: "RooflineContext", x: MockTensor) -> MockTensor:

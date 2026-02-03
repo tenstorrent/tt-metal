@@ -13,7 +13,12 @@ from typing import Optional, Tuple, TYPE_CHECKING
 
 from ..mock_tensor import MockTensor
 from ..roofline import layernorm_roofline
-from .operation import RooflineFunctionContext, RooflineFunction
+from .operation import (
+    RooflineFunctionContext,
+    RooflineFunction,
+    create_grad_tensor,
+    create_activation_tensor,
+)
 
 if TYPE_CHECKING:
     from ..roofline import RooflineContext
@@ -62,7 +67,7 @@ class MockLayerNormOp(RooflineFunction):
         )
         roofline_ctx.add_perf_result(estimate)
 
-        return MockTensor(input.shape, input.dtype, input.layout, requires_grad=True)
+        return create_activation_tensor(input.shape, input.dtype, input.layout)
 
     @staticmethod
     def backward(
@@ -95,16 +100,16 @@ class MockLayerNormOp(RooflineFunction):
         )
         roofline_ctx.add_perf_result(estimate)
 
-        grad_input = MockTensor(
-            input.shape, input.dtype, input.layout, requires_grad=False
+        grad_input = create_grad_tensor(
+            input.shape, input.dtype, input.layout, name="grad_input"
         )
-        grad_gamma = MockTensor(
-            gamma.shape, gamma.dtype, gamma.layout, requires_grad=False
+        grad_gamma = create_grad_tensor(
+            gamma.shape, gamma.dtype, gamma.layout, name="grad_gamma"
         )
         grad_beta = None
         if beta is not None:
-            grad_beta = MockTensor(
-                beta.shape, beta.dtype, beta.layout, requires_grad=False
+            grad_beta = create_grad_tensor(
+                beta.shape, beta.dtype, beta.layout, name="grad_beta"
             )
 
         return grad_input, grad_gamma, grad_beta

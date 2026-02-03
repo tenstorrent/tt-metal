@@ -9,9 +9,9 @@ optimizer weight update operations.
 """
 
 from __future__ import annotations
-from typing import Dict, TYPE_CHECKING
+from typing import Dict, List, TYPE_CHECKING
 
-from ..mock_tensor import MockTensor
+from ..mock_tensor import MockTensor, TensorLabel
 from ..roofline import RooflineEstimate, elementwise_roofline
 
 if TYPE_CHECKING:
@@ -60,6 +60,29 @@ class MockAdamW:
 
         # Calculate total parameter count
         self.total_params = sum(p.logical_volume() for p in parameters.values())
+
+        # Create optimizer state tensors (m and v for each parameter)
+        self._state_tensors: List[MockTensor] = []
+        for name, param in parameters.items():
+            # First moment (momentum)
+            m = MockTensor(
+                param.shape,
+                param.dtype,
+                param.layout,
+                requires_grad=False,
+                label=TensorLabel.OPTIMIZER_STATE,
+                name=f"{name}.m",
+            )
+            # Second moment (variance)
+            v = MockTensor(
+                param.shape,
+                param.dtype,
+                param.layout,
+                requires_grad=False,
+                label=TensorLabel.OPTIMIZER_STATE,
+                name=f"{name}.v",
+            )
+            self._state_tensors.extend([m, v])
 
     def step(self, ctx: "RooflineContext") -> None:
         """Estimate optimizer step cost.

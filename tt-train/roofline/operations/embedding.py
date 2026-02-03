@@ -13,7 +13,12 @@ from typing import Tuple, TYPE_CHECKING
 
 from ..mock_tensor import MockTensor
 from ..roofline import embedding_roofline
-from .operation import RooflineFunctionContext, RooflineFunction
+from .operation import (
+    RooflineFunctionContext,
+    RooflineFunction,
+    create_grad_tensor,
+    create_activation_tensor,
+)
 
 if TYPE_CHECKING:
     from ..roofline import RooflineContext
@@ -65,7 +70,7 @@ class MockEmbeddingOp(RooflineFunction):
         # Output shape: indices shape with last dim replaced by embedding_dim
         # [batch, 1, 1, seq_len] -> [batch, 1, seq_len, embedding_dim]
         output_shape = indices.shape[:-2] + (indices.shape[-1], embedding_dim)
-        return MockTensor(output_shape, weight.dtype, weight.layout, requires_grad=True)
+        return create_activation_tensor(output_shape, weight.dtype, weight.layout)
 
     @staticmethod
     def backward(
@@ -101,8 +106,8 @@ class MockEmbeddingOp(RooflineFunction):
         roofline_ctx.add_perf_result(estimate)
 
         # Gradient has same shape as weight
-        grad_weight = MockTensor(
-            weight.shape, weight.dtype, weight.layout, requires_grad=False
+        grad_weight = create_grad_tensor(
+            weight.shape, weight.dtype, weight.layout, name="grad_embedding"
         )
 
         return None, grad_weight

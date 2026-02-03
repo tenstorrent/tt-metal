@@ -74,6 +74,16 @@ from .hardware import (
 from .mock_tensor import (
     MockTensor,
     BackwardNode,
+    TensorLabel,
+    set_global_memory_tracker,
+    get_global_memory_tracker,
+)
+
+# Memory tracking
+from .memory_tracker import (
+    MemoryTracker,
+    MemoryEvent,
+    MemorySnapshot,
 )
 
 # Roofline estimation classes and functions
@@ -88,6 +98,7 @@ from .roofline import (
     rmsnorm_roofline,
     softmax_roofline,
     attention_roofline,
+    fused_attention_roofline,
     heads_creation_roofline,
     heads_fusion_roofline,
     grouped_heads_creation_roofline,
@@ -161,6 +172,7 @@ from .operations import (
     MockHeadsFusionOp,
     MockGroupedHeadsCreationOp,
     MockScaledDotProductAttentionOp,
+    MockScaledDotProductAttentionFusedOp,
     # Rotary Position Embedding
     MockRoPEOp,
     # Loss
@@ -187,6 +199,13 @@ __all__ = [
     # Roofline core
     "RooflineEstimate",
     "RooflineContext",
+    # Memory tracking
+    "MemoryTracker",
+    "MemoryEvent",
+    "MemorySnapshot",
+    "TensorLabel",
+    "set_global_memory_tracker",
+    "get_global_memory_tracker",
     # Roofline functions
     "matmul_roofline",
     "reduction_roofline",
@@ -196,6 +215,7 @@ __all__ = [
     "rmsnorm_roofline",
     "softmax_roofline",
     "attention_roofline",
+    "fused_attention_roofline",
     "heads_creation_roofline",
     "heads_fusion_roofline",
     "grouped_heads_creation_roofline",
@@ -249,6 +269,7 @@ __all__ = [
     "MockHeadsFusionOp",
     "MockGroupedHeadsCreationOp",
     "MockScaledDotProductAttentionOp",
+    "MockScaledDotProductAttentionFusedOp",
     "MockRoPEOp",
     "MockCrossEntropyLossOp",
     # Training utilities

@@ -14,7 +14,12 @@ from typing import Optional, Tuple, TYPE_CHECKING
 from ..mock_tensor import MockTensor
 from ..hardware import DataType
 from ..roofline import matmul_roofline, reduction_roofline
-from .operation import RooflineFunctionContext, RooflineFunction
+from .operation import (
+    RooflineFunctionContext,
+    RooflineFunction,
+    create_grad_tensor,
+    create_activation_tensor,
+)
 
 if TYPE_CHECKING:
     from ..roofline import RooflineContext
@@ -73,7 +78,7 @@ class MockLinearOp(RooflineFunction):
 
         # Compute output shape
         output_shape = input.shape[:-1] + (out_features,)
-        return MockTensor(output_shape, input.dtype, input.layout, requires_grad=True)
+        return create_activation_tensor(output_shape, input.dtype, input.layout)
 
     @staticmethod
     def backward(
@@ -109,8 +114,8 @@ class MockLinearOp(RooflineFunction):
             phase="backward",
         )
         roofline_ctx.add_perf_result(estimate)
-        grad_input = MockTensor(
-            input.shape, input.dtype, input.layout, requires_grad=False
+        grad_input = create_grad_tensor(
+            input.shape, input.dtype, input.layout, name="grad_input"
         )
 
         # grad_weight = grad_output.T @ input
@@ -125,8 +130,8 @@ class MockLinearOp(RooflineFunction):
             phase="backward",
         )
         roofline_ctx.add_perf_result(estimate)
-        grad_weight = MockTensor(
-            weight.shape, weight.dtype, weight.layout, requires_grad=False
+        grad_weight = create_grad_tensor(
+            weight.shape, weight.dtype, weight.layout, name="grad_weight"
         )
 
         # grad_bias = sum(grad_output, dim=0)
@@ -141,8 +146,8 @@ class MockLinearOp(RooflineFunction):
                 phase="backward",
             )
             roofline_ctx.add_perf_result(estimate)
-            grad_bias = MockTensor(
-                bias.shape, bias.dtype, bias.layout, requires_grad=False
+            grad_bias = create_grad_tensor(
+                bias.shape, bias.dtype, bias.layout, name="grad_bias"
             )
 
         return grad_input, grad_weight, grad_bias

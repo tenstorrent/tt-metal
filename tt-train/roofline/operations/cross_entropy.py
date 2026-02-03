@@ -13,7 +13,12 @@ from typing import Tuple, TYPE_CHECKING
 
 from ..mock_tensor import MockTensor
 from ..roofline import cross_entropy_roofline
-from .operation import RooflineFunctionContext, RooflineFunction
+from .operation import (
+    RooflineFunctionContext,
+    RooflineFunction,
+    create_grad_tensor,
+    create_activation_tensor,
+)
 
 if TYPE_CHECKING:
     from ..roofline import RooflineContext
@@ -64,7 +69,7 @@ class MockCrossEntropyLossOp(RooflineFunction):
 
         # Output is scalar loss (or per-sample losses)
         output_shape = (1,)  # Scalar after reduction
-        return MockTensor(output_shape, logits.dtype, logits.layout, requires_grad=True)
+        return create_activation_tensor(output_shape, logits.dtype, logits.layout)
 
     @staticmethod
     def backward(
@@ -98,8 +103,8 @@ class MockCrossEntropyLossOp(RooflineFunction):
         roofline_ctx.add_perf_result(estimate)
 
         # Gradient has same shape as logits
-        grad_logits = MockTensor(
-            logits.shape, logits.dtype, logits.layout, requires_grad=False
+        grad_logits = create_grad_tensor(
+            logits.shape, logits.dtype, logits.layout, name="grad_logits"
         )
 
         return grad_logits, None

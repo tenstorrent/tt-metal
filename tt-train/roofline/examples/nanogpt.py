@@ -135,8 +135,17 @@ def run_model_roofline(
     batch_size: int = 64,
     seq_len: int = 256,
     hardware: str = "n150",
+    plot_memory: bool = True,
 ):
-    """Run transformer model roofline analysis (supports both GPT and Llama models)."""
+    """Run transformer model roofline analysis (supports both GPT and Llama models).
+
+    Args:
+        model_name: Name of the model preset to use
+        batch_size: Batch size for the analysis
+        seq_len: Sequence length for the analysis
+        hardware: Hardware configuration to use
+        plot_memory: Whether to generate memory usage plot
+    """
     from roofline import (
         MockTensor,
         MockNanoGPT,
@@ -153,6 +162,7 @@ def run_model_roofline(
         MockAdamW,
         mock_clip_grad_norm,
         MockCrossEntropyLossOp,
+        TensorLabel,
     )
 
     # Hardware mapping
@@ -190,7 +200,11 @@ def run_model_roofline(
     preset = MODEL_PRESETS[model_name]
     model_type = preset["model_type"]
 
-    # Create model based on type
+    # Create roofline context FIRST so that parameter tensors are tracked
+    # (Memory tracking is enabled when context is created)
+    ctx = RooflineContext(hw_spec)
+
+    # Create model based on type (parameters will now be tracked)
     if model_type == ModelType.GPT:
         config = MockNanoGPTConfig(
             vocab_size=preset["vocab_size"],
@@ -277,15 +291,31 @@ def run_model_roofline(
     print(f"Running Analysis: B={batch_size}, S={seq_len}")
     print("-" * 70)
 
-    # Create roofline context
-    ctx = RooflineContext(hw_spec)
+    # Helper to print memory snapshot
+    def print_memory_snapshot(label: str):
+        if ctx.memory_tracker is not None:
+            current_bytes, breakdown = ctx.memory_tracker.current_memory()
+            print(f"--- {label} ---")
+            print(f"  Current Memory: {current_bytes / 1e6:.2f} MB")
 
-    # Create input tensors
+    # Snapshot after model creation
+    print_memory_snapshot("AFTER_MODEL_CREATION")
+
+    # Create optimizer right after model (like ttml)
+    # This allocates optimizer state (m and v tensors for AdamW)
+    optimizer = MockAdamW(params, lr=1e-4, weight_decay=0.1)
+
+    # Snapshot after optimizer creation
+    print_memory_snapshot("AFTER_OPTIMIZER_CREATION")
+
+    # Create input tensors (not tracked as training tensors)
     # Note: indices shape is [batch, 1, 1, seq_len] for ttml
     indices = MockTensor(
         (batch_size, 1, 1, seq_len),
         dtype=DataType.BFLOAT16,  # Will be cast to int internally
         requires_grad=False,
+        label=TensorLabel.ACTIVATION,  # Input data, not a training tensor
+        name="indices",
     )
 
     # Target for loss (same shape as indices)
@@ -293,6 +323,8 @@ def run_model_roofline(
         (batch_size, 1, 1, seq_len),
         dtype=DataType.BFLOAT16,
         requires_grad=False,
+        label=TensorLabel.ACTIVATION,  # Target data, not a training tensor
+        name="targets",
     )
 
     # Forward pass
@@ -301,20 +333,28 @@ def run_model_roofline(
     # Compute loss
     loss = MockCrossEntropyLossOp.apply(ctx, logits, targets)
 
+    # Snapshot after forward pass
+    print_memory_snapshot("AFTER_FORWARD_PASS")
+
     forward_time_ms = ctx.total_time_ms()
     forward_flops = ctx.total_flops()
 
-    # Backward pass
-    loss.backward(ctx)
+    # Backward pass (retain_graph=False to deallocate activations/gradients early)
+    loss.backward(ctx, retain_graph=False)
+
+    # Snapshot after backward pass
+    print_memory_snapshot("AFTER_BACKWARD_PASS")
 
     backward_time_ms = ctx.total_time_ms() - forward_time_ms
     backward_flops = ctx.total_flops() - forward_flops
     after_backward_time_ms = ctx.total_time_ms()
     after_backward_flops = ctx.total_flops()
 
-    # Optimizer step
-    optimizer = MockAdamW(params, lr=1e-4, weight_decay=0.1)
+    # Optimizer step (optimizer already created above)
     optimizer.step(ctx)
+
+    # Snapshot after optimizer step
+    print_memory_snapshot("AFTER_OPTIMIZER_STEP")
 
     optimizer_time_ms = ctx.total_time_ms() - after_backward_time_ms
     optimizer_flops = ctx.total_flops() - after_backward_flops
@@ -324,6 +364,9 @@ def run_model_roofline(
     after_optimizer_flops = ctx.total_flops()
     mock_clip_grad_norm(ctx, params, max_norm=1.0)
 
+    # Snapshot after iteration complete
+    print_memory_snapshot("ITERATION_COMPLETE")
+
     grad_clip_time_ms = ctx.total_time_ms() - after_optimizer_time_ms
     grad_clip_flops = ctx.total_flops() - after_optimizer_flops
 
@@ -332,12 +375,6 @@ def run_model_roofline(
     iteration_flops = ctx.total_flops()
     tokens_per_iteration = batch_size * seq_len
     tokens_per_second = tokens_per_iteration / (iteration_time_ms / 1000)
-
-    # Memory estimates
-    activation_memory = ctx.estimate_activation_memory()
-    gradient_memory = ctx.estimate_gradient_memory(model)
-    optimizer_memory = optimizer.estimate_memory()
-    total_memory = param_memory + activation_memory + gradient_memory + optimizer_memory
 
     print()
     print("Timing Breakdown:")
@@ -360,13 +397,6 @@ def run_model_roofline(
     print(f"  Tokens/sec:  {tokens_per_second:,.0f}")
     print(f"  TFLOPs:      {ctx.achieved_tflops():.2f}")
     print()
-    print("Memory Estimate:")
-    print(f"  Parameters:   {param_memory/1e9:.3f} GB")
-    print(f"  Activations:  {activation_memory/1e9:.3f} GB")
-    print(f"  Gradients:    {gradient_memory/1e9:.3f} GB")
-    print(f"  Optimizer:    {optimizer_memory/1e9:.3f} GB")
-    print(f"  Total:        {total_memory/1e9:.3f} GB")
-    print()
 
     # Bottleneck analysis
     breakdown = ctx.bottleneck_breakdown()
@@ -374,10 +404,37 @@ def run_model_roofline(
     for btype, count in sorted(breakdown.items(), key=lambda x: -x[1]):
         print(f"  {btype.value}: {count} ops")
 
+    # Peak memory analysis from tracking
+    print()
+    print("-" * 70)
+    print("Memory Tracking Analysis")
+    print("-" * 70)
+    ctx.print_peak_memory()
+
+    # Generate memory usage plots
+    if plot_memory:
+        # Stacked area plot (overview)
+        plot_filename = f"memory_usage_{model_name}_b{batch_size}_s{seq_len}.png"
+        ctx.plot_memory_usage(
+            filename=plot_filename,
+            title=f"Memory Usage: {model_name} (B={batch_size}, S={seq_len})",
+            stacked=True,
+        )
+        # Detailed per-category plots (shows individual fluctuations)
+        detail_filename = f"memory_detail_{model_name}_b{batch_size}_s{seq_len}.png"
+        ctx.plot_memory_usage(
+            filename=detail_filename,
+            title=f"Memory Detail: {model_name} (B={batch_size}, S={seq_len})",
+            stacked=False,
+        )
+
     print()
     print("=" * 70)
     print("ANALYSIS COMPLETE")
     print("=" * 70)
+
+    # Disable memory tracking when done
+    ctx.disable_memory_tracking()
 
 
 def list_models():
@@ -417,6 +474,7 @@ def run_single_block_analysis():
         WORMHOLE_N150,
         BLACKHOLE_P100,
         DataType,
+        TensorLabel,
     )
 
     print()
@@ -447,6 +505,7 @@ def run_single_block_analysis():
         (batch_size, 1, seq_len, embedding_dim),
         dtype=DataType.BFLOAT16,
         requires_grad=True,
+        label=TensorLabel.ACTIVATION,
     )
 
     # Forward pass
@@ -527,6 +586,11 @@ Examples:
         action="store_true",
         help="Run detailed single-block analysis (GPT only)",
     )
+    parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Disable memory usage plot generation",
+    )
     args = parser.parse_args()
 
     if args.list:
@@ -540,7 +604,11 @@ Examples:
         model_name = "nanogpt-char"  # Default
 
     run_model_roofline(
-        model_name, batch_size=args.batch, seq_len=args.seq, hardware=args.hardware
+        model_name,
+        batch_size=args.batch,
+        seq_len=args.seq,
+        hardware=args.hardware,
+        plot_memory=not args.no_plot,
     )
 
     if args.detailed:

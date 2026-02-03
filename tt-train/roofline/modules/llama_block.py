@@ -18,6 +18,8 @@ from .module import MockModule
 from .rmsnorm import MockRMSNormLayer
 from .grouped_query_attention import MockGroupedQueryAttention, RoPEParams
 from .llama_mlp import MockLlamaMLP
+from .llama_mlp_fused import MockLlamaMLPFused
+from ..operations.swiglu_fused import SwiGLUFusedImpl
 
 if TYPE_CHECKING:
     from ..roofline import RooflineContext
@@ -84,13 +86,22 @@ class MockLlamaBlock(MockModule):
         # Pre-MLP normalization
         self.mlp_norm = MockRMSNormLayer(embedding_size, dtype=dtype)
 
-        # SwiGLU MLP
+        # SwiGLU MLP (non-fused version)
         self.mlp = MockLlamaMLP(
             embedding_size=embedding_size,
             intermediate_dim=intermediate_dim,
             dropout=dropout,
             dtype=dtype,
         )
+
+        # Fused SwiGLU MLP
+        # self.mlp = MockLlamaMLPFused(
+        #     embedding_size=embedding_size,
+        #     intermediate_dim=intermediate_dim,
+        #     dropout=dropout,
+        #     dtype=dtype,
+        #     impl=SwiGLUFusedImpl.MCAST,  # Use row multicast implementation
+        # )
 
     def forward(
         self,

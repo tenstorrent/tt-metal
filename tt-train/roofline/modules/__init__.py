@@ -18,6 +18,7 @@ from .rope import MockRotaryEmbedding
 from .grouped_query_attention import MockGroupedQueryAttention, RoPEParams
 from .mlp import MockGPTMLP
 from .llama_mlp import MockLlamaMLP
+from .llama_mlp_fused import MockLlamaMLPFused
 from .gpt_block import MockGPTBlock
 from .llama_block import MockLlamaBlock
 from .nanogpt import MockNanoGPT, MockNanoGPTConfig, create_mock_nanogpt
@@ -48,6 +49,7 @@ __all__ = [
     # MLP
     "MockGPTMLP",
     "MockLlamaMLP",
+    "MockLlamaMLPFused",
     # Transformer Blocks
     "MockGPTBlock",
     "MockLlamaBlock",

@@ -17,7 +17,8 @@ from ..hardware import DataType
 from ..operations import (
     MockGroupedHeadsCreationOp,
     MockHeadsFusionOp,
-    MockScaledDotProductAttentionOp,
+    MockScaledDotProductAttentionOp,  # Unfused version - materializes full attention matrix
+    MockScaledDotProductAttentionFusedOp,  # Fused version - Flash Attention style
     MockDropoutOp,
 )
 from ..operations.rope import MockRoPEOp
@@ -164,6 +165,9 @@ class MockGroupedQueryAttention(MockModule):
         # Note: For GQA, the roofline estimate should account for K/V broadcasting
         # The actual SDPA implementation handles this, and we pass the shapes as-is
         attn_out = MockScaledDotProductAttentionOp.apply(ctx, query, key, value, mask)
+        # attn_out = MockScaledDotProductAttentionFusedOp.apply(
+        #     ctx, query, key, value, mask
+        # )
 
         # Merge heads: [B, num_heads, S, d] -> [B, 1, S, E]
         merged = MockHeadsFusionOp.apply(ctx, attn_out)
