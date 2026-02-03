@@ -1,0 +1,13 @@
+rank_to_cluster_mock_cluster_desc:
+  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c01u02.yaml"
+  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c01u08.yaml"
+  2: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c02u02.yaml"
+  3: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c02u08.yaml"
+  4: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c03u02.yaml"
+  5: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c03u08.yaml"
+  6: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c04u02.yaml"
+  7: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c04u08.yaml"
+  8: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c05u02.yaml"
+  9: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c05u08.yaml"
+  10: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c06u02.yaml"
+  11: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/3_pod_16x8_bh_galaxy_cluster_desc/3_pod_16x8_bh_galaxy_cluster_desc_bh-glx-c06u08.yaml"
