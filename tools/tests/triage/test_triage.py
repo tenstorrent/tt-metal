@@ -372,7 +372,7 @@ class TestTriage:
     # Running dump_callstacks with --full-callstack or --gdb-callstack breaks brisc so that it cannot be halted
     # and it affects other tests in the same test class, so we move it to be run last.
     def test_dump_callstacks(self):
-        result = self.run_triage_script("dump_callstacks.py", argv=["--full-callstack"])
+        result = self.run_triage_script("dump_callstacks.py", argv=["--full-callstack", "--per-core"])
 
         assert result is not None, "Expected non-None result from dump_callstacks.py"
 

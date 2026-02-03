@@ -39,31 +39,49 @@ If a check is critical (such as a missing ELF file), the script should raise a `
 #### dump_callstacks output modes
 
 By default, `dump_callstacks`:
-- Shows only essential fields: Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, and Callstack
+- **Aggregates rows by canonical callstack** to make large-scale failures readable
+- Shows compressed Dev:Loc ranges (e.g., "0-31:1-0..2")
 - **Automatically filters out DONE cores** to reduce noise
 
-You can control the output with two independent flags:
+The aggregated view groups cores by their callstack (ignoring PC/addresses) and shows:
+- **Callstack**: The canonical callstack or error message
+- **#Callstacks**: Number of cores sharing this callstack
+- **RiscV**: Comma-separated list of RISC types (e.g., "brisc,trisc0,trisc1")
+- **Dev:Locs**: Compressed device and location ranges
 
-**Show more columns** using `-v` (can be repeated):
+You can control the output with these flags:
+
+**Per-core view** (original detailed table):
 ```bash
-# Level 1: Add detailed fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset)
-./tools/tt-triage.py --run=dump_callstacks -v
-
-# Level 2: Add internal debug fields (RD PTR, Base, Offset)
-./tools/tt-triage.py --run=dump_callstacks -vv
+# Show one row per core with full details
+./tools/tt-triage.py --run=dump_callstacks --per-core
 ```
 
 **Show all cores** (including DONE cores):
 ```bash
+# Works with both aggregated (default) and per-core views
 ./tools/tt-triage.py --run=dump_callstacks --all-cores
 ```
 
-**Combine both** for full details:
+**Show more columns** using `-v` (affects per-core mode only):
 ```bash
-./tools/tt-triage.py --run=dump_callstacks --all-cores -vv
+# Level 1: Add detailed fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset)
+./tools/tt-triage.py --run=dump_callstacks --per-core -v
+
+# Level 2: Add internal debug fields (RD PTR, Base, Offset)
+./tools/tt-triage.py --run=dump_callstacks --per-core -vv
 ```
 
-This keeps the default output clean while allowing detailed inspection when needed.
+**Combine flags** for specific views:
+```bash
+# Aggregated view with all cores (including DONE)
+./tools/tt-triage.py --run=dump_callstacks --all-cores
+
+# Per-core view with all cores and maximum verbosity
+./tools/tt-triage.py --run=dump_callstacks --per-core --all-cores -vv
+```
+
+This keeps the default output clean and readable for large-scale failures while allowing detailed inspection when needed.
 
 To enable rich visualization, a checker script should return data as a tagged `@dataclass` or a list of tagged `@dataclass` objects of the same type. Visualization in `tt-triage` is achieved by serializing data fields in a way that describes how they should appear in the output. You control this by using tagging methods and their arguments to specify how each field should be serialized and thus visualized:
 - `triage_field(serialized_name, serializer, verbose=0)` – The field will be serialized (and visualized) as `serialized_name` (or the original field name if not provided) using the specified `serializer` (or `default_serializer`). The `verbose` parameter controls at which verbosity level the field is shown (0=always, 1=with `-v`, 2=with `-vv`). This controls how the field appears in the visualization.

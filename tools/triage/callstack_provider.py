@@ -169,7 +169,9 @@ def format_callstack_with_message(callstack_with_message: KernelCallstackWithMes
 
     if callstack_with_message.message is not None:
         return "\n".join(
-            [f"[error]{callstack_with_message.message}[/]"] + _format_callstack(callstack_with_message.callstack)
+            [empty_line]
+            + [f"[error]{callstack_with_message.message}[/]"]
+            + _format_callstack(callstack_with_message.callstack)
         )
     else:
         return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack))
