@@ -677,22 +677,18 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
     if (ctx.use_welford) {
         constexpr uint32_t tile_width = 32;  // TILE_WIDTH
         uint32_t last_tile_W = ctx.K - ((ctx.K - tile_width) / tile_width) * tile_width;
-        union {
-            float f;
-            uint32_t u;
-        } eps_union{};
-        eps_union.f = ctx.eps;
+        auto eps_u32 = std::bit_cast<uint32_t>(ctx.eps);
 
         args.compute_all_to_all.push_back(tile_width);
         args.compute_all_to_all.push_back(last_tile_W);
         args.compute_all_to_all.push_back(ctx.K);
-        args.compute_all_to_all.push_back(eps_union.u);
+        args.compute_all_to_all.push_back(eps_u32);
         args.compute_all_to_all.push_back(ctx.per_core_recip_lut_size);
 
         args.compute_not_all_to_all.push_back(tile_width);
         args.compute_not_all_to_all.push_back(last_tile_W);
         args.compute_not_all_to_all.push_back(ctx.K);
-        args.compute_not_all_to_all.push_back(eps_union.u);
+        args.compute_not_all_to_all.push_back(eps_u32);
         args.compute_not_all_to_all.push_back(ctx.per_core_recip_lut_size);
     }
 
