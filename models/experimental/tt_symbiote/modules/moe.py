@@ -528,6 +528,8 @@ class TTNNGlm4MoeNaiveMoe(TTNNModule):
         ccl = self.device_state.ccl_manager
         hidden_size = self.torch_layer.hidden_dim
         moe_intermediate_size = self.torch_layer.intermediate_dim
+        assert len(x.shape) == 2  # Shape: [num_tokens, hidden_size]
+        x = ttnn.reshape(x, shape=(1, 1, x.shape[-2], x.shape[-1]))
         x = ttnn.experimental.all_gather_async(
             x,
             **ccl.populate_all_gather_runtime_args(
@@ -891,6 +893,8 @@ class TTNNGlm4MoeMoE(TTNNModule):
         router_logits = self.gate(hidden_states)
         topk_indices, topk_weights = self.torch_layer.route_tokens_to_experts(router_logits)
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
+        if self.device_state is not None:
+            hidden_states.set_distributed_config(self.device_state.tensor_config)
         hidden_states = self.experts(hidden_states, topk_indices.to(dtype=torch.int64), topk_weights).view(*orig_shape)
         hidden_states = hidden_states + self.shared_experts(residuals)
         return hidden_states.to_ttnn
