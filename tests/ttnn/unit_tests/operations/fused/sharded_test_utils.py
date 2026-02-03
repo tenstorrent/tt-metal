@@ -321,7 +321,9 @@ def do_test_main(
     if op_name == "layer_norm":
         ref_output_tensor = torch_layer_norm(torch_input_tensor, residual=residual, weight=weight, bias=bias)
     elif op_name == "rms_norm":
-        ref_output_tensor = rms_norm_golden(torch_input_tensor, weight)
+        ref_output_tensor = rms_norm_golden(
+            torch_input_tensor + residual if residual is not None else torch_input_tensor, weight
+        )
 
     # Generate the tt tensor based on the inputs
     sharded_mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
