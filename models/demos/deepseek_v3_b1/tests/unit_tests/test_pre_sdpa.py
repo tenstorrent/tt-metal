@@ -41,6 +41,8 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     HEADS_PER_ROW = 8
     QNOPE_OUT_DIM = 512  # Output dimension per Qnope head after matmul3
 
+    KNOPE_DIM = 512
+    KROPE_DIM = 64
     # Device grid configuration
     device_grid_size = device.compute_with_storage_grid_size()
 
@@ -61,6 +63,39 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     # Use the full device grid width for mcast core (last column)
     mcast_core_x = device_grid_size.x - 1  # Last column
     mcast_core_y = 9
+
+    # KV Cache Branch grid configuration
+    kv_cache_branch_start_offset = (0, 8)  # Offset for the operation grid
+    kv_cache_branch_grid = (9, 2)  # Grid dimensions for the operation
+
+    kv_cache_branch_crs = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(kv_cache_branch_start_offset[0], kv_cache_branch_start_offset[1]),
+                ttnn.CoreCoord(
+                    kv_cache_branch_grid[0] + kv_cache_branch_start_offset[0] - 1,
+                    kv_cache_branch_grid[1] + kv_cache_branch_start_offset[1] - 1,
+                ),
+            )
+        }
+    )
+    kv_cache_branch_rms_crs = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(kv_cache_branch_start_offset[0], kv_cache_branch_start_offset[1]),
+                ttnn.CoreCoord(kv_cache_branch_start_offset[0], kv_cache_branch_start_offset[1]),
+            )
+        }
+    )
+    kv_cache_branch_rope_crs = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(8 + kv_cache_branch_start_offset[0], kv_cache_branch_start_offset[1]),
+                ttnn.CoreCoord(8 + kv_cache_branch_start_offset[0], 1 + kv_cache_branch_start_offset[1]),
+            )
+        }
+    )
+    dkv_matmul_weights_shape = (7168, KNOPE_DIM + KROPE_DIM)
 
     tile = ttnn.Tile([1, 32])
 
@@ -269,6 +304,7 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     # Cos/Sin sharding: HEIGHT_SHARDED on qrope grid
     # Each core gets full head_dim (since cos/sin are reused for all heads on that core)
     # Shape per core: (1, qrope_head_dim) = (1, 64)
+    # Shared with KV Cache branch, double check if modifying these tensors
     cos_selected = torch_cos[position_ids].unsqueeze(0).unsqueeze(2)  # [1, batch, 1, qrope_head_dim] = [1, 1, 1, 64]
     sin_selected = torch_sin[position_ids].unsqueeze(0).unsqueeze(2)  # [1, batch, 1, qrope_head_dim] = [1, 1, 1, 64]
 
@@ -307,11 +343,16 @@ def test_pre_sdpa(device, epsilon, use_fp32):
 
     # Trans_mat: [1, 1, 32, 32] - repeat for all qrope cores
     # Each core gets full [32, 32] transformation matrix (reused for all heads)
-    trans_mat_replicated = torch_trans_mat.repeat(1, 1, qrope_num_cores, 1)  # [1, 1, 32, 32]
+    trans_mat_replicated = torch_trans_mat.repeat(
+        1, 1, qrope_num_cores + kv_cache_branch_rope_crs.num_cores(), 1
+    )  # [1, 1, 32, 32]
+    print("here")
+    trans_mat_crs = kv_cache_branch_rope_crs.merge(qrope_grid)
+    print(f"trans_mat_crs: {trans_mat_crs}")
     trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
     trans_shard_shape = (ttnn.TILE_SIZE, ttnn.TILE_SIZE)  # [32, 32] per core
     trans_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({qrope_grid}),
+        trans_mat_crs,
         trans_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -324,6 +365,80 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         device=device,
         memory_config=trans_mem_config,
         tile=trans_tile,
+    )
+
+    # KV Cache Branch
+    torch_dkv_matmul_weights = torch.randn(dkv_matmul_weights_shape, dtype=torch.bfloat16)
+    num_shards = kv_cache_branch_crs.num_cores()
+    shard_width = dkv_matmul_weights_shape[1] // num_shards
+    new_shard_order = [0, 1, 2, 3, 4, 5, 6, 7, 16, 8, 9, 10, 11, 12, 13, 14, 15, 17]
+    torch_dkv_matmul_weights_shards = torch_dkv_matmul_weights.reshape(
+        dkv_matmul_weights_shape[0], num_shards, shard_width
+    )
+    torch_dkv_matmul_weights_shuffled = torch_dkv_matmul_weights_shards[:, new_shard_order, :].reshape(
+        dkv_matmul_weights_shape[0], dkv_matmul_weights_shape[1]
+    )
+    dkv_matmul_weights_shard_spec = ttnn.ShardSpec(
+        kv_cache_branch_crs,
+        (dkv_matmul_weights_shape[0], shard_width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    dkv_matmul_weights_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, dkv_matmul_weights_shard_spec
+    )
+    ttnn_dkv_matmul_weights = ttnn.from_torch(
+        torch_dkv_matmul_weights_shuffled,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=dkv_matmul_weights_mem_config,
+    )
+
+    torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
+    dkv_rmsnorm_gamma_shard_spec = ttnn.ShardSpec(
+        kv_cache_branch_rms_crs,
+        (1, KNOPE_DIM),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    dkv_rmsnorm_gamma_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, dkv_rmsnorm_gamma_shard_spec
+    )
+
+    ttnn_dkv_rmsnorm_gamma = ttnn.from_torch(
+        torch_dkv_rmsnorm_gamma,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=dkv_rmsnorm_gamma_mem_config,
+        tile=tile,
+    )
+
+    kv_rope_num_heads = 1
+    kv_rope_cos_sin_shard_spec = ttnn.ShardSpec(
+        kv_cache_branch_rope_crs,
+        (kv_rope_num_heads, KROPE_HEAD_DIM // 2),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    kv_rope_cos_sin_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, kv_rope_cos_sin_shard_spec
+    )
+
+    ttnn_kv_rope_cos = ttnn.from_torch(
+        cos_selected,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=kv_rope_cos_sin_mem_config,
+        tile=tile,
+    )
+    ttnn_kv_rope_sin = ttnn.from_torch(
+        sin_selected,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=kv_rope_cos_sin_mem_config,
+        tile=tile,
     )
 
     # ========================================================================
@@ -340,6 +455,10 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         ttnn_sin,
         ttnn_cos,
         ttnn_trans_mat,
+        ttnn_kv_rope_cos,
+        ttnn_kv_rope_sin,
+        ttnn_dkv_matmul_weights,
+        ttnn_dkv_rmsnorm_gamma,
         ttnn_sdpa_input_output,
         epsilon=epsilon,
         fp32_dest_acc_en=use_fp32,
@@ -354,7 +473,7 @@ def test_pre_sdpa(device, epsilon, use_fp32):
     logger.info("Computing golden reference...")
 
     # Golden uses shuffled weights to produce same interleaved output
-    _, _, torch_sdpa_expected = PreSDPA.golden(
+    _, _, torch_sdpa_expected, torch_kv_cache_expected = PreSDPA.golden(
         torch_input,
         torch_gamma,
         torch_matmul_weights,
@@ -364,12 +483,16 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         torch_sin,
         torch_cos,
         position_ids,
+        torch_dkv_matmul_weights,
+        torch_dkv_rmsnorm_gamma,
         epsilon=epsilon,
         num_qnope_heads=NUM_QNOPE_HEADS,
         num_qrope_heads=NUM_QROPE_HEADS,
         qnope_head_dim=QNOPE_HEAD_DIM,
         qrope_head_dim=QROPE_HEAD_DIM,
         heads_per_row=HEADS_PER_ROW,
+        knope_dim=KNOPE_DIM,
+        krope_dim=KROPE_DIM,
     )
 
     # ========================================================================

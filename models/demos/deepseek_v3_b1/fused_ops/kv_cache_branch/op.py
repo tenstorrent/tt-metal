@@ -109,6 +109,9 @@ class KVCacheBranch:
         dkv_matmul_out_w = (
             dkv_matmul_weights_shard_width // dkv_matmul_weights_tile.tile_shape[1]
         )  # Per-core width in tiles
+        print(" dkv matmul weights shard width ", dkv_matmul_weights_shard_shape)
+
+        print(" dkv matmul out w ", dkv_matmul_out_w)
 
         # Semaphore IDs for gather synchronization
         # Senders on NCRISC use NOC_0, receiver on BRISC uses NOC_1
@@ -159,9 +162,7 @@ class KVCacheBranch:
             ("dkv_matmul_k_num_tiles", dkv_matmul_k_num_tiles),
             ("dkv_matmul_out_w_per_core", dkv_matmul_out_w),
         ]
-        dkv_matmul_brisc_named_compile_time_args = [
-            ("dkv_matmul_out", dkv_matmul_output_cb),
-        ]
+
         dkv_matmul_trisc_named_compile_time_args = [
             ("dkv_matmul_in0", dkv_matmul_input_cb),
             ("dkv_matmul_in1", dkv_matmul_weights_cb),
@@ -259,7 +260,8 @@ class KVCacheBranch:
         # ROPE
         krope_brisc_named_compile_time_args = [
             ("k_rope_output_cb", k_rope_output_cb),
-            ("Wt", 1),
+            ("Wt", 1),  # Needed for KV Cache update
+            ("Ht", 1),  # Needed for KV Cache update
         ]
         krope_ncrisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
@@ -267,6 +269,7 @@ class KVCacheBranch:
             ("sin_cb", sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("Wt", 1),
+            ("Ht", 1),
         ]
         krope_trisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
@@ -278,28 +281,14 @@ class KVCacheBranch:
             ("sin_interm_cb", sin_interm_cb),
             ("out_cb", k_rope_output_cb),
             ("Wt", 1),
+            ("Ht", 1),
         ]
 
         # Create tile descriptor for proper tile dimensions
 
         # CB X: DKV Matmul input buffer (1x7168 with 1x32 tiles = 224 tiles)
-        # matmul_input_total_size = 14336  # 224 * 64 bytes
-        # matmul_input_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
-        # dkv_matmul_input_total_size = matmul_input_total_size
-        # dkv_matmul_input_page_size = 64
-        # dkv_matmul_input_cb_format = ttnn.CBFormatDescriptor(
-        #    buffer_index=dkv_matmul_input_cb,
-        #    data_format=data_format,
-        #    page_size=dkv_matmul_input_page_size,
-        #    tile=matmul_input_tile_descriptor,
-        # )
-        # dkv_matmul_input_cb_core_ranges = input_core_grid
-        # dkv_matmul_input_cb_descriptor = ttnn.CBDescriptor(
-        #    total_size=dkv_matmul_input_total_size,
-        #    format_descriptors=[dkv_matmul_input_cb_format],
-        # )
         dkv_matmul_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(dkv_matmul_input_cb, input_tensor)
-        # CB X: DKV Matmul output buffer (1x224 with 1x32 tiles = 7 tiles)
+        # CB X: DKV Matmul output buffers
         dkv_matmul_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
         dkv_matmul_output_page_size = TILE_1x32.get_tile_size(data_format)
         dkv_matmul_output_cb_format = ttnn.CBFormatDescriptor(
@@ -308,6 +297,9 @@ class KVCacheBranch:
             page_size=dkv_matmul_output_page_size,
             tile=dkv_matmul_output_tile_descriptor,
         )
+        print(" dkv matmul output cb format ", data_format)
+        print(" dkv matmul output page size ", dkv_matmul_output_page_size)
+        print(" dkv matmul output core ranges ", dkv_matmul_weights_core_grid)
         dkv_matmul_output_cb_descriptor = ttnn.CBDescriptor(
             total_size=dkv_matmul_output_page_size,
             core_ranges=dkv_matmul_weights_core_grid,
@@ -448,7 +440,6 @@ class KVCacheBranch:
             + krope_ncrisc_named_compile_time_args,
             # BRISC named compile-time args
             brisc_named_compile_time_args=dkv_gather_receiver_named_compile_time_args
-            + dkv_matmul_brisc_named_compile_time_args
             + kv_rmsnorm_brisc_named_compile_time_args
             + krope_brisc_named_compile_time_args,
             # BRISC common runtime args: KV cache buffer address and write position

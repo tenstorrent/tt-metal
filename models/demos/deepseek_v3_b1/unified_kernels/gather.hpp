@@ -94,6 +94,7 @@ struct Gather {
             // NCRISC (Sender) - DataMovementProcessor.RISCV_1
             // ================================================================
             if constexpr (IsSenderCore) {
+                DPRINT << " SENDER CORE" << ENDL();
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
 
@@ -118,12 +119,14 @@ struct Gather {
                 if constexpr (pop_src) {
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
+                DPRINT << " SENDER CORE END" << ENDL();
             }
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC (Receiver) - DataMovementProcessor.RISCV_0
             // ================================================================
             if constexpr (IsReceiverCore) {
+                DPRINT << " RECEIVER CORE" << ENDL();
                 // Reserve space in destination CB
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
 
@@ -140,6 +143,7 @@ struct Gather {
 
                 // Push to destination CB after data arrived
                 cb_push_back(args.dst_cb, args.dst_num_pages);
+                DPRINT << " RECEIVER COORE END" << ENDL();
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

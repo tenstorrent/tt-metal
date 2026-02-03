@@ -88,6 +88,7 @@ struct Matmul {
 
     private:
         void impl(const RTArgs& args) {
+            DPRINT << " MATMUL CORE" << ENDL();
 #if defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC (Compute)
@@ -102,13 +103,16 @@ struct Matmul {
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
             cb_wait_front(args.in0, args.k_num_tiles);
             cb_wait_front(args.in1, args.k_num_tiles * out_w);
-
+            UNPACK((DPRINT << " in0 " << TSLICE(args.in0, 0, SliceRange::h0_w0_32()) << ENDL()));
+            UNPACK((DPRINT << " in1 " << TSLICE(args.in1, 0, SliceRange::h0_w0_32()) << ENDL()));
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
+            DPRINT << "RESERVED OUTPUT TILES " << out_w << ENDL();
 
             if constexpr (out_w <= 8) {
                 // Use optimized custom_mm API for up to 8 output tiles (half-DST)
                 custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
+                DPRINT << " CUSTOM MM BLOCK INIT " << ENDL();
 
                 tile_regs_acquire();
 
@@ -122,6 +126,8 @@ struct Matmul {
                 for (uint32_t w = 0; w < out_w; w++) {
                     pack_tile(w, args.out, w);
                 }
+                DPRINT << " args.in0 " << args.in0 << " args.in1 " << args.in1 << " args.out " << args.out
+                       << " args.k_num_tiles " << args.k_num_tiles << " args.out_w " << out_w << ENDL();
                 tile_regs_release();
             } else {
                 // Use optimized custom_mm API with blocking for out_w > 8
@@ -135,6 +141,7 @@ struct Matmul {
 
                     // Re-init for each block to reset MOP state
                     custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
+                    DPRINT << " CUSTOM TILES IN BLOCK " << tiles_in_block << ENDL();
 
                     tile_regs_acquire();
 
@@ -160,8 +167,10 @@ struct Matmul {
                 cb_pop_front(args.in1, args.k_num_tiles * out_w);
             }
 
+            PACK((DPRINT << " PACK " << TSLICE(args.out, 0, SliceRange::h0_w0_32()) << ENDL()));
             cb_push_back(args.out, out_w);
 #endif
+            DPRINT << " MATMUL CORE END" << ENDL();
         }
     };  // class Op
 

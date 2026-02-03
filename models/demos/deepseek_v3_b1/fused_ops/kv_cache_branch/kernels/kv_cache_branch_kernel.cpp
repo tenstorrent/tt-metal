@@ -60,7 +60,8 @@ void kernel_main() {
     // kv cache rmsnorm reader args
     deepseek_b1_ops::RMSNorm::ReaderArgs kv_rmsnorm_args{};
 
-    using K_RopeCTArgs = deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt")>;
+    using K_RopeCTArgs =
+        deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
     constexpr uint32_t k_rope_input_cb = get_named_compile_time_arg_val("in_cb");
     constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
     constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
@@ -136,7 +137,8 @@ void kernel_main() {
         get_common_arg_val<float>(1),     // scalar (1/sqrt(512))
     };
 
-    using K_RopeCTArgs = deepseek_b1_ops::Rope::ComputeCTArgs<get_named_compile_time_arg_val("Wt")>;
+    using K_RopeCTArgs = deepseek_b1_ops::Rope::
+        ComputeCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
 
     // CB indices (passed as runtime args to ComputeArgs)
     constexpr uint32_t k_rope_input_cb = get_named_compile_time_arg_val("in_cb");
@@ -172,6 +174,8 @@ void kernel_main() {
         constexpr uint32_t dkv_matmul_in1 = get_named_compile_time_arg_val("dkv_matmul_in1");
         constexpr uint32_t dkv_matmul_out_w_per_core = get_named_compile_time_arg_val("dkv_matmul_out_w_per_core");
         unified_kernels::setup_sharded_buffer(dkv_matmul_in1, dkv_matmul_k_num_tiles * dkv_matmul_out_w_per_core);
+        DPRINT << " DKV_MATMUL_IN1 " << dkv_matmul_in1 << " DKV_MATMUL_OUT_W_PER_CORE " << dkv_matmul_out_w_per_core
+               << " DKV_MATMUL_K_NUM_TILES " << dkv_matmul_k_num_tiles << ENDL();
     }
     if constexpr (Core::is_kv_rmsnorm_core) {
         // RMSNorm gamma (sharded weights)
@@ -255,7 +259,7 @@ void kernel_main() {
 
         for (uint32_t tile_idx = 0; tile_idx < kv_rmsnorm_num_tiles; tile_idx++) {
             uint32_t tile_id = kv_cache_start_tile_id + tile_idx;
-            noc_async_write_page(tile_id, kv_cache_addr_gen, l1_read_addr, /*size=*/tile_size, /*offset=*/0);
+            noc_async_write_page(tile_id, kv_cache_addr_gen, l1_read_addr, tile_size, 0);
             l1_read_addr += tile_size;
         }
         noc_async_write_barrier();
@@ -278,11 +282,7 @@ void kernel_main() {
             // Rope tiles come after nope tiles
             uint32_t tile_id = kv_cache_start_tile_id + tile_idx;
             noc_async_write_page(
-                tile_id,
-                kv_cache_addr_gen,
-                l1_read_addr,
-                /*size=*/tile_size,
-                /*offset=*/512 * 2 + tile_size * rope_offset);
+                tile_id, kv_cache_addr_gen, l1_read_addr, tile_size, 512 * 2 + tile_size * rope_offset);
             l1_read_addr += tile_size;
         }
         noc_async_write_barrier();
