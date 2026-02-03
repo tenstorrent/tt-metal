@@ -27,6 +27,7 @@ Generates in output-dir:
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -49,16 +50,37 @@ def merge_deployment_descriptors(dep1_path, dep2_path, output_path):
             outfile.write(f2.read())
 
 
-def run_cabling_generator(cabling_dir, deployment_path, output_fsd, work_dir):
+def find_cabling_generator(repo_root, build_dir=None):
+    """Find run_cabling_generator binary, checking multiple build directories."""
+    binary_subpath = Path("tools") / "scaleout" / "run_cabling_generator"
+
+    if build_dir:
+        # User-specified build directory
+        candidate = repo_root / build_dir / binary_subpath
+        if candidate.exists():
+            return candidate
+        print(f"Error: run_cabling_generator not found at {candidate}", file=sys.stderr)
+        sys.exit(1)
+
+    # Check common build directories in order of preference
+    build_dirs = ["build_Release", "build_Debug", "build"]
+    for bd in build_dirs:
+        candidate = repo_root / bd / binary_subpath
+        if candidate.exists():
+            return candidate
+
+    print("Error: run_cabling_generator not found in any build directory", file=sys.stderr)
+    print(f"Searched: {', '.join(build_dirs)}", file=sys.stderr)
+    print("Build with: ./build_metal.sh --build-tests", file=sys.stderr)
+    sys.exit(1)
+
+
+def run_cabling_generator(cabling_dir, deployment_path, output_fsd, build_dir=None):
     script_dir = Path(__file__).resolve().parent
     # Script lives at tools/scaleout/cabling_generator/merge_cluster_configs.py -> repo root is 3 levels up
     repo_root = script_dir.parent.parent.parent
 
-    cabling_gen = repo_root / "build_Release" / "tools" / "scaleout" / "run_cabling_generator"
-    if not cabling_gen.exists():
-        print(f"Error: run_cabling_generator not found at {cabling_gen}", file=sys.stderr)
-        print("Build with: ./build_metal.sh --build-tests", file=sys.stderr)
-        sys.exit(1)
+    cabling_gen = find_cabling_generator(repo_root, build_dir)
 
     cmd = [str(cabling_gen), "--cabling", cabling_dir, "--deployment", deployment_path, "--output", "merged"]
 
@@ -90,8 +112,12 @@ def run_cabling_generator(cabling_dir, deployment_path, output_fsd, work_dir):
 
 
 def count_nodes(deployment_path):
+    """Count host entries in deployment descriptor using regex for robustness."""
     with open(deployment_path, "r") as f:
-        return f.read().count("hosts {")
+        content = f.read()
+    # Match 'hosts {' at line start (with optional leading whitespace) to avoid matching in comments/strings
+    pattern = r"^\s*hosts\s*\{"
+    return len(re.findall(pattern, content, re.MULTILINE))
 
 
 def main():
@@ -106,6 +132,11 @@ def main():
     )
     parser.add_argument("--output-dir", "-o", required=True, help="Output directory")
     parser.add_argument("--temp-dir", default=None, help="Temporary directory")
+    parser.add_argument(
+        "--build-dir",
+        default=None,
+        help="Build directory name (e.g., build_Release, build_Debug). Auto-detected if not specified.",
+    )
 
     args = parser.parse_args()
 
@@ -140,7 +171,7 @@ def main():
 
         merged_fsd = output_dir / "merged_fsd.textproto"
         generated_deployment_path = run_cabling_generator(
-            str(cabling_dir), str(merged_deployment), str(merged_fsd), temp_dir
+            str(cabling_dir), str(merged_deployment), str(merged_fsd), args.build_dir
         )
 
         final_deployment = output_dir / "merged_deployment_descriptor.textproto"
