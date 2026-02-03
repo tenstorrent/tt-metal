@@ -633,45 +633,19 @@ Tensor ExecuteBinaryRemainder::invoke(
     return ttnn::unary_remainder(input, scalar, output_mem_config, std::nullopt, sub_core_grids);
 }
 
-Tensor run_fmod(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const Tensor& division_result,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::subtract(
-        input_a,
-        ttnn::multiply(division_result, input_b, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    return result;
-}
-
 // FMOD result = input − (other * trunc(input/other))
-// When inputs are of data type BF16 and when input_b==0, expected is nan, but FMOD gives inf
 Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    DataType input_dtype = input_a.dtype();
-
-    // INT32 inputs are handled by the kernel directly via binary_ng, skip composite path
-    const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-    if (is_int32) {
-        return ttnn::prim::binary_ng(
-            input_a, input_b, BinaryOpType::FMOD, std::nullopt, output_mem_config, std::nullopt);
-    }
-    Tensor div_res = ttnn::div(input_a, input_b, false, "trunc", std::nullopt, output_mem_config);
-
-    // No typecast for FP32 input
-    if (input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
-        return run_fmod(input_a, input_b, div_res, output_mem_config);
-    }
-    // For bfloat16 with decimal values, need to typecast to FP32 to improve precision
-    Tensor a = typecast(input_a, DataType::FLOAT32);
-    Tensor b = typecast(input_b, DataType::FLOAT32);
-    div_res = typecast(div_res, DataType::FLOAT32);
-    return typecast(run_fmod(a, b, div_res, output_mem_config), input_dtype);
+    // // INT32 inputs are handled by the kernel directly via binary_ng, skip composite path
+    // const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
+    // if (is_int32) {
+    //     return ttnn::prim::binary_ng(
+    //         input_a, input_b, BinaryOpType::FMOD, std::nullopt, output_mem_config, std::nullopt);
+    // }
+    return ttnn::prim::binary_ng(input_a, input_b, BinaryOpType::FMOD, std::nullopt, output_mem_config, std::nullopt);
 }
 
 Tensor ExecuteBinaryFmod::invoke(
