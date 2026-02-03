@@ -33,15 +33,15 @@ sleep 5
 echo ""
 
 # Step 2: Run physical discovery test (optional - uncomment if needed)
-# echo "=========================================="
-# echo "Step 2: Running physical discovery test..."
-# echo "=========================================="
-# tt-run --rank-binding "$QUAD_RANK_BINDING" --mpi-args "$QUAD_MPI_ARGS" ./build/test/tt_metal/tt_fabric/test_physical_discovery --gtest_filter="PhysicalDiscovery.*"
-# if [[ $? -ne 0 ]]; then
-#     echo "Error: Physical discovery test failed"
-#     exit 1
-# fi
-# echo ""
+echo "=========================================="
+echo "Step 2: Running physical discovery test..."
+echo "=========================================="
+tt-run --rank-binding "$QUAD_RANK_BINDING" --mpi-args "$QUAD_MPI_ARGS" ./build/test/tt_metal/tt_fabric/test_physical_discovery --gtest_filter="PhysicalDiscovery.*"
+if [[ $? -ne 0 ]]; then
+    echo "Error: Physical discovery test failed"
+    exit 1
+fi
+echo ""
 
 # Test: test_all_to_all_dispatch_8x16_quad_galaxy
 echo "=========================================="

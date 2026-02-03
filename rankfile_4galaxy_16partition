@@ -1,0 +1,27 @@
+# Rankfile for 4 galaxies split into 4 partitions each (16 ranks total)
+# Format: rank <rank_number>=<hostname> slot=<slot_number>
+# Each galaxy (host) has 4 partitions (ranks)
+
+# Host 0 (wh-glx-a04u02): ranks 0-3
+rank 0=wh-glx-a04u02 slot=0
+rank 1=wh-glx-a04u02 slot=1
+rank 2=wh-glx-a04u02 slot=2
+rank 3=wh-glx-a04u02 slot=3
+
+# Host 1 (wh-glx-a05u02): ranks 4-7
+rank 4=wh-glx-a05u02 slot=0
+rank 5=wh-glx-a05u02 slot=1
+rank 6=wh-glx-a05u02 slot=2
+rank 7=wh-glx-a05u02 slot=3
+
+# Host 2 (wh-glx-a05u08): ranks 8-11
+rank 8=wh-glx-a05u08 slot=0
+rank 9=wh-glx-a05u08 slot=1
+rank 10=wh-glx-a05u08 slot=2
+rank 11=wh-glx-a05u08 slot=3
+
+# Host 3 (wh-glx-a05u14): ranks 12-15
+rank 12=wh-glx-a05u14 slot=0
+rank 13=wh-glx-a05u14 slot=1
+rank 14=wh-glx-a05u14 slot=2
+rank 15=wh-glx-a05u14 slot=3
