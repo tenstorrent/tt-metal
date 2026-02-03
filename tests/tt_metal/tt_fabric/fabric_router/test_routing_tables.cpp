@@ -129,8 +129,12 @@ TEST(MeshGraphValidation, TestMGDConnections) {
 }
 
 TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
+    // Reset MetalContext's control plane to ensure a clean state
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    // initialize_fabric_config() calls get_control_plane() which creates the control plane and writes the mapping file
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -177,6 +181,23 @@ TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
+    // Reset MetalContext's control plane to ensure it doesn't interfere with the test's custom control plane
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
+    // Delete any existing mapping file to ensure we check the one written by the test's ControlPlane
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+    std::filesystem::path root_dir = rtoptions.get_root_dir();
+    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::string generated_filename =
+        "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
+    std::filesystem::path generated_file = generated_dir / generated_filename;
+    if (std::filesystem::exists(generated_file)) {
+        std::filesystem::remove(generated_file);
+    }
+
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
@@ -286,6 +307,25 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kMeshGraphInit) {
 
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+
+    // Reset MetalContext's control plane to ensure it doesn't interfere with the test's custom control plane
+    // This prevents MetalContext from creating an auto-discovery control plane that writes a mapping file first
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+
+    // Delete any existing mapping file to ensure we check the one written by the test's ControlPlane
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+    std::filesystem::path root_dir = rtoptions.get_root_dir();
+    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::string generated_filename =
+        "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
+    std::filesystem::path generated_file = generated_dir / generated_filename;
+    if (std::filesystem::exists(generated_file)) {
+        std::filesystem::remove(generated_file);
+    }
+
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
     auto control_plane = make_control_plane(
