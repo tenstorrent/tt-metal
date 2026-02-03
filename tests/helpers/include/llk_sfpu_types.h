@@ -110,5 +110,15 @@ enum class SfpuType
     add_top_row,
     typecast,
     mul_uint16,
+    max_int32,
+    min_int32,
+    max_uint32,
+    min_uint32,
+    unary_max,
+    unary_min,
+    unary_max_int32,
+    unary_min_int32,
+    unary_max_uint32,
+    unary_min_uint32,
 };
 #endif // ARCH_QUASAR
