@@ -363,7 +363,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
-                # TODO: Optimzize this config
                 "2D_GEGLU_LINEAR_1536_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
@@ -374,7 +373,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
-                # TODO: Optimzize this config
                 "2D_GEGLU_LINEAR_1536_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
@@ -385,8 +383,7 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
-                # TODO: Optimzize this config; rename this to 2D config
-                "1D_GEGLU_LINEAR_1536_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                "2D_GEGLU_LINEAR_1536_MID_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
                     per_core_M=1,
@@ -396,8 +393,7 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
-                # TODO: Optimzize this config; rename this to 2D config
-                "1D_GEGLU_LINEAR_1536_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                "2D_GEGLU_LINEAR_1536_MID_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
                     per_core_M=1,
@@ -408,7 +404,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
                 # # # FF2 # # #
-                # TODO: Optimzize this config
                 "2D_FF2_SEQ_LEN_4096": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
@@ -419,7 +414,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
-                # TODO: Optimzize this config
                 "2D_FF2_SEQ_LEN_1024": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=3,
@@ -430,7 +424,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
-                # TODO: Optimzize this config
                 "2D_FF2_SEQ_LEN_256": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=3,
@@ -482,7 +475,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
-                # TODO: Optimzize this config
                 "2D_TM_OUT_LINEAR_1536": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
@@ -493,7 +485,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
-                # TODO: Optimzize this config
                 "2D_TM_OUT_LINEAR_1536_MID": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
@@ -515,7 +506,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
-                # TODO: Optimzize this config
                 "2D_ATTN_QKV_LINEAR_1536": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
@@ -526,7 +516,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
-                # TODO: Optimzize this config
                 "2D_ATTN_QKV_LINEAR_1536_MID": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
@@ -758,9 +747,6 @@ class RefinerModelOptimisations(ModelOptimisations):
         )
 
         self.refiner_layernorm_configs = {}
-        # For mid_block: 256 seq (8 M-tiles), 1536 channels (48 N-tiles)
-        # Matmul output per_core_M=1, per_core_N=10, so block_h=1, block_w=10
-        # subblock_w=5 (10/5=2, and 5<=8)
         self.refiner_layernorm_configs["1536_mid_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
             subblock_w=5,
@@ -770,9 +756,6 @@ class RefinerModelOptimisations(ModelOptimisations):
             legacy_reduction=True,
             legacy_rsqrt=True,
         )
-        # For down_blocks.2/up_blocks.1: 1024 seq (32 M-tiles), 1536 channels (48 N-tiles)
-        # Matmul output per_core_M=4, per_core_N=10, so block_h=4, block_w=10
-        # subblock_w=5 (10/5=2, and 5<=8)
         self.refiner_layernorm_configs["1536_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
             subblock_w=5,
@@ -782,8 +765,6 @@ class RefinerModelOptimisations(ModelOptimisations):
             legacy_reduction=True,
             legacy_rsqrt=True,
         )
-        # For down_blocks.1/up_blocks.2: 4096 seq (128 M-tiles), 768 channels (24 N-tiles)
-        # Matmul output per_core_M=16, per_core_N=5, so block_h=16, block_w=5
         self.refiner_layernorm_configs["768_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
             subblock_w=5,
@@ -853,9 +834,9 @@ class RefinerModelOptimisations(ModelOptimisations):
         if "net.0.proj" in matmul_path:
             if "mid_block" in matmul_path:
                 if "gelu" in matmul_path:
-                    return self.matmul_configs.get("1D_GEGLU_LINEAR_1536_SPLIT_GELU")
+                    return self.matmul_configs.get("2D_GEGLU_LINEAR_1536_MID_SPLIT_GELU")
                 else:
-                    return self.matmul_configs.get("1D_GEGLU_LINEAR_1536_SPLIT")
+                    return self.matmul_configs.get("2D_GEGLU_LINEAR_1536_MID_SPLIT")
             elif "down_blocks.1" in matmul_path or "up_blocks.2" in matmul_path:
                 if "gelu" in matmul_path:
                     return self.matmul_configs.get("2D_GEGLU_LINEAR_768_SPLIT_GELU")
@@ -942,8 +923,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                 return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
             else:
                 return ttnn.L1_MEMORY_CONFIG
-        if "resnets" in module_path and "time_emb_proj" in module_path:
-            return ttnn.L1_MEMORY_CONFIG  # TODO: This is not used
         if "resnets" in module_path and "conv_shortcut" in module_path:
             if "up_blocks.3" in module_path:
                 return ttnn.L1_MEMORY_CONFIG
