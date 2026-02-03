@@ -52,6 +52,7 @@ set(SOURCES
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
     ops/rmsnorm_op_test.cpp
+    ops/newton_schulz_op_test.cpp
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp

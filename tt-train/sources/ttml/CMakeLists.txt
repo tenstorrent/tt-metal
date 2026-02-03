@@ -133,6 +133,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/newton_schulz_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/newton_schulz_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
