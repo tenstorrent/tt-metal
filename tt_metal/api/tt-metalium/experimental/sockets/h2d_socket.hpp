@@ -6,7 +6,6 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/vector_aligned.hpp>
 #include <utility>
 
 namespace tt::umd {
@@ -153,7 +152,7 @@ private:
 
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
     std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
-    MeshCoreCoord recv_core_;
+    MeshCoreCoord recv_core_ = {};
     BufferType buffer_type_ = BufferType::L1;
     uint32_t fifo_size_ = 0;
     uint32_t page_size_ = 0;
