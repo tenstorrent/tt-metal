@@ -588,11 +588,9 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     program_descriptor.cbs.push_back(
         make_cb_descriptor(im2_t * single_tile_size, tt::CBIndex::c_19, cb_data_format, single_tile_size));
 
-    // CB 24: Intermediate 0 (if needed)
-    if (!(rms_norm && !b.has_value())) {
-        program_descriptor.cbs.push_back(
-            make_cb_descriptor(im0_t * single_tile_size, tt::CBIndex::c_24, cb_data_format, single_tile_size));
-    }
+    // CB 24: Intermediate 0
+    program_descriptor.cbs.push_back(
+        make_cb_descriptor(im0_t * single_tile_size, tt::CBIndex::c_24, cb_data_format, single_tile_size));
 
     // CB 20: Intermediate 3 (if not use_welford)
     if (!use_welford) {
