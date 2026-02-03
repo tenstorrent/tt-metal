@@ -465,7 +465,7 @@ def create_tt_model(
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
-            True,  # prefill-only profile
+            False,  # prefill-only profile
             1,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
