@@ -59,10 +59,10 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     torch_addcmul_a = torch.randn(1, N, dtype=torch.bfloat16)  # base value (broadcast like bias)
     torch_addcmul_b = torch.randn(M, N, dtype=torch.bfloat16)  # gate
 
-    # torch_matmul_input = torch.full_like(torch_matmul_input, fill_value=2.0)
-    # torch_matmul_weight = torch.eye(K, N, dtype=torch.bfloat16)
-    # torch_addcmul_a = torch.full_like(torch_addcmul_a, fill_value=0.0)  # expected output will be == 1
-    # torch_addcmul_b = torch.full_like(torch_addcmul_b, fill_value=2.0)  # expected output will be == 1
+    torch_matmul_input = torch.full_like(torch_matmul_input, fill_value=2.0)
+    torch_matmul_weight = torch.eye(K, N, dtype=torch.bfloat16)
+    torch_addcmul_a = torch.full_like(torch_addcmul_a, fill_value=0.0)  # expected output will be == 1
+    torch_addcmul_b = torch.full_like(torch_addcmul_b, fill_value=2.0)  # expected output will be == 1
 
     torch_bias = torch.randn(1, N, dtype=torch.bfloat16) if use_bias else None
 

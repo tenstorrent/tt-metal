@@ -238,6 +238,9 @@ void read_ternary_blocks_sync(
         ternary_a_write_ptr += tile_size_bytes;
     }
     noc_async_read_barrier();
+    volatile uint16_t* ternary_a_accessor_ptr = reinterpret_cast<volatile uint16_t*>(ternary_a_write_ptr);
+    DPRINT << "ternary_a_accessor[0] = " << BF16(ternary_a_accessor_ptr[0]) << ENDL();
+
     cb_push_back(ternary_a_cb, N_block_tiles);
 
     for (; i < d0_end; i++, m_id++) {
