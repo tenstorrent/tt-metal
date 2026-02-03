@@ -11,8 +11,7 @@
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
-#include <optional>
-
+#include "autograd/tensor.hpp"
 #include "models/base_transformer.hpp"
 #include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
@@ -26,7 +25,6 @@
 #include "modules/multi_layer_perceptron.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
-#include "nb_memeff_runner.hpp"
 #include "nb_modules.hpp"
 
 namespace ttml::nanobind::models {
@@ -155,10 +153,18 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
     m.def(
         "memory_efficient_runner",
-        &ttml::nanobind::detail::memory_efficient_runner,
+        [](nb::callable fw_callable, const ttml::autograd::TensorPtr& input, nb::args args, nb::kwargs kwargs) {
+            auto fw_impl = [fw_callable, args, kwargs](const ttml::autograd::TensorPtr& input) {
+                nb::gil_scoped_acquire guard;
+                nb::object tensor_obj = fw_callable(input, *args, **kwargs);
+                return nb::cast<autograd::TensorPtr>(tensor_obj);
+            };
+            return models::common::transformer::memory_efficient_runner(fw_impl, input);
+        },
         nb::arg("forward_impl"),
         nb::arg("input"),
-        nb::arg("mask") = nb::none(),
+        nb::arg("args") = nb::tuple(),
+        nb::arg("kwargs") = nb::dict(),
         "Memory-efficient forward/backward runner with gradient checkpointing.");
 
     {

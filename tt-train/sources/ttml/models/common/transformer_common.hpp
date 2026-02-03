@@ -5,6 +5,7 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -27,10 +28,13 @@ enum class WeightTyingType {
     Enabled,
 };
 
-autograd::TensorPtr memory_efficient_runner(
-    auto&& forward_impl, const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
+template <typename F, typename... ExtraArgs>
+autograd::TensorPtr memory_efficient_runner(F&& forward_impl, const autograd::TensorPtr& input, ExtraArgs&&... args) {
+    using Fd = std::decay_t<F>;
+    Fd f = std::forward<F>(forward_impl);
+
     if (autograd::ctx().get_gradient_mode() == autograd::GradMode::DISABLED) {
-        return forward_impl(input, mask);
+        return f(input, std::forward<ExtraArgs>(args)...);
     }
 
     // make a copy of a generator before running forward pass
@@ -42,11 +46,15 @@ autograd::TensorPtr memory_efficient_runner(
         auto scoped = ttml::core::Scoped(
             []() { autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED); },
             []() { autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED); });
-        out = forward_impl(input, mask);
+        out = f(input, std::forward<ExtraArgs>(args)...);
     }
 
     // define grad function and copy generator (in the state before forward pass)
-    autograd::GradFunction grad = [input, mask, out, &forward_impl, generator]() {
+    autograd::GradFunction grad = [input,
+                                   out,
+                                   f = std::move(f),
+                                   generator,
+                                   args_cap = std::make_tuple(std::forward<ExtraArgs>(args)...)]() mutable {
         // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());
         // run forward pass again
@@ -57,7 +65,7 @@ autograd::TensorPtr memory_efficient_runner(
             auto scoped = ttml::core::Scoped(
                 [&generator]() { autograd::ctx().set_generator(generator); },
                 [generator = autograd::ctx().get_generator()]() { autograd::ctx().set_generator(generator); });
-            output = forward_impl(input_detached, mask);
+            output = std::apply([&](const auto&... xs) { return f(input_detached, xs...); }, args_cap);
         }
         // use gradients from new output
         output->set_grad(out->get_grad());

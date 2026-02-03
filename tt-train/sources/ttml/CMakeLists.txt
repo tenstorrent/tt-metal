@@ -568,8 +568,6 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_memeff_runner.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_memeff_runner.hpp
 )
 nanobind_add_module(
     _ttml

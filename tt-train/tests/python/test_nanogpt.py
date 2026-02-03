@@ -494,7 +494,7 @@ class TestMemoryEfficientRunner:
 
         captured = {}
 
-        def forward_fn(input, mask=None):
+        def forward_fn(input):
             inter = ttml.ops.binary.mul(input, np.random.rand())
             captured["inter"] = inter
             return ttml.ops.unary.relu(inter)
