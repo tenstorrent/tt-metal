@@ -620,7 +620,6 @@ def test_matmul_batched_dram_sharded(device, test_case):
     assert pcc_passed
 
 
-@skip_for_blackhole("Deepseek tests target Wormhole")
 @pytest.mark.parametrize(
     "batch, m, k, n",
     [
