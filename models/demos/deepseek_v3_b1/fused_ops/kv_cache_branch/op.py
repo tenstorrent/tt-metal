@@ -246,6 +246,7 @@ class KVCacheBranch:
             ("sin_cb", sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("Wt", 1),
+            ("Ht", 1),
         ]
         krope_trisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
@@ -257,6 +258,7 @@ class KVCacheBranch:
             ("sin_interm_cb", sin_interm_cb),
             ("out_cb", k_rope_output_cb),
             ("Wt", 1),
+            ("Ht", 1),
         ]
 
         # Create tile descriptor for proper tile dimensions
