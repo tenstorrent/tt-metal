@@ -356,11 +356,11 @@ def run_test_linear(
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
             ttnn.Topology.Ring,
             2,
-            2,
+            6,
             0,
             1,
             12,
-            10,
+            9,
         ],
     ],
     ids=[
@@ -419,8 +419,6 @@ def test_linear(
     sp_axis,
     tp_axis,
 ):
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-
     check_result = run_test_linear(
         mesh_device,
         M,
