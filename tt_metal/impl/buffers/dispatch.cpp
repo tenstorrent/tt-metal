@@ -761,7 +761,7 @@ void issue_buffer_dispatch_command_sequence(
 
         if (dispatch_params.remote_chip) {
             command_sequence.add_prefetch_relay_linear_h(
-                dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr);
+                dispatch_params.pinned_src_noc_xy, relay_data_size, relay_src_addr);
         } else {
             command_sequence.add_prefetch_relay_linear(
                 dispatch_params.pinned_src_noc_xy, relay_data_size, relay_src_addr);
