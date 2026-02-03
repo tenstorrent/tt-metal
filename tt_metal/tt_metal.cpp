@@ -89,7 +89,11 @@ struct DataMovementConfigStatus {
 DataMovementConfigStatus CheckDataMovementConfig(
     const HalProgrammableCoreType& programmable_core, Program& program, const CoreRangeSet& core_ranges) {
     DataMovementConfigStatus data_movement_config_status{
-        .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false, .noc_mode = std::nullopt};
+        .riscv0_in_use = false,
+        .riscv1_in_use = false,
+        .noc0_in_use = false,
+        .noc1_in_use = false,
+        .noc_mode = std::nullopt};
 
     auto set_global_and_local_noc_usage = [&](const std::shared_ptr<Kernel>& kernel,
                                               bool& local_noc0_usage,
@@ -140,24 +144,31 @@ DataMovementConfigStatus CheckDataMovementConfig(
                                 case 0:
                                     has_dm0 = true;
                                     data_movement_config_status.riscv0_in_use = true;
-                                    set_global_and_local_noc_usage(kernel, local_noc0_in_use, local_noc1_in_use, new_noc_mode);
+                                    set_global_and_local_noc_usage(
+                                        kernel, local_noc0_in_use, local_noc1_in_use, new_noc_mode);
                                     break;
                                 case 1:
                                     has_dm1 = true;
                                     data_movement_config_status.riscv1_in_use = true;
-                                    set_global_and_local_noc_usage(kernel, local_noc0_in_use, local_noc1_in_use, new_noc_mode);
+                                    set_global_and_local_noc_usage(
+                                        kernel, local_noc0_in_use, local_noc1_in_use, new_noc_mode);
                                     break;
                                 default: TT_THROW("Unknown DataMovementProcessor type"); break;
                             }
-                            if (data_movement_config_status.noc_mode.has_value() && new_noc_mode != data_movement_config_status.noc_mode.value()) {
-                                TT_THROW("Illegal NOC usage: data movement kernels on logical core {} cannot use different NOC modes!", CoreCoord(x, y).str());
+                            if (data_movement_config_status.noc_mode.has_value() &&
+                                new_noc_mode != data_movement_config_status.noc_mode.value()) {
+                                TT_THROW(
+                                    "Illegal NOC usage: data movement kernels on logical core {} cannot use different "
+                                    "NOC modes!",
+                                    CoreCoord(x, y).str());
                             }
                             data_movement_config_status.noc_mode = new_noc_mode;
                         }
                     }
                     if (has_dm0 and has_dm1) {
                         TT_FATAL(
-                            (data_movement_config_status.noc_mode.value() == NOC_MODE::DM_DYNAMIC_NOC) || (local_noc0_in_use and local_noc1_in_use),
+                            (data_movement_config_status.noc_mode.value() == NOC_MODE::DM_DYNAMIC_NOC) ||
+                                (local_noc0_in_use and local_noc1_in_use),
                             "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, "
                             "doing so results in hangs!",
                             CoreCoord(x, y).str());
@@ -1108,18 +1119,26 @@ KernelHandle CreateDataMovementKernel(
         "cores because both data movement processors are in use!",
         kernel_name);
 
+    TT_FATAL(
+        !data_movement_config_status.noc_mode.has_value() ||
+            data_movement_config_status.noc_mode.value() == config.noc_mode,
+        "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because "
+        "of a mismatch in NOC mode."
+        "New NOC Mode: {}, Existing NOC Mode: {}",
+        kernel_name,
+        enchantum::to_string(config.noc_mode),
+        enchantum::to_string(data_movement_config_status.noc_mode.value()));
 
-    TT_FATAL(!data_movement_config_status.noc_mode.has_value() ||
-    data_movement_config_status.noc_mode.value() == config.noc_mode,
-    "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because of a mismatch in NOC mode."
-    "New NOC Mode: {}, Existing NOC Mode: {}",
-    kernel_name,
-    enchantum::to_string(config.noc_mode),
-    enchantum::to_string(data_movement_config_status.noc_mode.value()));
-
-    if (data_movement_config_status.noc_mode.has_value() && data_movement_config_status.noc_mode.value() != NOC_MODE::DM_DYNAMIC_NOC) {
-        uint32_t current_noc_value = config.noc == NOC::NOC_0 ? data_movement_config_status.noc0_in_use : data_movement_config_status.noc1_in_use;
-        TT_FATAL(!current_noc_value, "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because the NOC {} is in use!", kernel_name, enchantum::to_string(config.noc));
+    if (data_movement_config_status.noc_mode.has_value() &&
+        data_movement_config_status.noc_mode.value() != NOC_MODE::DM_DYNAMIC_NOC) {
+        uint32_t current_noc_value = config.noc == NOC::NOC_0 ? data_movement_config_status.noc0_in_use
+                                                              : data_movement_config_status.noc1_in_use;
+        TT_FATAL(
+            !current_noc_value,
+            "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores "
+            "because the NOC {} is in use!",
+            kernel_name,
+            enchantum::to_string(config.noc));
     }
 
     TT_FATAL(
@@ -1181,17 +1200,26 @@ KernelHandle CreateEthernetKernel(
         "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
         "cores because both data movement processors are in use!",
         kernel->name());
-    TT_FATAL(!data_movement_config_status.noc_mode.has_value() ||
-    data_movement_config_status.noc_mode.value() == config.noc_mode,
-    "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because of a mismatch in NOC mode."
-    "Current NOC Mode: {}, Existing NOC Mode: {}",
-    kernel->name(),
-    enchantum::to_string(config.noc_mode),
-    enchantum::to_string(data_movement_config_status.noc_mode.value()));
+    TT_FATAL(
+        !data_movement_config_status.noc_mode.has_value() ||
+            data_movement_config_status.noc_mode.value() == config.noc_mode,
+        "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because "
+        "of a mismatch in NOC mode."
+        "Current NOC Mode: {}, Existing NOC Mode: {}",
+        kernel->name(),
+        enchantum::to_string(config.noc_mode),
+        enchantum::to_string(data_movement_config_status.noc_mode.value()));
 
-    if (data_movement_config_status.noc_mode.has_value() && data_movement_config_status.noc_mode.value() != NOC_MODE::DM_DYNAMIC_NOC) {
-        uint32_t current_noc_value = config.noc == NOC::NOC_0 ? data_movement_config_status.noc0_in_use : data_movement_config_status.noc1_in_use;
-        TT_FATAL(!current_noc_value, "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because the NOC {} is in use!", kernel->name(), enchantum::to_string(config.noc));
+    if (data_movement_config_status.noc_mode.has_value() &&
+        data_movement_config_status.noc_mode.value() != NOC_MODE::DM_DYNAMIC_NOC) {
+        uint32_t current_noc_value = config.noc == NOC::NOC_0 ? data_movement_config_status.noc0_in_use
+                                                              : data_movement_config_status.noc1_in_use;
+        TT_FATAL(
+            !current_noc_value,
+            "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores "
+            "because the NOC {} is in use!",
+            kernel->name(),
+            enchantum::to_string(config.noc));
     }
 
     //
