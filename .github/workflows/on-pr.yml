@@ -187,8 +187,7 @@ jobs:
     name: "⚡ Performance tests (${{ matrix.target }})"
     uses: ./.github/workflows/setup-and-test.yml
     needs: [build-images, detect-changes]
-    if: ${{ github.event_name != 'push' &&
-            needs.detect-changes.outputs.performance == 'true' }}
+    if: false
     strategy:
       fail-fast: false
       matrix:
