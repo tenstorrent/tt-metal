@@ -179,13 +179,19 @@ def decode_forward(
     expert_mapping_for_dispatch = expert_mapping_tensors
     expert_mapping_for_remap = ttnn.clone(expert_mapping_tensors)
     expert_mapping_for_combine = ttnn.clone(expert_mapping_tensors)
-    dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
-        hidden_rm,
-        topk_indices_rm,
-        expert_mapping_for_dispatch,
-        **dispatch_config.as_dict(),
-    )
+
+    # DEBUG STUB: Bypass all_to_all_dispatch - just tile hidden_rm to fake dispatch output
+    # Real dispatch would route tokens to expert devices; here we just replicate
+    dispatch_output = ttnn.concat([hidden_rm] * num_dispatch_devices, dim=2)  # [1, 1, total_tokens, H]
+    dispatch_metadata = ttnn.concat([topk_indices_rm] * num_dispatch_devices, dim=2)  # [1, 1, total_tokens, K]
     dispatch_metadata_for_combine = ttnn.clone(dispatch_metadata)
+    # dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
+    #     hidden_rm,
+    #     topk_indices_rm,
+    #     expert_mapping_for_dispatch,
+    #     **dispatch_config.as_dict(),
+    # )
+    # dispatch_metadata_for_combine = ttnn.clone(dispatch_metadata)
     ttnn.deallocate(hidden_rm)
     ttnn.deallocate(topk_indices_rm)
 
@@ -357,12 +363,18 @@ def decode_forward(
     # With output_shard_dim=2, output has tokens sharded on dim -2:
     # Output shape: [num_experts_per_tok, 1, tokens_per_device, H]
     # (each token gets outputs from k experts stacked in first dimension)
-    combine_output = ttnn.all_to_all_combine(
-        expert_output,
-        dispatch_metadata_for_combine,
-        expert_mapping_for_combine,
-        **combine_config.as_dict(),
-    )
+
+    # DEBUG STUB: Bypass all_to_all_combine - just slice expert_output to fake combine output
+    # Real combine would route expert outputs back to token positions; here we just slice
+    # expert_output shape: [experts_per_device, 1, total_tokens, H]
+    # We need: [num_experts_per_tok, 1, tokens_per_device, H]
+    combine_output = expert_output[: config.num_experts_per_tok, :, :tokens_per_device, :]
+    # combine_output = ttnn.all_to_all_combine(
+    #     expert_output,
+    #     dispatch_metadata_for_combine,
+    #     expert_mapping_for_combine,
+    #     **combine_config.as_dict(),
+    # )
     ttnn.deallocate(expert_output)
     ttnn.deallocate(dispatch_metadata_for_combine)
     ttnn.deallocate(expert_mapping_for_combine)
