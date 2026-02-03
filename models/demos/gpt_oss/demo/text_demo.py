@@ -401,10 +401,6 @@ def test_gpt_oss_demo(
         users_row_sharded=users_row_sharded,
         long_context_mode=long_context_mode,
     )
-    if long_context_mode:
-        pytest.skip(
-            f"Long-context mode currently not supported for {model_args[0].model_name} model. See #29619 for details."
-        )
 
     # Create generator (match tt-transformers pattern)
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
@@ -536,13 +532,17 @@ def test_gpt_oss_demo(
                 )
 
                 # Use single-user prefill
+                # Note: user_id=0 because page_table is already sliced for this user
+                # (batch_idx for fill_cache should be 0 since page_table has shape [1, blocks]).
+                # global_user_id tells the model which mesh row to target for KV cache filling.
                 logits = generator.prefill_forward_single_user_text(
                     user_tokens,
                     page_table=user_page_table,
-                    user_id=user_id,
+                    user_id=0,
                     last_token_idx=user_prefill_len - 1,
                     kv_cache=tt_kv_cache[model_id],
                     model_id=model_id,
+                    global_user_id=user_id,  # Pass actual global user_id for mesh row targeting
                 )
                 # Convert ttnn.Tensor to torch.Tensor for argmax
                 # For multi-device tensors, extract from device 0 first
