@@ -13,7 +13,6 @@
 #include "compute_kernel_api/add_int_sfpu.h"
 #include "compute_kernel_api/sub_int_sfpu.h"
 #include "compute_kernel_api/mul_int_sfpu.h"
-#include "compute_kernel_api/mul_int32_sfpu.h"
 #include "compute_kernel_api/div_int32_sfpu.h"
 #include "compute_kernel_api/div_int32_floor.h"
 #include "compute_kernel_api/quantization.h"
@@ -81,4 +80,7 @@ void kernel_main() {
         cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
         cb_push_back(cb_out, num_tiles_per_cycle);
     }
+
+    // Pop the scalar tile from RHS CB
+    cb_pop_front(cb_post_rhs, num_tiles_per_cycle);
 }

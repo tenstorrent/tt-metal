@@ -4,11 +4,11 @@
 """PCC (Pearson Correlation Coefficient) test for YUNet model.
 
 Usage:
-    # Default 320x320
+    # Default 640x640
     pytest models/experimental/yunet/tests/pcc/test_pcc.py -v
 
-    # Run with 640x640
-    pytest models/experimental/yunet/tests/pcc/test_pcc.py -v --input-size 640
+    # Run with 320x320
+    pytest models/experimental/yunet/tests/pcc/test_pcc.py -v --input-size 320
 """
 
 import pytest
