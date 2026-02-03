@@ -72,7 +72,7 @@ public:
 
 TEST_F(NewDPrintFormatUpdatesFixture, PrintSingleUintArg) {
     std::vector<std::string_view> messages = {
-        "Printing uint32_t from arg: {0:I}"sv,
+        "Printing uint32_t from arg: {0,I}"sv,
     };
 
     TestFormatUpdate(
@@ -81,19 +81,38 @@ TEST_F(NewDPrintFormatUpdatesFixture, PrintSingleUintArg) {
 
 TEST_F(NewDPrintFormatUpdatesFixture, PrintBasicTypes) {
     std::vector<std::string_view> messages = {
-        "int8_t: {0:b}"sv,
-        "uint8_t: {0:B}"sv,
-        "int16_t: {0:h}"sv,
-        "uint16_t: {0:H}"sv,
-        "int32_t: {0:i}"sv,
-        "uint32_t: {0:I}"sv,
-        "int64_t: {0:q}"sv,
-        "uint64_t: {0:Q}"sv,
-        "float: {0:f}"sv,
-        "double: {0:d}"sv,
-        "bool: {0:?}"sv,
+        "int8_t: {0,b}"sv,
+        "uint8_t: {0,B}"sv,
+        "int16_t: {0,h}"sv,
+        "uint16_t: {0,H}"sv,
+        "int32_t: {0,i}"sv,
+        "uint32_t: {0,I}"sv,
+        "int64_t: {0,q}"sv,
+        "uint64_t: {0,Q}"sv,
+        "float: {0,f}"sv,
+        "double: {0,d}"sv,
+        "bool: {0,?}"sv,
     };
 
     TestFormatUpdate(
         "tests/tt_metal/tt_metal/test_kernels/new_dprint/print_basic_types.cpp", ttsl::make_span(messages));
+}
+
+TEST_F(NewDPrintFormatUpdatesFixture, PrintWithFormatSpecified) {
+    std::vector<std::string_view> messages = {
+        "int8_t: {0,b: >-10}"sv,
+        "uint8_t: {0,B:#B}"sv,
+        "int16_t: {0,h: <-10}"sv,
+        "uint16_t: {0,H:#X}"sv,
+        "int32_t: {0,i: ^-10}"sv,
+        "uint32_t: {0,I:#x}"sv,
+        "int64_t: {0,q: }"sv,
+        "uint64_t: {0,Q:#08X}"sv,
+        "float: {0,f:3.3g}"sv,
+        "double: {0,d:.5f}"sv,
+        "bool: {0,?}"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/new_dprint/print_with_format_specified.cpp", ttsl::make_span(messages));
 }

@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <type_traits>
 
 #include "new_dprint_structures.h"
@@ -129,6 +130,29 @@ struct static_string {
         }
     }
 
+    constexpr void push_back_uint32(uint32_t value) {
+        // Special case for zero
+        if (value == 0) {
+            push_back('0');
+            return;
+        }
+
+        int digits = 0;
+        uint64_t digit_reader = 1;
+
+        while (digit_reader <= value) {
+            digit_reader *= 10;
+            digits++;
+        }
+        digit_reader /= 10;
+
+        for (int i = 0; i < digits; ++i) {
+            char digit_char = '0' + (value / digit_reader) % 10;
+            push_back(digit_char);
+            digit_reader /= 10;
+        }
+    }
+
     constexpr std::array<char, N + 1> to_array() const {
         std::array<char, N + 1> arr = {};
         for (std::size_t i = 0; i < size; ++i) {
@@ -169,14 +193,14 @@ namespace parsing {
 
 // Helper struct to return both parsed value and new position
 struct IndexParseResult {
-    int value;
+    uint32_t value;
     std::size_t new_pos;
 };
 
 // Helper to parse an integer from format string starting at position i
 // Returns the parsed value and the new position after the digits
 constexpr IndexParseResult parse_index(const char* format, std::size_t i, std::size_t format_len) {
-    int value = 0;
+    uint32_t value = 0;
     std::size_t pos = i;
     while (pos < format_len && helpers::is_digit(format[pos])) {
         value = value * 10 + (format[pos] - '0');
@@ -196,13 +220,23 @@ enum class TokenType {
 
 // Result of parsing a single token from format string
 struct FormatToken {
-    TokenType type;
-    std::size_t end_pos;  // Position to continue parsing from (after this token)
+    TokenType type = TokenType::RegularChar;
+    std::size_t end_pos = 0;  // Position to continue parsing from (after this token)
 
     // Placeholder-specific data
-    int index;  // The N in {N}, or -1 for {} or escape sequences
+    std::optional<uint32_t> index;    // The N in {N}, or -1 for {} or escape sequences
+    std::optional<char> fill;         // <a character other than '{' or '}'>
+    std::optional<char> align;        // '<' | '>' | '^'
+    std::optional<char> sign;         // '+' | '-' | ' ']
+    bool use_alternate_form = false;  // '#'
+    bool use_zero_padding = false;    // '0'
+    std::optional<uint32_t> width;
+    std::optional<uint32_t> precision;
+    bool use_current_locale = false;  // 'L'
+    std::optional<char> format_type;  // 'a' | 'A' | 'b' | 'B' | 'c' | 'd' | 'e' | 'E' | 'f' | 'F' | 'g' | 'G' | 'o' |
+                                      // 'p' | 's' | 'x' | 'X' | '?'
 
-    constexpr bool is_indexed() const { return index != -1; }
+    constexpr bool is_indexed() const { return index.has_value(); }
 };
 
 // Parse a single token from the format string at position i
@@ -215,48 +249,139 @@ constexpr FormatToken parse_format_token(const char (&format)[N], std::size_t i)
     constexpr std::size_t format_len = N - 1;
 
     if (i >= format_len) {
-        return FormatToken{TokenType::RegularChar, i + 1, -1};
+        return FormatToken{TokenType::RegularChar, i + 1};
     }
 
     char c = format[i];
 
     // Check for escaped opening brace {{
     if (c == '{' && i + 1 < format_len && format[i + 1] == '{') {
-        return FormatToken{TokenType::EscapedOpenBrace, i + 2, -1};
+        return FormatToken{TokenType::EscapedOpenBrace, i + 2};
     }
 
     // Check for escaped closing brace }}
     if (c == '}' && i + 1 < format_len && format[i + 1] == '}') {
-        return FormatToken{TokenType::EscapedCloseBrace, i + 2, -1};
+        return FormatToken{TokenType::EscapedCloseBrace, i + 2};
     }
 
-    // Check for placeholder {N} or {}
+    // Check for placeholder
     if (c == '{') {
-        if (i + 1 >= format_len) {
+        i++;
+        if (i >= format_len) {
             // '{' at end of string is invalid
-            return FormatToken{TokenType::InvalidPlaceholder, i + 1, -1};
+            return FormatToken{TokenType::InvalidPlaceholder, i};
         }
 
-        if (helpers::is_digit(format[i + 1])) {
-            // Indexed placeholder {N}
-            IndexParseResult result = parse_index(format, i + 1, format_len);
-            if (result.new_pos < format_len && format[result.new_pos] == '}') {
-                return FormatToken{TokenType::Placeholder, result.new_pos + 1, result.value};
+        // We are trying to mimic fmtlib format specifiers here:
+        // replacement_field ::= "{" [arg_id] [":" (format_spec | chrono_format_spec)] "}"
+        // arg_id            ::= integer | identifier
+        // integer           ::= digit+
+        // digit             ::= "0"..."9"
+        // identifier        ::= id_start id_continue*
+        // id_start          ::= "a"..."z" | "A"..."Z" | "_"
+        // id_continue       ::= id_start | digit
+        // But we don't support using identifiers to reduce kernel size, only integers for arg_id.
+
+        // Regarding format_spec:
+        // format_spec ::= [[fill]align][sign]["#"]["0"][width]["." precision]["L"][type]
+        // fill        ::= <a character other than '{' or '}'>
+        // align       ::= "<" | ">" | "^"
+        // sign        ::= "+" | "-" | " "
+        // width       ::= integer | "{" [arg_id] "}"
+        // precision   ::= integer | "{" [arg_id] "}"
+        // type        ::= "a" | "A" | "b" | "B" | "c" | "d" | "e" | "E" | "f" | "F" |
+        //                 "g" | "G" | "o" | "p" | "s" | "x" | "X" | "?"
+        // We don't support using arg_id for width/precision.
+
+        // Initially we mark parsed_token as invalid for simpler code and update it as Placeholder if valid
+        FormatToken parsed_token{TokenType::InvalidPlaceholder};
+
+        // arg_id parsing
+        if (helpers::is_digit(format[i])) {
+            IndexParseResult result = parse_index(format, i, format_len);
+            i = result.new_pos;
+            parsed_token.index = result.value;
+        }
+
+        // Check for format specifier
+        if (i < format_len && format[i] == ':') {
+            i++;  // Skip ':'
+
+            // Parse fill and align
+            if (i < format_len && (format[i] == '<' || format[i] == '>' || format[i] == '^')) {
+                parsed_token.align = format[i];
+                i++;
+            } else if (
+                i + 1 < format_len && format[i] != '{' && format[i] != '}' &&
+                (format[i + 1] == '<' || format[i + 1] == '>' || format[i + 1] == '^')) {
+                parsed_token.fill = format[i];
+                parsed_token.align = format[i + 1];
+                i += 2;
             }
-            // Invalid: digit not followed by }
-            return FormatToken{TokenType::InvalidPlaceholder, i + 1, -1};
-        }
-        if (format[i + 1] == '}') {
-            // Non-indexed placeholder {}
-            return FormatToken{TokenType::Placeholder, i + 2, -1};
+
+            // Parse sign
+            if (i < format_len && (format[i] == '+' || format[i] == '-' || format[i] == ' ')) {
+                parsed_token.sign = format[i];
+                i++;
+            }
+
+            // Parse alternate form
+            if (i < format_len && format[i] == '#') {
+                parsed_token.use_alternate_form = true;
+                i++;
+            }
+
+            // Parse zero padding
+            if (i < format_len && format[i] == '0') {
+                parsed_token.use_zero_padding = true;
+                i++;
+            }
+
+            // Parse width
+            if (i < format_len && helpers::is_digit(format[i])) {
+                IndexParseResult result = parse_index(format, i, format_len);
+                i = result.new_pos;
+                parsed_token.width = result.value;
+            }
+
+            // Parse precision
+            if (i + 1 < format_len && format[i] == '.' && helpers::is_digit(format[i + 1])) {
+                i++;  // Skip '.'
+                IndexParseResult result = parse_index(format, i, format_len);
+                i = result.new_pos;
+                parsed_token.precision = result.value;
+            }
+
+            // Parse locale option
+            if (i < format_len && format[i] == 'L') {
+                parsed_token.use_current_locale = true;
+                i++;
+            }
+
+            // Parse format type
+            if (i < format_len &&
+                (format[i] == 'a' || format[i] == 'A' || format[i] == 'b' || format[i] == 'B' || format[i] == 'c' ||
+                 format[i] == 'd' || format[i] == 'e' || format[i] == 'E' || format[i] == 'f' || format[i] == 'F' ||
+                 format[i] == 'g' || format[i] == 'G' || format[i] == 'o' || format[i] == 'p' || format[i] == 's' ||
+                 format[i] == 'x' || format[i] == 'X' || format[i] == '?')) {
+                parsed_token.format_type = format[i];
+                i++;
+            }
         }
 
-        // Invalid: '{' not followed by '{', '}', or digit
-        return FormatToken{TokenType::InvalidPlaceholder, i + 1, -1};
+        // Check for closing brace
+        if (i < format_len && format[i] == '}') {
+            parsed_token.type = TokenType::Placeholder;
+            parsed_token.end_pos = i + 1;
+            return parsed_token;
+        }
+
+        parsed_token.end_pos = i;
+        return parsed_token;
     }
 
     // Regular character
-    return FormatToken{TokenType::RegularChar, i + 1, -1};
+    return FormatToken{TokenType::RegularChar, i + 1};
 }
 
 }  // namespace parsing
@@ -320,12 +445,12 @@ constexpr bool has_indexed_placeholders(const char (&format)[N]) {
 
 // Helper to find the maximum index used in format string
 template <std::size_t N>
-constexpr int get_max_index(const char (&format)[N]) {
-    int max_index = -1;
+constexpr uint32_t get_max_index(const char (&format)[N]) {
+    uint32_t max_index = 0;
     for (std::size_t i = 0; i < N - 1;) {
         parsing::FormatToken token = parsing::parse_format_token(format, i);
         if (token.type == parsing::TokenType::Placeholder && token.is_indexed()) {
-            max_index = std::max(max_index, token.index);
+            max_index = std::max(max_index, token.index.value());
         }
         i = token.end_pos;
     }
@@ -349,8 +474,8 @@ constexpr bool all_arguments_referenced(const char (&format)[N], std::size_t arg
     for (std::size_t i = 0; i < N - 1;) {
         parsing::FormatToken token = parsing::parse_format_token(format, i);
         if (token.type == parsing::TokenType::Placeholder && token.is_indexed()) {
-            if (token.index >= 0 && static_cast<std::size_t>(token.index) < arg_count) {
-                referenced[token.index] = true;
+            if (static_cast<std::size_t>(token.index.value()) < arg_count) {
+                referenced[token.index.value()] = true;
             }
         }
         i = token.end_pos;
@@ -502,21 +627,54 @@ constexpr auto update_format_string(const char (&format)[N]) {
             result.push_back('}');
         } else if (token.type == parsing::TokenType::Placeholder) {
             // Determine the argument index for this placeholder
-            int arg_index = token.is_indexed() ? token.index : type_index++;
+            uint32_t arg_index = token.is_indexed() ? token.index.value() : type_index++;
 
-            // Unified handling for both indexed and non-indexed: output {index:type}
+            // Unified handling for both indexed and non-indexed: output {index,type:format}
             result.push_back('{');
 
             // Output the index
-            static_assert(NEW_DPRINT_MAX_ARGUMENTS <= 100, "Adjust index output code for larger max arguments");
-            if (arg_index >= 10) {
-                result.push_back('0' + (arg_index / 10));
-            }
-            result.push_back('0' + (arg_index % 10));
+            result.push_back_uint32(arg_index);
 
-            // Add colon and type character
-            result.push_back(':');
+            // Add comma and type character
+            result.push_back(',');
             result.push_back(type_infos[arg_index].type_char);
+
+            // If there are any format specifiers, add them
+            bool has_format_spec = token.fill.has_value() || token.align.has_value() || token.sign.has_value() ||
+                                   token.use_alternate_form || token.use_zero_padding || token.width.has_value() ||
+                                   token.precision.has_value() || token.use_current_locale ||
+                                   token.format_type.has_value();
+            if (has_format_spec) {
+                result.push_back(':');
+                if (token.fill.has_value()) {
+                    result.push_back(token.fill.value());
+                }
+                if (token.align.has_value()) {
+                    result.push_back(token.align.value());
+                }
+                if (token.sign.has_value()) {
+                    result.push_back(token.sign.value());
+                }
+                if (token.use_alternate_form) {
+                    result.push_back('#');
+                }
+                if (token.use_zero_padding) {
+                    result.push_back('0');
+                }
+                if (token.width.has_value()) {
+                    result.push_back_uint32(token.width.value());
+                }
+                if (token.precision.has_value()) {
+                    result.push_back('.');
+                    result.push_back_uint32(token.precision.value());
+                }
+                if (token.use_current_locale) {
+                    result.push_back('L');
+                }
+                if (token.format_type.has_value()) {
+                    result.push_back(token.format_type.value());
+                }
+            }
             result.push_back('}');
         } else {
             // Regular character
