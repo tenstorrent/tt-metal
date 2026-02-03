@@ -253,19 +253,13 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             num_tile_rows_per_core_group_2) = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
     }
 
-    // Create or use passed-in reciprocal LUT tensor if using Welford
+    // Use passed-in reciprocal LUT tensor if using Welford
     std::optional<Tensor> recip_tensor = std::nullopt;
     uint32_t reciprocal_CB_size_bytes = 0;
     if (use_welford) {
-        if (tensor_args.recip_tensor.has_value()) {
-            // Use the passed-in reciprocal tensor
-            recip_tensor = tensor_args.recip_tensor;
-            reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
-        } else {
-            // Create reciprocal tensor internally (legacy path)
-            std::tie(recip_tensor, reciprocal_CB_size_bytes) =
-                create_reciprocal_tensor_if_needed(device, W, all_cores, use_welford);
-        }
+        TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
+        recip_tensor = tensor_args.recip_tensor;
+        reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
     }
 
     ////////////////////////////////////////////////////////////////////////////
