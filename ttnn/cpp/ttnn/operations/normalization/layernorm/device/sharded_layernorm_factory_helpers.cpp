@@ -403,8 +403,8 @@ KernelLayout KernelLayout::compute(
 
     // Compute kernel indices based on ordering in add_kernel_descriptors()
     // Order: reader_sender, [reader_receiver_all_to_all], [reader_receiver],
-    //        compute_all_to_all, [compute_not_all_to_all],
-    //        writer_sender, [writer_receiver]
+    //        writer_sender, [writer_receiver],
+    //        compute_all_to_all, [compute_not_all_to_all]
     uint32_t idx = 0;
 
     layout.reader_sender_idx = idx++;
@@ -417,16 +417,16 @@ KernelLayout KernelLayout::compute(
         layout.reader_receiver_idx = idx++;
     }
 
-    layout.compute_all_to_all_idx = idx++;
-
-    if (workers.num_none_all_to_all_workers > 0) {
-        layout.compute_not_all_to_all_idx = idx++;
-    }
-
     layout.writer_sender_idx = idx++;
 
     if (layout.has_writer_receiver) {
         layout.writer_receiver_idx = idx++;
+    }
+
+    layout.compute_all_to_all_idx = idx++;
+
+    if (workers.num_none_all_to_all_workers > 0) {
+        layout.compute_not_all_to_all_idx = idx++;
     }
 
     return layout;
