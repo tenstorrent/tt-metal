@@ -300,7 +300,7 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
-    # Set less layers and shorter max length for the sake of testing
+    # Set fewer number oflayers to speed test and avoid OOM
     hf_config_short.num_hidden_layers = 5
 
     # Only use decode_position_ids for decode mode
