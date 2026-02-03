@@ -72,61 +72,10 @@ def t2v_metrics(mesh_device, height):
 
 # TODO: Update device/config specific metrics for i2v
 def i2v_metrics(mesh_device, height):
-    expected_metrics = {}
-    if tuple(mesh_device.shape) == (2, 4) and height == 480:
-        expected_metrics = {
-            "encoder": 19.0,
-            "denoising": 800.0,
-            "vae": 9.0,
-            "total": 850.0,
-        }
-    elif tuple(mesh_device.shape) == (4, 8) and height == 480:
-        expected_metrics = {
-            "encoder": 15.0,
-            "denoising": 163.0,
-            "vae": 18.2,
-            "total": 192.0,
-        }
-    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
-        if is_blackhole():
-            expected_metrics = {
-                "encoder": 15.0,
-                "denoising": 185.0,
-                "vae": 8.0,
-                "total": 208.0,
-            }
-        else:
-            expected_metrics = {
-                "encoder": 15.0,
-                "denoising": 440.0,
-                "vae": 8.0,
-                "total": 463.0,
-            }
-    elif tuple(mesh_device.shape) == (2, 2):
-        assert height == 480, "2x2 is only supported for 480p"
-        assert is_blackhole(), "2x2 is only supported for blackhole"
-        expected_metrics = {
-            "encoder": 27.0,
-            "denoising": 680.0,
-            "vae": 60.0,
-            "total": 760.0,
-        }
-    elif tuple(mesh_device.shape) == (1, 8) and height == 480:
-        assert is_blackhole(), "1x8 is only supported for blackhole"
-        expected_metrics = {
-            "encoder": 23.0,
-            "denoising": 426.6,
-            "vae": 10.0,
-            "total": 449.3,
-        }
-    else:
-        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
-    return expected_metrics
+    return t2v_metrics(mesh_device, height)
 
 
 def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
-    pipeline_cls = WanPipeline if model_type == "t2v" else WanPipelineI2V
-
     if model_type == "t2v":
         pipeline_cls = WanPipeline
         expected_metrics = t2v_metrics(mesh_device, height)
