@@ -161,9 +161,9 @@ if [[ -n "$RANK_BINDINGS_FILE" ]]; then
         echo -e "${RED}Error: Rank bindings file not found: $RANK_BINDINGS_FILE${NC}" >&2
         exit 1
     fi
-    
+
     echo -e "${BLUE}Parsing rank bindings file: $RANK_BINDINGS_FILE${NC}"
-    
+
     # Use Python to parse YAML and extract env vars for each rank
     # Create a temporary Python script to parse the YAML
     PYTHON_PARSE_SCRIPT=$(cat << 'PYTHON_EOF'
@@ -174,7 +174,7 @@ import json
 try:
     with open(sys.argv[1], 'r') as f:
         data = yaml.safe_load(f)
-    
+
     rank_envs = {}
     if 'rank_bindings' in data:
         for binding in data['rank_bindings']:
@@ -182,7 +182,7 @@ try:
             env_overrides = binding.get('env_overrides', {})
             if rank is not None:
                 rank_envs[str(rank)] = env_overrides
-    
+
     # Output as JSON for bash to parse
     print(json.dumps(rank_envs))
 except Exception as e:
@@ -190,32 +190,32 @@ except Exception as e:
     sys.exit(1)
 PYTHON_EOF
 )
-    
+
     # Check if Python is available
     if ! command -v python3 &> /dev/null && ! command -v python &> /dev/null; then
         echo -e "${RED}Error: Python not found. Required for parsing rank bindings file.${NC}" >&2
         exit 1
     fi
-    
+
     PYTHON_CMD="python3"
     if ! command -v python3 &> /dev/null; then
         PYTHON_CMD="python"
     fi
-    
+
     # Parse the YAML file and get JSON representation
     RANK_ENV_JSON=$("$PYTHON_CMD" -c "$PYTHON_PARSE_SCRIPT" "$RANK_BINDINGS_FILE")
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}Error: Failed to parse rank bindings file${NC}" >&2
         exit 1
     fi
-    
+
     # Escape the JSON for safe embedding in bash script
     # Replace single quotes with '\'' and wrap in single quotes
     RANK_ENV_JSON_ESCAPED=$(echo "$RANK_ENV_JSON" | sed "s/'/'\\\\''/g")
-    
+
     # Count ranks
     RANK_COUNT=$("$PYTHON_CMD" -c "import json, sys; print(len(json.loads(sys.argv[1])))" "$RANK_ENV_JSON")
-    
+
     echo -e "${GREEN}✓ Parsed environment variables for $RANK_COUNT rank(s)${NC}"
 else
     RANK_ENV_JSON_ESCAPED=""
@@ -405,7 +405,7 @@ print(json.dumps(result))
 " 2>/dev/null || echo "{}")
         RANK_HOST_SLOT_JSON_ESCAPED=$(echo "$RANK_HOST_SLOT_JSON" | sed "s/'/'\\\\''/g")
     fi
-    
+
     INLINE_SCRIPT="
 RANK=\${OMPI_COMM_WORLD_RANK:-0}
 OUTPUT_DIR='${OUTPUT_DIR}'
@@ -541,7 +541,7 @@ if [[ $RANK_COUNT -gt 0 ]]; then
             MISSING_RANKS+=("$rank")
         fi
     done
-    
+
     if [[ ${#MISSING_RANKS[@]} -gt 0 ]]; then
         echo -e "${RED}Warning: Missing cluster descriptors for ranks: ${MISSING_RANKS[*]}${NC}" >&2
     fi

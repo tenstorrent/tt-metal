@@ -148,10 +148,10 @@ rank 3=bh-glx-b09u08 slot=0
 ## How It Works
 
 1. **Parse Inputs**: The script parses the rankfile (or hostnames) and rank bindings file
-2. **Determine Rank Count**: 
+2. **Determine Rank Count**:
    - If rank bindings file is provided, uses the number of ranks from that file
    - Otherwise, uses the number of hosts or ranks from the rankfile
-3. **Build MPI Command**: 
+3. **Build MPI Command**:
    - Uses `--rankfile` if provided, otherwise uses `--host` with hostname:N format
    - Adds `--oversubscribe` if multiple processes per host
    - Sets `-np` to the total number of ranks
@@ -165,7 +165,7 @@ rank 3=bh-glx-b09u08 slot=0
 
 - **With rankfile**: Files are named `{base_name}_{hostname}_slot_{slot}.yaml`
   - Example: `my_cluster_desc_bh-glx-b08u02_slot_0.yaml`
-  
+
 - **Without rankfile**: Files are named `{base_name}_rank_{rank}.yaml`
   - Example: `my_cluster_desc_rank_0.yaml`
 
