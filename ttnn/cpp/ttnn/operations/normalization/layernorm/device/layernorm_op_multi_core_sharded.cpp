@@ -54,39 +54,22 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
     auto workers = WorkerDistribution::compute(grid, block_ht);
     auto core_ranges = CoreRanges::compute(grid, workers);
 
-    // Determine if reader_receiver_all_to_all kernel is present
-    // This must match add_kernel_descriptors(): grid.use_mcast && !core_ranges.all_to_all_workers_except_sender.empty()
-    bool has_reader_receiver_all_to_all = grid.use_mcast && !core_ranges.all_to_all_workers_except_sender.empty();
+    // Compute kernel layout - this determines which kernels are present and their ordering
+    // This ensures consistency with create_descriptor()
+    auto kernel_layout = KernelLayout::compute(grid, workers, core_ranges);
 
-    // Calculate kernel handle indices based on conditional kernel ordering:
-    // 0: reader_sender (always)
-    // 1: reader_receiver_all_to_all (if has_reader_receiver_all_to_all)
-    // next: reader_receiver (if num_none_all_to_all_workers > 0)
-    // next: writer_sender (always)
-    // next: writer_receiver (if num_none_all_to_all_workers > 0)
-    KernelHandle kernel_idx = 1;  // Start after reader_sender (index 0)
-    if (has_reader_receiver_all_to_all) {
-        kernel_idx++;
-    }
-    if (workers.num_none_all_to_all_workers > 0) {
-        kernel_idx++;
-    }
-    KernelHandle writer_mcast_sender_kernels_id = kernel_idx++;
-    KernelHandle writer_mcast_receiver_kernels_id = 0;
-    if (workers.num_none_all_to_all_workers > 0) {
-        writer_mcast_receiver_kernels_id = kernel_idx++;
-    }
+    KernelHandle writer_mcast_sender_kernels_id = kernel_layout.writer_sender_idx;
+    KernelHandle writer_mcast_receiver_kernels_id = kernel_layout.writer_receiver_idx;
 
     // Build cores vector and writer_kernel_ids
-    // Must use the same core set as in create_descriptor() to match kernel assignments
+    // Use the same core set as in create_descriptor() to match kernel assignments
     auto all_cores_vec = corerange_to_cores(core_ranges.all_cores, core_ranges.all_cores.num_cores(), grid.row_wise);
     std::vector<CoreCoord> cores;
     std::vector<KernelHandle> writer_kernel_ids;
     cores.reserve(all_cores_vec.size());
     writer_kernel_ids.reserve(all_cores_vec.size());
 
-    for (uint32_t i = 0; i < all_cores_vec.size(); ++i) {
-        const CoreCoord& core = all_cores_vec[i];
+    for (const auto& core : all_cores_vec) {
         cores.push_back(core);
         // Determine if this core is an all-to-all worker by checking if it's in the all_to_all_cores range
         bool is_all_to_all_worker = core_ranges.all_to_all_cores.contains(core);
