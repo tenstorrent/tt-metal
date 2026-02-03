@@ -6,7 +6,7 @@ on:
       device-type:
         required: true
         type: string
-        description: "Device type: n150, n300, p100, p150, wh-qb, bh-qb2, wh-6u, bh-6u"
+        description: "Device type: n150, n300, p100, p150, p300, WH-LB, BH-LB, BH-QB2, WH-6U, BH-6U"
       runner-label:
         required: true
         type: string
@@ -54,28 +54,31 @@ jobs:
               tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "mistral-7b", "phi-3-mini-128k"]'
               ;;
             n300)
-              tt_transformers_models='["llama3.2-11b-vision", "qwen2.5-7b", "phi-3-mini-128k"]'
+              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "phi-3-mini-128k", "qwen2.5-7b", "qwen2.5-coder-32b", "phi-3-mini-128k"]'
               ;;
             p100)
               tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "phi-3-mini-128k"]'
               ;;
             p150)
-              tt_transformers_models='["llama3.1-8b"]'
+              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "phi-3-mini-128k"]'
               ;;
             p300)
               tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
-            WH-QB)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-70b", "llama3.2-90b-vision", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b"]'
+            WH-LB)
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "phi-3-mini-128k", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen3-32b"]'
+              ;;
+            BH-LB)
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "phi-3-mini-128k", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen3-32b"]'
               ;;
             BH-QB2)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-70b", "llama3.3-70b", "llama3.2-90b-vision", "qwen3-32b"]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "phi-3-mini-128k", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b"]'
               ;;
             WH-6U)
-              tt_transformers_models='["llama3.1-70b"]'
+              tt_transformers_models='[]'
               ;;
             BH-6U)
-              tt_transformers_models='["llama3.1-70b"]'
+              tt_transformers_models='[]'
               ;;
           esac
 
@@ -89,24 +92,26 @@ jobs:
                 {"name":"vit","test_path":"models/demos/vision/classification/vit/wormhole/tests/test_ttnn_optimized_sharded_vit_wh.py::test_vit","test_args":"","timeout":20},
                 {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
                 {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"unet-vanilla","test_path":"models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
                 {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
                 {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
                 {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20},
-                {"name":"unet-vanilla","test_path":"models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
               ]')
               ;;
             n300)
               standalone_models=$(jq -nc '[
+                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
                 {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo","test_args":"--input-path=models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json","timeout":30},
                 {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/wormhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
                 {"name":"vit","test_path":"models/demos/vision/classification/vit/wormhole/tests/test_ttnn_optimized_sharded_vit_wh.py::test_vit","test_args":"","timeout":20},
                 {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
                 {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20},
                 {"name":"unet-vanilla","test_path":"models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
+                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
+                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
+                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20}
               ]')
               ;;
             p100)
@@ -117,10 +122,10 @@ jobs:
                 {"name":"vit","test_path":"models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20},
                 {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
                 {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
                 {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
                 {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
                 {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
               ]')
               ;;
             p150)
@@ -129,8 +134,11 @@ jobs:
                 {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/blackhole/tests/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512","test_args":"","timeout":30},
                 {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
                 {"name":"vit","test_path":"models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20},
+                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
                 {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
                 {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
+                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
                 {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20}
               ]')
               ;;
@@ -148,16 +156,47 @@ jobs:
                 {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20}
               ]')
               ;;
-            WH-QB)
+            WH-LB)
               standalone_models=$(jq -nc '[
                 {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
+                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo","test_args":"--input-path=models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json","timeout":30},
                 {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py::test_demo_sample","test_args":"","timeout":20},
-                {"name":"vit","test_path":"models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference","test_args":"","timeout":20}
+                {"name":"vit","test_path":"models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference","test_args":"","timeout":20},
+                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
+                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"unet-vanilla","test_path":"models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
+                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
+                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20}
+              ]')
+              ;;
+            BH-LB)
+              standalone_models=$(jq -nc '[
+                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
+                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/blackhole/tests/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512","test_args":"","timeout":30},
+                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
+                {"name":"vit","test_path":"models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20},
+                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
+                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
+                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
+                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20}
               ]')
               ;;
             BH-QB2)
               standalone_models=$(jq -nc '[
                 {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
+                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/blackhole/tests/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512","test_args":"","timeout":30},
+                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
+                {"name":"vit","test_path":"models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20}
+                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
+                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
+                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
+                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20},
                 {"name":"flux.1-dev","test_path":"models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py::test_flux1_pipeline","test_args":"-k \"2x2sp0tp1 and dev and encoder_device and not_traced and yes_use_cache\"","timeout":60},
                 {"name":"wan2.2-t2v-a14b","test_path":"models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py::test_pipeline_inference","test_args":"-k \"1x4sp0tp1 and resolution_480p\"","timeout":60}
               ]')
@@ -170,11 +209,11 @@ jobs:
                 {"name":"vit","test_path":"models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference","test_args":"","timeout":20},
                 {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
                 {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"unet-vanilla","test_path":"models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
                 {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
                 {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20},
-                {"name":"unet-vanilla","test_path":"models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
+                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20}
               ]')
               ;;
             BH-6U)
@@ -185,11 +224,10 @@ jobs:
                 {"name":"vit","test_path":"models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20},
                 {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
                 {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo","test_args":"","timeout":20},
+                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
                 {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
                 {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20},
-                {"name":"unet-vanilla","test_path":"models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
+                {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20}
               ]')
               ;;
           esac

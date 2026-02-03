@@ -16,8 +16,8 @@ on:
           - p150
           - p300
           - wh-loudbox
-          - bh-qb2
           - bh-loudbox
+          - bh-qb2
           - wh-6u
           - bh-6u
       model-type:
@@ -147,7 +147,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
-      device-type: 'WH-LOUDBOX'
+      device-type: 'WH-LB'
       runner-label: 'config-t3000'
       arch: 'wormhole_b0'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -156,7 +156,7 @@ jobs:
       model-type: ${{ inputs.model-type || 'all' }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
 
-  # BH QuietBox Tests (2xP300)
+  # BH QuietBox2 Tests (2xP300)
   bh-quietbox-tests:
     if: ${{ contains(inputs.device, 'all') || contains(inputs.device, 'bh-qb2') }}
     needs: build-artifact
@@ -179,7 +179,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
-      device-type: 'BH-LOUDBOX'
+      device-type: 'BH-LB'
       runner-label: 'BH-loudbox'
       arch: 'blackhole'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -312,9 +312,9 @@ jobs:
               'p100': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'mistral-7b', 'phi-3-mini-128k'],
               'p150': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'mistral-7b', 'phi-3-mini-128k'],
               'p300': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'mistral-7b', 'qwen2.5-7b', 'qwen2.5-coder-32b', 'qwen3-32b', 'phi-3-mini-128k'],
-              'WH-LOUDBOX': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
+              'WH-LB': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
               'BH-QB2': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
-              'BH-LOUDBOX': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
+              'BH-LB': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
               'WH-6U': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
               'BH-6U': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k']
           }
@@ -325,9 +325,9 @@ jobs:
               'p100': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
               'p150': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
               'p300': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'WH-LOUDBOX': ['resnet-50', 'vit', 'llama3.3-70b', 'whisper', 'stable-diffusion', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'WH-LB': ['resnet-50', 'vit', 'llama3.3-70b', 'whisper', 'stable-diffusion', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
               'BH-QB2': ['llama3.3-70b', 'flux.1-dev', 'wan2.2-t2v-a14b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'BH-LOUDBOX': ['llama3.3-70b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
+              'BH-LB': ['llama3.3-70b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
               'WH-6U': ['resnet-50', 'vit', 'llama3.3-70b', 'whisper', 'stable-diffusion', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
               'BH-6U': ['llama3.3-70b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert']
           }
