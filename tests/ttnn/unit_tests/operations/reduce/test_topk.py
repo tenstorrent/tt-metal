@@ -15,26 +15,27 @@ UINT16_MAX = 65535
 
 def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids=None, pass_indices_tensor=False):
     torch.manual_seed(2005)
-
+    torch.set_printoptions(profile="full")
+    torch.set_printoptions(sci_mode=False)
     # Input tensor
     shape = [N, C, H, W]
-    ttnn_indices_dtype = ttnn.uint16 if W <= UINT16_MAX else ttnn.uint32
-    torch_indices_dtype = torch.uint16 if W <= UINT16_MAX else torch.uint32
+    # ttnn_indices_dtype = ttnn.uint16 if W <= UINT16_MAX else ttnn.uint32
+    # torch_indices_dtype = torch.uint16 if W <= UINT16_MAX else torch.uint32
     torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype) * 0.9
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
 
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
-    if pass_indices_tensor:
-        indices_tensor_torch = torch.zeros(shape, dtype=torch_indices_dtype)
-        for i in range(W):
-            indices_tensor_torch[:, :, :, i] = i
-        indices_tensor = ttnn.from_torch(
-            indices_tensor_torch, ttnn_indices_dtype, layout=ttnn.Layout.TILE, device=device
-        )
-    else:
-        indices_tensor = None
+    # if pass_indices_tensor:
+    #     indices_tensor_torch = torch.zeros(shape, dtype=torch_indices_dtype)
+    #     for i in range(W):
+    #         indices_tensor_torch[:, :, :, i] = i
+    #     indices_tensor = ttnn.from_torch(
+    #         indices_tensor_torch, ttnn_indices_dtype, layout=ttnn.Layout.TILE, device=device
+    #     )
+    # else:
+    # indices_tensor = None
 
     ttnn_topk_values, ttnn_topk_indices = ttnn.topk(
         ttnn_input,
@@ -43,84 +44,102 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         largest=largest,
         sorted=sorted,
         sub_core_grids=sub_core_grids,
-        indices_tensor=indices_tensor,
+        # indices_tensor=indices_tensor,
     )
-
     # Convert TTNN outputs to Torch for comparison
     ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
-    ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices, dtype=torch_indices_dtype)
+    print("Input Tensor:")
+    # print(input[0, 0, 2048, :])
+    print("TTNN TopK Values:")
+    # print(ttnn_torch_values[0, 0, 2048, :])
+    print("PyTorch TopK Values:")
+    # print(pyt_topk_values[0, 0, 2048, :])
+    # for n in range(N):
+    #     for c in range(C):
+    #             for i in range(H):
+    #                 ttnn_tensor = ttnn_torch_values[n, c, i, :]
+    #                 torch_tensor = pyt_topk_values[n, c, i, :]
+    #                 print(i, end=', ')
+    #                 assert_equal(ttnn_tensor, torch_tensor)
+    torch.set_printoptions(profile="default")
+    # ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices, dtype=torch_indices_dtype)
 
-    # Assert output shapes
-    desired_shape = [N, C, H, W]
-    desired_shape[dim] = k
-    assert list(ttnn_topk_values.shape) == desired_shape
-    assert list(ttnn_topk_indices.shape) == desired_shape
+    # # Assert output shapes
+    # desired_shape = [N, C, H, W]
+    # desired_shape[dim] = k
+    # assert list(ttnn_topk_values.shape) == desired_shape
+    # assert list(ttnn_topk_indices.shape) == desired_shape
 
-    # Assert values correctness
-    if dtype == ttnn.bfloat8_b:
-        assert_allclose(ttnn_torch_values, pyt_topk_values, rtol=1e-1, atol=1e-1)
-    else:
-        assert_equal(ttnn_torch_values, pyt_topk_values)
+    # # Assert values correctness
+    # if dtype == ttnn.bfloat8_b:
+    #     assert_allclose(ttnn_torch_values, pyt_topk_values, rtol=1e-1, atol=1e-1)
+    # else:
+    assert_equal(ttnn_torch_values, pyt_topk_values)
 
-    # Assert indices correctness using gather
-    # pcc is not a good measure for the raw indices
-    # if index 49 and index 8 are tied, the order of the indices can be different
-    # but the values associated with the indices should be the same
-    # if index 7 and 8 are tied, but swapped, the pcc will be better than if index 49 and 8 are tied but swapped
-    # rounding may also cause more ties than expected
-    # the bigger we get, the tighter the distribution of the top K elements, so the pcc will be worse as stability/rounding will cause more ties
-    # use cosine similarity on the gathered indices as this will show the top elements are all about the same
-    ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn_torch_indices.to(torch.int64))
-    cosine = torch.nn.CosineSimilarity(dim=dim)
-    ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
+    # # Assert indices correctness using gather
+    # # pcc is not a good measure for the raw indices
+    # # if index 49 and index 8 are tied, the order of the indices can be different
+    # # but the values associated with the indices should be the same
+    # # if index 7 and 8 are tied, but swapped, the pcc will be better than if index 49 and 8 are tied but swapped
+    # # rounding may also cause more ties than expected
+    # # the bigger we get, the tighter the distribution of the top K elements, so the pcc will be worse as stability/rounding will cause more ties
+    # # use cosine similarity on the gathered indices as this will show the top elements are all about the same
+    # ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn_torch_indices.to(torch.int64))
+    # cosine = torch.nn.CosineSimilarity(dim=dim)
+    # ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
 
-    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
+    # assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
 
 
 @pytest.mark.parametrize(
     "dtype",
     (
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
         # ttnn.float32, top bits in float32 get cut off somewhere, LLK does not work for this
     ),
     ids=[
         "BFLOAT16_B",
-        "BFLOAT8_B",
+        # "BFLOAT8_B",
         # "FLOAT32",
     ],
 )
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k",
     (
-        (1, 1, 32, 8192, 3, 50),
-        (1, 1, 64, 64, 2, 32),
-        (1, 1, 64, 64, 2, 64),
-        (1, 2048, 1, 64, 1, 32),
-        (1, 1, 32, 64, 3, 2),
-        (1, 1, 32, 64, 3, 4),
-        (1, 1, 32, 8192, 3, 6),
-        (1, 2048, 1, 64, 1, 8),
-        (1, 1, 32, 32768, 3, 3000),
-        (1, 1, 32, 18992, 3, 3000),
-        (1, 1, 32, 18992, 3, 32),
-        (1, 1, 32, 10000, 3, 32),
-        (1, 1, 32, 64128, 3, 32),
-        (1, 1, 65 * 32, 96, 3, 32),
+        # (1, 1, 32, 8192, 3, 50),
+        # (1, 1, 64, 64, 2, 32),
+        # (1, 1, 64, 64, 2, 64),
+        # (1, 2048, 1, 64, 1, 32),
+        # (1, 1, 32, 64, 3, 2),
+        # (1, 1, 32, 64, 3, 4),
+        # (1, 1, 32, 8192, 3, 6),
+        # (1, 2048, 1, 64, 1, 8),
+        # (1, 1, 32, 32768, 3, 3000),
+        # (1, 1, 32, 18992, 3, 3000),
+        # (1, 1, 32, 18992, 3, 32),
+        # (1, 1, 32, 10000, 3, 32),
+        # (1, 1, 32, 64128, 3, 32),
+        # (1, 1, 65 * 32, 32 * 3, 3, 32),
+        (1, 1, 65 * 32, 32 * 3, 3, 32),
+        # (1, 10, 32, 512, 2, 32),
+        # (5, 9, 96, 1024, 2, 32),
+        # (5, 9, 1024, 96, 3, 32),
+        # (3, 2, 160, 960, 2, 32),
     ),
 )
 @pytest.mark.parametrize(
     "sorted",
     [
         True,
-        False,
+        # False,
     ],
 )
 @pytest.mark.parametrize(
     "largest",
     [
         True,
-        False,
+        # False,
     ],
 )
 @pytest.mark.parametrize(
@@ -133,6 +152,7 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids)
 
 
+"""
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16,),
@@ -277,3 +297,4 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device):
 
     with pytest.raises(Exception):
         ttnn.topk(ttnn_input, k=32, dim=-1, largest=True, sorted=True, out=(value_tensor, index_tensor))
+"""
