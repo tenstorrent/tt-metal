@@ -28,11 +28,11 @@ echo "/path/to/tt-metal/build/tt-train/sources/ttml" > python_env/lib/python3.10
 
 This avoids rebuilding and reflects Python source changes immediately.
 
-### Option B: pip install (standalone build)
+### Option B: uv pip install (standalone build)
 
 ```bash
 cd /path/to/tt-train
-pip install .
+uv pip install .
 ```
 
 Or for editable/development install:
@@ -41,7 +41,7 @@ Or for editable/development install:
 
 ```bash
 cd /path/to/tt-train
-pip install --no-build-isolation -e .
+uv pip install --no-build-isolation -e .
 ```
 
 ## Verification
