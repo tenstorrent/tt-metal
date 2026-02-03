@@ -109,7 +109,7 @@ class TestFactory:
 
 
 def parametrize_mesh_with_fabric():
-    """Universal mesh parametrization with automatic FABRIC_1D_RING - always uses 4x8 base mesh like original tests"""
+    """Universal mesh parametrization with automatic FABRIC_1D - always uses 4x8 base mesh like original tests"""
     # Always use 4x8 base mesh like original working tests
     num_devices = ttnn.get_num_devices()
     if num_devices == 8:
@@ -119,9 +119,7 @@ def parametrize_mesh_with_fabric():
     else:
         raise ValueError(f"Invalid number of devices: {num_devices}")
     fabric_params = [
-        pytest.param(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 30000000}, id="fabric_1d_ring"
-        ),
+        pytest.param({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000}, id="fabric_1d"),
     ]
 
     # Return a single decorator that combines both parametrizations

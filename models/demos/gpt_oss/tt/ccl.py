@@ -5,7 +5,7 @@ import ttnn
 
 
 class CCLManager:
-    def __init__(self, mesh_device, num_links=4, topology=ttnn.Topology.Ring):
+    def __init__(self, mesh_device, num_links=4, topology=ttnn.Topology.Linear):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology

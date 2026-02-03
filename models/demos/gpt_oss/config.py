@@ -158,7 +158,11 @@ class MeshConfig:
         #     barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         # )
         gathered = ttnn.all_reduce(
-            tensor, num_links=ccl_manager.num_links, memory_config=memory_config, topology=ccl_manager.topology
+            tensor,
+            cluster_axis=axis,
+            num_links=ccl_manager.num_links,
+            memory_config=memory_config,
+            topology=ttnn.Topology.Linear if axis == 0 else ttnn.Topology.Ring,
         )
 
         # Remove padding if applied
@@ -190,9 +194,10 @@ class MeshConfig:
         return ttnn.all_gather(
             tensor,
             dim=dim,
+            cluster_axis=axis,
             num_links=ccl_manager.num_links,
             memory_config=memory_config,
-            topology=ttnn.Topology.Linear if linear else ccl_manager.topology,
+            topology=ttnn.Topology.Linear if axis == 0 else ttnn.Topology.Ring,
         )
 
     def __repr__(self):
