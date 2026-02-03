@@ -83,6 +83,28 @@ struct CoreRanges {
     static CoreRanges compute(const GridParams& grid, const WorkerDistribution& workers);
 };
 
+// Struct to hold kernel layout information (which kernels exist and their handles)
+// This encapsulates the logic for determining kernel ordering and presence
+struct KernelLayout {
+    bool has_reader_receiver_all_to_all = false;
+    bool has_reader_receiver = false;
+    bool has_writer_receiver = false;
+
+    // Kernel handle indices (0-based)
+    uint32_t reader_sender_idx = 0;
+    uint32_t reader_receiver_all_to_all_idx = 0;
+    uint32_t reader_receiver_idx = 0;
+    uint32_t writer_sender_idx = 0;
+    uint32_t writer_receiver_idx = 0;
+    uint32_t compute_all_to_all_idx = 0;
+    uint32_t compute_not_all_to_all_idx = 0;
+
+    // Compute kernel layout based on grid and worker configuration
+    // This determines which kernels are present and their ordering in the program
+    static KernelLayout compute(
+        const GridParams& grid, const WorkerDistribution& workers, const CoreRanges& core_ranges);
+};
+
 //////////////////////////////////////////////////////////////////////////////
 // Kernel paths, defines, and compile-time args helpers
 //////////////////////////////////////////////////////////////////////////////

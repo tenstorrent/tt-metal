@@ -391,6 +391,47 @@ CoreRanges CoreRanges::compute(const GridParams& grid, const WorkerDistribution&
     return cr;
 }
 
+KernelLayout KernelLayout::compute(
+    const GridParams& grid, const WorkerDistribution& workers, const CoreRanges& core_ranges) {
+    KernelLayout layout;
+
+    // Determine which kernels are present based on grid and worker configuration
+    // This logic must match the kernel creation in add_kernel_descriptors()
+    layout.has_reader_receiver_all_to_all = grid.use_mcast && !core_ranges.all_to_all_workers_except_sender.empty();
+    layout.has_reader_receiver = workers.num_none_all_to_all_workers > 0;
+    layout.has_writer_receiver = workers.num_none_all_to_all_workers > 0;
+
+    // Compute kernel indices based on ordering in add_kernel_descriptors()
+    // Order: reader_sender, [reader_receiver_all_to_all], [reader_receiver],
+    //        compute_all_to_all, [compute_not_all_to_all],
+    //        writer_sender, [writer_receiver]
+    uint32_t idx = 0;
+
+    layout.reader_sender_idx = idx++;
+
+    if (layout.has_reader_receiver_all_to_all) {
+        layout.reader_receiver_all_to_all_idx = idx++;
+    }
+
+    if (layout.has_reader_receiver) {
+        layout.reader_receiver_idx = idx++;
+    }
+
+    layout.compute_all_to_all_idx = idx++;
+
+    if (workers.num_none_all_to_all_workers > 0) {
+        layout.compute_not_all_to_all_idx = idx++;
+    }
+
+    layout.writer_sender_idx = idx++;
+
+    if (layout.has_writer_receiver) {
+        layout.writer_receiver_idx = idx++;
+    }
+
+    return layout;
+}
+
 //////////////////////////////////////////////////////////////////////////////
 // Kernel paths, defines, and compile-time args helpers
 //////////////////////////////////////////////////////////////////////////////
