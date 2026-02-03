@@ -32,8 +32,8 @@ from ttexalens.coordinate import OnChipCoordinate
 
 triage.progress_disabled = True  # Disable progress bars for tests
 
-# Exit code used when runtime detects dispatch timeout
-# Read from environment variable to match what runtime will use
+# Exit code used when runtime detects dispatch timeout.
+# Default is 124, but it is configurable via TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE.
 TIMEOUT_EXIT_CODE = int(os.environ.get("TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE", "124"))
 
 # Mapping of hang application paths to their expected test results

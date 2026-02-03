@@ -306,7 +306,7 @@ class RunTimeOptions {
     bool exit_on_dispatch_timeout = false;
 
     // Exit code to use when exiting on dispatch timeout (default: standard timeout code)
-    uint32_t dispatch_timeout_exit_code = 124;
+    int dispatch_timeout_exit_code = 124;
 
     // Dump JIT build commands to stdout for debugging
     bool dump_build_commands = false;
@@ -562,7 +562,7 @@ public:
     void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }
 
     bool get_exit_on_dispatch_timeout() const { return exit_on_dispatch_timeout; }
-    uint32_t get_dispatch_timeout_exit_code() const { return dispatch_timeout_exit_code; }
+    int get_dispatch_timeout_exit_code() const { return dispatch_timeout_exit_code; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }

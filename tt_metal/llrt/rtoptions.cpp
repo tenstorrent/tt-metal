@@ -910,7 +910,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 124 (standard timeout exit code)
         // Usage: export TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE=124
         case EnvVarID::TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE: {
-            this->dispatch_timeout_exit_code = std::stoul(value);
+            try {
+                int parsed_value = std::stoi(value);
+                if (parsed_value < 0 || parsed_value > 255) {
+                    TT_THROW("TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE must be in range [0, 255]: {}", value);
+                }
+                this->dispatch_timeout_exit_code = parsed_value;
+            } catch (const std::invalid_argument&) {
+                TT_THROW("Invalid TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE value out of range: {}", value);
+            }
             break;
         }
 
