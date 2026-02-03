@@ -44,7 +44,6 @@ jobs:
           echo "[info] requested-models: $requested_models"
 
           # Initialize models JSON with all false
-          # oft removed due to issue 36807 (https://github.com/tenstorrent/tt-metal/issues/36807)
           models_json='{
             "stable-diffusion-xl": false,
             "stable-diffusion-1-4": false,

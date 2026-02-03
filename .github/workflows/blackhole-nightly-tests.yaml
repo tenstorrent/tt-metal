@@ -13,11 +13,6 @@ on:
         required: false
         type: boolean
         default: false
-      run_bh_nightly_20_cores:
-        description: 'Run Blackhole nightly 20 cores tests'
-        required: false
-        type: boolean
-        default: false
       run_bh_multi_card_nightly_unit_tests:
         description: 'Run Blackhole multi card nightly unit tests'
         required: false
@@ -98,11 +93,6 @@ on:
         default: false
       run_bh_multi_card_nightly_demo_tests:
         description: 'Run Blackhole multi card nightly demo tests'
-        required: false
-        type: boolean
-        default: false
-      run_bh_nightly_20_cores:
-        description: 'Run Blackhole nightly 20 cores tests'
         required: false
         type: boolean
         default: false
