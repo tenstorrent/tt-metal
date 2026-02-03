@@ -51,6 +51,7 @@ def test_yolov5x_stability(
         resolution=resolution,
         model_location_generator=None,
     )
+    performant_runner._capture_yolov5x_trace_2cqs()
 
     logger.info(f"Running stability test for YOLOv5x with resolution: {resolution} and batch size: {batch_size}")
 

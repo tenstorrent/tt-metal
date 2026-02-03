@@ -129,8 +129,6 @@ class TtnnDetect:
         x3 = self.cv2_2_1(x3)
         x3 = self.cv2_2_2(x3)
         x4 = self.cv3_0_0(y1)
-        # Move to DRAM to avoid L1 buffer clash with conv's static circular buffers (Issue #6992)
-        x4 = ttnn.to_memory_config(x4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x4 = self.cv3_0_1(x4)
         x4 = self.cv3_0_2(x4)
         x1 = ttnn.to_memory_config(x1, memory_config=ttnn.L1_MEMORY_CONFIG)

@@ -57,6 +57,7 @@ class TtnnSPPF:
                 dilation=[1, 1],
                 applied_shard_scheme=None if y[-1].is_sharded() else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             )
+
             tt_out_dram = ttnn.to_memory_config(tt_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             y.append(tt_out_dram)
 

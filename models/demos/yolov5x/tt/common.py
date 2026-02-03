@@ -77,9 +77,12 @@ class TtYOLOv5xConv2D:
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED
             )
 
+        # if auto_shard:
+        #     shard_layout = None
+
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
-            shard_layout=shard_layout,
+            shard_layout=None if auto_shard else shard_layout,
             deallocate_activation=self.deallocate_activation,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
