@@ -116,11 +116,15 @@ void kernel_main() {
     cb_pop_front(cb_r2c_rdy, 1);
     uint32_t* num_tokens_per_expert = reinterpret_cast<uint32_t*>(get_tile_address(per_expert_total_tokens_cb_id, 0));
 
+    // Wait for DM1 to tell us the address
+    // TODO
+
+    // This decides half of the buffer will have the valid data sent by tilize cores
+    bool use_second_half_buffer = false;
+
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
-    uint32_t in0_offset_per_expert = 0;
-    uint32_t out_offset_per_expert = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_tokens = num_tokens_per_expert[expert_id];
         uint32_t num_expert_chunks = (num_expert_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
@@ -128,9 +132,11 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
             //---------------------------------------------------------------------
+            // Wait for the next chunk of tiles to arrive from the tilize cores
+            // TODO
 
             for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
-                uint32_t in0_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
+                uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
 
                 tile_regs_acquire();
                 for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
@@ -186,7 +192,7 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in2 @ W2 (in pairs of 4)
             //---------------------------------------------------------------------
-            uint32_t out_tile_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
+            uint32_t out_tile_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
             for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
                 uint32_t dm1_step = 0;
                 uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
@@ -239,7 +245,10 @@ void kernel_main() {
                 pack_tile</*out_of_order_output=*/true>(3, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
                 tile_regs_release();
             }
-        }
+
+            // Toggle the buffer to use
+            use_second_half_buffer = !use_second_half_buffer;
+        }  // end for (chunk)
     }  // end for (expert_id)
 
     // Drain the pipeline - the last dummy push
