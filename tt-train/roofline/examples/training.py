@@ -69,7 +69,7 @@ MODEL_PRESETS: Dict[str, dict] = {
     },
     "gpt2-small": {
         "model_type": ModelType.GPT,
-        "vocab_size": 50257,  # GPT-2 vocab padded to 64
+        "vocab_size": 50257,
         "block_size": 1024,
         "n_embd": 768,
         "n_layer": 12,
@@ -213,7 +213,6 @@ def run_model_roofline(
             n_layer=preset["n_layer"],
             n_head=preset["n_head"],
             dropout=preset["dropout"],
-            # bias: uses default from MockNanoGPTConfig (True)
         )
         model = MockNanoGPT(config)
         max_seq_len = config.block_size
@@ -366,6 +365,7 @@ def run_model_roofline(
 
     # Snapshot after iteration complete
     print_memory_snapshot("ITERATION_COMPLETE")
+    ctx.print_peak_memory()
 
     grad_clip_time_ms = ctx.total_time_ms() - after_optimizer_time_ms
     grad_clip_flops = ctx.total_flops() - after_optimizer_flops

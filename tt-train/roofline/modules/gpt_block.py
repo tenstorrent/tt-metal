@@ -44,7 +44,6 @@ class MockGPTBlock(MockModule):
         embedding_dim: int,
         num_heads: int,
         dropout: float = 0.0,
-        bias: bool = True,
         dtype: DataType = DataType.BFLOAT16,
     ):
         """Initialize GPT block.
@@ -53,7 +52,6 @@ class MockGPTBlock(MockModule):
             embedding_dim: Dimension of embeddings
             num_heads: Number of attention heads
             dropout: Dropout probability
-            bias: Whether to use bias in layer norm
             dtype: Data type for parameters
         """
         super().__init__()
@@ -62,8 +60,8 @@ class MockGPTBlock(MockModule):
         self.num_heads = num_heads
 
         # Layer norms
-        self.ln1 = MockLayerNorm(embedding_dim, bias=bias, dtype=dtype)
-        self.ln2 = MockLayerNorm(embedding_dim, bias=bias, dtype=dtype)
+        self.ln1 = MockLayerNorm(embedding_dim, dtype=dtype)
+        self.ln2 = MockLayerNorm(embedding_dim, dtype=dtype)
 
         # Attention
         self.attention = MockMultiHeadAttention(

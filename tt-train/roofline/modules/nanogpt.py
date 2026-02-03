@@ -19,6 +19,7 @@ from .module import MockModule, MockParameter, MockModuleList
 from .embedding import MockEmbedding, MockTrainablePositionalEmbedding
 from .linear import MockLinearLayer
 from .gpt_block import MockGPTBlock
+from .layernorm import MockLayerNorm
 
 if TYPE_CHECKING:
     from ..roofline import RooflineContext
@@ -37,7 +38,6 @@ class MockNanoGPTConfig:
     n_layer: int = 12  # Number of transformer blocks
     n_head: int = 12  # Number of attention heads
     dropout: float = 0.2  # Dropout probability
-    bias: bool = True  # Use bias in linear layers and layer norm
 
 
 class MockNanoGPT(MockModule):
@@ -98,7 +98,6 @@ class MockNanoGPT(MockModule):
                     config.n_embd,
                     config.n_head,
                     dropout=config.dropout,
-                    bias=config.bias,
                     dtype=dtype,
                 )
                 for _ in range(config.n_layer)
@@ -106,15 +105,7 @@ class MockNanoGPT(MockModule):
         )
 
         # Final layer norm - using direct parameters
-        self.ln_f_gamma = MockParameter(
-            (1, 1, 1, config.n_embd), dtype=dtype, name="ln_f_gamma"
-        )
-        if config.bias:
-            self.ln_f_beta = MockParameter(
-                (1, 1, 1, config.n_embd), dtype=dtype, name="ln_f_beta"
-            )
-        else:
-            self.ln_f_beta = None
+        self.ln_f = MockLayerNorm(config.n_embd, dtype=dtype)
 
         # Output projection to vocabulary (no bias)
         self.fc = MockLinearLayer(
@@ -148,8 +139,7 @@ class MockNanoGPT(MockModule):
             out = block(ctx, out, mask)
 
         # Final layer norm
-        beta_tensor = self.ln_f_beta.tensor if self.ln_f_beta is not None else None
-        out = MockLayerNormOp.apply(ctx, out, self.ln_f_gamma.tensor, beta_tensor)
+        out = self.ln_f(ctx, out)
 
         # Output projection
         logits = self.fc(ctx, out)

@@ -37,7 +37,7 @@ class MockLayerNormOp(RooflineFunction):
         roofline_ctx: "RooflineContext",
         input: MockTensor,
         gamma: MockTensor,
-        beta: Optional[MockTensor] = None,
+        beta: MockTensor,
     ) -> MockTensor:
         """Forward pass: apply layer normalization.
 
@@ -46,7 +46,7 @@ class MockLayerNormOp(RooflineFunction):
             roofline_ctx: Roofline context for estimates
             input: Input tensor [..., embedding_dim]
             gamma: Scale parameter [1, 1, 1, embedding_dim]
-            beta: Optional bias parameter [1, 1, 1, embedding_dim]
+            beta: Shift parameter [1, 1, 1, embedding_dim]
 
         Returns:
             Normalized output tensor with same shape as input
@@ -74,7 +74,7 @@ class MockLayerNormOp(RooflineFunction):
         ctx: RooflineFunctionContext,
         roofline_ctx: "RooflineContext",
         grad_output: MockTensor,
-    ) -> Tuple[MockTensor, MockTensor, Optional[MockTensor]]:
+    ) -> Tuple[MockTensor, MockTensor, MockTensor]:
         """Backward pass: compute gradients for input, gamma, beta.
 
         Args:
@@ -106,10 +106,8 @@ class MockLayerNormOp(RooflineFunction):
         grad_gamma = create_grad_tensor(
             gamma.shape, gamma.dtype, gamma.layout, name="grad_gamma"
         )
-        grad_beta = None
-        if beta is not None:
-            grad_beta = create_grad_tensor(
-                beta.shape, beta.dtype, beta.layout, name="grad_beta"
-            )
+        grad_beta = create_grad_tensor(
+            beta.shape, beta.dtype, beta.layout, name="grad_beta"
+        )
 
         return grad_input, grad_gamma, grad_beta

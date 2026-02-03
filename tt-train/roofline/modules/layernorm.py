@@ -35,31 +35,23 @@ class MockLayerNorm(MockModule):
     def __init__(
         self,
         embedding_dim: int,
-        bias: bool = True,
         dtype: DataType = DataType.BFLOAT16,
     ):
         """Initialize layer normalization.
 
         Args:
             embedding_dim: Dimension to normalize over
-            bias: Whether to use bias (beta) parameter
             dtype: Data type for parameters
         """
         super().__init__()
 
         self.embedding_dim = embedding_dim
-        self.has_bias = bias
 
         # Gamma (scale): [1, 1, 1, embedding_dim]
         self.gamma = MockParameter((1, 1, 1, embedding_dim), dtype=dtype, name="gamma")
 
         # Beta (shift): [1, 1, 1, embedding_dim]
-        if bias:
-            self.beta = MockParameter(
-                (1, 1, 1, embedding_dim), dtype=dtype, name="beta"
-            )
-        else:
-            self.beta = None
+        self.beta = MockParameter((1, 1, 1, embedding_dim), dtype=dtype, name="beta")
 
     def forward(self, ctx: "RooflineContext", x: MockTensor) -> MockTensor:
         """Forward pass: apply layer normalization.
@@ -71,10 +63,7 @@ class MockLayerNorm(MockModule):
         Returns:
             Normalized output tensor
         """
-        beta_tensor = self.beta.tensor if self.beta is not None else None
-        return MockLayerNormOp.apply(ctx, x, self.gamma.tensor, beta_tensor)
+        return MockLayerNormOp.apply(ctx, x, self.gamma.tensor, self.beta.tensor)
 
     def __repr__(self) -> str:
-        return (
-            f"MockLayerNorm(embedding_dim={self.embedding_dim}, bias={self.has_bias})"
-        )
+        return f"MockLayerNorm(embedding_dim={self.embedding_dim})"

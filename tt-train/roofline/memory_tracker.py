@@ -210,8 +210,8 @@ class MemoryTracker:
 
         peak_bytes, breakdown = self.peak_memory()
 
-        print(f"\nPeak Memory Usage: {peak_bytes / 1e9:.3f} GB ({peak_bytes:,} bytes)")
-        print("Breakdown by category:")
+        print(f"Peak Memory Usage: {peak_bytes / 1e9:.3f} GB ({peak_bytes:,} bytes)")
+        print("Peak Memory Breakdown by category:")
         for label in TensorLabel:
             label_bytes = breakdown.get(label, 0)
             pct = (label_bytes / peak_bytes * 100) if peak_bytes > 0 else 0
