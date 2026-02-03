@@ -330,9 +330,10 @@ void multicast_tensor_tensix(
         DataMovementConfigOut);
 
     ////////// COMPUTE KERNEL SETUP //////////
-    // Void compute kernel - no computation needed for this multicast example.
-    // The user can extend this to perform operations on the received tiles.
-    vector<uint32_t> compute_kernel_args = {};
+    // Compute kernel copies tiles from input CB to output CB.
+    // In a real application, this is where computation would happen.
+    // n_tiles is passed as a compile-time argument for loop bounds.
+    vector<uint32_t> compute_compile_args = {n_tiles};
     CreateKernel(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/compute/void_compute_kernel.cpp",
@@ -341,7 +342,7 @@ void multicast_tensor_tensix(
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
-            .compile_args = compute_kernel_args});
+            .compile_args = compute_compile_args});
 
     ////////// RUNTIME ARGS SETUP //////////
 
