@@ -729,7 +729,7 @@ void copy_to_host(
 void copy_to_host(
     distributed::MeshCommandQueue& queue,
     const Tensor& device_tensor,
-    std::byte* const dst,
+    std::byte* dst,
     const std::optional<BufferRegion>& region,
     bool blocking) {
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "copy_to_host: source tensor must be on device");
