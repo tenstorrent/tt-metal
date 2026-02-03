@@ -21,7 +21,6 @@ namespace tt::tt_metal::distributed {
 enum class H2DMode : uint8_t {
     HOST_PUSH,    ///< Host pushes data to device via UMD TLB writes.
     DEVICE_PULL,  ///< Device pulls data from pinned host memory via PCIe NOC reads.
-                  ///< Requires vIOMMU to be enabled on the system.
 };
 
 /**
@@ -35,6 +34,7 @@ enum class H2DMode : uint8_t {
  *
  * - **DEVICE_PULL**: The host writes data to pinned host memory, and the device core
  *   pulls data via PCIe NOC reads.
+ * Both Modes require vIOMMU to be enabled on the system, based on the current implementation.
  *
  * The socket uses a circular FIFO buffer with flow control. The host tracks `bytes_sent`
  * and the device kernel updates `bytes_acked` to indicate consumed data. The host blocks

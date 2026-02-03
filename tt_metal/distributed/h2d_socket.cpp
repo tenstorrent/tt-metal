@@ -38,11 +38,12 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
     const MeshCoordinateRangeSet& device_range,
     uint32_t pcie_alignment) {
     host_data_buffer_size_ = fifo_size_ / sizeof(uint32_t);
+    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc): aligned_alloc required for dynamic alignment
     void* aligned_ptr = std::aligned_alloc(pcie_alignment, fifo_size_);
     TT_FATAL(aligned_ptr != nullptr, "Failed to allocate aligned memory for host data buffer.");
     std::memset(aligned_ptr, 0, fifo_size_);
-    host_data_buffer_ =
-        std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t* p) { std::free(p); });
+    host_data_buffer_ = std::shared_ptr<uint32_t[]>(
+        static_cast<uint32_t*>(aligned_ptr), [](uint32_t* p) { std::free(p); });  // NOLINT(cppcoreguidelines-no-malloc)
 
     tt::tt_metal::HostBuffer host_data_buffer_view(
         tt::stl::Span<uint32_t>(host_data_buffer_.get(), host_data_buffer_size_),
@@ -151,7 +152,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     } else if (arch == tt::ARCH::WORMHOLE_B0) {
         // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
         // since the device address space is not statically mapped.
-        pcie_writer = [&](void* data, uint32_t num_bytes, uint64_t device_addr) {
+        pcie_writer = [recv_device_id, recv_virtual_core](void* data, uint32_t num_bytes, uint64_t device_addr) {
             const auto& cluster = MetalContext::instance().get_cluster();
             cluster.write_core(data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr);
         };
@@ -169,7 +170,6 @@ H2DSocket::H2DSocket(
     recv_core_(recv_core),
     buffer_type_(buffer_type),
     fifo_size_(fifo_size),
-    page_size_(0),
     bytes_acked_pinned_memory_(nullptr),
     data_pinned_memory_(nullptr),
     h2d_mode_(h2d_mode) {
@@ -218,7 +218,7 @@ void H2DSocket::push_bytes(uint32_t num_bytes) {
 
 void H2DSocket::notify_receiver() {
     uint32_t bytes_sent_addr = config_buffer_->address() + offsetof(receiver_socket_md, bytes_sent);
-    receiver_core_tlb_->write_block(bytes_sent_addr, &bytes_sent_, sizeof(bytes_sent_));
+    pcie_writer(&bytes_sent_, sizeof(bytes_sent_), bytes_sent_addr);
     tt_driver_atomics::sfence();
 }
 
