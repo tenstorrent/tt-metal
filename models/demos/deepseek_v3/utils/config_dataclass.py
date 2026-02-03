@@ -133,9 +133,9 @@ class AllToAllAsyncGenericConfig(OpConfigBase):
     out_dim: int | None = None
     cluster_axis: int | None = None
     mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
-    topology: ttnn._ttnn.operations.ccl.Topology | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = ttnn.Topology.Ring
     persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
-    num_links: int | None = None
+    num_links: int | None = 4
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
 
