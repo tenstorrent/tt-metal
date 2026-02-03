@@ -884,6 +884,7 @@ bool write_to_device_buffer(
         return false;
     }
 
+    fmt::println(stderr, "write_to_device_buffer");
     const BufferDispatchConstants buf_dispatch_constants =
         generate_buffer_dispatch_constants(sysmem_manager, dispatch_core_type, cq_id);
 
@@ -899,6 +900,7 @@ bool write_to_device_buffer(
         auto device_id = buffer.device()->id();
         auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
         if (noc_addr_pair_opt.has_value()) {
+            fmt::println(stderr, "noc_addr_pair_opt has value");
             remote_chip = noc_addr_pair_opt->device_id != device_id;
             const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
@@ -928,8 +930,13 @@ bool write_to_device_buffer(
                 pinned_src_addr = pinned_noc_base + src_offset_base;
                 pinned_src_noc_xy = noc_addr_pair_opt->pcie_xy_enc;
                 use_pinned_transfer = true;
+                fmt::println(stderr, "Using pinned transfer");
             }
+        } else {
+            fmt::println(stderr, "noc_addr_pair_opt does not have value");
         }
+    } else {
+        fmt::println(stderr, "Has pinned inputs {} is_unpadded {} is_sharded {}", has_pinned_inputs, is_unpadded, is_sharded(buffer.buffer_layout()));
     }
     if (is_sharded(buffer.buffer_layout())) {
         ShardedBufferWriteDispatchParams dispatch_params(
