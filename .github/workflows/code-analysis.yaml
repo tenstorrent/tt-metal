@@ -1,212 +1,460 @@
-name: "Trace Qwen Model Operations"
+name: "Code analysis"
 
 on:
+  schedule:
+    # Run daily at 6 PM PST (2 AM UTC next day)
+    - cron: "0 2 * * *"
+  workflow_call:
+    inputs:
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 24.04"
+        description: "Platform to analyze (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04')"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
+      enable-static-analysis:
+        description: "Enable Clang Static Analyzer (CSA) via CodeChecker"
+        required: false
+        type: boolean
+        default: false
+      # Pre-built Docker image tags (optional - if provided, skips docker build)
+      ci-build-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built CI Build Docker image tag"
+      dev-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built Dev Docker image tag"
+      debug-file-filter:
+        description: >-
+          Analyze only specific file(s) for fast debugging
+          (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')
+        required: false
+        type: string
+        default: ""
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   workflow_dispatch:
     inputs:
-      hf_model:
-        description: "HuggingFace model to trace"
-        type: string
-        default: "Qwen/Qwen2.5-Coder-7B-Instruct"
+      architecture:
         required: false
-      test_path:
-        description: "Test path to trace"
         type: string
-        default: "models/tt_transformers/demo/simple_text_demo.py::test_demo_text"
+        default: "amd64"
+      enable-static-analysis:
+        description: "Enable Clang Static Analyzer (CSA) via CodeChecker"
         required: false
-      runner_label:
-        description: "Runner label (machine type)"
+        type: boolean
+        default: false
+      debug-file-filter:
+        description: >-
+          Analyze only specific file(s) for fast debugging
+          (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')
+        required: false
+        type: string
+        default: ""
+      platform:
+        required: false
         type: choice
-        default: "n300"
+        default: "Ubuntu 24.04"
         options:
-          - n300
-          - n300-llmbox
-          - N150
-      arch:
-        description: "Architecture"
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to analyze"
+      build-type:
+        required: false
         type: choice
-        default: "wormhole_b0"
+        default: Release
         options:
-          - wormhole_b0
-          - blackhole
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
-  display-inputs:
-    name: Display workflow inputs
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Display configuration
-        run: |
-          echo "╔═════════════════════════════════════════════════════════╗"
-          echo "║          Model Tracer Workflow Configuration           ║"
-          echo "╟─────────────────────────────────────────────────────────╢"
-          echo "│ HF Model:             ${{ github.event.inputs.hf_model || 'Qwen/Qwen2.5-Coder-7B-Instruct' }}"
-          echo "│ Test Path:            ${{ github.event.inputs.test_path || 'models/tt_transformers/demo/simple_text_demo.py::test_demo_text' }}"
-          echo "│ Runner Label:         ${{ github.event.inputs.runner_label || 'n300' }}"
-          echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
-          echo "│ Triggered by:         ${{ github.actor }}"
-          echo "└─────────────────────────────────────────────────────────┘"
+  # NOTE: Platform parsing is handled by build-docker-artifact.yaml internally.
+  # This workflow only needs to pass the platform string.
 
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
+  determine-scan-type:
+    runs-on: ubuntu-latest
+    outputs:
+      do-full-scan: ${{ steps.compute-outputs.outputs.do-full-scan }}
+      do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
+    steps:
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+
+      - id: compute-outputs
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_name }}" == "main" ]] || \
+             [[ "${{ steps.find-changes.outputs.clang-tidy-config-changed }}" == "true" ]]; then
+            do_full_scan="true"
+          else
+            do_full_scan="false"
+          fi
+
+          if [[ "$do_full_scan" == "true" ]] || \
+             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]] || \
+             [[ "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]]; then
+            do_scan="true"
+          else
+            do_scan="false"
+          fi
+
+          echo "Do a scan: $do_scan"
+          echo "Do a full scan: $do_full_scan"
+          echo "do-full-scan=$do_full_scan" >> "$GITHUB_OUTPUT"
+          echo "do-scan=$do_scan" >> "$GITHUB_OUTPUT"
+
+  # Only build docker images if pre-built tags are not provided
+  build-docker-image:
+    if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    uses: ./.github/workflows/build-docker-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
-      build-type: Release
-      build-wheel: true
-      platform: Ubuntu 22.04
-      enable-lto: false
-      tracy: false
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
 
-  trace-model:
-    name: "Trace ${{ github.event.inputs.hf_model || 'Qwen/Qwen2.5-Coder-7B-Instruct' }}"
-    needs: build-artifact
-    runs-on: tt-ubuntu-2204-${{ github.event.inputs.runner_label || 'n300' }}-viommu-stable
+  clang-tidy:
+    name: 🤖 Clang Tidy
+    needs: [ build-docker-image, determine-scan-type ]
+    # Use always() so this job runs even when build-docker-image is skipped
+    # (pre-built tags provided)
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          needs.determine-scan-type.outputs.do-scan == 'true' }}
+    timeout-minutes: 240
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: >-
+        harbor.ci.tenstorrent.net/${{
+          inputs.ci-build-docker-image ||
+          needs.build-docker-image.outputs.ci-build-tag ||
+          'docker-image-unresolved!'}}
       env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ github.event.inputs.arch || 'wormhole_b0' }}
-        LOGURU_LEVEL: INFO
-        GITHUB_ACTIONS: true
-        TRACY_NO_INVARIANT_CHECK: 1
-        HF_MODEL: ${{ github.event.inputs.hf_model || 'Qwen/Qwen2.5-Coder-7B-Instruct' }}
-        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
-        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        CCACHE_REMOTE_ONLY: "true"
+        CCACHE_TEMPDIR: /tmp/ccache
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
+        - ${{ github.workspace }}:/work
+        # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache
+      # Group 1457 is for the shared ccache drive
+      # tmpfs is for efficiency
+      options: >
+        --group-add 1457
+        --tmpfs /tmp
     defaults:
       run:
         shell: bash
-        working-directory: /work
-    timeout-minutes: 60
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          # Conditionally set this here so that it remains unset on forks,
+          # otherwise it resolves an invalid URL and the job fails
+          REDIS_USER="${{ vars.REDIS_USER }}"
+          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
+          REDIS_HOST="${{ vars.REDIS_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_PORT }}"
+          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
+          CCACHE_PARTS=(
+            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
+            "@${REDIS_HOST}:${REDIS_PORT}"
+            "|read-only=${REDIS_READONLY}"
+          )
+          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+
+      - name: Create ccache tmpdir
+        run: |
+          mkdir -p /tmp/ccache
+
+      - name: Check out repo
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
+          fetch-tags: true
           submodules: recursive
-          path: docker-job
+          clean: true
 
-      - name: ⬇️ Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
+      - name: Determine merge base
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        run: |
+          echo "Current branch: ${{ github.ref_name }}"
+          MERGE_BASE=$(git merge-base ${{ github.ref_name }} origin/main)
+          echo "Merge base between ${{ github.ref_name }} and main: $MERGE_BASE"
+          echo "MERGE_BASE=$MERGE_BASE" >> $GITHUB_ENV
+
+      - name: Check out baseline
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.MERGE_BASE }}
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+          clean: true
+
+      - name: Create shim
+        run: |
+          # Suppress clang-tidy to first get an up-to-date build tree
+          ln -sf /usr/bin/true ./clang-tidy-shim
+
+      - name: 🔧 CMake configure
+        run: |
+          CLANG_TIDY_CMD="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
+          cmake --preset clang-tidy \
+            -DCMAKE_CXX_CLANG_TIDY="$CLANG_TIDY_CMD" \
+            -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
+
+      - name: Prepare baseline ccache summary
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        run: |
+          # Zero out the stats so we can see how we did this build
+          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+          ccache -z
+
+      - name: 🛠️ Baseline Build
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        timeout-minutes: 60
+        run: |
+          cmake --build --preset clang-tidy
+
+      - name: Publish Ccache summary
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        run: |
+          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+          clean: false
+
+      - name: Restore shim
+        run: |
+          # Restore shim to legit clang-tidy
+          # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
+          ln -sf $(which clang-tidy-20) ./clang-tidy-shim
+
+      - name: Prepare ccache summary
+        run: |
+          # Zero out the stats so we can see how we did this build
+          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+          ccache -z
+
+      - name: 🔍 Analyze code with clang-tidy
+        timeout-minutes: 120
+        run: |
+          cmake --build --preset clang-tidy
+
+      - name: Publish Ccache summary
+        run: |
+          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  clang-static-analyzer:
+    name: 🔬 Clang Static Analyzer
+    needs: [ build-docker-image ]
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          (inputs.enable-static-analysis == true || github.event_name == 'schedule') }}
+    timeout-minutes: 300
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    container:
+      image: >-
+        harbor.ci.tenstorrent.net/${{
+          inputs.ci-build-docker-image ||
+          needs.build-docker-image.outputs.ci-build-tag ||
+          'docker-image-unresolved!'}}
+      volumes:
+        - ${{ github.workspace }}:/work
+        # HACK: make actions available inside container
+        - ${{ github.workspace }}/../../_actions:${{ github.workspace }}/../../_actions
+      options: --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
+      - name: 🔧 CMake configure
+        run: cmake --preset clang-static-analyzer
+
+      - name: 🛠️ Generate files
+        run: cmake --build .build/clang-static-analyzer --target all_generated_files
+
+      - name: Setup clang symlinks for CodeChecker
+        run: |
+          update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100
+          update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100
+
+      - name: Install CodeChecker
+        run: |
+          # Pre-install CodeChecker in the container's venv using uv.
+          # Pin to a specific version for reproducibility.
+          uv pip install codechecker==6.27.1
+
+      - name: 🔬 Analyze with CodeChecker
+        id: codechecker
+        run: |
+          set -euo pipefail
+
+          OUTPUT_DIR=/work/.build/codechecker-reports
+          mkdir -p "$OUTPUT_DIR"
+
+          echo "=== Starting CodeChecker analysis ==="
+
+          # Build command with optional file filter
+          ANALYZE_CMD="CodeChecker analyze \
+            /work/.build/clang-static-analyzer/compile_commands.json \
+            --output $OUTPUT_DIR \
+            --jobs $(nproc) \
+            --config /work/.codechecker.json"
+
+          if [ -n "${{ inputs.debug-file-filter }}" ]; then
+            echo "🐛 DEBUG MODE: Analyzing only: ${{ inputs.debug-file-filter }}"
+            ANALYZE_CMD="$ANALYZE_CMD --file '${{ inputs.debug-file-filter }}'"
+          fi
+
+          # Run analysis (don't fail on analyzer crashes - common with static analysis)
+          eval "$ANALYZE_CMD" || echo "⚠️ Analysis completed with warnings"
+
+          # Set output for downstream steps
+          echo "analyze-output=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
+
+          # Show summary
+          PLIST_COUNT=$(find "$OUTPUT_DIR" -name "*.plist" 2>/dev/null | wc -l)
+          echo "✅ Generated $PLIST_COUNT plist files"
+
+      - name: Generate JSON and HTML reports from analysis results
+        run: |
+          set -euo pipefail
+
+          OUTPUT_DIR="${{ steps.codechecker.outputs.analyze-output }}"
+          JSON_OUTPUT="/work/.build/codechecker_issues.json"
+          HTML_OUTPUT="/work/.build/codechecker_html"
+
+          echo "=== Generating JSON report ==="
+          # CodeChecker parse can fail if no issues found or plist files corrupted - that's OK
+          CodeChecker parse "$OUTPUT_DIR" --export json --output "$JSON_OUTPUT" || true
+
+          if [ -f "$JSON_OUTPUT" ] && [ -s "$JSON_OUTPUT" ]; then
+            ISSUE_COUNT=$(jq '.reports | length' "$JSON_OUTPUT" || echo "0")
+            echo "✅ JSON report contains $ISSUE_COUNT issues"
+          else
+            echo "⚠️ No JSON output, creating empty report"
+            echo '{"version": 1, "reports": []}' > "$JSON_OUTPUT"
+          fi
+
+          echo ""
+          echo "=== Generating HTML report ==="
+          mkdir -p "$HTML_OUTPUT"
+          # Same as above - parse can fail for non-fatal reasons
+          CodeChecker parse "$OUTPUT_DIR" --export html --output "$HTML_OUTPUT" || true
+
+          if [ -d "$HTML_OUTPUT" ] && [ -n "$(ls -A "$HTML_OUTPUT")" ]; then
+            echo "✅ HTML report generated"
+          else
+            echo "⚠️ HTML report is empty or missing"
+          fi
+
+      - name: Upload JSON report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: CodeChecker-JSON-Report
+          path: /work/.build/codechecker_issues.json
+
+      - name: Upload HTML report
+        uses: actions/upload-artifact@v4
+        if: always()
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          name: CodeChecker-HTML-Report
+          path: /work/.build/codechecker_html
 
-      - name: 📊 Display Environment
-        run: |
-          echo "════════════════════════════════════════════════════════"
-          echo "Environment Information"
-          echo "════════════════════════════════════════════════════════"
-          echo "Working Directory: $(pwd)"
-          echo "Architecture: $ARCH_NAME"
-          echo "HuggingFace Model: $HF_MODEL"
-          echo "HF Token: $([ -n "$HF_TOKEN" ] && echo "✅ Configured" || echo "❌ Not set")"
-          echo "Test Path: ${{ github.event.inputs.test_path || 'models/tt_transformers/demo/simple_text_demo.py::test_demo_text' }}"
-          echo ""
-          echo "Python Environment:"
-          which python3
-          python3 --version
-          echo ""
-          echo "Available Devices:"
-          tt-smi -ls || echo "tt-smi not available"
-          echo "════════════════════════════════════════════════════════"
+  publish-clangsa-pages:
+    name: 📄 Publish CSA HTML to GitHub Pages
+    needs: [ clang-static-analyzer ]
+    # Only publish on full scans (skip when debug-file-filter is used)
+    if: >-
+      ${{ always() && needs.clang-static-analyzer.result == 'success' &&
+          inputs.debug-file-filter == '' }}
+    runs-on: ubuntu-latest
 
-      - name: 🔧 Run Model Tracer
-        run: |
-          echo "Starting model tracing..."
-          TEST_PATH="${{ github.event.inputs.test_path || 'models/tt_transformers/demo/simple_text_demo.py::test_demo_text' }}"
-
-          # The setup-job action should have already configured the environment
-          # Just use python3 directly which should be available from the Docker container
-          echo "Using Python: $(which python3)"
-          python3 --version
-
-          # Run the tracer
-          python3 model_tracer/generic_ops_tracer.py "$TEST_PATH"
-
-      - name: 📦 Display Trace Results
-        if: always()
-        run: |
-          echo "════════════════════════════════════════════════════════"
-          echo "Trace Results"
-          echo "════════════════════════════════════════════════════════"
-
-          if [ -d "model_tracer/traced_operations" ]; then
-            echo "Traced operations directory:"
-            ls -lh model_tracer/traced_operations/
-
-            if [ -f "model_tracer/traced_operations/ttnn_operations_master.json" ]; then
-              echo ""
-              echo "Master JSON file size:"
-              du -h model_tracer/traced_operations/ttnn_operations_master.json
-
-              echo ""
-              echo "Number of operations in master JSON:"
-              python3 << 'EOF'
-          import json
-          try:
-              with open('model_tracer/traced_operations/ttnn_operations_master.json', 'r') as f:
-                  data = json.load(f)
-              print(f"  Operations: {len(data.get('operations', {}))}")
-              print(f"  Total configs: {data.get('metadata', {}).get('total_configurations', 'N/A')}")
-          except Exception as e:
-              print(f"  Error reading JSON: {e}")
-          EOF
-            fi
-          else
-            echo "⚠️ No traced_operations directory found"
-          fi
-          echo "════════════════════════════════════════════════════════"
-
-      - name: 📤 Upload Traced Operations
-        if: always()
-        uses: actions/upload-artifact@v4
+    steps:
+      - name: Download CodeChecker HTML report
+        uses: actions/download-artifact@v4
         with:
-          name: traced-operations-${{ github.event.inputs.hf_model || 'qwen-coder' }}-${{ github.run_id }}
-          path: /work/model_tracer/traced_operations/
-          retention-days: 7
+          name: CodeChecker-HTML-Report
+          path: site
 
-      - name: 📤 Upload Master JSON
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Download CodeChecker JSON report
+        uses: actions/download-artifact@v4
         with:
-          name: master-json-${{ github.event.inputs.hf_model || 'qwen-coder' }}-${{ github.run_id }}
-          path: /work/model_tracer/traced_operations/ttnn_operations_master.json
-          retention-days: 30
-          if-no-files-found: warn
+          name: CodeChecker-JSON-Report
+          path: site
 
-      - name: 📊 Generate Summary
-        if: always()
-        run: |
-          echo "# Model Tracer Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Model: \`$HF_MODEL\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Test: \`${{ github.event.inputs.test_path || 'models/tt_transformers/demo/simple_text_demo.py::test_demo_text' }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Runner: \`${{ github.event.inputs.runner_label || 'n300' }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Architecture: \`$ARCH_NAME\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+      - name: Add .nojekyll
+        run: touch site/.nojekyll
 
-          if [ -f "model_tracer/traced_operations/ttnn_operations_master.json" ]; then
-            echo "**Results:**" >> $GITHUB_STEP_SUMMARY
-            python3 << 'EOF' >> $GITHUB_STEP_SUMMARY
-          import json
-          try:
-              with open('model_tracer/traced_operations/ttnn_operations_master.json', 'r') as f:
-                  data = json.load(f)
-              print(f"- ✅ Operations traced: {len(data.get('operations', {}))}")
-              print(f"- ✅ Total configurations: {data.get('metadata', {}).get('total_configurations', 'N/A')}")
-          except Exception as e:
-              print(f"- ❌ Error: {e}")
-          EOF
-          else
-            echo "- ❌ No trace results found" >> $GITHUB_STEP_SUMMARY
-          fi
+      - name: Publish to tenstorrent/tt-metal-clangsa-results (gh-pages)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.CLANGSA_RESULTS_PAT }}
+          external_repository: tenstorrent/tt-metal-clangsa-results
+          publish_branch: gh-pages
+          publish_dir: site
+          force_orphan: true
+          commit_message: "Update CSA reports from tt-metal @ ${{ github.sha }}"
