@@ -29,7 +29,7 @@ namespace deepseek_b1_ops {
 // Computes: output[1,N] = in0[1,K] @ in1[K,N] with in1 streamed from DRAM
 //
 // CB States:
-//   NCRISC: Signals in0 tensor-backed CB is ready
+//   NCRISC: No-op (in0 and index CB setup done externally via setup_sharded_buffer)
 //   BRISC: Streams in1 from DRAM with pipelining, waits for output
 //   TRISC (Compute):
 //     - Waits: in0 (K tiles), in1 (subblock_k tiles streamed)
@@ -41,12 +41,8 @@ struct DRAMStreamingMatmul {
     // Compile-time args structs
     // ========================================================================
 
-    // Reader CTArgs (NCRISC)
-    template <uint32_t cb_in0_, uint32_t num_tiles_k_>
-    struct ReaderCTArgs {
-        static constexpr uint32_t cb_in0 = cb_in0_;
-        static constexpr uint32_t num_tiles_k = num_tiles_k_;
-    };
+    // Reader CTArgs (NCRISC) - empty, sharded buffer setup done in kernel file
+    struct ReaderCTArgs {};
 
     // Writer CTArgs (BRISC)
     template <
@@ -61,7 +57,10 @@ struct DRAMStreamingMatmul {
         uint32_t out_num_tiles_,
         uint32_t num_subblocks_k_,
         uint32_t bank_id_,
-        uint32_t vc_>
+        uint32_t vc_,
+        uint32_t enable_indexing_ = 0,
+        uint32_t cb_index_ = 0,
+        uint32_t index_offset_ = 0>
     struct WriterCTArgs {
         static constexpr uint32_t cb_in1 = cb_in1_;
         static constexpr uint32_t cb_out = cb_out_;
@@ -75,6 +74,10 @@ struct DRAMStreamingMatmul {
         static constexpr uint32_t num_subblocks_k = num_subblocks_k_;
         static constexpr uint32_t bank_id = bank_id_;
         static constexpr uint32_t vc = vc_;
+        // Expert indexing support
+        static constexpr bool enable_indexing = enable_indexing_ == 1;
+        static constexpr uint32_t cb_index = cb_index_;
+        static constexpr uint32_t index_offset = index_offset_;  // offset into index tensor
     };
 
     // Compute CTArgs (TRISC)
@@ -116,9 +119,8 @@ struct DRAMStreamingMatmul {
         void impl() {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
-            // NCRISC: Signal sharded in0 CB is ready (tensor-backed)
+            // NCRISC: No-op - sharded buffer setup done in kernel file
             // ================================================================
-            cb_push_back(CTArgs::cb_in0, CTArgs::num_tiles_k);
 
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
@@ -130,10 +132,31 @@ struct DRAMStreamingMatmul {
             constexpr uint32_t dram_bank_id = CTArgs::bank_id;
             constexpr uint32_t vc = CTArgs::vc;
 
+            // Expert indexing: compute DRAM offset based on expert index
+            uint32_t expert_offset_bytes = 0;
+            if constexpr (CTArgs::enable_indexing) {
+                // Wait for index tensor to be ready
+                cb_wait_front(CTArgs::cb_index, 1);
+
+                // Read expert index from index tensor at specified offset (uint16)
+                volatile tt_l1_ptr uint16_t* index_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::cb_index));
+                uint32_t expert_idx = static_cast<uint32_t>(index_ptr[CTArgs::index_offset]);
+
+                // Compute offset: expert_idx * expert_size_per_bank
+                // Each expert per bank = k_tiles * per_core_n tiles (column-major shuffled per expert)
+                // k_tiles = num_subblocks_k * subblock_k
+                // bytes_per_tile = in1_block_size_bytes / subblock_k
+                constexpr uint32_t k_tiles = CTArgs::num_subblocks_k * CTArgs::subblock_k;
+                constexpr uint32_t bytes_per_tile = CTArgs::in1_block_size_bytes / CTArgs::subblock_k;
+                constexpr uint32_t expert_size_bytes = k_tiles * CTArgs::per_core_n * bytes_per_tile;
+                expert_offset_bytes = expert_idx * expert_size_bytes;
+            }
+
             // Setup DRAM read for in1
             uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
             uint32_t l1_write_addr_in1;
-            uint32_t l1_read_addr_in1 = 0;
+            uint32_t l1_read_addr_in1 = expert_offset_bytes;
 
             // Set up NOC state for page reads
             noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
