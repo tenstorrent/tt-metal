@@ -12,8 +12,12 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import is_blackhole
 from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from diffusers.utils import export_to_video
-from ....parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
 from ....utils.test import line_params, ring_params
+
+
+@pytest.fixture(scope="function")
+def wan_pipeline(request):
+    model_type = request.model_type
 
 
 @pytest.mark.parametrize(
@@ -86,16 +90,6 @@ def test_pipeline_performance(
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
-
-    parallel_config = DiTParallelConfig(
-        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
-        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
-        cfg_parallel=None,
-    )
-    vae_parallel_config = VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
-        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
-    )
 
     # Test prompts
     prompts = [

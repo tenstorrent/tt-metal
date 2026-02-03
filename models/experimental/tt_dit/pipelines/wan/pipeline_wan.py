@@ -219,6 +219,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
+            device_configs[(2, 2)] = device_configs[(1, 4)]
             device_configs[(1, 8)] = {
                 "sp_axis": 0,
                 "tp_axis": 1,
@@ -235,6 +236,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
+            config = device_configs[tuple(mesh_device.shape)]
         else:
             device_configs[(2, 4)] = {
                 "sp_axis": 0,
@@ -253,7 +255,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "is_fsdp": True,
             }
 
-        config = device_configs[tuple(mesh_device.shape)]
+            config = device_configs[tuple(mesh_device.shape)]
 
         sp_axis = sp_axis or config["sp_axis"]
         tp_axis = tp_axis or config["tp_axis"]
