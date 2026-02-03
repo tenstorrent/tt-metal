@@ -370,8 +370,24 @@ all_gather_minimal_matmul_async_factory_helper(
         (transpose_core_grid ? full_grid_size.y : full_grid_size.x) >= num_mux_cores,
         "The are not enough cores for the number of mux cores requested");
 
-    auto mux_cores =
-        CoreRange(CoreCoord(0, full_grid_size.y - 1), CoreCoord(full_grid_size.x - 1, full_grid_size.y - 1));
+    const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
+        return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
+    };
+
+    std::vector<CoreRange> mux_core_ranges;
+    for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
+        uint32_t dir = mux_id % 2;  // 2 being the number of directions
+        if (mux_connection_valid(dir)) {
+            uint32_t link = mux_id / 2;  // 2 is the num directions
+            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - dir;
+            if (mux_x_index >= full_grid_size.x) {
+                mux_x_index = mux_x_index - full_grid_size.x;
+            }
+            auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
+            mux_core_ranges.emplace_back(mux_logical_core);
+        }
+    }
+    CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
 
     const uint32_t l1_unreserved_base_address =
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -386,10 +402,6 @@ all_gather_minimal_matmul_async_factory_helper(
         0,
         buffer_size_bytes_full_size_channel,
         mux_base_l1_address);
-
-    const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
-        return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
-    };
 
     // all gather
     // L1 Scratch CB Creation
@@ -639,7 +651,7 @@ all_gather_minimal_matmul_async_factory_helper(
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        mux_cores,
+        mux_core_range_set,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
@@ -663,10 +675,10 @@ all_gather_minimal_matmul_async_factory_helper(
     // div_up-based ranges for M and N.
 
     for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
-        uint32_t dir = 1 - (mux_id % 2);  // 2 being the number of directions
+        uint32_t dir = mux_id % 2;  // 2 being the number of directions
         if (mux_connection_valid(dir)) {
             uint32_t link = mux_id / 2;  // 2 is the num directions
-            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
+            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - dir;
             if (mux_x_index >= full_grid_size.x) {
                 mux_x_index = mux_x_index - full_grid_size.x;
             }
