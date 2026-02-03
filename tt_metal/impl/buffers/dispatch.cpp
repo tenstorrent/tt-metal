@@ -115,6 +115,11 @@ public:
 
     virtual ~InterleavedBufferWriteDispatchParams() = default;
 
+    InterleavedBufferWriteDispatchParams(const InterleavedBufferWriteDispatchParams& other) = default;
+    InterleavedBufferWriteDispatchParams& operator=(const InterleavedBufferWriteDispatchParams& other) = default;
+    InterleavedBufferWriteDispatchParams(InterleavedBufferWriteDispatchParams&& other) = default;
+    InterleavedBufferWriteDispatchParams& operator=(InterleavedBufferWriteDispatchParams&& other) = default;
+
     virtual void calculate_num_pages_for_write_transaction(uint32_t num_pages_available_in_cq) {
         this->pages_per_txn = std::min(this->total_pages_to_write, num_pages_available_in_cq);
     }
