@@ -65,8 +65,12 @@ struct BufferWriteDispatchParams {
     bool remote_chip = false;
 
     BufferWriteDispatchParams() = default;
-    BufferWriteDispatchParams(uint32_t src_noc_xy, uint64_t src_addr, bool src_pinned = false, bool remote_chip = false) :
-        pinned_src_noc_xy{src_noc_xy}, pinned_src_addr{src_addr}, use_pinned_transfer{src_pinned}, remote_chip{remote_chip} {}
+    BufferWriteDispatchParams(
+        uint32_t src_noc_xy, uint64_t src_addr, bool src_pinned = false, bool remote_chip = false) :
+        pinned_src_noc_xy{src_noc_xy},
+        pinned_src_addr{src_addr},
+        use_pinned_transfer{src_pinned},
+        remote_chip{remote_chip} {}
 
     void calculate_issue_wait() {
         this->issue_wait = this->total_pages_written == 0;  // only stall for the first write of the buffer

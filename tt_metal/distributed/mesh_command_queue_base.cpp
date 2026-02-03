@@ -226,10 +226,10 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    
+
     // Track if any transfer actually used pinned memory
     std::atomic<bool> any_pinned_used = false;
-    
+
     auto dispatch_lambda = [&shard_data_transfers, &buffer, &any_pinned_used, this](uint32_t shard_idx) {
         const auto& shard_data_transfer = shard_data_transfers[shard_idx];
         bool pinned_used = this->write_shard_to_device(
