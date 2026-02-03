@@ -253,7 +253,9 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
                                          const tt::tt_metal::Shape& output_padded_shape) -> MemoryConfig {
         if (input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             auto shard_spec = input_memory_config.shard_spec().value();
+            auto shard_volume = shard_spec.numel();
             shard_spec.shape[1] = output_padded_shape[-1];  // update output shard to match new shard width
+            shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
             return MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
         }
         return input_memory_config;

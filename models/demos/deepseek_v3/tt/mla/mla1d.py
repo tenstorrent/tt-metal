@@ -51,7 +51,7 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 class MLA1D(AbstractModule):
     """
-    Pipeline-Parallel Multi-Latent Attention Module for 1D tensor parallelism.
+    Multi-Latent Attention Module for 1D tensor parallelism.
     """
 
     @classmethod
@@ -766,46 +766,50 @@ class MLA1D(AbstractModule):
     ) -> ModelState:
         if kv_cache_override is None:
             kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
-            cache_shape = (paged_config.max_num_blocks * mesh_device.shape[1], 1, paged_config.block_size, kvpe_dim)
+            cache_shape = (paged_config.max_num_blocks, 1, paged_config.block_size, kvpe_dim)
         else:
             kv_cache_shape = kv_cache_override.kv_cache_shape
             cache_shape = (
-                kv_cache_shape[0] * mesh_device.shape[1],
+                kv_cache_shape[0],
                 kv_cache_shape[1],
                 kv_cache_shape[2],
                 kv_cache_shape[3],
             )
 
-        assert (
-            caches is None
-            or len(caches) == mesh_device.shape[0]
-            and all(cache.shape == cache_shape for cache in caches)
-        )
-        if caches is None:
-            caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
-
+        assert caches is None or len(caches) == mesh_device.shape[0]
         # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mesh_shape": mesh_device.shape,
-            "kvpe_cache": cls._convert_cache(tuple(caches), mesh_device),
+            "kvpe_cache": cls._convert_cache(caches, cache_shape, mesh_device),
             "ccl": ccl,
         }
 
     @classmethod
     def _convert_cache(
         cls,
-        caches: tuple[torch.Tensor, ...],
+        caches: tuple[torch.Tensor, ...] | None,
+        cache_shape: tuple[int, ...],
         mesh_device: ttnn.MeshDevice,
     ) -> ttnn.Tensor:
-        return ttnn.as_tensor(
-            torch.concatenate(caches),
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
-        )
+        if caches is None:
+            # ttnn.zeros doesn't accept a mesh_mapper, so we need to pass correct shape per device. It replicates the tensor across the devices.
+            return ttnn.zeros(
+                shape=cache_shape,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            return ttnn.as_tensor(
+                torch.concatenate(tuple(caches)),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
+            )
 
     @classmethod
     def forward_decode(
@@ -1037,7 +1041,7 @@ class MLA1D(AbstractModule):
         # Strategy: Process each chunk independently to keep all_gather buffers small
         SEQ_LEN_CHUNK_SIZE = 8192
         if seq_len > SEQ_LEN_CHUNK_SIZE:
-            num_heads_local = v_out.shape[2]
+            num_heads = v_out.shape[2]
             v_head_dim = v_out.shape[3]
             # Use ceiling division instead of even_int_div to handle non-multiples of 8192
             num_chunks = (seq_len + SEQ_LEN_CHUNK_SIZE - 1) // SEQ_LEN_CHUNK_SIZE
@@ -1049,15 +1053,11 @@ class MLA1D(AbstractModule):
                 v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
 
             output_chunks = []
-            num_heads = cfg["num_heads"]
             hidden_dim = num_heads * v_head_dim
             for chunk_idx in range(num_chunks):
                 start = chunk_idx * SEQ_LEN_CHUNK_SIZE
                 end = start + SEQ_LEN_CHUNK_SIZE
-                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads_local, v_head_dim))
-                v_chunk = ttnn.experimental.all_gather_async(
-                    v_chunk, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-                )  # [1, chunk_size, num_heads, v_head_dim]
+                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads, v_head_dim))
                 v_chunk = ttnn.reshape(v_chunk, (1, 1, SEQ_LEN_CHUNK_SIZE, hidden_dim))
                 out_chunk = ttnn.linear(v_chunk, **cfg["wo"])  # [1, 1, chunk_size, dim]
                 output_chunks.append(out_chunk)

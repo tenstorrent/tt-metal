@@ -64,20 +64,20 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 1024)
+#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 2560)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
-#define MEM_NCRISC_FIRMWARE_SIZE 1536
-#define MEM_TRISC0_FIRMWARE_SIZE 1536
-#define MEM_TRISC1_FIRMWARE_SIZE 1536
-#define MEM_TRISC2_FIRMWARE_SIZE 1536
+#define MEM_NCRISC_FIRMWARE_SIZE 2560
+#define MEM_TRISC0_FIRMWARE_SIZE 2560
+#define MEM_TRISC1_FIRMWARE_SIZE 2560
+#define MEM_TRISC2_FIRMWARE_SIZE 2560
 
 // Blackhole Architecture - No IRAM constraints
 // Per-kernel limits set to maximum available L1
 // These are enforced by the ELF loader in tt_elffile.cpp
 // The real constraint is the kernel_config_buffer aggregate limit, configurable via
 // worker_l1_size in MeshDevice::create_unit_meshes
-// 1503 KB = 1536 KB (L1 total) - 33 KB (MEM_MAP_END system reserved)
-#define MEM_MAX_KERNEL_SIZE (1503 * 1024)
+// Max kernel size = 1536 KB (L1 total) - MEM_MAP_END (system reserved)
+#define MEM_MAX_KERNEL_SIZE (1497 * 1024)
 
 #define MEM_BRISC_KERNEL_SIZE MEM_MAX_KERNEL_SIZE
 #define MEM_NCRISC_KERNEL_SIZE MEM_MAX_KERNEL_SIZE
@@ -110,7 +110,7 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12768
+#define MEM_MAILBOX_SIZE 12896
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -139,8 +139,8 @@
 
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_CONNECTION_LOCK_BASE + MEM_FABRIC_CONNECTION_LOCK_SIZE)
-#define MEM_ROUTING_TABLE_SIZE 2544  // struct layout: base(484) + union(1024) + exit(1024) + pad(12)
-#define MEM_OFFSET_OF_ROUTING_PATHS 484
+#define MEM_ROUTING_TABLE_SIZE 2576  // struct layout: base(516) + union(1024) + exit(1024) + pad(12)
+#define MEM_OFFSET_OF_ROUTING_PATHS 516
 #define MEM_ROUTING_TABLE_PADDING 12
 
 #define ROUTING_PATH_SIZE_1D 1024  // 64 chips × 16 bytes
@@ -149,8 +149,8 @@
 #define COMPRESSED_ROUTING_PATH_SIZE_2D 1024  // sizeof(intra_mesh_routing_path_t<2, true>)
 // Union: 1D and 2D routing tables share the same offset
 #define MEM_TENSIX_ROUTING_PATH_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS)
-#define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE  // 484
-#define MEM_TENSIX_ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE  // 484
+#define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE  // 516
+#define MEM_TENSIX_ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE  // 516
 #define MEM_TENSIX_ROUTING_PATH_SIZE 1024                             // max(1024, 1024)
 
 #define MEM_TENSIX_EXIT_NODE_TABLE_BASE (MEM_TENSIX_ROUTING_PATH_BASE + MEM_TENSIX_ROUTING_PATH_SIZE)
@@ -237,7 +237,6 @@
 #define MEM_SYSENG_RESERVED_BASE (MEM_ETH_SIZE - MEM_SYSENG_RESERVED_SIZE)
 #define MEM_ERISC_BARRIER_BASE (MEM_SYSENG_RESERVED_BASE - MEM_ERISC_L1_BARRIER_SIZE)
 #define MEM_ERISC_APP_ROUTING_INFO_BASE (MEM_ERISC_BARRIER_BASE - MEM_ERISC_APP_ROUTING_INFO_SIZE)
-
 #define MEM_ERISC_APP_SYNC_INFO_BASE (MEM_ERISC_APP_ROUTING_INFO_BASE - MEM_ERISC_SYNC_INFO_SIZE)
 #define MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE (MEM_ERISC_APP_SYNC_INFO_BASE - MEM_ERISC_FABRIC_ROUTER_RESERVED_SIZE)
 
@@ -258,6 +257,8 @@
 #define MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D MEM_AERISC_FABRIC_ROUTING_PATH_BASE
 #define MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D MEM_AERISC_FABRIC_ROUTING_PATH_BASE
 #define MEM_AERISC_EXIT_NODE_TABLE_BASE (MEM_AERISC_FABRIC_ROUTING_PATH_BASE + MEM_ERISC_FABRIC_ROUTING_PATH_SIZE)
+#define MEM_AERISC_FABRIC_ROUTER_STATE_BASE MEM_AERISC_ROUTING_TABLE_BASE
+#define MEM_AERISC_FABRIC_ROUTER_COMMAND_BASE (MEM_AERISC_ROUTING_TABLE_BASE + 16)
 
 // This is now the maximum size available for your application
 #define MEM_ERISC_MAX_SIZE MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE
