@@ -62,7 +62,7 @@ Tensor rms_norm(
         bias,
         residual_input_tensor,
         output_memory_config,
-        program_config.value_or(ttnn::prim::create_program_config(input_tensor.shard_spec())),
+        program_config.value_or(ttnn::prim::create_layernorm_program_config(input_tensor.shard_spec())),
         kernel_config_val,
         std::nullopt,  // dtype
         prim::LayerNormType::RMSNORM);
