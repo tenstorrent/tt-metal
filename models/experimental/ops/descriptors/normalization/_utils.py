@@ -48,7 +48,6 @@ def _create_layernorm_op_descriptor(
     program_config: Optional["ttnn.LayerNormProgramConfig"] = None,
 ) -> "OpDescriptor":
     """Create a layernorm/rmsnorm op descriptor."""
-    device = input_tensor.device()
 
     # For non-sharded inputs, core_range_set is required
     if not input_tensor.is_sharded() and core_range_set is None:
