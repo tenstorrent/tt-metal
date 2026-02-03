@@ -240,7 +240,9 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     logger.info(f"  Output shard shape: {output_shard_shape}")
     logger.info(f"  Num cores: {num_cores}")
     logger.info(f"  Scale: {scale}")
+    print("here", tt_q.shape, tt_kvpe_cache.shape)
 
+    # Pass only K cache; V is read from first head_dim_v (kv_lora_rank) dims of K (MLA semantics, matches mla1d.py).
     tt_output = ttnn.transformer.paged_flash_multi_latent_attention_decode(
         tt_q,
         tt_kvpe_cache,
@@ -310,24 +312,21 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     ttnn.synchronize_device(device)
 
     # Verify output shape and correctness against PyTorch reference.
-    # KVPE cache is used as both K and V in MLA; V uses first kv_lora_rank dims.
-    # Use first user only to match Q batch size 1; output head_dim is kv_lora_rank (512).
+    # KVPE cache: K uses full head_dim 576; V is first kv_lora_rank (512) dims (MLA semantics).
+    # Device Q has batch 1 (single user); run reference for user 0 only so shapes and semantics match.
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_torch(tt_output)
+    print("here", torch_q.shape, torch_kvpe_cache.shape)
     torch_output = scaled_dot_product_attention_reference(
         torch_q,
-        torch_kvpe_cache,  # K: first user, full head_dim 576
-        torch_kvpe_cache[..., :512],  # V: first user, kv_lora_rank 512
-        position_idxs,
+        torch_kvpe_cache[0:1],  # K: user 0 only, [1, 1, 2048, 576]
+        torch_kvpe_cache[0:1, ..., :kv_lora_rank],  # V: user 0 only, first 512 dims
+        position_idxs[0:1],  # start index for user 0
         padded_layer_len,
         scale,
     )
-    print(tt_output.shape)  # torch.Size([1, 4, 128, 512])
-    print(torch_output.shape)  # torch.Size([4, 4, 128, 512])
-    torch_output = torch_output[3:4, :, :, :]
-
     assert list(tt_output.shape) == output_shape, f"Shape mismatch: {list(tt_output.shape)} != {output_shape}"
-    assert_with_pcc(tt_output, torch_output, pcc=0.99)
+    assert_with_pcc(torch_output, tt_output, pcc=0.99)
 
     # PCC check allows for bfloat16 / accumulation differences vs PyTorch reference
     logger.info(f"✓ Trace mode {op_name} test passed with correct output shape")

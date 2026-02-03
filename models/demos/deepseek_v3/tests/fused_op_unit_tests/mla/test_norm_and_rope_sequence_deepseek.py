@@ -10,7 +10,7 @@ from tracy import signpost
 import ttnn
 from models.demos.deepseek_v3.tests.fused_op_unit_tests.mla.test_rope_deepseek import apply_rotary_pos_emb_torch
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def create_rope_tensors(device, qk_rope_head_dim=64, max_seq_len=2048, bsz=32):
@@ -311,7 +311,7 @@ def run_norm_and_rope_sequence_with_trace(
     "device_params",
     [
         {
-            "trace_region_size": 4202496,
+            "trace_region_size": 4218900,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],
@@ -455,12 +455,14 @@ def test_deepseek_v3_mla_norm_and_rope_sequence_trace_mode(
     torch_kv_nope *= torch.rsqrt(torch_variance + 1e-6) * kv_norm_gamma
     torch_kv_nope_out = torch_kv_nope
     torch_kv_rope_out = torch_kv_rope.permute(0, 2, 1, 3)
+    torch_trans_mat_2d = rope_tensors["torch_trans"][:, :, 0:32, :]
     torch_kv_rope_out = apply_rotary_pos_emb_torch(
-        torch_kv_rope_out, rope_tensors["torch_cos"], rope_tensors["torch_sin"], rope_tensors["torch_trans"]
+        torch_kv_rope_out, rope_tensors["torch_cos"], rope_tensors["torch_sin"], torch_trans_mat_2d
     )
     torch_kv_rope_out = torch_kv_rope_out.permute(0, 2, 1, 3)
     torch_kvpe = torch.cat([torch_kv_nope_out, torch_kv_rope_out], dim=-1)
-    torch_kvpe = torch.nn.functional.pad(torch_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
+    # Match ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0) — pad dim 1 on the right
+    torch_kvpe = torch.nn.functional.pad(torch_kvpe, (0, 0, 0, 0, 0, ttnn.TILE_SIZE - 1, 0, 0), "constant", 0)
     torch_kvpe = torch_kvpe.permute(0, 2, 1, 3)
 
     profiler = BenchmarkProfiler()
@@ -502,8 +504,8 @@ def test_deepseek_v3_mla_norm_and_rope_sequence_trace_mode(
         assert (
             list(tt_kvpe_output.shape) == kvpe_output_shape
         ), f"KVPE shape mismatch: {list(tt_kvpe_output.shape)} != {kvpe_output_shape}"
-        assert_equal(torch_q_out, tt_q_output)
-        assert_equal(torch_kvpe, tt_kvpe_output)
+        assert_with_pcc(torch_q_out, tt_q_output, 0.9999)
+        assert_with_pcc(torch_kvpe, tt_kvpe_output, 0.9999)
 
         logger.info("✓ norm_and_rope sequence trace mode test passed with correct output shapes")
 

@@ -9,6 +9,7 @@ from tracy import signpost
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def run_wkv_b2_sequence_with_trace(
@@ -244,7 +245,7 @@ def test_deepseek_v3_mla_wkv_b2_sequence_trace_mode(
 
         assert list(tt_v_output.shape) == output_shape, f"V shape mismatch: {list(tt_v_output.shape)} != {output_shape}"
 
-        assert_with_pcc(torch_v_out, tt_v_output)
+        assert_with_pcc(torch_v_out, tt_v_output, 0.9999)
         logger.info("✓ wkv_b2 sequence trace mode test passed with correct output shape")
 
     finally:
