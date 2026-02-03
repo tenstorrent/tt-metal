@@ -8,7 +8,7 @@
 #include "risc_common.h"
 #include <tensix.h>
 #include "hostdev/dev_msgs.h"
-#include "hostdevcommon/common_values.hpp"
+#include "hostdev/rta_constants.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
 

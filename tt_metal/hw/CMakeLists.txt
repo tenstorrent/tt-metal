@@ -547,6 +547,7 @@ target_sources(
             # Interface Headers - Host-Device boundary
             inc/hostdev/dev_msgs.h
             inc/hostdev/fabric_telemetry_msgs.h
+            inc/hostdev/rta_constants.h
             inc/hostdev/socket.h
             # Interface Headers
             inc/internal/atomic_rwptr.h
