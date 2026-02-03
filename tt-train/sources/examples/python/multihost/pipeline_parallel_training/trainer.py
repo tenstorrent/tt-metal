@@ -11,7 +11,9 @@ from ttml.common.data import get_batch, build_causal_mask
 from ttml.common.utils import PerformanceMeter, no_grad
 
 
-def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False):
+def get_batch_ttml(
+    ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False
+):
     """Prepare a batch of data for TTML training.
 
     Args:
@@ -35,14 +37,18 @@ def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool
             ttnn.DataType.UINT32,
             mapper,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
+        tt_y = ttml.autograd.Tensor.from_numpy(
+            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
+        )
     else:
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
             ttnn.Layout.ROW_MAJOR,
             ttnn.DataType.UINT32,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+        tt_y = ttml.autograd.Tensor.from_numpy(
+            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
+        )
     return tt_x, tt_y
 
 
@@ -79,8 +85,10 @@ def train(
     loss_fn = ttml.ops.loss.cross_entropy_loss
     reduce = ttml.ops.ReduceType.MEAN
 
-    causal_mask = build_causal_mask(cfg.seq_len)
-    tt_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+    causal_mask = build_causal_mask(seq_len)
+    tt_mask = ttml.autograd.Tensor.from_numpy(
+        causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
+    )
 
     # Setup distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -93,7 +101,9 @@ def train(
     is_first_stage = rank == 0
     is_final_stage = rank == world_size - 1
 
-    assert world_size > 1, f"Pipeline parallel requires world_size > 1, got {world_size}"
+    assert (
+        world_size > 1
+    ), f"Pipeline parallel requires world_size > 1, got {world_size}"
 
     # Create composer for distributed tensors if using DDP or TP
     composer = None
@@ -123,8 +133,10 @@ def train(
             # Only the final stage computes loss, so it needs the correct targets
             if is_first_stage:
                 socket_manager.send(tt_y, distributed_ctx, world_size - 1)
+                print("!!!!!!!!!!!!! Sent from first stage!")
             elif is_final_stage:
                 tt_y = socket_manager.recv(tt_y, distributed_ctx, 0)
+                print("!!!!!!!!!!!!!! received from final stage!")
 
             # Forward and backward pass
             # Pipeline model automatically handles inter-stage communication

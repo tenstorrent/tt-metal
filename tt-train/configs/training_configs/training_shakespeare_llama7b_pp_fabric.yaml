@@ -15,7 +15,7 @@ training_config:
   tokenizer_path: "data/tinyllama-tokenizer.json"
   tokenizer_type: "bpe"
   model_config: "model_configs/llama8b_pp.yaml"
-  multihost_config: multihost_configs/5worker_32block_pp_fabric.yaml
+  multihost_config: multihost_configs/4worker_32block_pp_fabric.yaml
 
 eval_config:
   repetition_penalty: 1.0
@@ -25,4 +25,4 @@ eval_config:
 
 device_config:
   enable_tp: true
-  mesh_shape: [1, 8]
+  mesh_shape: [1, 32]
