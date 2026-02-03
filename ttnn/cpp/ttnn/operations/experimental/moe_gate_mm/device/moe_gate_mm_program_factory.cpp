@@ -39,6 +39,9 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
         | cb_w2c_in2     | CBIndex::c_3  | Float32    | true  |    1     |      2048       |
         | cb_s2c_out(sh) | CBIndex::c_4  | Float16_b  | true  |    1     |      2048       |
+        | cb_w2c_in3     | CBIndex::c_5  | Float16_b  | true  |    8     |      16384      |
+        | cb_w2c_in4     | CBIndex::c_6  | Float16_b  | true  |    7     |      14336      |
+        | cb_w2c_in5     | CBIndex::c_7  | Float16_b  | true  |    1     |      2048       |
         ------------------------------------------------------------------------------------
     */
 
@@ -47,6 +50,9 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Float16_b, true, 32 * 3},
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_in2", tt::CBIndex::c_3, tt::DataFormat::Float32, true, 1},
+        {"cb_w2c_in3", tt::CBIndex::c_5, tt::DataFormat::Float16_b, true, 8},
+        {"cb_w2c_in4", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, 7},
+        {"cb_w2c_in5", tt::CBIndex::c_7, tt::DataFormat::Float16_b, true, 1},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
@@ -158,10 +164,19 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         const auto& core_next2 = device->worker_core_from_logical_core(dram_bank2core_coords[bank_id_next2]);
 
         dram_bank2neighbors[bank_id] = {1, core_next1.x, core_next1.y, core_next2.x, core_next2.y};
-
-        log_warning(
-            tt::LogOp, "bank_id: {}, bank_id_next1: {}, bank_id_next2: {}", bank_id, bank_id_next1, bank_id_next2);
     }
+
+    // We also need the reverse mapping for bank_id to N tile_id
+    std::unordered_map<uint32_t, uint32_t> bank2tile_id;
+    uint32_t tile_id = 0;
+    for (uint32_t core_id = 0; core_id < num_cores; core_id++) {
+        if ((core_id % 3) == 0) {
+            continue;
+        }
+        bank2tile_id[ring_pos2bank_id[core_id]] = tile_id++;
+    }
+
+    const auto& core_collector = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[11]]);
 
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> runtime_args;
@@ -179,6 +194,9 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     runtime_args.push_back(0);  // Neighbor1 physical y
     runtime_args.push_back(0);  // Neighbor2 physical x
     runtime_args.push_back(0);  // Neighbor2 physical y
+    runtime_args.push_back(0);  // Collector core ID
+    runtime_args.push_back(core_collector.x);  // Collector physical x
+    runtime_args.push_back(core_collector.y);  // Collector physical y
 
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
@@ -211,12 +229,18 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
             runtime_args[8] = dram_bank2neighbors[dram_bank][2];
             runtime_args[9] = dram_bank2neighbors[dram_bank][3];
             runtime_args[10] = dram_bank2neighbors[dram_bank][4];
+            runtime_args[11] = 0;
+            runtime_args[12] = 0;
+            runtime_args[13] = 0;
         } else {
             runtime_args[6] = 0;
             runtime_args[7] = 0;
             runtime_args[8] = 0;
             runtime_args[9] = 0;
             runtime_args[10] = 0;
+            runtime_args[11] = bank2tile_id[dram_bank];
+            runtime_args[12] = core_collector.x;
+            runtime_args[13] = core_collector.y;
         }
 
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);

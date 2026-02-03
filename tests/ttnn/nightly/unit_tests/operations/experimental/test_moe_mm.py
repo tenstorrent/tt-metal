@@ -63,6 +63,8 @@ def create_torch_bias(L, N):
     """
     # torch_bias = torch.rand((L, N), dtype=torch.bfloat16) - 0.5
     torch_bias = torch.rand((L, N), dtype=torch.bfloat16) - 5
+    # Add 1 for each "N" dimension.
+    torch_bias = torch_bias + 1 + 1 / 256 * torch.arange(N, dtype=torch.bfloat16).view(1, -1)
     return torch_bias
 
 
@@ -147,7 +149,14 @@ def prepare_output_tensor(tt_output, ring2cores):
         if not send_flag:
             each_shard.append(tt_output[:, current_column : current_column + ttnn.TILE_SIZE])
         current_column += ttnn.TILE_SIZE
-    return torch.cat(each_shard, dim=1)
+    output = torch.cat(each_shard, dim=1)
+
+    # Get the 32 scores values from each tile.
+    f1_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[3, :, :16]
+    f2_scores = output.view(output.shape[0], -1, ttnn.TILE_SIZE)[4, :, :16]
+
+    group_scores = torch.cat([f1_scores, f2_scores], dim=-1)
+    return group_scores.transpose(0, 1)
 
 
 def get_accuracy_metrics(torch_output, tt_output):
@@ -324,13 +333,24 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
             torch_sigmoid_out = torch.nn.functional.sigmoid(torch_mm_out)
             torch_bias_out = torch_sigmoid_out + torch_bias[:, None, :]
 
-            torch_w_output_ref = torch_bias_out
+            # Make columns in groups of 8
+            num_groups = 8
+            torch_bias_out = torch_bias_out.reshape(L, M, num_groups, -1)
+
+            # Sort values for each L,M and for each group.
+            torch_sorted_groups = torch.sort(torch_bias_out, dim=-1, descending=True).values
+
+            # Get the sum of the top-2 values for each group.
+            group_scores = torch_sorted_groups[:, :, :, :2].sum(dim=-1)
+
+            torch_w_output_ref = group_scores.view(L, M, num_groups)
 
         # Calculate accuracy metrics for each layer
         for layer_id in range(L):
             torch_layer_output = torch_w_output_ref[layer_id, :, :]
             tt_layer_output = tt_to_torch_outputs[layer_id, :, :]
             tt_output = prepare_output_tensor(tt_layer_output, ring2cores)
+            # breakpoint()
             layer_metrics = get_accuracy_metrics(torch_layer_output, tt_output)
             all_accuracy_metrics[layer_id] = layer_metrics
 
@@ -349,7 +369,7 @@ def run_test_moe_mm(device, M, K, N, L, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 256, 1): 18.0,
+    (32, 7168, 256, 1): 20.0,
 }
 
 

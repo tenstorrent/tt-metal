@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
 // Triple buffering constants
@@ -39,7 +39,7 @@ void kernel_main() {
     const auto w_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
     const auto partial_semaphore = get_arg_val<uint32_t>(argidx++);
-    const auto send_core = get_arg_val<uint32_t>(argidx++);
+    const auto is_send_core = get_arg_val<uint32_t>(argidx++);
     const auto neighbor1_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto neighbor1_physical_y = get_arg_val<uint32_t>(argidx++);
     const auto neighbor2_physical_x = get_arg_val<uint32_t>(argidx++);
@@ -61,7 +61,7 @@ void kernel_main() {
     constexpr uint32_t noc_packet_size = 8192;
 
     // Constants for MoE Gate MM
-    const uint32_t num_w_tiles_h = send_core ? (2 * 72) : (2 * 76 + 1);
+    const uint32_t num_w_tiles_h = is_send_core ? (2 * 72) : (2 * 76 + 1);
     constexpr uint32_t num_w_tiles_w = 1;
 
     //-------------------------------------------------------------------------
