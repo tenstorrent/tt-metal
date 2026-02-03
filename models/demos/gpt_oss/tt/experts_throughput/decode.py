@@ -51,6 +51,7 @@ def _apply_swiglu(
     ttnn.deallocate(up)
 
     # Compute gate_alpha = gate * alpha
+    gate_clamped_for_glu = ttnn.clone(gate_clamped)
     gate_alpha = ttnn.mul(gate_clamped, alpha)
 
     # Compute gate_sigmoid = sigmoid(gate_alpha)
@@ -58,8 +59,9 @@ def _apply_swiglu(
     ttnn.deallocate(gate_alpha)
 
     # Compute glu = gate * gate_sigmoid
-    glu = ttnn.mul(gate_clamped, gate_sigmoid, memory_config=memory_config)
+    glu = ttnn.mul(gate_clamped_for_glu, gate_sigmoid, memory_config=memory_config)
     ttnn.deallocate(gate_clamped)
+    ttnn.deallocate(gate_clamped_for_glu)
     ttnn.deallocate(gate_sigmoid)
 
     # Add 1 to up: up = up + 1
@@ -174,12 +176,16 @@ def decode_forward(
     # With output_concat_dim=2, outputs have seq_len scaled:
     #   - dispatch_output: [D, 1, total_tokens, H] - tokens scattered to expert devices
     #   - dispatch_metadata: [D, 1, total_tokens, K] - expert indices (for combine routing)
+    expert_mapping_for_dispatch = expert_mapping_tensors
+    expert_mapping_for_remap = ttnn.clone(expert_mapping_tensors)
+    expert_mapping_for_combine = ttnn.clone(expert_mapping_tensors)
     dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
         hidden_rm,
         topk_indices_rm,
-        expert_mapping_tensors,
+        expert_mapping_for_dispatch,
         **dispatch_config.as_dict(),
     )
+    dispatch_metadata_for_combine = ttnn.clone(dispatch_metadata)
     ttnn.deallocate(hidden_rm)
     ttnn.deallocate(topk_indices_rm)
 
@@ -204,10 +210,12 @@ def decode_forward(
     # avoiding computation on empty slots.
     _, sparsity = ttnn.moe_expert_token_remap(
         remap_mask,
-        expert_mapping_tensors,
+        expert_mapping_for_remap,
         dispatch_metadata,
         reduction_size=config.sparsity_block_size,
     )
+    ttnn.deallocate(expert_mapping_for_remap)
+    ttnn.deallocate(dispatch_metadata)
     ttnn.deallocate(remap_mask)
 
     # ==========================================================================
@@ -244,6 +252,9 @@ def decode_forward(
     # significantly reducing computation for sparse expert activation patterns.
 
     # Gate projection (w1): [B*S/block, block, H] x [experts, H, I] -> [B*S/block, experts, block, I]
+    expert_input_for_w3 = ttnn.clone(expert_input)
+    sparsity_for_w3 = ttnn.clone(sparsity)
+    sparsity_for_w2 = ttnn.clone(sparsity)
     w1_out = ttnn.sparse_matmul(
         expert_input,
         weights.w1,
@@ -262,9 +273,9 @@ def decode_forward(
 
     # Up projection (w3): same shape as gate
     w3_out = ttnn.sparse_matmul(
-        expert_input,
+        expert_input_for_w3,
         weights.w3,
-        sparsity=sparsity,
+        sparsity=sparsity_for_w3,
         memory_config=memory_config,
         program_config=program_config.get_gate_up_config(config.intermediate_size),
         is_input_a_sparse=False,
@@ -272,6 +283,7 @@ def decode_forward(
         output_tile=ttnn.Tile([config.sparsity_block_size, ttnn.TILE_SIZE]),
     )
     ttnn.deallocate(expert_input)
+    ttnn.deallocate(expert_input_for_w3)
 
     # Add up bias
     # w3_out shape: [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
@@ -295,7 +307,7 @@ def decode_forward(
     expert_output_sparse = ttnn.sparse_matmul(
         activated,
         weights.w2,
-        sparsity=sparsity,
+        sparsity=sparsity_for_w2,
         memory_config=memory_config,
         program_config=program_config.get_down_config(config.hidden_size),
         is_input_a_sparse=True,
@@ -304,6 +316,8 @@ def decode_forward(
     )
     ttnn.deallocate(activated)
     ttnn.deallocate(sparsity)
+    ttnn.deallocate(sparsity_for_w3)
+    ttnn.deallocate(sparsity_for_w2)
 
     # Add down projection bias
     # expert_output shape: [num_sparse_blocks, num_experts_per_device, block_size, hidden]
@@ -345,12 +359,13 @@ def decode_forward(
     # (each token gets outputs from k experts stacked in first dimension)
     combine_output = ttnn.all_to_all_combine(
         expert_output,
-        dispatch_metadata,
-        expert_mapping_tensors,
+        dispatch_metadata_for_combine,
+        expert_mapping_for_combine,
         **combine_config.as_dict(),
     )
     ttnn.deallocate(expert_output)
-    ttnn.deallocate(dispatch_metadata)
+    ttnn.deallocate(dispatch_metadata_for_combine)
+    ttnn.deallocate(expert_mapping_for_combine)
 
     # ==========================================================================
     # STEP 8: APPLY ROUTING WEIGHTS AND REDUCE ACROSS EXPERTS

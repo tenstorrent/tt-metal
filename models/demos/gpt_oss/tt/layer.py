@@ -99,7 +99,7 @@ class DecoderLayer:
     ):
         # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
-        residual = hidden_states
+        residual = ttnn.clone(hidden_states)
         hidden_states_post_norm = self.input_layernorm(hidden_states)
 
         # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
@@ -118,7 +118,7 @@ class DecoderLayer:
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
-        residual = hidden_states
+        residual = ttnn.clone(hidden_states)
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
         # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
 
