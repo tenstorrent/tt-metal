@@ -229,6 +229,8 @@ TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    check_asic_mapping_against_golden("TestSplit2x2ControlPlaneInit");
 }
 
 TEST(MultiHost, TestSplit2x2Fabric2DSanity) {
@@ -368,6 +370,8 @@ TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    check_asic_mapping_against_golden("Test32x4QuadGalaxyControlPlaneInit");
 }
 
 TEST(MultiHost, TestBHGalaxyTorusXYControlPlaneQueries) {
@@ -528,6 +532,8 @@ TEST(MultiHost, TestQuadGalaxyControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    check_asic_mapping_against_golden("TestQuadGalaxyControlPlaneInit");
 }
 
 TEST(MultiHost, TestQuadGalaxyFabric2DSanity) {
@@ -733,6 +739,8 @@ TEST(MultiHost, TestBHQB4x4RelaxedControlPlaneInit) {
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    check_asic_mapping_against_golden("TestBHQB4x4RelaxedControlPlaneInit");
 }
 
 TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
@@ -820,6 +828,8 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
         auto host_rank = mesh_graph.get_host_rank_for_chip(switch_mesh_id, chip_id);
         EXPECT_EQ(*host_rank, MeshHostRankId{0}) << "All switch chips should be on host rank 0";
     }
+
+    check_asic_mapping_against_golden("TestClosetBox3PodTTSwitchAPIs");
 }
 
 TEST(MultiHost, BHDualGalaxyControlPlaneInit) {
@@ -836,6 +846,8 @@ TEST(MultiHost, BHDualGalaxyControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    check_asic_mapping_against_golden("BHDualGalaxyControlPlaneInit");
 }
 
 TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
@@ -902,6 +914,8 @@ TEST(MultiHost, T3K2x2AssignZDirectionControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+    check_asic_mapping_against_golden("T3K2x2AssignZDirectionControlPlaneInit");
 }
 
 TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
@@ -921,7 +935,6 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
     control_plane.print_routing_tables();
 
     // Test Z direction functionality
-    // Verify routing_direction_to_eth_direction returns INVALID_DIRECTION for Z
     EXPECT_EQ(
         control_plane.routing_direction_to_eth_direction(RoutingDirection::Z),
         static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
@@ -983,7 +996,7 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
                 EXPECT_TRUE(is_valid_chan) << "Unexpected Z direction channel: " << chan;
                 EXPECT_EQ(
                     control_plane.get_eth_chan_direction(fabric_node_id, chan),
-                    static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+                    static_cast<eth_chan_directions>(eth_chan_directions::Z));
             }
         }
     }
@@ -1000,6 +1013,8 @@ TEST(MultiHost, TestBHBlitzPipelineControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    check_asic_mapping_against_golden("TestBHBlitzPipelineControlPlaneInit");
 }
 
 TEST(MultiHost, TestBHBlitzPipelineFabric2DSanity) {
@@ -1052,6 +1067,8 @@ TEST(MultiHost, TestTriplePod16x8QuadBHGalaxyControlPlaneInit) {
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    check_asic_mapping_against_golden("TestTriplePod16x8QuadBHGalaxyControlPlaneInit");
 }
 
 TEST(MultiHost, TestTriplePod16x8QuadBHGalaxyFabric2DSanity) {

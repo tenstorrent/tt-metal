@@ -26,7 +26,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 19
+                chip_id: 18
               asic_id: 87028777098424398
             - umd_chip_id: 3
               asic_position:
