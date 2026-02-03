@@ -10,8 +10,14 @@
 #include <vector>
 #include <hostdevcommon/common_values.hpp>
 #include "umd/device/types/cluster_descriptor_types.hpp"
+#include "device_impl.hpp"
 
 namespace tt::tt_metal {
+
+namespace experimental {
+class DispatchContext;
+}  // namespace experimental
+
 class IDevice;
 class DeviceManager {
 public:
@@ -60,7 +66,7 @@ private:
     bool is_initialized_ = false;
 
     mutable std::mutex lock_;
-    std::vector<std::unique_ptr<tt_metal::IDevice>> devices_;
+    std::vector<std::unique_ptr<Device>> devices_;
 
     bool skip_remote_devices_{};
 
@@ -69,6 +75,7 @@ private:
     std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map_;
     void init_firmware_on_active_devices();
     void activate_device(ChipId id);
+    Device* get_active_device_internal(ChipId device_id) const;
 
     // Initialize DeviceManager
     void initialize_devices(const std::vector<ChipId>& device_ids);
@@ -79,14 +86,18 @@ private:
     // Initialize state for activated devices
     void init_fabric(const std::vector<IDevice*>& active_devices) const;
     void initialize_active_devices();
+    void configure_and_load_fast_dispatch_kernels();
+    void compile_and_load_fabric();
     void add_devices_to_pool(const std::vector<ChipId>& device_ids);
     void wait_for_fabric_router_sync(uint32_t timeout_ms = 5000) const;
-    IDevice* get_device(ChipId id) const;
+    Device* get_device(ChipId id) const;
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void teardown_fd(const std::unordered_set<ChipId>& devices_to_close);
 
     // Retrieves the fabric router sync timeout value from configuration or returns a default
     static uint32_t get_fabric_router_sync_timeout_ms();
+
+    friend class experimental::DispatchContext;
 };
 
 }  // namespace tt::tt_metal

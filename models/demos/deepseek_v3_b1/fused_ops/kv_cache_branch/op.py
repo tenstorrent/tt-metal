@@ -12,7 +12,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_bfloat16_packed, float_to_uint32
+from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
 class KVCacheBranch:
@@ -114,30 +114,27 @@ class KVCacheBranch:
 
         kv_numel = 512
         kv_rmsnorm_num_tiles = kv_numel // (16 * 32)  # 512 / 512 = 1 tile (16x32)
-        kv_rmsnorm_num_faces = 2  # 16x32 tiles have 2 faces (16/16 * 32/16 = 1 * 2)
         inv_sqrt_numel = 1.0 / math.sqrt(float(kv_numel))
-        kv_scalar_packed = float_to_bfloat16_packed(inv_sqrt_numel)
+        kv_scalar_packed = float_to_uint32(inv_sqrt_numel)
         epsilon_packed = float_to_uint32(epsilon)
 
         # CB indices
         # CONSOLIDATE!!!!!!!!!
         # Tile sizes: 1x32 = 64 bytes (BF16), 16x32 = 1024 bytes (BF16), 32x32 = 2048 bytes (BF16)
 
-        rmsnorm_scalars_cb = 8  # 16x32 tile, 1024 bytes (1 tile for reduction scalar)
-        cos_cb = 1  # 1x32 tile, 64 bytes (sharded, Wt tiles per core)
-        sin_cb = 2  # 1x32 tile, 64 bytes (sharded, Wt tiles per core)
-        trans_mat_cb = 3  # 1x32 tile, 64 bytes (sharded, 1 tile per core) - actually 32x32 for matmul
-        rotated_input_interm_cb = 4  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
-        cos_interm_cb = 5  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
-        sin_interm_cb = 6  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
-        dkv_matmul_input_cb = 16  # 1x32 tile, 64 bytes (224 tiles = 1x7168)
+        cos_cb = 0  # 1x32 tile, 64 bytes (sharded, Wt tiles per core)
+        sin_cb = 1  # 1x32 tile, 64 bytes (sharded, Wt tiles per core)
+        trans_mat_cb = 2  # 1x32 tile, 64 bytes (sharded, 1 tile per core) - actually 32x32 for matmul
+        rotated_input_interm_cb = 3  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
+        cos_interm_cb = 4  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
+        sin_interm_cb = 5  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
+        dkv_matmul_input_cb = 6  # 1x32 tile, 64 bytes (224 tiles = 1x7168)
         dkv_matmul_output_cb = 7  # 1x32 tile, 64 bytes (1 tile per core for rope input)
-        dkv_matmul_weights_cb = 10  # 32x32 tile, 2048 bytes (sharded weights)
-        kv_rmsnorm_input_cb = 11  # 16x32 tile, 1024 bytes (gathered data, 1 tile)
-        kv_rmsnorm_interm_cb = 12  # 16x32 tile, 1024 bytes (1 tile intermediate)
-        kv_rmsnorm_gamma_cb = 13  # 16x32 tile, 1024 bytes (sharded gamma, 1 tile)
-        kv_rmsnorm_output_cb = 14  # 16x32 tile, 1024 bytes (sharded output, 1 tile)
-        k_rope_output_cb = 15  # 1x32 tile, 64 bytes (Wt tiles output) - SAME AS KV in merged
+        dkv_matmul_weights_cb = 8  # 32x32 tile, 2048 bytes (sharded weights)
+        kv_rmsnorm_input_cb = 9  # 16x32 tile, 1024 bytes (gathered data, 1 tile)
+        kv_rmsnorm_gamma_cb = 10  # 16x32 tile, 1024 bytes (sharded gamma, 1 tile)
+        kv_rmsnorm_output_cb = 11  # 16x32 tile, 1024 bytes (sharded output, 1 tile)
+        k_rope_output_cb = 12  # 1x32 tile, 64 bytes (Wt tiles output) - SAME AS KV in merged
 
         # DKV Matmul
         dkv_matmul_k_num_tiles = 7168 // 32
@@ -171,17 +168,12 @@ class KVCacheBranch:
 
         kv_rmsnorm_ncrisc_named_compile_time_args = [
             ("kv_rmsnorm_input_cb", kv_rmsnorm_input_cb),
-            ("kv_rmsnorm_interm_cb", kv_rmsnorm_interm_cb),
             ("kv_rmsnorm_gamma_cb", kv_rmsnorm_gamma_cb),
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
-            ("kv_rmsnorm_num_faces", kv_rmsnorm_num_faces),
-            ("kv_rmsnorm_scalars_cb", rmsnorm_scalars_cb),
         ]
         kv_rmsnorm_trisc_named_compile_time_args = [
             ("kv_rmsnorm_input_cb", kv_rmsnorm_input_cb),
-            ("kv_rmsnorm_scalars_cb", rmsnorm_scalars_cb),
-            ("kv_rmsnorm_interm_cb", kv_rmsnorm_interm_cb),
             ("kv_rmsnorm_gamma_cb", kv_rmsnorm_gamma_cb),
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("kv_rmsnorm_num_tiles", kv_rmsnorm_num_tiles),
@@ -327,19 +319,6 @@ class KVCacheBranch:
         kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = kv_rmsnorm_tile_descriptor
         kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = kv_rmsnorm_page_size
 
-        # CB X: KV RMSNorm intermediate buffer (16x32 tiles)
-        kv_rmsnorm_interm_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=kv_rmsnorm_interm_cb,
-            data_format=data_format,
-            page_size=kv_rmsnorm_page_size,
-            tile=kv_rmsnorm_tile_descriptor,
-        )
-        kv_rmsnorm_interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=kv_rmsnorm_num_tiles * kv_rmsnorm_page_size,
-            core_ranges=gamma_tensor.memory_config().shard_spec.grid,
-            format_descriptors=[kv_rmsnorm_interm_cb_format],
-        )
-
         # CB X: KV RMSNorm output buffer
         # kv_rmsnorm_output_cb_format = ttnn.CBFormatDescriptor(
         #    buffer_index=kv_rmsnorm_output_cb,
@@ -356,19 +335,6 @@ class KVCacheBranch:
         kv_rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(kv_rmsnorm_output_cb, output_tensor)
         kv_rmsnorm_output_cb_descriptor.format_descriptors[0].tile = kv_rmsnorm_tile_descriptor
         kv_rmsnorm_output_cb_descriptor.format_descriptors[0].page_size = kv_rmsnorm_page_size
-
-        # CB X: RMSNorm scalars buffer (1 tile for reduction scalar)
-        rmsnorm_scalars_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=rmsnorm_scalars_cb,
-            data_format=data_format,
-            page_size=kv_rmsnorm_page_size,
-            tile=kv_rmsnorm_tile_descriptor,
-        )
-        rmsnorm_scalars_cb_descriptor = ttnn.CBDescriptor(
-            total_size=kv_rmsnorm_page_size,
-            core_ranges=gamma_tensor.memory_config().shard_spec.grid,
-            format_descriptors=[rmsnorm_scalars_cb_format],
-        )
 
         krope_tile_size = TILE_1x32.get_tile_size(data_format)
         krope_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
@@ -459,10 +425,6 @@ class KVCacheBranch:
             + kv_rmsnorm_ncrisc_named_compile_time_args
             + dkv_gather_sender_named_compile_time_args
             + krope_ncrisc_named_compile_time_args,
-            # NCRISC common runtime args:
-            ncrisc_common_runtime_args=[
-                kv_scalar_packed,
-            ],
             # BRISC named compile-time args
             brisc_named_compile_time_args=dkv_gather_receiver_named_compile_time_args
             + dkv_matmul_brisc_named_compile_time_args,
@@ -474,6 +436,7 @@ class KVCacheBranch:
             # TRISC common runtime args: epsilon (used by rmsnorm compute)
             trisc_common_runtime_args=[
                 epsilon_packed,
+                kv_scalar_packed,
             ],
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
@@ -517,9 +480,7 @@ class KVCacheBranch:
                 dkv_matmul_input_cb_descriptor,
                 dkv_matmul_output_cb_descriptor,
                 dkv_matmul_weights_cb_descriptor,
-                rmsnorm_scalars_cb_descriptor,
                 kv_rmsnorm_input_cb_descriptor,
-                kv_rmsnorm_interm_cb_descriptor,
                 kv_rmsnorm_gamma_cb_descriptor,
                 kv_rmsnorm_output_cb_descriptor,
                 cos_cb_descriptor,
