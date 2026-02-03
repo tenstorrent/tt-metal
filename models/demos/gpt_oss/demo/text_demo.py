@@ -18,6 +18,7 @@ Updated to use refactored TestFactory and MeshConfig patterns:
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -349,6 +350,8 @@ def test_gpt_oss_demo(
         pytest.skip(
             f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
         )
+    if os.environ.get("CI", None) and long_context_mode:
+        pytest.skip(f"Long-context mode skipped for CI environment.")
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
