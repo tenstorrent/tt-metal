@@ -47,7 +47,7 @@ def assert_output_accuracy(torch_output, ttnn_output):
         raise ValueError(f"Robust checks are not implemented for dtype: {dtype}")
 
 
-def create_recip_tensor_for_non_sharded(device, w, use_welford):
+def create_recip_tensor(device, w, use_welford):
     """Helper to create reciprocal tensor for non-sharded welford tests."""
     if not use_welford:
         return None
@@ -68,7 +68,7 @@ def test_layer_norm(device, h, w, use_welford, dtype):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    recip_tensor = create_recip_tensor_for_non_sharded(device, w, use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -94,7 +94,7 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    recip_tensor = create_recip_tensor_for_non_sharded(device, w, use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(
         input_tensor, weight=weight, bias=bias, program_config=program_config, recip_tensor=recip_tensor
     )
@@ -124,7 +124,7 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
     bias = ttnn.from_torch(torch_bias, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    recip_tensor = create_recip_tensor_for_non_sharded(device, w, use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(
         input_tensor, weight=weight, bias=bias, program_config=program_config, recip_tensor=recip_tensor
     )
@@ -155,7 +155,7 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welfor
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    recip_tensor = create_recip_tensor_for_non_sharded(device, w, use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(
         input_tensor,
         residual_input_tensor=residual_input_tensor,
@@ -222,7 +222,7 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    recip_tensor = create_recip_tensor_for_non_sharded(device, w, use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -250,7 +250,7 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    recip_tensor = create_recip_tensor_for_non_sharded(device, w, use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(
         input_tensor, weight=weight, bias=bias, program_config=program_config, recip_tensor=recip_tensor
     )
@@ -276,7 +276,7 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    recip_tensor = create_recip_tensor_for_non_sharded(device, w, use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(
         input_tensor, weight=weight, program_config=program_config, recip_tensor=recip_tensor
     )
@@ -302,7 +302,7 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    recip_tensor = create_recip_tensor_for_non_sharded(device, w, use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, bias=bias, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -366,7 +366,7 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    recip_tensor = create_recip_tensor_for_non_sharded(device, w, use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(
         input_tensor,
         residual_input_tensor=residual_input_tensor,
@@ -404,7 +404,7 @@ def test_l1_interleaved(device, use_welford, dtype):
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=l1_interleaved_mem_config
     )
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    recip_tensor = create_recip_tensor_for_non_sharded(device, w, use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -462,7 +462,7 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
 
     # Run layer norm
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    recip_tensor = create_recip_tensor_for_non_sharded(device, w, use_welford)
+    recip_tensor = create_recip_tensor(device, w, use_welford)
     output_ttnn = ttnn.layer_norm(
         tt_input_tensor,
         program_config=program_config,
