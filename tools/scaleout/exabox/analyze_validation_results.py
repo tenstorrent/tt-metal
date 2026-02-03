@@ -17,6 +17,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+# Optional matplotlib import for plotting
+try:
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
 # Constants
 EXPECTED_ITERATIONS = 50
 TIMEOUT_ESCALATION_THRESHOLD = 10.0  # 10% failure rate
@@ -996,6 +1005,144 @@ def output_json(analyses: list[LogAnalysis]):
     print(json.dumps(result, indent=2))
 
 
+def plot_link_histogram(analyses: list[LogAnalysis], output_dir: str) -> str | None:
+    """Generate bar chart of top failing links by frequency."""
+    if not MATPLOTLIB_AVAILABLE:
+        print("Warning: matplotlib not available, skipping histogram plot", file=sys.stderr)
+        return None
+
+    link_stats, _ = aggregate_stats(analyses)
+    if not link_stats:
+        print("No faulty links to plot", file=sys.stderr)
+        return None
+
+    # Sort by count and take top entries
+    sorted_links = sorted(link_stats.items(), key=lambda x: x[1]["count"], reverse=True)[:MAX_HISTOGRAM_ENTRIES]
+
+    if not sorted_links:
+        return None
+
+    # Prepare data
+    labels = [f"{host}:T{tray}:A{asic}:Ch{ch}:{ptype}" for (host, tray, asic, ch, ptype), _ in sorted_links]
+    counts = [stats["count"] for _, stats in sorted_links]
+    crc_errors = [stats["crc"] for _, stats in sorted_links]
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, max(6, len(labels) * 0.4)))
+
+    y_pos = range(len(labels))
+    bars = ax.barh(y_pos, counts, color="steelblue", edgecolor="black", label="Occurrences")
+
+    # Add CRC error overlay if present
+    if any(crc_errors):
+        ax.barh(y_pos, crc_errors, color="salmon", edgecolor="darkred", alpha=0.7, label="CRC Errors")
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(labels, fontsize=9)
+    ax.invert_yaxis()  # Top items at top
+    ax.set_xlabel("Count")
+    ax.set_title(f"Top {len(labels)} Failing Links\n(Total logs analyzed: {len(analyses)})")
+    ax.legend(loc="lower right")
+
+    # Add count labels on bars
+    for i, (count, crc) in enumerate(zip(counts, crc_errors)):
+        ax.text(count + 0.1, i, str(count), va="center", fontsize=8)
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, "faulty_links_histogram.png")
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+    return output_path
+
+
+def plot_host_tray_heatmap(analyses: list[LogAnalysis], output_dir: str) -> str | None:
+    """Generate heatmap of failures by host and tray."""
+    if not MATPLOTLIB_AVAILABLE:
+        print("Warning: matplotlib not available, skipping heatmap plot", file=sys.stderr)
+        return None
+
+    # Aggregate by host and tray
+    host_tray_counts: dict[tuple[str, int], int] = defaultdict(int)
+    for a in analyses:
+        for link in a.faulty_links:
+            host_tray_counts[(link.host, link.tray)] += 1
+
+    if not host_tray_counts:
+        print("No faulty links to plot in heatmap", file=sys.stderr)
+        return None
+
+    # Get unique hosts and trays
+    hosts = sorted(set(h for h, _ in host_tray_counts.keys()))
+    trays = sorted(set(t for _, t in host_tray_counts.keys()))
+
+    if not hosts or not trays:
+        return None
+
+    # Build matrix
+    matrix = [[host_tray_counts.get((h, t), 0) for t in trays] for h in hosts]
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(max(8, len(trays) * 0.8), max(6, len(hosts) * 0.5)))
+
+    # Create heatmap
+    cmap = plt.cm.YlOrRd  # Yellow-Orange-Red colormap
+    im = ax.imshow(matrix, cmap=cmap, aspect="auto")
+
+    # Add colorbar
+    cbar = ax.figure.colorbar(im, ax=ax)
+    cbar.ax.set_ylabel("Failure Count", rotation=-90, va="bottom")
+
+    # Set ticks and labels
+    ax.set_xticks(range(len(trays)))
+    ax.set_yticks(range(len(hosts)))
+    ax.set_xticklabels([f"Tray {t}" for t in trays], fontsize=9)
+    ax.set_yticklabels(hosts, fontsize=9)
+
+    # Add text annotations
+    for i, host in enumerate(hosts):
+        for j, tray in enumerate(trays):
+            value = matrix[i][j]
+            if value > 0:
+                text_color = "white" if value > max(max(row) for row in matrix) / 2 else "black"
+                ax.text(j, i, str(value), ha="center", va="center", color=text_color, fontsize=10)
+
+    ax.set_title(f"Link Failures by Host and Tray\n(Total logs: {len(analyses)})")
+    ax.set_xlabel("Tray")
+    ax.set_ylabel("Host")
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, "host_tray_heatmap.png")
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+    return output_path
+
+
+def generate_plots(analyses: list[LogAnalysis], output_dir: str) -> None:
+    """Generate all plots and save to output directory."""
+    if not MATPLOTLIB_AVAILABLE:
+        print("Error: matplotlib is required for plotting. Install with: pip install matplotlib", file=sys.stderr)
+        return
+
+    # Create output directory if needed
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"\n{'=' * 50}\nGenerating Plots\n{'=' * 50}\n")
+
+    # Generate histogram
+    hist_path = plot_link_histogram(analyses, output_dir)
+    if hist_path:
+        print(f"  Saved: {hist_path}")
+
+    # Generate heatmap
+    heatmap_path = plot_host_tray_heatmap(analyses, output_dir)
+    if heatmap_path:
+        print(f"  Saved: {heatmap_path}")
+
+    if not hist_path and not heatmap_path:
+        print("  No plots generated (no faulty link data)")
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze validation logs.")
     parser.add_argument("directory", nargs="?", default="validation_output", help="Log directory")
@@ -1007,6 +1154,8 @@ def main():
     parser.add_argument("--timeline", action="store_true", help="Show timeline")
     parser.add_argument("--errors", action="store_true", help="Show error messages")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    parser.add_argument("--plot", action="store_true", help="Generate plots (requires matplotlib)")
+    parser.add_argument("--plot-dir", type=str, default=".", help="Directory to save plots (default: current dir)")
 
     args = parser.parse_args()
     if args.no_color or args.json:
@@ -1042,6 +1191,8 @@ def main():
             print_errors(analyses)
         if args.verbose:
             print_verbose(analyses)
+        if args.plot:
+            generate_plots(analyses, args.plot_dir)
 
 
 if __name__ == "__main__":
