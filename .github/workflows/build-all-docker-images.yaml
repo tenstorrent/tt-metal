@@ -184,7 +184,7 @@ jobs:
           driver-opts: |
             env.HTTP_PROXY=proxy.restricted-proxy.svc.cluster.local:3128
             env.HTTPS_PROXY=proxy.restricted-proxy.svc.cluster.local:3128
-            env.NO_PROXY=large-file-cache.large-file-cache.svc.cluster.local,harbor.*.tenstorrent.net
+            env.NO_PROXY=large-file-cache.large-file-cache.svc.cluster.local,harbor.*.tenstorrent.net,mirror.gcr.io,gcr.io,*.gcr.io
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
@@ -361,7 +361,7 @@ jobs:
           driver-opts: |
             env.HTTP_PROXY=proxy.restricted-proxy.svc.cluster.local:3128
             env.HTTPS_PROXY=proxy.restricted-proxy.svc.cluster.local:3128
-            env.NO_PROXY=large-file-cache.large-file-cache.svc.cluster.local,harbor.*.tenstorrent.net
+            env.NO_PROXY=large-file-cache.large-file-cache.svc.cluster.local,harbor.*.tenstorrent.net,mirror.gcr.io,gcr.io,*.gcr.io
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
@@ -538,7 +538,7 @@ jobs:
           driver-opts: |
             env.HTTP_PROXY=proxy.restricted-proxy.svc.cluster.local:3128
             env.HTTPS_PROXY=proxy.restricted-proxy.svc.cluster.local:3128
-            env.NO_PROXY=large-file-cache.large-file-cache.svc.cluster.local,harbor.*.tenstorrent.net
+            env.NO_PROXY=large-file-cache.large-file-cache.svc.cluster.local,harbor.*.tenstorrent.net,mirror.gcr.io,gcr.io,*.gcr.io
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
