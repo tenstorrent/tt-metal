@@ -159,7 +159,7 @@ uint32_t configure_rta_offsets_for_kernel_groups(
             auto dispatch_class = kernel->dispatch_class();
             kg->rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
             uint32_t rta_offset = base_offset + offset;
-            offset += max_rtas[dispatch_class] * sizeof(uint32_t);
+            offset += tt::align(max_rtas[dispatch_class] * sizeof(uint32_t), 64);
             kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
             for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
                 uint32_t processor_index = hal.get_processor_index(

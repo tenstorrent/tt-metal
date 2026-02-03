@@ -65,7 +65,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             .set_page_size(src1_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_src1_config);
 
-    uint32_t ouput_cb_index = tt::CBIndex::c_16;
+    uint32_t ouput_cb_index = tt::CBIndex::c_15;
     uint32_t num_output_tiles = 2;
     CircularBufferConfig cb_output_config =
         CircularBufferConfig(num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
@@ -85,7 +85,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+            .noc = NOC::RISCV_0_default,
             .compile_args = reader_compile_time_args});
 
     auto writer = CreateKernel(

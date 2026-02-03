@@ -25,9 +25,9 @@ void MAIN {
 
     experimental::CircularBuffer cb0(tt::CBIndex::c_0);
     experimental::CircularBuffer cb1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    experimental::CircularBuffer cb15(tt::CBIndex::c_15);
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_15);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -46,9 +46,9 @@ void MAIN {
                     cb1.pop_front(onetile);
                 }
 
-                cb16.reserve_back(onetile);
-                pack_tile(0, tt::CBIndex::c_16);
-                cb16.push_back(onetile);
+                cb15.reserve_back(onetile);
+                pack_tile(0, tt::CBIndex::c_15);
+                cb15.push_back(onetile);
 
                 release_dst();
             }
