@@ -15,7 +15,6 @@
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
 using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
-using tt::tt_fabric::fabric_router_tests::compare_asic_mapping_files;
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
@@ -313,7 +312,7 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     // Generate unique golden file name based on mesh graph descriptor path
     std::string golden_name = get_golden_name_from_mesh_graph_path(mesh_graph_desc_path);
     // Add test index to make it unique for duplicate descriptors
-    auto test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     if (test_info) {
         std::string test_name = test_info->name();
         // Extract index from test name (e.g., "TestT3kControlPlaneInit/0" -> "0")
