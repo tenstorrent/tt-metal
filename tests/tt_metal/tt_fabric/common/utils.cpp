@@ -167,7 +167,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                     //               - umd_chip_id: 0
                     auto mesh_list = host_node["mesh"];
 
-                    // Iterate through mesh list - entries can have both mesh and chips keys
+                    // Iterate through mesh list - entries can have both mesh and chips keys in the same entry
                     // Format: - mesh: 0
                     //           chips: [...]
                     for (const auto& entry : mesh_list) {
@@ -220,7 +220,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                     // Old map format: map of mesh_X -> map of chip_id -> entry
                     for (const auto& mesh_pair : host_node) {
                         std::string mesh_key = mesh_pair.first.as<std::string>();
-                        if (mesh_key.find("mesh_") != 0) {
+                        if (!mesh_key.starts_with("mesh_")) {
                             continue;  // Skip non-mesh keys
                         }
                         auto mesh_value = mesh_pair.second;
@@ -280,7 +280,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         // Find missing ASIC entries (entries in generated but not in golden)
         std::vector<std::string> missing_in_golden;
         for (const auto& [asic_id_key, _] : gen_map_by_asic_id) {
-            if (gold_map_by_asic_id.find(asic_id_key) == gold_map_by_asic_id.end()) {
+            if (!gold_map_by_asic_id.contains(asic_id_key)) {
                 missing_in_golden.push_back(asic_id_key);
             }
         }
@@ -299,7 +299,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         // Find missing ASIC entries (entries in golden but not in generated)
         std::vector<std::string> missing_in_generated;
         for (const auto& [asic_id_key, _] : gold_map_by_asic_id) {
-            if (gen_map_by_asic_id.find(asic_id_key) == gen_map_by_asic_id.end()) {
+            if (!gen_map_by_asic_id.contains(asic_id_key)) {
                 missing_in_generated.push_back(asic_id_key);
             }
         }
@@ -317,7 +317,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
 
         // Compare all entries that exist in both files
         for (const auto& [asic_id_key, gen_mapping_node] : gen_map_by_asic_id) {
-            if (gold_map_by_asic_id.find(asic_id_key) == gold_map_by_asic_id.end()) {
+            if (!gold_map_by_asic_id.contains(asic_id_key)) {
                 // Already reported as missing above, skip detailed comparison
                 continue;
             }
@@ -426,7 +426,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
 }
 
 void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name) {
-    std::string golden_base_name = golden_name.empty() ? test_name : golden_name;
+    std::string golden_file_base = golden_name.empty() ? test_name : golden_name;
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     int world_size = *distributed_context->size();
@@ -440,7 +440,7 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     // Ranks are 0-based in distributed_context, but files use 1-based indexing
     std::string generated_filename =
         "asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".yaml";
-    std::string golden_filename = golden_base_name + ".yaml";
+    std::string golden_filename = golden_file_base + ".yaml";
 
     std::filesystem::path generated_file = generated_dir / generated_filename;
     std::filesystem::path golden_file = golden_dir / golden_filename;
@@ -457,7 +457,7 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
 
     bool comparison_result = compare_asic_mapping_files(generated_file, golden_file);
     EXPECT_TRUE(comparison_result) << "ASIC mapping file mismatch for test " << test_name
-                                   << " (golden: " << golden_base_name << ") on rank " << rank;
+                                   << " (golden: " << golden_file_base << ") on rank " << rank;
     if (!comparison_result) {
         FAIL() << "ASIC mapping file mismatch detected on rank " << rank
                << ". Test must fail when mappings don't match golden reference.";

@@ -19,7 +19,6 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
-using tt::tt_fabric::fabric_router_tests::compare_asic_mapping_files;
 
 namespace {
 
