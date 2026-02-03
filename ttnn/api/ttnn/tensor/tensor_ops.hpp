@@ -31,6 +31,19 @@ tt::tt_metal::Tensor to_device(
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
 
+void copy_to_device(
+    distributed::MeshCommandQueue& queue,
+    const std::byte* src,
+    Tensor& device_tensor,
+    const std::optional<BufferRegion>& region = std::nullopt);
+
+void copy_to_host(
+    distributed::MeshCommandQueue& queue,
+    const Tensor& device_tensor,
+    std::byte* dst,
+    const std::optional<BufferRegion>& region = std::nullopt,
+    bool blocking = true);
+
 Tensor to_layout(const Tensor& input_tensor, tt::tt_metal::Layout target_layout);
 
 Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id);

@@ -107,6 +107,28 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
+void copy_to_device(
+    distributed::MeshCommandQueue& queue,
+    const std::byte* src,
+    Tensor& device_tensor,
+    const std::optional<BufferRegion>& region) {
+    GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", queue, src, device_tensor, region);
+    tensor_impl::copy_to_device(queue, src, device_tensor, region);
+    GraphTracker::instance().track_function_end(device_tensor);
+}
+
+void copy_to_host(
+    distributed::MeshCommandQueue& queue,
+    const Tensor& device_tensor,
+    std::byte* dst,
+    const std::optional<BufferRegion>& region,
+    bool blocking) {
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::copy_to_host", queue, device_tensor, dst, region, blocking);
+    tensor_impl::copy_to_host(queue, device_tensor, dst, region, blocking);
+    GraphTracker::instance().track_function_end(device_tensor);
+}
+
 Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id) {
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return input_tensor;
