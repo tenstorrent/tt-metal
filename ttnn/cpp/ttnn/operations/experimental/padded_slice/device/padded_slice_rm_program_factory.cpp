@@ -23,6 +23,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
+#include <tt-metalium/tt_align.hpp>
 
 using namespace tt::tt_metal;
 
@@ -284,20 +285,21 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
     } else {
         non_aligned_temp_cb_index = temp_pad_cb_index;  // Use the unused temp pad index so that CBs are continuous.
     }
+    uint32_t num_trids = 2;
     if (is_non_aligned) {
         tt::tt_metal::create_cb(
             non_aligned_temp_cb_index,
             program,
             total_cores,
-            a.logical_shape()[-1] * a.element_size(),
-            2,
+            tt::align(a.logical_shape()[-1] * a.element_size(), src_buffer_alignment),
+            num_trids,
             cb_data_format);
     }
 
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)output_cb_index};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {
-        (uint32_t)is_non_aligned, non_aligned_temp_cb_index, src_buffer_alignment};
+        (uint32_t)is_non_aligned, non_aligned_temp_cb_index, src_buffer_alignment, num_trids};
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

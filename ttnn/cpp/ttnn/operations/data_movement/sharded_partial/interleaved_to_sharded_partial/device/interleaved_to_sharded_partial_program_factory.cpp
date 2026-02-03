@@ -121,16 +121,18 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
     }
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     uint32_t dram_alignment = hal::get_dram_alignment();
+    uint32_t num_trids = 4;
     if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
         uint32_t scratch_cb_page_size;
         // scratchpad going to be used to align DRAM (64B) to L1 (16B)
-        if (is_blackhole) {
-            scratch_cb_page_size = tt::align(input_unit_size, hal::get_l1_alignment());
-        } else {
-            scratch_cb_page_size = tt::align(input_unit_size, dram_alignment);
-        }
+
+        // This is done to mitigate the alignment issues.
+        // See issue #34414.
+        scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
+
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
-            tt::tt_metal::CircularBufferConfig(4 * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
+            tt::tt_metal::CircularBufferConfig(
+                num_trids * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
                 .set_page_size(scratch_cb_index, scratch_cb_page_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_out_config);
     }
@@ -147,7 +149,8 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
-        std::vector<uint32_t> reader_compile_time_args = {input_cb_index, scratch_cb_index, num_units_per_row};
+        std::vector<uint32_t> reader_compile_time_args = {
+            input_cb_index, scratch_cb_index, num_units_per_row, num_trids};
         tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
