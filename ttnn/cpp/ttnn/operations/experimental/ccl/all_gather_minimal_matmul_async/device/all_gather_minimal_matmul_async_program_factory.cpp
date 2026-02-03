@@ -370,7 +370,8 @@ all_gather_minimal_matmul_async_factory_helper(
         (transpose_core_grid ? full_grid_size.y : full_grid_size.x) >= num_mux_cores,
         "The are not enough cores for the number of mux cores requested");
 
-    auto mux_cores = CoreRange(CoreCoord(0, full_grid_size.y - 1), CoreCoord(num_mux_cores - 1, full_grid_size.y - 1));
+    auto mux_cores =
+        CoreRange(CoreCoord(0, full_grid_size.y - 1), CoreCoord(full_grid_size.x - 1, full_grid_size.y - 1));
 
     const uint32_t l1_unreserved_base_address =
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -664,8 +665,12 @@ all_gather_minimal_matmul_async_factory_helper(
     for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
         uint32_t dir = 1 - (mux_id % 2);  // 2 being the number of directions
         if (mux_connection_valid(dir)) {
-            auto mux_logical_core = CoreCoord(mux_id, full_grid_size.y - 1);
             uint32_t link = mux_id / 2;  // 2 is the num directions
+            uint32_t mux_x_index = num_workers_per_link * (link + 1) - (1 - dir);
+            if (mux_x_index >= full_grid_size.x) {
+                mux_x_index = mux_x_index - full_grid_size.x;
+            }
+            auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
 
             std::vector<uint32_t> mux_rt_args = {};
             const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
@@ -776,7 +781,8 @@ all_gather_minimal_matmul_async_factory_helper(
             device->worker_core_from_logical_core(termination_master_logical_core);
 
         // in0 backward sender
-        uint32_t mux_core_index_backward = ((in1_core_order_index / num_workers_per_link) * num_workers_per_link) + 1;
+        uint32_t mux_core_index_backward =
+            ((in1_core_order_index / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
         if (mux_core_index_backward >= in1_core_order.size()) {
             mux_core_index_backward = mux_core_index_backward - in1_core_order.size();
         }
@@ -795,7 +801,8 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_args);
 
         // in0 forward sender
-        uint32_t mux_core_index_forward = ((in1_core_order_index / num_workers_per_link) * num_workers_per_link) + 2;
+        uint32_t mux_core_index_forward =
+            ((in1_core_order_index / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
         if (mux_core_index_forward >= in1_core_order.size()) {
             mux_core_index_forward = mux_core_index_forward - in1_core_order.size();
         }
