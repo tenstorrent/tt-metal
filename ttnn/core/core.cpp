@@ -4,6 +4,8 @@
 
 #include "ttnn/core.hpp"
 #include <tt_stl/caseless_comparison.hpp>
+#include <tt_stl/caseless_comparison.hpp>
+#include <tt_stl/caseless_comparison.hpp>
 #include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/host_api.hpp>
