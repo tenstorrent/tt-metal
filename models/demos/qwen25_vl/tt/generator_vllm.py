@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
+import time
 from types import SimpleNamespace
 from typing import Mapping, Optional
 
@@ -120,6 +120,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             self.reference_model is not None and self.visual_model is not None
         ), "Reference model and visual model must be provided for vLLM"
 
+        # Performance tracking
+        self._decode_iteration = 0
+        self._last_decode_time = None
+
         super().__init__(*args, **kwargs)
 
     @classmethod
@@ -228,7 +232,40 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                     [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw], dim=0
                 )
                 # Vision prefill
+                vision_prefill_start = time.perf_counter()
                 image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+                vision_prefill_time = time.perf_counter() - vision_prefill_start
+                batch_size = tokens.shape[0]
+                vision_prefill_time_per_user = vision_prefill_time / batch_size
+                # Calculate image tokens for logging
+                try:
+                    # Get spatial_merge_size from vision config if available
+                    spatial_merge_size = getattr(self.reference_model.config.vision_config, "spatial_merge_size", None)
+                    if spatial_merge_size is None:
+                        # Try to get merge_size from processor config (fallback)
+                        spatial_merge_size = getattr(self.reference_model.config, "spatial_merge_size", 14)
+                    merge_length = spatial_merge_size**2
+                    if hasattr(inputs, "image_grid_thw") and inputs.image_grid_thw.numel() > 0:
+                        # Calculate number of image tokens: grid_thw.prod() / merge_size^2
+                        num_image_tokens = (inputs.image_grid_thw.prod() / merge_length).item()
+                        vision_tok_s = num_image_tokens / vision_prefill_time if vision_prefill_time > 0 else 0
+                        vision_tok_s_per_user = vision_tok_s / batch_size
+                        logger.info(
+                            f"[PERF] Vision prefill: {vision_prefill_time*1000:.2f}ms "
+                            f"({vision_prefill_time_per_user*1000:.2f}ms/user) @ "
+                            f"{vision_tok_s_per_user:.1f} tok/s/user ({vision_tok_s:.1f} tok/s throughput)"
+                        )
+                    else:
+                        logger.info(
+                            f"[PERF] Vision prefill: {vision_prefill_time*1000:.2f}ms "
+                            f"({vision_prefill_time_per_user*1000:.2f}ms/user)"
+                        )
+                except Exception:
+                    # Fallback to simple time logging if token calculation fails
+                    logger.info(
+                        f"[PERF] Vision prefill: {vision_prefill_time*1000:.2f}ms "
+                        f"({vision_prefill_time_per_user*1000:.2f}ms/user)"
+                    )
             else:
                 # text-only users
                 image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
@@ -265,7 +302,41 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 inputs.pixel_values = torch.concat([im.pixel_values for im in kwargs["images"]], dim=0)
                 inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in kwargs["images"]], dim=0)
 
+                # Vision prefill
+                vision_prefill_start = time.perf_counter()
                 image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+                vision_prefill_time = time.perf_counter() - vision_prefill_start
+                batch_size = tokens.shape[0]
+                vision_prefill_time_per_user = vision_prefill_time / batch_size
+                # Calculate image tokens for logging
+                try:
+                    # Get spatial_merge_size from vision config if available
+                    spatial_merge_size = getattr(self.reference_model.config.vision_config, "spatial_merge_size", None)
+                    if spatial_merge_size is None:
+                        # Try to get merge_size from processor config (fallback)
+                        spatial_merge_size = getattr(self.reference_model.config, "spatial_merge_size", 14)
+                    merge_length = spatial_merge_size**2
+                    if hasattr(inputs, "image_grid_thw") and inputs.image_grid_thw.numel() > 0:
+                        # Calculate number of image tokens: grid_thw.prod() / merge_size^2
+                        num_image_tokens = (inputs.image_grid_thw.prod() / merge_length).item()
+                        vision_tok_s = num_image_tokens / vision_prefill_time if vision_prefill_time > 0 else 0
+                        vision_tok_s_per_user = vision_tok_s / batch_size
+                        logger.info(
+                            f"[PERF] Vision prefill: {vision_prefill_time*1000:.2f}ms "
+                            f"({vision_prefill_time_per_user*1000:.2f}ms/user) @ "
+                            f"{vision_tok_s_per_user:.1f} tok/s/user ({vision_tok_s:.1f} tok/s throughput)"
+                        )
+                    else:
+                        logger.info(
+                            f"[PERF] Vision prefill: {vision_prefill_time*1000:.2f}ms "
+                            f"({vision_prefill_time_per_user*1000:.2f}ms/user)"
+                        )
+                except Exception:
+                    # Fallback to simple time logging if token calculation fails
+                    logger.info(
+                        f"[PERF] Vision prefill: {vision_prefill_time*1000:.2f}ms "
+                        f"({vision_prefill_time_per_user*1000:.2f}ms/user)"
+                    )
             else:
                 # text-only users
                 image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
@@ -277,7 +348,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         (
             input_prefill_pt,
             decoding_pos,  # Position where decoding should start for each user
-            _prefill_lens,  # [INFO] _prefill_lens is post-padding number of tokens after text-image processing
+            prefill_lens,  # [INFO] prefill_lens is post-padding number of tokens after text-image processing
         ) = preprocess_inputs_prefill(
             input_embeds,
             self.model_args,
@@ -290,6 +361,8 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         )
         rot_mats = (cos, sin)
 
+        # Text prefill timing (TTFT)
+        prefill_start = time.perf_counter()
         logits = self.prefill_forward_text(
             input_prefill_pt,
             rot_mats=rot_mats,
@@ -297,6 +370,31 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
+        prefill_time = time.perf_counter() - prefill_start
+        batch_size = tokens.shape[0]
+        ttft = prefill_time / batch_size
+        # Calculate prefill tokens per second using prefill_lens (actual prefill lengths)
+        if isinstance(prefill_lens, torch.Tensor):
+            prefill_tokens = prefill_lens.sum().item()
+        elif isinstance(prefill_lens, (list, tuple)):
+            prefill_tokens = sum(prefill_lens)
+        else:
+            # Fallback: use decoding_pos as approximation
+            if isinstance(decoding_pos, torch.Tensor):
+                prefill_tokens = decoding_pos.sum().item()
+            elif isinstance(decoding_pos, (list, tuple)):
+                prefill_tokens = sum(decoding_pos)
+            else:
+                prefill_tokens = batch_size * padded_seq_len
+        prefill_tok_s = prefill_tokens / prefill_time if prefill_time > 0 else 0
+        logger.info(
+            f"[PERF] Text prefill (TTFT): {prefill_time*1000:.2f}ms "
+            f"({ttft*1000:.2f}ms/user) @ {prefill_tok_s:.1f} tok/s"
+        )
+
+        # Reset decode iteration counter for new prefill
+        self._decode_iteration = 0
+
         return logits, rope_deltas
 
     def decode_forward(self, *args, **kwargs):
@@ -306,4 +404,26 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         if rope_deltas_list is not None:
             super().update_rope_deltas(rope_deltas_list)
 
-        return super().decode_forward_text(*args, **kwargs)
+        # Decode timing
+        decode_start = time.perf_counter()
+        result = super().decode_forward_text(*args, **kwargs)
+        decode_time = time.perf_counter() - decode_start
+
+        self._decode_iteration += 1
+        self._last_decode_time = decode_time
+
+        # Calculate tokens per second
+        # Assume batch_size from the first argument (tokens) if available
+        batch_size = 1
+        if len(args) > 0 and isinstance(args[0], torch.Tensor):
+            batch_size = args[0].shape[0] if len(args[0].shape) > 0 else 1
+
+        tok_s_per_user = 1.0 / decode_time if decode_time > 0 else 0
+        tok_s_throughput = tok_s_per_user * batch_size
+
+        logger.info(
+            f"[PERF] Decode iteration {self._decode_iteration}: {decode_time*1000:.2f}ms @ "
+            f"{tok_s_per_user:.1f} tok/s/user ({tok_s_throughput:.1f} tok/s throughput)"
+        )
+
+        return result
