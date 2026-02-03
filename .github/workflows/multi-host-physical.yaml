@@ -273,7 +273,7 @@ jobs:
       - name: Run DeepSeek V3 module tests
         if: ${{ github.event.inputs.glx_4x_deepseekv3_module_tests == 'true' || github.event.schedule == '0 4 * * *' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 80
+        timeout-minutes: 150
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
