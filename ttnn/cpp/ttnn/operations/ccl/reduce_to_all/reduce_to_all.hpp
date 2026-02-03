@@ -22,7 +22,6 @@ struct ExecuteReduceToAll {
         const std::optional<ttnn::Tensor>& optional_output_tensor_l = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_fw_intermediate_tensor = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_bw_intermediate_tensor = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_coord_intermediate_tensor = std::nullopt,
         const std::optional<std::vector<ttnn::CoreCoord>>& input_forwarder_cores = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_forwarder_scratch_tensor = std::nullopt);
 };

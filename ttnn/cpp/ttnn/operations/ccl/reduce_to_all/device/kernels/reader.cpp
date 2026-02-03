@@ -28,18 +28,18 @@ FORCE_INLINE void prepare_data_for_compute(
 }
 
 // CB IDs
-constexpr uint32_t cb_local_l = get_compile_time_arg_val(0);
-constexpr uint32_t cb_local_ms = get_compile_time_arg_val(1);
-constexpr uint32_t cb_r1_neighbor_l = get_compile_time_arg_val(2);
-constexpr uint32_t cb_r1_neighbor_ms = get_compile_time_arg_val(3);
-constexpr uint32_t cb_r2_neighbor_l = get_compile_time_arg_val(4);
-constexpr uint32_t cb_r2_neighbor_ms = get_compile_time_arg_val(5);
+static constexpr uint32_t cb_local_l = get_compile_time_arg_val(0);
+static constexpr uint32_t cb_local_ms = get_compile_time_arg_val(1);
+static constexpr uint32_t cb_r1_neighbor_l = get_compile_time_arg_val(2);
+static constexpr uint32_t cb_r1_neighbor_ms = get_compile_time_arg_val(3);
+static constexpr uint32_t cb_r2_neighbor_l = get_compile_time_arg_val(4);
+static constexpr uint32_t cb_r2_neighbor_ms = get_compile_time_arg_val(5);
 
-constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);
-constexpr uint32_t vDHt = get_compile_time_arg_val(7);
+static constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);
+static constexpr uint32_t vDHt = get_compile_time_arg_val(7);
 
-constexpr uint32_t l_tensor_size_bytes = get_compile_time_arg_val(8);
-constexpr uint32_t ms_tile_size_bytes = get_compile_time_arg_val(9);
+static constexpr uint32_t l_tensor_size_bytes = get_compile_time_arg_val(8);
+static constexpr uint32_t ms_tile_size_bytes = get_compile_time_arg_val(9);
 
 void kernel_main() {
     size_t arg_idx = 0;

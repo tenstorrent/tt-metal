@@ -17,7 +17,6 @@ ttnn::Tensor ExecuteReduceToAll::invoke(
     const std::optional<ttnn::Tensor>& optional_output_tensor_l,
     const std::optional<ttnn::Tensor>& optional_fw_intermediate_tensor,
     const std::optional<ttnn::Tensor>& optional_bw_intermediate_tensor,
-    const std::optional<ttnn::Tensor>& optional_coord_intermediate_tensor,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_forwarder_cores,
     const std::optional<ttnn::Tensor>& optional_forwarder_scratch_tensor) {
     // Returns normalized L tensor (L/S division is fused in compute kernel)
@@ -30,7 +29,6 @@ ttnn::Tensor ExecuteReduceToAll::invoke(
         optional_output_tensor_l,
         optional_fw_intermediate_tensor,
         optional_bw_intermediate_tensor,
-        optional_coord_intermediate_tensor,
         input_forwarder_cores,
         optional_forwarder_scratch_tensor);
     return result.at(1).at(0);  // Final outputs [1], normalized L [0]

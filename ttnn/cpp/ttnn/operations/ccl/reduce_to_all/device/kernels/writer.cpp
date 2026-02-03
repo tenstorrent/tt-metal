@@ -72,34 +72,20 @@ FORCE_INLINE void forward_packet(uint32_t slot_addr, uint64_t agg_slot_noc, uint
 }
 
 // CB IDs
-constexpr uint32_t cb_local_l = get_compile_time_arg_val(0);
-constexpr uint32_t cb_local_ms = get_compile_time_arg_val(1);
-constexpr uint32_t cb_r1_result_l = get_compile_time_arg_val(2);
-constexpr uint32_t cb_r1_result_ms = get_compile_time_arg_val(3);
-constexpr uint32_t cb_packet_slot = get_compile_time_arg_val(4);
-constexpr uint32_t cb_compute_to_writer_sync = get_compile_time_arg_val(5);
-constexpr uint32_t cb_writer_to_compute_sync = get_compile_time_arg_val(6);
-
-constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(7);
-constexpr uint32_t vDHt = get_compile_time_arg_val(8);
-constexpr uint32_t l1_alignment = get_compile_time_arg_val(9);
-constexpr uint32_t page_size_bytes = get_compile_time_arg_val(10);
-constexpr uint32_t slot_size = get_compile_time_arg_val(11);
-
-// =============================================================================
-// Main kernel
-// =============================================================================
+static constexpr uint32_t cb_local_l = get_compile_time_arg_val(0);
+static constexpr uint32_t cb_local_ms = get_compile_time_arg_val(1);
+static constexpr uint32_t cb_r1_result_l = get_compile_time_arg_val(2);
+static constexpr uint32_t cb_r1_result_ms = get_compile_time_arg_val(3);
+static constexpr uint32_t cb_packet_slot = get_compile_time_arg_val(4);
+static constexpr uint32_t cb_compute_to_writer_sync = get_compile_time_arg_val(5);
+static constexpr uint32_t cb_writer_to_compute_sync = get_compile_time_arg_val(6);
+static constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(7);
+static constexpr uint32_t vDHt = get_compile_time_arg_val(8);
+static constexpr uint32_t l1_alignment = get_compile_time_arg_val(9);
+static constexpr uint32_t page_size_bytes = get_compile_time_arg_val(10);
+static constexpr uint32_t slot_size = get_compile_time_arg_val(11);
 
 void kernel_main() {
-    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
-    constexpr uint32_t l_tensor_size_bytes = out_tiles * page_size_bytes;  // L payload
-    constexpr uint32_t aligned_page_size = ((page_size_bytes + l1_alignment - 1) / l1_alignment) * l1_alignment;
-    constexpr uint32_t ms_tile_size_bytes = aligned_page_size;  // Single combined MS tile
-    constexpr uint32_t total_payload_size = l_tensor_size_bytes + ms_tile_size_bytes;
-
-    // ==========================================================================
-    // Runtime args (combined MS format)
-    // ==========================================================================
     size_t arg_idx = 0;
 
     // R1 destination - intermediate tensor address on neighbor device
@@ -127,6 +113,12 @@ void kernel_main() {
     const uint32_t r2_agg_slot_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r2_agg_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t r2_slot_idx = get_arg_val<uint32_t>(arg_idx++);  // For bit-packed signaling
+
+    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+    constexpr uint32_t l_tensor_size_bytes = out_tiles * page_size_bytes;  // L payload
+    constexpr uint32_t aligned_page_size = ((page_size_bytes + l1_alignment - 1) / l1_alignment) * l1_alignment;
+    constexpr uint32_t ms_tile_size_bytes = aligned_page_size;  // Single combined MS tile
+    constexpr uint32_t total_payload_size = l_tensor_size_bytes + ms_tile_size_bytes;
 
     // ==========================================================================
     // ROUND 1: Send local input to R1 neighbor via forwarder

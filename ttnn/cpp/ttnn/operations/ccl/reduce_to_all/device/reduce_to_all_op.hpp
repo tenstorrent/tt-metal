@@ -32,7 +32,6 @@ struct ReduceToAllOp {
         const std::optional<Tensor> optional_output_tensor_l;
         const std::optional<Tensor> optional_fw_intermediate_tensor;
         const std::optional<Tensor> optional_bw_intermediate_tensor;
-        const std::optional<Tensor> optional_coord_intermediate_tensor;
         const std::optional<Tensor> optional_forwarder_scratch_tensor;
     };
 
@@ -130,7 +129,6 @@ ttnn::operations::ccl::ReduceToAllOp::tensor_return_value_t reduce_to_all(
     const std::optional<Tensor>& optional_output_tensor_l = std::nullopt,
     const std::optional<Tensor>& optional_fw_intermediate_tensor = std::nullopt,
     const std::optional<Tensor>& optional_bw_intermediate_tensor = std::nullopt,
-    const std::optional<Tensor>& optional_coord_intermediate_tensor = std::nullopt,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_forwarder_cores = std::nullopt,
     const std::optional<Tensor>& optional_forwarder_scratch_tensor = std::nullopt);
 }  // namespace prim

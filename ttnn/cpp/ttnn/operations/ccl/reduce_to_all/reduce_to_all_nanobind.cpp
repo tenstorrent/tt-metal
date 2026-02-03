@@ -31,7 +31,6 @@ void bind_reduce_to_all(nb::module_& mod) {
                 output_tensor_l (ttnn.Tensor, optional): Optional output tensor for normalized L values.
                 fw_intermediate_tensor (ttnn.Tensor, optional): Optional fw intermediate tensor.
                 bw_intermediate_tensor (ttnn.Tensor, optional): Optional bw intermediate tensor.
-                coord_intermediate_tensor (ttnn.Tensor, optional): Optional coord intermediate tensor.
                 input_forwarder_cores (List[ttnn.CoreCoord], optional): List of forwarder cores
 
            Returns:
@@ -68,7 +67,6 @@ void bind_reduce_to_all(nb::module_& mod) {
                const std::optional<ttnn::Tensor>& output_tensor_l,
                const std::optional<ttnn::Tensor>& fw_intermediate_tensor,
                const std::optional<ttnn::Tensor>& bw_intermediate_tensor,
-               const std::optional<ttnn::Tensor>& coord_intermediate_tensor,
                const std::optional<std::vector<ttnn::CoreCoord>>& input_forwarder_cores,
                const std::optional<ttnn::Tensor>& forwarder_scratch_tensor,
                const tt::tt_fabric::Topology topology) {
@@ -80,7 +78,6 @@ void bind_reduce_to_all(nb::module_& mod) {
                     output_tensor_l,
                     fw_intermediate_tensor,
                     bw_intermediate_tensor,
-                    coord_intermediate_tensor,
                     input_forwarder_cores,
                     forwarder_scratch_tensor);
             },
@@ -91,7 +88,6 @@ void bind_reduce_to_all(nb::module_& mod) {
             nb::arg("output_tensor_l") = nb::none(),
             nb::arg("fw_intermediate_tensor") = nb::none(),
             nb::arg("bw_intermediate_tensor") = nb::none(),
-            nb::arg("coord_intermediate_tensor") = nb::none(),
             nb::arg("input_forwarder_cores") = nb::none(),
             nb::arg("forwarder_scratch_tensor") = nb::none(),
             nb::arg("topology").noconvert() = nb::cast(tt::tt_fabric::Topology::Ring)});

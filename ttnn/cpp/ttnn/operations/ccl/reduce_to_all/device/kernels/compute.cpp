@@ -52,23 +52,23 @@
 #include "models/demos/deepseek_v3_b1/kernel_includes/tt_metal/include/compute_kernel_api/sdpa.h"
 
 // CB indices
-constexpr uint32_t cb_local_l = get_compile_time_arg_val(0);
-constexpr uint32_t cb_local_ms = get_compile_time_arg_val(1);
-constexpr uint32_t cb_r1_neighbor_l = get_compile_time_arg_val(2);
-constexpr uint32_t cb_r1_neighbor_ms = get_compile_time_arg_val(3);
-constexpr uint32_t cb_r1_result_l = get_compile_time_arg_val(4);
-constexpr uint32_t cb_r1_result_ms = get_compile_time_arg_val(5);
-constexpr uint32_t cb_r2_neighbor_l = get_compile_time_arg_val(6);
-constexpr uint32_t cb_r2_neighbor_ms = get_compile_time_arg_val(7);
-constexpr uint32_t cb_l_out = get_compile_time_arg_val(8);
-constexpr uint32_t cb_ms_out = get_compile_time_arg_val(9);  // Only used for R1 intermediate
-constexpr uint32_t cb_compute_to_writer_sync = get_compile_time_arg_val(10);  // Compute -> Writer sync
-constexpr uint32_t cb_writer_to_compute_sync = get_compile_time_arg_val(11);  // Writer -> Compute sync
+static constexpr uint32_t cb_local_l = get_compile_time_arg_val(0);
+static constexpr uint32_t cb_local_ms = get_compile_time_arg_val(1);
+static constexpr uint32_t cb_r1_neighbor_l = get_compile_time_arg_val(2);
+static constexpr uint32_t cb_r1_neighbor_ms = get_compile_time_arg_val(3);
+static constexpr uint32_t cb_r1_result_l = get_compile_time_arg_val(4);
+static constexpr uint32_t cb_r1_result_ms = get_compile_time_arg_val(5);
+static constexpr uint32_t cb_r2_neighbor_l = get_compile_time_arg_val(6);
+static constexpr uint32_t cb_r2_neighbor_ms = get_compile_time_arg_val(7);
+static constexpr uint32_t cb_l_out = get_compile_time_arg_val(8);
+static constexpr uint32_t cb_ms_out = get_compile_time_arg_val(9);                   // Only used for R1 intermediate
+static constexpr uint32_t cb_compute_to_writer_sync = get_compile_time_arg_val(10);  // Compute -> Writer sync
+static constexpr uint32_t cb_writer_to_compute_sync = get_compile_time_arg_val(11);  // Writer -> Compute sync
 
 // Compute parameters
-constexpr uint32_t scale_fp32 = get_compile_time_arg_val(12);
-constexpr uint32_t block_size = get_compile_time_arg_val(13);  // tiles per row (vDHt)
-constexpr uint32_t num_blocks = get_compile_time_arg_val(14);  // number of rows (Sq_chunk_t)
+static constexpr uint32_t scale_fp32 = get_compile_time_arg_val(12);
+static constexpr uint32_t block_size = get_compile_time_arg_val(13);  // tiles per row (vDHt)
+static constexpr uint32_t num_blocks = get_compile_time_arg_val(14);  // number of rows (Sq_chunk_t)
 
 void kernel_main() {
     constexpr int vector_mode = VectorMode::RC_custom;

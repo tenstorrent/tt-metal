@@ -33,11 +33,10 @@
 
 #include <cstdint>
 
-// Compile-time args
-constexpr uint32_t total_slots = get_compile_time_arg_val(0);  // Total slots (R1 + R2 combined)
-constexpr uint32_t slot_size = get_compile_time_arg_val(1);    // Bytes per slot (header + L + S + M)
+static constexpr uint32_t total_slots = get_compile_time_arg_val(0);  // Total slots (R1 + R2 combined)
+static constexpr uint32_t slot_size = get_compile_time_arg_val(1);    // Bytes per slot (header + L + S + M)
 
-constexpr uint32_t all_sent_mask = (1u << total_slots) - 1;
+static constexpr uint32_t all_sent_mask = (1u << total_slots) - 1;
 
 // Maximum clients is 32 (one bit per client in 32-bit semaphore)
 static_assert(total_slots <= 32, "forwarder supports at most 32 slots (limited by 32-bit semaphore)");
