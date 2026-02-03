@@ -16,6 +16,8 @@ import ttnn
 # build_metal.sh --build-tt-train), then fall back to local package (standalone pip install)
 try:
     import _ttml
+    # Ensure _ttml is also visible as a submodule of this package for relative imports
+    sys.modules[__name__ + "._ttml"] = _ttml
 
     # Ensure _ttml is also visible as a submodule of this package for relative imports
     sys.modules[__name__ + "._ttml"] = _ttml
