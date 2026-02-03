@@ -570,7 +570,13 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         print(f"⚠️  Note: --debug flag is deprecated (live output is now always enabled)")
 
     # Use python executable from tt-metal environment
-    python_cmd = os.path.join(BASE_DIR, "python_env/bin/python")
+    # Try to find python_env, fall back to system python3 if not found (e.g., in Docker/CI)
+    python_env_path = os.path.join(BASE_DIR, "python_env/bin/python")
+    if os.path.exists(python_env_path):
+        python_cmd = python_env_path
+    else:
+        # Fallback to system python3 (used in Docker containers)
+        python_cmd = "python3"
 
     # Create a unique subdirectory for this run based on source name and timestamp
     # This prevents conflicts with previous runs
