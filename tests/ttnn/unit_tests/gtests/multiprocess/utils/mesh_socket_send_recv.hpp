@@ -15,11 +15,13 @@ namespace tt::tt_metal {
 // Metal-level send_async operation
 // Sends data from input_buffer through mesh_socket
 // Optionally uses recv_socket for backward communication
+// Optionally uses barrier_buffer for latency measurements (if provided, latencies are written to this buffer)
 void send_async(
     distributed::MeshDevice* mesh_device,
     const Buffer* input_buffer,
     DataFormat input_data_format,
     const distributed::MeshSocket& mesh_socket,
-    const std::optional<distributed::MeshSocket>& recv_socket = std::nullopt);
+    const std::optional<distributed::MeshSocket>& recv_socket = std::nullopt,
+    const std::optional<const Buffer*>& barrier_buffer = std::nullopt);
 
 }  // namespace tt::tt_metal

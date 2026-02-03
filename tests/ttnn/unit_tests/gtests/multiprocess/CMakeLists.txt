@@ -51,6 +51,7 @@ function(setup_socket_pipeline_test target_name test_source)
 endfunction()
 
 setup_multiprocess_unit_test(unit_tests_dual_rank_2x4 test_host_all_gather.cpp)
-setup_multiprocess_unit_test(unit_tests_dual_rank_2x2 test_send_recv_ops.cpp)
+# test_send_recv_ops.cpp now includes tests using migrated metal-level socket operations
+setup_socket_pipeline_test(unit_tests_dual_rank_2x2 test_send_recv_ops.cpp)
 setup_multiprocess_unit_test(unit_tests_pipeline_2x4 test_send_recv_pipeline.cpp)
 setup_socket_pipeline_test(unit_tests_pipeline socket_fwd_pipeline.cpp)

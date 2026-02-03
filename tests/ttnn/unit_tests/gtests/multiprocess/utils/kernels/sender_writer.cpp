@@ -50,6 +50,7 @@ void kernel_main() {
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t recv_socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t measurement_address = get_arg_val<uint32_t>(rt_args_idx++);  // Runtime barrier/measurement address
 
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
     auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_tensor_addr, input_page_size);
@@ -123,7 +124,8 @@ void kernel_main() {
         invalidate_l1_cache();
     }
     // Measure roundtrip latency: Time it takes for the data to be picked up from L1 + pipeline latency
-    uint32_t measurement_addr = credit_address;
+    // Use runtime-provided measurement address (barrier buffer) if available, otherwise use credit_address
+    uint32_t measurement_addr = measurement_address;
     auto l1_read_addr = get_read_ptr(data_cb_id);
     for (uint32_t i = 0; i < 100; ++i) {
         uint64_t start_timestamp = get_timestamp();

@@ -35,7 +35,8 @@ tt::tt_metal::Program create_send_async_program(
     const Buffer* input_buffer,
     DataFormat input_data_format,
     const tt::tt_metal::distributed::MeshCoordinate& mesh_coordinate,
-    distributed::MeshDevice* mesh_device) {
+    distributed::MeshDevice* mesh_device,
+    const std::optional<const Buffer*>& barrier_buffer = std::nullopt) {
     tt::tt_metal::Program program{};
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
@@ -118,7 +119,8 @@ tt::tt_metal::Program create_send_async_program(
     const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_buffer);
     auto compile_time_args = input_accessor_args.get_compile_time_args();
 
-    constexpr uint32_t barrier_address = 639680;
+    // Use hardcoded address for credit synchronization, but runtime address for latency measurements
+    constexpr uint32_t credit_address = 639680;
     std::vector<uint32_t> writer_compile_args = {
         src0_cb_index,             // cb0_id
         packet_header_cb_index,    // fabric_packet_header_cb_id
@@ -128,7 +130,7 @@ tt::tt_metal::Program create_send_async_program(
         num_whole_packets_link_0,  // num_whole_packets_link_0
         num_whole_packets_link_1,  // num_whole_packets_link_1
         input_page_size,           // input_page_size
-        barrier_address,
+        credit_address,            // credit_address (for synchronization)
     };
     writer_compile_args.insert(writer_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
@@ -146,7 +148,8 @@ tt::tt_metal::Program create_send_async_program(
         input_buffer->address(),
         mesh_socket.get_config_buffer()->address(),
         recv_socket.has_value() ? recv_socket.value().get_config_buffer()->address() : 0,
-        bank_id};
+        bank_id,
+        barrier_buffer.has_value() ? barrier_buffer.value()->address() : credit_address};  // measurement address
 
     for (uint32_t i = 0; i < num_links; i++) {
         tt::tt_fabric::append_fabric_connection_rt_args(
@@ -182,7 +185,8 @@ void send_async(
     const Buffer* input_buffer,
     DataFormat input_data_format,
     const distributed::MeshSocket& mesh_socket,
-    const std::optional<distributed::MeshSocket>& recv_socket) {
+    const std::optional<distributed::MeshSocket>& recv_socket,
+    const std::optional<const Buffer*>& barrier_buffer) {
     // Determine which mesh coordinates need programs based on socket configuration
     // Create programs for all sender device coordinates in the socket configuration
     const auto& socket_connections = mesh_socket.get_config().socket_connection_config;
@@ -197,7 +201,7 @@ void send_async(
         auto* target_device = mesh_device->get_device(device_coord);
         if (target_device != nullptr) {
             auto program = create_send_async_program(
-                mesh_socket, recv_socket, input_buffer, input_data_format, device_coord, mesh_device);
+                mesh_socket, recv_socket, input_buffer, input_data_format, device_coord, mesh_device, barrier_buffer);
 
             workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program));
         }
