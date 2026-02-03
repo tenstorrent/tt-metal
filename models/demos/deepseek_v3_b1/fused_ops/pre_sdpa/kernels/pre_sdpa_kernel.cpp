@@ -331,6 +331,8 @@ void kernel_main() {
 
     // Gather heads compute args (no-op for TRISC)
     deepseek_b1_ops::GatherHeads::ComputeArgs gather_heads_args{};
+    // Use anything for initial init
+    binary_op_init_common(0, 0, 0);
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)

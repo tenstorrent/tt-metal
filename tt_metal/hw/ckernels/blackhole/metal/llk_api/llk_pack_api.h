@@ -297,7 +297,7 @@ inline void llk_pack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _
 
 inline void llk_pack_debug_dump_seek(std::uint8_t offset) { _llk_pack_debug_dump_seek_(offset); }
 
-template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -306,7 +306,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, true>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,

@@ -65,6 +65,7 @@ void kernel_main() {
         .out = out_cb,
         .k_num_tiles = num_tiles_k,
     };
+    custom_mm_block_init(matmul_args.in0, matmul_args.in1, matmul_args.out, false, matmul_args.k_num_tiles);
 #endif
 
     // ========================================================================

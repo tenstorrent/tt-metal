@@ -161,6 +161,8 @@ void kernel_main() {
         .sin_interm_cb = sin_interm_cb,
         .out_cb = k_rope_output_cb,
     };
+    // Use anything for initial init
+    binary_op_init_common(0, 0, 0);
 #endif
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers

@@ -115,7 +115,10 @@ struct Rope {
             // ================================================================
             if constexpr (!SkipFullInit) {
                 mm_init(args.in_cb, args.trans_mat_cb, args.rotated_in_interm_cb);
-                binary_op_init_common(args.rotated_in_interm_cb, args.sin_cb, args.sin_interm_cb);
+            } else {
+                // MM has in0 to srcB, in1 to srcA
+                reconfig_data_format(args.trans_mat_cb, args.in_cb);
+                pack_reconfig_data_format(args.rotated_in_interm_cb);
             }
             // ================================================================
             // Main loop: process Ht heads, each head consumes Wt tiles
@@ -149,6 +152,7 @@ struct Rope {
                 // ============================================================
                 // Step 2: sin_interm = rotated * sin (broadcast multiply)
                 // ============================================================
+                reconfig_data_format_srca(args.rotated_in_interm_cb);
                 mul_bcast_rows_init_short(args.rotated_in_interm_cb, args.sin_cb);
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < Wt; ++j) {

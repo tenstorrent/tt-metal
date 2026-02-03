@@ -98,6 +98,11 @@ struct Matmul {
             constexpr bool transpose = false;
             constexpr uint32_t out_w = CTArgs::out_w;
 
+            // MM has in0 to srcB, in1 to srcA
+            reconfig_data_format(args.in1, args.in0);
+            pack_reconfig_data_format(args.out);
+            custom_mm_block_init_short(args.in0, args.in1, transpose, args.k_num_tiles);
+
             // Wait for all input tiles (both from sharded tensors in L1)
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
             cb_wait_front(args.in0, args.k_num_tiles);

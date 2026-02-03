@@ -52,6 +52,12 @@ ALWI void custom_mm_block_init(
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
 
+ALWI void custom_mm_block_init_short(
+    uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0, uint32_t kt_dim = 1) {
+    UNPACK((llk_unpack_AB_custom_mm_init(in0_cb_id, in1_cb_id, transpose, kt_dim)));
+    MATH((llk_math_custom_mm_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, kt_dim)));
+}
+
 // clang-format off
 /**
  * Performs block-sized matrix multiplication *C=A\*B* between the blocks in two
