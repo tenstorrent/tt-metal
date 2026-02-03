@@ -829,6 +829,11 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
         EXPECT_EQ(*host_rank, MeshHostRankId{0}) << "All switch chips should be on host rank 0";
     }
 
+    // Configure routing tables to generate ASIC mapping file for golden file comparison
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
     check_asic_mapping_against_golden("TestClosetBox3PodTTSwitchAPIs");
 }
 
@@ -866,10 +871,10 @@ TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
     control_plane.print_routing_tables();
 
     // Test Z direction functionality
-    // Verify routing_direction_to_eth_direction returns INVALID_DIRECTION for Z
+    // routing_direction_to_eth_direction always returns Z for RoutingDirection::Z (regardless of assign_z_direction)
     EXPECT_EQ(
         control_plane.routing_direction_to_eth_direction(RoutingDirection::Z),
-        static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+        static_cast<eth_chan_directions>(eth_chan_directions::Z));
 
     // Verify get_forwarding_eth_chans_to_chip can handle Z direction
     // (This will return empty if no Z connections exist, but should not crash)
@@ -894,10 +899,10 @@ TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
             for (const auto& chan : z_direction_chans) {
                 if (chan == 8 || chan == 9) {
                     z_channel_count++;
-                    // Verify that get_eth_chan_direction returns INVALID_DIRECTION for Z channels
+                    // Verify that get_eth_chan_direction returns Z for Z channels
                     EXPECT_EQ(
                         control_plane.get_eth_chan_direction(fabric_node_id, chan),
-                        static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+                        static_cast<eth_chan_directions>(eth_chan_directions::Z));
                 }
             }
         }
@@ -935,9 +940,10 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
     control_plane.print_routing_tables();
 
     // Test Z direction functionality
+    // When assign_z_direction is set, routing_direction_to_eth_direction should return Z (not INVALID_DIRECTION)
     EXPECT_EQ(
         control_plane.routing_direction_to_eth_direction(RoutingDirection::Z),
-        static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+        static_cast<eth_chan_directions>(eth_chan_directions::Z));
 
     // Verify get_forwarding_eth_chans_to_chip can handle Z direction for intermesh connections
     const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
