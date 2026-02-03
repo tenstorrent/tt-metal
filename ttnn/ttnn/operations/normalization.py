@@ -140,8 +140,7 @@ def create_layer_norm_reciprocals(device: ttnn.Device, core_range_set: ttnn.Core
     the per-core width in elements. The tensor is replicated for each core so that
     when sharded to L1 memory, each core has a complete copy.
 
-    This tensor is required when using the Welford algorithm (use_welford=True) for
-    numerically stable incremental mean/variance computation.
+    This tensor is required when using the Welford algorithm (use_welford=True).
 
     Args:
         device: The device to create the tensor on.
