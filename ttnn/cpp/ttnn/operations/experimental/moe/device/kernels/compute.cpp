@@ -8,6 +8,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/pack_untilize.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -43,7 +44,9 @@ void kernel_main() {
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
+
+    // Output CB for untilized data going to DRAM (not an alias, separate CB)
+    constexpr auto cb_c2s_out_untilized = cb_s2c_in;
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
@@ -173,7 +176,10 @@ void kernel_main() {
         //---------------------------------------------------------------------
         // Compute in2 @ W2 (in pairs of 4)
         //---------------------------------------------------------------------
-        uint32_t out_tile_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
+        // Initialize pack untilize for row-major output: 4 tiles wide -> 32 rows x 128 datums
+        pack_untilize_dest_init<4, 20>(cb_c2s_out_untilized);
+        uint32_t out_index = (expert_id & 1) ? 26 : 0;
+
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
@@ -218,15 +224,20 @@ void kernel_main() {
 
             tile_regs_commit();
 
+            // Reserve space in the output CB for the untilized data
+            cb_reserve_back(cb_c2s_out_untilized, 1);
+
             tile_regs_wait();
-            // Pack this in-place for now.
-            pack_tile</*out_of_order_output=*/true>(0, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(1, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(2, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(3, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
+            // Pack 4 tiles as row-major: 32 rows x 128 datums (32*4 width)
+            pack_untilize_dest<4, 20>(cb_c2s_out_untilized, /*block_rt_dim=*/1, out_index + iter * 4);
             tile_regs_release();
         }
+
+        // Restore normal packer state after untilize
     }  // end for (expert_id)
+    // cb_reserve_back(cb_c2w_rdy, 1);
+    // cb_push_back(cb_c2w_rdy, 1);
+    pack_untilize_uninit(cb_c2s_out_untilized);
 
     // Drain the pipeline - the last dummy push
     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
