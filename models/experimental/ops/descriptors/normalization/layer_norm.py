@@ -19,6 +19,7 @@ def layer_norm(
     residual_input_tensor: Optional["ttnn.Tensor"] = None,
     compute_kernel_config: Optional["ttnn.DeviceComputeKernelConfig"] = None,
     memory_config: Optional["ttnn.MemoryConfig"] = None,
+    program_config: Optional["ttnn.LayerNormProgramConfig"] = None,
 ) -> OpDescriptor:
     """
     Create an OpDescriptor for a layer norm operation.
@@ -32,6 +33,7 @@ def layer_norm(
         residual_input_tensor: Optional residual tensor to add before normalization.
         compute_kernel_config: Optional compute kernel configuration.
         memory_config: Optional output memory configuration. Defaults to input's memory config.
+        program_config: Optional program configuration. If not provided, one will be auto-generated.
 
     Returns:
         OpDescriptor containing the program descriptor, input tensors, and output tensors.
@@ -58,6 +60,7 @@ def layer_norm(
         memory_config,
         core_range_set,
         epsilon,
+        program_config,
     )
 
 

@@ -202,6 +202,7 @@ def test_deepseek_v3_q_kv_rms_norm(device):
         weight=q_tensors["weight"],
         memory_config=q_tensors["memory_config"],
         core_range_set=q_tensors["cores"],
+        program_config=q_tensors["program_config"],
     )
     kv_branch = descriptors.rms_norm(
         kv_tensors["input"],
@@ -209,6 +210,7 @@ def test_deepseek_v3_q_kv_rms_norm(device):
         weight=kv_tensors["weight"],
         memory_config=kv_tensors["memory_config"],
         core_range_set=kv_tensors["cores"],
+        program_config=kv_tensors["program_config"],
     )
 
     # Run composite (returns list of output lists, one per op descriptor)
