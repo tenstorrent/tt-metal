@@ -491,8 +491,8 @@ def get_rotate_tolerances(input_shape, angle, interpolation_mode):
 
     if interpolation_mode == "nearest":
         if is_diagonal_rotation:
-            return 6.0, 0.1
+            return 6.0, 0.01
         else:
-            return 5.0, 0.1
+            return 5.0, 0.01
     else:
-        return 1.0, 0.1
+        return 1.0, 0.01

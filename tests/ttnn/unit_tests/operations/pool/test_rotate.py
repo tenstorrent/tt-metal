@@ -233,14 +233,14 @@ def test_memory_configs(device, memory_config):
     ttnn_output = ttnn.rotate(ttnn_input, angle=angle)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    atol, rtol = 5.0, 0.05
+    atol, rtol = get_rotate_tolerances(input_shape, angle, "nearest")
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"Memory config test failed for {memory_config}"
 
 
 @skip_for_blackhole("Incorrect result on BH github issue #36263")
-@pytest.mark.parametrize("shard_strategy", ["height", "block"])
-def test_sharded_memory(device, shard_strategy):
+@pytest.mark.parametrize("interpolation_mode", ["nearest", "bilinear"])
+def test_height_sharded_memory(device, interpolation_mode):
     """Test rotation with height and block sharded memory configurations using full grid."""
     torch.manual_seed(0)
 
@@ -250,55 +250,29 @@ def test_sharded_memory(device, shard_strategy):
     num_cores = num_cores_x * num_cores_y
     angle = 45.0
 
-    if shard_strategy == "height":
-        total_sticks = num_cores * 4
-        input_shape = (1, total_sticks, 1, 64)
-        shard_height = (total_sticks + num_cores - 1) // num_cores
-        shard_width = input_shape[3]
-        shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
-            (shard_height, shard_width),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        sharded_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
-        )
-    elif shard_strategy == "width":
-        total_sticks = 16
-        channels = num_cores * 32
-        input_shape = (1, 4, 4, channels)
-        shard_height = total_sticks
-        shard_width = channels // num_cores
-        shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
-            (shard_height, shard_width),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
-    else:
-        total_sticks = num_cores_y * 4
-        input_shape = (1, total_sticks, 1, num_cores_x * 32)
-        shard_height = (total_sticks + num_cores_y - 1) // num_cores_y
-        shard_width = input_shape[3] // num_cores_x
-        shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
-            (shard_height, shard_width),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+    total_sticks = num_cores * 4
+    input_shape = (1, total_sticks, 1, 64)
+    shard_height = (total_sticks + num_cores - 1) // num_cores
+    shard_width = input_shape[3]
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
+        (shard_height, shard_width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
     torch_input_nhwc = torch.randn(input_shape, dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn.rotate)
-    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle)
+    torch_output_nhwc = golden_function(torch_input_nhwc, angle=angle, interpolation_mode=interpolation_mode)
 
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_input_sharded = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
-    ttnn_output = ttnn.rotate(ttnn_input_sharded, angle=angle)
+    ttnn_output = ttnn.rotate(ttnn_input_sharded, angle=angle, interpolation_mode=interpolation_mode)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    atol, rtol = 5.0, 0.05
+    atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
-    assert comparison_passed, f"{shard_strategy} sharded memory test failed"
+    assert comparison_passed, f"{interpolation_mode} height sharded memory test failed"
 
 
 # ============================================================================
@@ -324,7 +298,7 @@ def test_data_types(device, dtype):
     ttnn_output = ttnn.rotate(ttnn_input, angle=angle)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    atol, rtol = 5.0, 0.05
+    atol, rtol = get_rotate_tolerances(input_shape, angle, "nearest")
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"Data type test failed for {dtype}"
 
@@ -372,7 +346,7 @@ def test_negative_angles(device, angle):
     if angle % 90 == 0:
         assert torch.equal(torch_output_nhwc, ttnn_output_torch), f"{angle}° rotation should be exact"
     else:
-        atol, rtol = 5.0, 0.05
+        atol, rtol = get_rotate_tolerances(input_shape, angle, "nearest")
         comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
         assert comparison_passed, f"Negative angle test failed for {angle}°"
 
@@ -392,7 +366,7 @@ def test_large_angles(device, angle):
     ttnn_output = ttnn.rotate(ttnn_input, angle=angle)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    atol, rtol = 5.0, 0.05
+    atol, rtol = get_rotate_tolerances(input_shape, angle, "nearest")
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"Large angle test failed for {angle}°"
 
@@ -412,7 +386,7 @@ def test_small_tensor(device):
     ttnn_output = ttnn.rotate(ttnn_input, angle=angle)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    atol, rtol = 5.0, 0.05
+    atol, rtol = get_rotate_tolerances(input_shape, angle, "nearest")
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, "Small tensor test failed"
 

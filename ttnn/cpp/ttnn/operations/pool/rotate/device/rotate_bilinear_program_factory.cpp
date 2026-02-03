@@ -107,7 +107,6 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
             input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
         is_width_sharded =
             input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
-        TT_FATAL(!is_width_sharded, "Width sharding is not supported for rotate operation");
         num_cores_x = input_shard_spec.grid.bounding_box().grid_size().x;
         num_sticks_per_core_group_1 = input_nsticks_per_core;
         core_group_1 = all_cores;
