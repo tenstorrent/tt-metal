@@ -103,23 +103,28 @@ def swiglu_fused_row_mcast_roofline(
         2 * embedding_size * hidden_size + hidden_size * embedding_size  # w1 + w2  # w3
     ) * bytes_per_elem
     weights_total_bytes = weight_read_mult * weight_bytes_per_read
-
     # Output write once: batch_seq * embedding_size
     output_bytes = batch_seq * embedding_size * bytes_per_elem
 
-    total_bytes = int(input_bytes + weights_total_bytes + output_bytes)
+    if phase == "forward":
+        total_bytes = int(input_bytes + weights_total_bytes + output_bytes)
 
-    # FLOPs calculation
-    # x @ w1: 2 * batch_seq * embedding_size * hidden_size
-    # x @ w2: 2 * batch_seq * embedding_size * hidden_size
-    # (result) @ w3: 2 * batch_seq * hidden_size * embedding_size
-    # Total matmul FLOPs: 6 * batch_seq * embedding_size * hidden_size
-    matmul_flops = 6 * batch_seq * embedding_size * hidden_size
+        # FLOPs calculation
+        # x @ w1: 2 * batch_seq * embedding_size * hidden_size
+        # x @ w2: 2 * batch_seq * embedding_size * hidden_size
+        # (result) @ w3: 2 * batch_seq * hidden_size * embedding_size
+        # Total matmul FLOPs: 6 * batch_seq * embedding_size * hidden_size
+        matmul_flops = 6 * batch_seq * embedding_size * hidden_size
 
-    # SiLU and mul are done on the fly (on SFPU)
-    # silu: ~8 ops per element (approximation)
-    # mul: 1 op per element
-    eltwise_flops = 9 * batch_seq * hidden_size
+        # SiLU and mul are done on the fly (on SFPU)
+        # silu: ~8 ops per element (approximation)
+        # mul: 1 op per element
+        eltwise_flops = 9 * batch_seq * hidden_size
+    else:
+        # weights_total_bytes + (grad_bytes = weights_total_bytes) + (input_grad = input_bytes) + (output_grad = output_bytes)
+        total_bytes = int(weights_total_bytes * 2 + input_bytes + output_bytes)
+        matmul_flops = 12 * batch_seq * embedding_size * hidden_size
+        eltwise_flops = 14 * batch_seq * hidden_size
 
     total_flops = matmul_flops + eltwise_flops
 

@@ -100,7 +100,7 @@ class MockLlamaBlock(MockModule):
         #     intermediate_dim=intermediate_dim,
         #     dropout=dropout,
         #     dtype=dtype,
-        #     impl=SwiGLUFusedImpl.MCAST,  # Use row multicast implementation
+        #     impl=SwiGLUFusedImpl.MCAST,
         # )
 
     def forward(

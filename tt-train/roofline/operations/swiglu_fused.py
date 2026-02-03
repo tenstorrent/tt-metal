@@ -164,15 +164,13 @@ class MockSwiGLUFusedOp(RooflineFunction):
                 phase="backward",
             )
 
-        # Scale up for backward (approximately 2x forward)
-        # This accounts for: grad_input, grad_w1, grad_w2, grad_w3 computations
         estimate_bwd = type(estimate)(
             operation=estimate.operation,
             phase=estimate.phase,
-            total_flops=int(estimate.total_flops * 2),
-            total_bytes=int(estimate.total_bytes * 2),
-            ideal_compute_ns=estimate.ideal_compute_ns * 2,
-            ideal_memory_ns=estimate.ideal_memory_ns * 2,
+            total_flops=int(estimate.total_flops),
+            total_bytes=int(estimate.total_bytes),
+            ideal_compute_ns=estimate.ideal_compute_ns,
+            ideal_memory_ns=estimate.ideal_memory_ns,
             hw=estimate.hw,
         )
         roofline_ctx.add_perf_result(estimate_bwd)
