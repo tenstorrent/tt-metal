@@ -720,34 +720,23 @@ class MasterConfigLoader:
             if not tensors:
                 continue
 
-            # Add tensor parameters with appropriate naming based on count
-            if len(tensors) == 1:
-                # Unary: use simple names
-                config_dict["shape"] = tensors[0]["shape"]
-                config_dict["dtype"] = tensors[0]["dtype"]
-                config_dict["layout"] = tensors[0]["layout"]
-                config_dict["memory_config"] = tensors[0]["memory_config"]
-                config_dict["output_memory_config"] = tensors[0]["memory_config"]
-            elif len(tensors) == 2:
-                # Binary: use _a and _b suffixes
-                config_dict["shape_a"] = tensors[0]["shape"]
-                config_dict["shape_b"] = tensors[1]["shape"]
-                config_dict["dtype_a"] = tensors[0]["dtype"]
-                config_dict["dtype_b"] = tensors[1]["dtype"]
-                config_dict["layout_a"] = tensors[0]["layout"]
-                config_dict["layout_b"] = tensors[1]["layout"]
-                config_dict["memory_config_a"] = tensors[0]["memory_config"]
-                config_dict["memory_config_b"] = tensors[1]["memory_config"]
-                config_dict["output_memory_config"] = tensors[0]["memory_config"]
-            else:
-                # Multi-input: use _a, _b, _c, ... suffixes
-                for i, tensor in enumerate(tensors):
-                    suffix = chr(97 + i)  # a, b, c, ...
+            # Add tensor parameters with unified naming for all cases
+            # Always use input_shape for first tensor
+            config_dict["input_shape"] = tensors[0]["shape"]
+
+            # Add dtype, layout, and memory_config for all tensors using input_a_*, input_b_*, etc.
+            for i, tensor in enumerate(tensors):
+                suffix = chr(97 + i)  # a, b, c, ...
+                config_dict[f"input_{suffix}_dtype"] = tensor["dtype"]
+                config_dict[f"input_{suffix}_layout"] = tensor["layout"]
+                config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
+
+                # For additional tensors with different shapes, add shape_b, shape_c, etc.
+                # (Only when shape actually differs from the first tensor's shape)
+                if i > 0 and tensor["shape"] != tensors[0]["shape"]:
                     config_dict[f"shape_{suffix}"] = tensor["shape"]
-                    config_dict[f"dtype_{suffix}"] = tensor["dtype"]
-                    config_dict[f"layout_{suffix}"] = tensor["layout"]
-                    config_dict[f"memory_config_{suffix}"] = tensor["memory_config"]
-                config_dict["output_memory_config"] = tensors[0]["memory_config"]
+
+            config_dict["output_memory_config"] = tensors[0]["memory_config"]
 
             # Add all keyword arguments (anything not arg0, arg1, arg2, ...)
             # Parse special float values and enum types in keyword arguments
