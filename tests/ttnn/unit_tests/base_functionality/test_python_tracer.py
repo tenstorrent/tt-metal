@@ -86,7 +86,7 @@ def test_operation_parameter_tracing(tmp_path, device, shape_a, shape_b, dtype):
     tensor_a = ttnn.rand(shape=shape_a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tensor_b = ttnn.rand(shape=shape_b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    tensor_c = ttnn.add(tensor_a, tensor_b)
+    ttnn.add(tensor_a, tensor_b)
     ttnn.synchronize_device(device)
 
     # Find the trace files (format: {number}_{operation_name}_{timestamp}.json)
@@ -307,7 +307,7 @@ def test_default_no_tensor_values(tmp_path, device):
 def test_tracing_disabled_no_files_created(tmp_path, device):
     """Test that no trace files are created when tracing is disabled."""
     # Ensure tracing is disabled (fixture should handle this, but be explicit)
-    import ttnn.operation_tracer
+
 
     original_trace_flag = ttnn.operation_tracer._ENABLE_TRACE
     ttnn.operation_tracer._ENABLE_TRACE = False
@@ -324,7 +324,7 @@ def test_tracing_disabled_no_files_created(tmp_path, device):
     # Perform some operations
     a = ttnn.rand(shape=[2, 3], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.rand(shape=[2, 3], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    c = ttnn.add(a, b)
+    ttnn.add(a, b)
     ttnn.synchronize_device(device)
 
     # Verify NO trace files were created
@@ -336,7 +336,7 @@ def test_tracing_disabled_no_files_created(tmp_path, device):
     # Also verify the directory doesn't exist (or is empty)
     if trace_dir.exists():
         all_files = list(trace_dir.glob("*"))
-        assert len(all_files) == 0, f"Expected trace directory to be empty, but found {len(all_files)} files"
+        assert len(all_files) == 0, f"Expected trace directory to be empty, but found: {[f.name for f in all_files]}."
 
     # Restore original state
     ttnn.operation_tracer._ENABLE_TRACE = original_trace_flag
@@ -367,7 +367,7 @@ def test_from_torch_to_device_tracing(tmp_path, device):
     # Create tensors using from_torch and to_device
     torch_tensor = torch.randn(2, 3).bfloat16()
     tensor_host = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tensor_device = ttnn.to_device(tensor_host, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.to_device(tensor_host, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.synchronize_device(device)
 
     # Verify trace files were created
