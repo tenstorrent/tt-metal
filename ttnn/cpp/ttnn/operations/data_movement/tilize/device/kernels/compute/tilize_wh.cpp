@@ -14,5 +14,5 @@ void kernel_main() {
     constexpr uint32_t third_dim = get_compile_time_arg_val(2);
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    compute_kernel_lib::tilize<block_size_row, tt::CBIndex::c_0, tt::CBIndex::c_16>(block_size_col * third_dim);
+    compute_kernel_lib::tilize<tt::CBIndex::c_0, tt::CBIndex::c_16>(block_size_row, block_size_col * third_dim);
 }

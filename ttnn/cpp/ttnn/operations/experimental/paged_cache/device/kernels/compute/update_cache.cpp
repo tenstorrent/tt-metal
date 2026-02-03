@@ -47,13 +47,13 @@ void kernel_main() {
 
         // Wait on writer to update block. Tilize with DT reconfiguration.
         compute_kernel_lib::tilize<
-            Wt,                   // block_width_tiles
             untilized_cache2_cb,  // input_cb
             out_cb,               // output_cb
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-            compute_kernel_lib::tilize_config::WaitMode::Wait,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
             cache_cb>(  // reconfig_from_cb (for DT restoration)
+            Wt,         // block_width_tiles
             1);         // num_blocks
 
         pack_reconfig_data_format(out_cb, untilized_cache_cb);

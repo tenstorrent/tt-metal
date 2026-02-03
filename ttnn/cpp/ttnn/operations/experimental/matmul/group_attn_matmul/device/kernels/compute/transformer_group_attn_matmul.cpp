@@ -157,7 +157,15 @@ void kernel_main() {
             pack_reconfig_data_format(cb_intermed0, out_cb_id);
 
             // tilize CB::intermed1 and write to CBIndex::c_16
-            tilize<true, true, false, true>(cb_intermed1, out_num_tiles, out_cb_id, 1, 1, cb_in1);
+            compute_kernel_lib::tilize<
+                cb_intermed1,
+                out_cb_id,
+                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
+                cb_in1>(
+                out_num_tiles,
+                1);
 
             cb_pop_front(cb_in0, in0_block_num_tiles);
         } // Mt loop

@@ -72,13 +72,12 @@ void kernel_main() {
 
                 // tilize CB::intermed2 and write to CBIndex::c_16
                 compute_kernel_lib::tilize<
-                    onetile,
                     cb_intermed2,
                     out_cb_id,
                     compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-                    compute_kernel_lib::tilize_config::WaitMode::Wait,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                     compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-                    cb_in1>(1);
+                    cb_in1>(onetile, 1);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);

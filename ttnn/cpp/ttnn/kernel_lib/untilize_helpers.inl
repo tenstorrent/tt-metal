@@ -14,6 +14,68 @@
 namespace compute_kernel_lib {
 
 // =============================================================================
+// Data Format Detection - Automatic Detection
+// =============================================================================
+
+// unpack_dst_format is defined in JIT-generated chlkc_unpack_data_format.h
+// It's an array where unpack_dst_format[cb_id] contains the DataFormat enum value
+
+// Integer data formats from tt_metal/hw/inc/tt-1xx/blackhole/tensix_types.h:
+// - Int8 = 14
+// - UInt8 = 30
+// - UInt16 = 9
+// - Int32 = 8
+// - UInt32 = 24
+
+template <uint32_t cb_id>
+constexpr bool is_integer_format() {
+// Check if unpack_dst_format array is available (from JIT-generated chlkc_unpack_data_format.h)
+// This header is included via chlkc_list.h in the firmware build
+#if __has_include("chlkc_unpack_data_format.h")
+// Include the JIT-generated header
+#include "chlkc_unpack_data_format.h"
+
+    // Access the format at compile time
+    constexpr uint32_t format = unpack_dst_format[cb_id];
+
+    // Check if format is one of the integer types
+    // Integer formats from tt_metal/hw/inc/tt-1xx/blackhole/tensix_types.h:
+    return format == 8 ||   // Int32
+           format == 24 ||  // UInt32
+           format == 14 ||  // Int8
+           format == 30 ||  // UInt8
+           format == 9;     // UInt16
+#else
+// If header not available, assume non integer for wide widths
+// This ensures wide integer tensors get hardware acceleration
+    return false;
+#endif
+}
+
+// =============================================================================
+// Block Splitting Helper for Wide Integer Untilize
+// =============================================================================
+
+/**
+ * @brief Compute number of blocks needed to split a wide row into DEST-sized chunks
+ *
+ * Finds the largest divisor of total_width that is <= max_block_width
+ * This ensures optimal block size while respecting DEST register limits.
+ *
+ * @param total_width Total width in tiles to be split
+ * @param max_block_width Maximum block width (DEST register limit)
+ * @return Number of blocks needed
+ */
+constexpr uint32_t compute_num_blocks(uint32_t total_width, uint32_t max_block_width) {
+    for (uint32_t block_width = max_block_width; block_width >= 1; --block_width) {
+        if (total_width % block_width == 0) {
+            return total_width / block_width;
+        }
+    }
+    return total_width;  // fallback: 1 tile per block
+}
+
+// =============================================================================
 // Standalone Init/Uninit Wrapper Functions Implementations
 // =============================================================================
 
@@ -128,7 +190,7 @@ ALWI void untilize(uint32_t num_blocks) {
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
             // Handle per-row waiting
-            if constexpr (wait_mode == untilize_config::WaitMode::Wait) {
+            if constexpr (wait_mode == untilize_config::WaitMode::WaitBlock) {
                 cb_wait_front(input_cb, block_width_tiles);
             }
             // WaitUpfront: already waited above

@@ -198,7 +198,8 @@ void kernel_main() {
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                             // Tilize row-major patches with variable row alignment
                             // Reader produces row pages, which may not be tile aligned
-                            compute_kernel_lib::tilize<matmul_K_t, cb_vol2col_rm, cb_vol2col_tiled>(
+                            compute_kernel_lib::tilize<cb_vol2col_rm, cb_vol2col_tiled>(
+                                matmul_K_t,
                                 matmul_M_t,
                                 compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::total_batched(
                                     num_patches));

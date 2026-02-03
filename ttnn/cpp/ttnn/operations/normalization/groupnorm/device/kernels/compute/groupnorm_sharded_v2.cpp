@@ -156,15 +156,14 @@ void kernel_main() {
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm = cb_repack;
-    compute_kernel_lib::tilize<per_core_N, cb_in_rm, cb_in>(per_core_M);
+    compute_kernel_lib::tilize<cb_in_rm, cb_in>(per_core_N, per_core_M);
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
     compute_kernel_lib::tilize<
-        per_core_N,
         cb_in_rm,
         cb_in,
         compute_kernel_lib::tilize_config::InitUninitMode::InitOnly,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait>(per_core_M);
+        compute_kernel_lib::tilize_config::WaitMode::NoWait>(per_core_N, per_core_M);
 #endif
     cb_wait_front(cb_in, per_core_MN);
 #else

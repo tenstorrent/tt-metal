@@ -53,13 +53,12 @@ void kernel_main() {
 
         // Wait on writer to update block. Tilize.
         compute_kernel_lib::tilize<
-            Wt,
             untilized_cache2_cb,
             out_cb,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-            compute_kernel_lib::tilize_config::WaitMode::Wait,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-            cache_cb>(1);
+            cache_cb>(Wt, 1);
 
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }

@@ -14,7 +14,6 @@
 namespace compute_kernel_lib {
 
 template <
-    uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
     tilize_config::InitUninitMode init_uninit_mode,
@@ -22,14 +21,13 @@ template <
     tilize_config::TilizeSpeedMode speed_mode,
     uint32_t reconfig_from_cb>
 ALWI void tilize(
+    uint32_t block_width_tiles,
     uint32_t num_blocks,
     tilize_config::NonTileAlignedCBWaitConfig config) {
 
     // Compile-time validation
     static_assert(input_cb != output_cb,
         "Tilize cannot be done in-place: input_cb and output_cb must be different");
-    static_assert(block_width_tiles > 0,
-        "block_width_tiles must be greater than 0");
     static_assert(input_cb < 32,
         "Invalid input_cb: must be less than 32");
     static_assert(output_cb < 32,
@@ -83,7 +81,7 @@ ALWI void tilize(
             uint32_t current_input = (rows_left < TILE_HEIGHT) ? rows_left : TILE_HEIGHT;
 
             // Handle waiting based on WaitMode
-            if constexpr (wait_mode == tilize_config::WaitMode::Wait) {
+            if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
                 cb_wait_front(input_cb, current_input);
             } else if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
                 // WaitUpfront: wait for all data at the beginning
@@ -128,7 +126,7 @@ ALWI void tilize(
 
         for (uint32_t block = 0; block < num_blocks; ++block) {
             // Handle per-iteration waiting
-            if constexpr (wait_mode == tilize_config::WaitMode::Wait) {
+            if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
                 cb_wait_front(input_cb, input_amount);
             }
             // WaitUpfront: already waited above

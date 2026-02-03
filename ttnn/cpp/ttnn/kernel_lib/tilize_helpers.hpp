@@ -33,30 +33,32 @@
  *   compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
  *
  *   // Simple standard tilize
- *   compute_kernel_lib::tilize<32, cb_in, cb_out>(num_blocks);
+ *   compute_kernel_lib::tilize<cb_in, cb_out>(32, num_blocks);
  *
  *   // Fast tilize with explicit mode
  *   using namespace compute_kernel_lib::tilize_config;
  *   compute_kernel_lib::tilize<
- *       64, cb_in, cb_out,
+ *       cb_in, cb_out,
  *       InitUninitMode::InitAndUninit,
- *       WaitMode::Wait,
- *       TilizeSpeedMode::Fast>(num_blocks);
+ *       WaitMode::WaitBlock,
+ *       TilizeSpeedMode::Fast>(64, num_blocks);
  *
  *   // With data type reconfiguration
- *   compute_kernel_lib::tilize<16, new_cb, cb_out,
+ *   compute_kernel_lib::tilize<new_cb, cb_out,
  *       InitUninitMode::InitAndUninit,
- *       WaitMode::Wait,
+ *       WaitMode::WaitBlock,
  *       TilizeSpeedMode::Standard,
- *       old_cb>(num_blocks);
+ *       old_cb>(16, num_blocks);
  *
  *   // Non-tile-aligned: per-iteration pages
- *   compute_kernel_lib::tilize<total_tiles, cb_in, cb_out>(
+ *   compute_kernel_lib::tilize<cb_in, cb_out>(
+ *       total_tiles,
  *       1,
  *       NonTileAlignedCBConfig::per_iteration(total_sticks));
  *
  *   // Non-tile-aligned: total batched pages
- *   compute_kernel_lib::tilize<matmul_K_t, cb_in, cb_out>(
+ *   compute_kernel_lib::tilize<cb_in, cb_out>(
+ *       matmul_K_t,
  *       matmul_M_t,
  *       NonTileAlignedCBConfig::total_batched(num_patches));
  */
@@ -85,12 +87,12 @@ enum class InitUninitMode : uint8_t {
 /**
  * @brief Controls input synchronization (wait strategy) for tilize operations
  *
- * Wait (default) - wait per block/iteration (standard behavior)
+ * WaitBlock (default) - wait per block/iteration (standard behavior)
  * WaitUpfront - wait for all blocks upfront before processing
  * NoWait - caller manages synchronization (data is pre-loaded)
  */
 enum class WaitMode : uint8_t {
-    Wait,         // Default - wait per block/iteration
+    WaitBlock,    // Default - wait per block/iteration
     WaitUpfront,  // Wait for all blocks upfront before processing
     NoWait        // Caller manages synchronization (skip cb_wait_front)
 };
@@ -205,9 +207,8 @@ public:
  *
  * Example:
  *   compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
- *   compute_kernel_lib::tilize<block_w, cb_in, cb_out>(num_blocks);
+ *   compute_kernel_lib::tilize<cb_in, cb_out>(block_w, num_blocks);
  *
- * @tparam block_width_tiles Block width in tiles (FIRST template parameter for consistency)
  * @tparam input_cb Input circular buffer ID (compile-time for type safety)
  * @tparam output_cb Output circular buffer ID (compile-time for type safety)
  * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
@@ -215,85 +216,88 @@ public:
  * @tparam speed_mode Explicit tilize speed mode selection (default: Standard)
  * @tparam reconfig_from_cb Previous CB for DT tracking (default: INVALID_CB = disabled)
  *
+ * @param block_width_tiles Block width in tiles (FIRST runtime argument for consistency)
  * @param num_blocks Number of blocks to process
  * @param config Non-tile-aligned CB wait configuration (default: disabled)
  *
  * @example
  *   // Simple standard tilize
- *   tilize<32, cb_in, cb_out>(10);
+ *   tilize<cb_in, cb_out>(32, 10);
  *
  * @example
  *   // Fast tilize (explicit mode selection)
  *   using namespace compute_kernel_lib::tilize_config;
- *   tilize<64, cb_in, cb_out,
+ *   tilize<cb_in, cb_out,
  *          InitUninitMode::InitAndUninit,
- *          WaitMode::Wait,
- *          TilizeSpeedMode::Fast>(5);
+ *          WaitMode::WaitBlock,
+ *          TilizeSpeedMode::Fast>(64, 5);
  *
  * @example
  *   // Data type reconfiguration
  *   using namespace compute_kernel_lib::tilize_config;
- *   tilize<16, new_cb, cb_out,
+ *   tilize<new_cb, cb_out,
  *          InitUninitMode::InitAndUninit,
- *          WaitMode::Wait,
+ *          WaitMode::WaitBlock,
  *          TilizeSpeedMode::Standard,
- *          old_cb>(5);
+ *          old_cb>(16, 5);
  *
  * @example
  *   // Fast + DT reconfiguration
  *   using namespace compute_kernel_lib::tilize_config;
- *   tilize<64, new_cb, cb_out,
+ *   tilize<new_cb, cb_out,
  *          InitUninitMode::InitAndUninit,
- *          WaitMode::Wait,
+ *          WaitMode::WaitBlock,
  *          TilizeSpeedMode::Fast,
- *          old_cb>(5);
+ *          old_cb>(64, 5);
  *
  * @example
  *   // Per-iteration pages (asymmetric input/output - convert_to_hwc pattern)
- *   tilize<total_tiles, cb_in, cb_out>(
+ *   tilize<cb_in, cb_out>(
+ *       total_tiles,
  *       1,
  *       tilize_config::NonTileAlignedCBWaitConfig::per_iteration(total_sticks));
  *
  * @example
  *   // Total batched pages (variable row alignment - conv3d pattern)
- *   tilize<matmul_K_t, cb_in, cb_out>(
+ *   tilize<cb_in, cb_out>(
+ *       matmul_K_t,
  *       matmul_M_t,
  *       tilize_config::NonTileAlignedCBWaitConfig::total_batched(num_patches));
  *
  * @example
  *   // Skip wait (groupnorm pattern with pre-loaded data)
  *   using namespace compute_kernel_lib::tilize_config;
- *   tilize<per_core_N, cb_in, cb_out,
+ *   tilize<cb_in, cb_out,
  *          InitUninitMode::InitAndUninit,
- *          WaitMode::NoWait>(per_core_M);
+ *          WaitMode::NoWait>(per_core_N, per_core_M);
  *
  * @example
  *   // Init only (first in sequence)
  *   using namespace compute_kernel_lib::tilize_config;
- *   tilize<width, cb_in, cb_out,
- *          InitUninitMode::InitOnly>(blocks);
+ *   tilize<cb_in, cb_out,
+ *          InitUninitMode::InitOnly>(width, blocks);
  *
  * @example
  *   // Neither init nor uninit (middle of sequence)
  *   using namespace compute_kernel_lib::tilize_config;
- *   tilize<width, cb_in, cb_out,
- *          InitUninitMode::Neither>(blocks);
+ *   tilize<cb_in, cb_out,
+ *          InitUninitMode::Neither>(width, blocks);
  *
  * @example
  *   // Uninit only (last in sequence)
  *   using namespace compute_kernel_lib::tilize_config;
- *   tilize<width, cb_in, cb_out,
- *          InitUninitMode::UninitOnly>(blocks);
+ *   tilize<cb_in, cb_out,
+ *          InitUninitMode::UninitOnly>(width, blocks);
  */
 template <
-    uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
     tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
-    tilize_config::WaitMode wait_mode = tilize_config::WaitMode::Wait,
+    tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
     tilize_config::TilizeSpeedMode speed_mode = tilize_config::TilizeSpeedMode::Standard,
     uint32_t reconfig_from_cb = tilize_config::INVALID_CB>
 ALWI void tilize(
+    uint32_t block_width_tiles,
     uint32_t num_blocks,
     tilize_config::NonTileAlignedCBWaitConfig config = tilize_config::NonTileAlignedCBWaitConfig::disabled());
 

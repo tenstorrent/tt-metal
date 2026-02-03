@@ -147,8 +147,8 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         // Tilize input with activation pattern (Ht rows × Wt tiles)
-        compute_kernel_lib::tilize<Wt, cb_in, cb_tilize>(
-            1, compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::per_iteration(Ht));
+        compute_kernel_lib::tilize<cb_in, cb_tilize>(
+            Wt, 1, compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::per_iteration(Ht));
 
         // transpose
         cb_wait_front(cb_tilize, HtWt);

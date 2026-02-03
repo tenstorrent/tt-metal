@@ -40,13 +40,12 @@ void tilize_in(
     // Replaced manual tilize loop with unified helper function
     // This uses fast tilize with DT variant (fast_tilize_init_with_dt)
     compute_kernel_lib::tilize<
-        in_block_w,
         in_cb_id,
         out_cb_id,
         init_uninit_mode,
-        compute_kernel_lib::tilize_config::WaitMode::Wait,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::TilizeSpeedMode::Fast,
-        in_cb_id>(in_num_subblocks);
+        in_cb_id>(in_block_w, in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
