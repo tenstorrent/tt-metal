@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import pathlib
 import shutil
 import pytest
 import torch
