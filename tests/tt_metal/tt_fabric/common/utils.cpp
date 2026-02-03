@@ -147,13 +147,14 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         auto gen_hostnames = gen_mapping["hostnames"];
         auto gold_hostnames = gold_mapping["hostnames"];
 
-        // Collect all umd_chip_id mappings from all hostnames and meshes (skip hostname comparison)
-        // Key format: "mesh_id:umd_chip_id" to uniquely identify each mapping
-        std::map<std::string, YAML::Node> gen_map_by_chip_id;
-        std::map<std::string, YAML::Node> gold_map_by_chip_id;
+        // Collect all chip mappings from all hostnames and meshes (skip hostname comparison)
+        // Key format: "asic_id" (as a string) to uniquely identify each mapping
+        // asic_id is unique across all chips and is the most reliable identifier
+        std::map<std::string, YAML::Node> gen_map_by_asic_id;
+        std::map<std::string, YAML::Node> gold_map_by_asic_id;
 
         // Helper function to collect chips from a host entry (handles both old and new formats)
-        // Ignores hostname - only collects chips by mesh_id:umd_chip_id
+        // Ignores hostname - collects chips by asic_id for uniqueness
         auto collect_chips_from_host = [](const YAML::Node& host_node, std::map<std::string, YAML::Node>& chip_map) {
             if (host_node.IsMap()) {
                 // Check if this is the new format: map with "hostname" and "mesh" keys
@@ -165,26 +166,19 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                     //             chips:
                     //               - umd_chip_id: 0
                     auto mesh_list = host_node["mesh"];
-                    uint32_t current_mesh_id = 0;
 
                     // Iterate through mesh list - entries can have both mesh and chips keys
                     // Format: - mesh: 0
                     //           chips: [...]
                     for (const auto& entry : mesh_list) {
                         if (entry.IsMap()) {
-                            // Update current_mesh_id if mesh key exists
-                            if (entry["mesh"]) {
-                                current_mesh_id = entry["mesh"].as<uint32_t>();
-                            }
-
                             // Process chips if chips key exists (can be in same entry as mesh)
                             if (entry["chips"]) {
                                 auto chips_list = entry["chips"];
                                 for (const auto& chip_entry : chips_list) {
-                                    if (chip_entry["umd_chip_id"]) {
-                                        uint32_t umd_chip_id = chip_entry["umd_chip_id"].as<uint32_t>();
-                                        std::string key =
-                                            std::to_string(current_mesh_id) + ":" + std::to_string(umd_chip_id);
+                                    if (chip_entry["asic_id"]) {
+                                        uint64_t asic_id = chip_entry["asic_id"].as<uint64_t>();
+                                        std::string key = std::to_string(asic_id);
                                         chip_map[key] = YAML::Clone(chip_entry);
                                     }
                                 }
@@ -206,14 +200,12 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                         is_old_sequence_format = true;
                         for (const auto& mesh_entry : entry_value) {
                             if (mesh_entry.IsMap() && mesh_entry["mesh"]) {
-                                uint32_t mesh_id = mesh_entry["mesh"].as<uint32_t>();
                                 if (mesh_entry["chips"]) {
                                     auto chips_list = mesh_entry["chips"];
                                     for (const auto& chip_entry : chips_list) {
-                                        if (chip_entry["umd_chip_id"]) {
-                                            uint32_t umd_chip_id = chip_entry["umd_chip_id"].as<uint32_t>();
-                                            std::string key =
-                                                std::to_string(mesh_id) + ":" + std::to_string(umd_chip_id);
+                                        if (chip_entry["asic_id"]) {
+                                            uint64_t asic_id = chip_entry["asic_id"].as<uint64_t>();
+                                            std::string key = std::to_string(asic_id);
                                             chip_map[key] = YAML::Clone(chip_entry);
                                         }
                                     }
@@ -228,20 +220,19 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
                     // Old map format: map of mesh_X -> map of chip_id -> entry
                     for (const auto& mesh_pair : host_node) {
                         std::string mesh_key = mesh_pair.first.as<std::string>();
-                        uint32_t mesh_id;
-                        if (mesh_key.find("mesh_") == 0) {
-                            mesh_id = std::stoul(mesh_key.substr(5));  // Remove "mesh_" prefix
-                        } else {
+                        if (mesh_key.find("mesh_") != 0) {
                             continue;  // Skip non-mesh keys
                         }
                         auto mesh_value = mesh_pair.second;
                         if (mesh_value.IsMap()) {
                             // Old map format: chip_id -> entry
                             for (const auto& chip_pair : mesh_value) {
-                                std::string umd_chip_id_str = chip_pair.first.as<std::string>();
-                                uint32_t umd_chip_id = std::stoul(umd_chip_id_str);
-                                std::string key = std::to_string(mesh_id) + ":" + std::to_string(umd_chip_id);
-                                chip_map[key] = YAML::Clone(chip_pair.second);
+                                auto chip_entry = chip_pair.second;
+                                if (chip_entry["asic_id"]) {
+                                    uint64_t asic_id = chip_entry["asic_id"].as<uint64_t>();
+                                    std::string key = std::to_string(asic_id);
+                                    chip_map[key] = YAML::Clone(chip_entry);
+                                }
                             }
                         }
                     }
@@ -253,12 +244,12 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         if (gen_hostnames.IsSequence()) {
             // New format: hostnames is a sequence
             for (const auto& host_entry : gen_hostnames) {
-                collect_chips_from_host(host_entry, gen_map_by_chip_id);
+                collect_chips_from_host(host_entry, gen_map_by_asic_id);
             }
         } else if (gen_hostnames.IsMap()) {
             // Old format: hostnames is a map
             for (const auto& host_pair : gen_hostnames) {
-                collect_chips_from_host(host_pair.second, gen_map_by_chip_id);
+                collect_chips_from_host(host_pair.second, gen_map_by_asic_id);
             }
         }
 
@@ -266,36 +257,36 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         if (gold_hostnames.IsSequence()) {
             // New format: hostnames is a sequence
             for (const auto& host_entry : gold_hostnames) {
-                collect_chips_from_host(host_entry, gold_map_by_chip_id);
+                collect_chips_from_host(host_entry, gold_map_by_asic_id);
             }
         } else if (gold_hostnames.IsMap()) {
             // Old format: hostnames is a map
             for (const auto& host_pair : gold_hostnames) {
-                collect_chips_from_host(host_pair.second, gold_map_by_chip_id);
+                collect_chips_from_host(host_pair.second, gold_map_by_asic_id);
             }
         }
 
-        // Compare the collected chip_id mappings
+        // Compare the collected asic_id mappings
         std::vector<std::string> mismatch_details;
 
         // First, check that we have the same number of entries
-        if (gen_map_by_chip_id.size() != gold_map_by_chip_id.size()) {
+        if (gen_map_by_asic_id.size() != gold_map_by_asic_id.size()) {
             std::ostringstream oss;
-            oss << "Mismatch in total number of unique UMD chip IDs: generated=" << gen_map_by_chip_id.size()
-                << ", golden=" << gold_map_by_chip_id.size();
+            oss << "Mismatch in total number of unique ASIC entries: generated=" << gen_map_by_asic_id.size()
+                << ", golden=" << gold_map_by_asic_id.size();
             mismatch_details.push_back(oss.str());
         }
 
-        // Find missing UMD chip IDs (entries in generated but not in golden)
+        // Find missing ASIC entries (entries in generated but not in golden)
         std::vector<std::string> missing_in_golden;
-        for (const auto& [chip_key, _] : gen_map_by_chip_id) {
-            if (gold_map_by_chip_id.find(chip_key) == gold_map_by_chip_id.end()) {
-                missing_in_golden.push_back(chip_key);
+        for (const auto& [asic_id_key, _] : gen_map_by_asic_id) {
+            if (gold_map_by_asic_id.find(asic_id_key) == gold_map_by_asic_id.end()) {
+                missing_in_golden.push_back(asic_id_key);
             }
         }
         if (!missing_in_golden.empty()) {
             std::ostringstream oss2;
-            oss2 << "UMD chip IDs (mesh_id:umd_chip_id) present in generated but missing in golden: ";
+            oss2 << "ASIC entries (asic_id) present in generated but missing in golden: ";
             for (size_t i = 0; i < missing_in_golden.size(); ++i) {
                 if (i > 0) {
                     oss2 << ", ";
@@ -305,16 +296,16 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
             mismatch_details.push_back(oss2.str());
         }
 
-        // Find missing UMD chip IDs (entries in golden but not in generated)
+        // Find missing ASIC entries (entries in golden but not in generated)
         std::vector<std::string> missing_in_generated;
-        for (const auto& [chip_key, _] : gold_map_by_chip_id) {
-            if (gen_map_by_chip_id.find(chip_key) == gen_map_by_chip_id.end()) {
-                missing_in_generated.push_back(chip_key);
+        for (const auto& [asic_id_key, _] : gold_map_by_asic_id) {
+            if (gen_map_by_asic_id.find(asic_id_key) == gen_map_by_asic_id.end()) {
+                missing_in_generated.push_back(asic_id_key);
             }
         }
         if (!missing_in_generated.empty()) {
             std::ostringstream oss2;
-            oss2 << "UMD chip IDs (mesh_id:umd_chip_id) present in golden but missing in generated: ";
+            oss2 << "ASIC entries (asic_id) present in golden but missing in generated: ";
             for (size_t i = 0; i < missing_in_generated.size(); ++i) {
                 if (i > 0) {
                     oss2 << ", ";
@@ -325,13 +316,13 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
         }
 
         // Compare all entries that exist in both files
-        for (const auto& [chip_key, gen_mapping_node] : gen_map_by_chip_id) {
-            if (gold_map_by_chip_id.find(chip_key) == gold_map_by_chip_id.end()) {
+        for (const auto& [asic_id_key, gen_mapping_node] : gen_map_by_asic_id) {
+            if (gold_map_by_asic_id.find(asic_id_key) == gold_map_by_asic_id.end()) {
                 // Already reported as missing above, skip detailed comparison
                 continue;
             }
 
-            auto gold_mapping_node = gold_map_by_chip_id[chip_key];
+            auto gold_mapping_node = gold_map_by_asic_id[asic_id_key];
             std::vector<std::string> chip_mismatches;
 
             // Compare the mapping fields
@@ -385,7 +376,7 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
 
             if (!chip_mismatches.empty()) {
                 std::ostringstream oss;
-                oss << "Chip ID " << chip_key << ": ";
+                oss << "ASIC entry " << asic_id_key << " (asic_id): ";
                 for (size_t i = 0; i < chip_mismatches.size(); ++i) {
                     if (i > 0) {
                         oss << ", ";
