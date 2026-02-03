@@ -32,7 +32,6 @@ MAX_ERROR_PREVIEW = 100
 TIMELINE_ROW_SIZE = 25
 
 
-
 class Colors:
     GREEN = "\033[0;32m"
     RED = "\033[0;31m"
@@ -46,8 +45,6 @@ class Colors:
     def disable(cls):
         for attr in ["GREEN", "RED", "YELLOW", "BLUE", "CYAN", "BOLD", "NC"]:
             setattr(cls, attr, "")
-
-
 
 
 def clean_line(line: str) -> str:
@@ -103,6 +100,7 @@ def get_color(name: str) -> str:
     """Get color code by name, respecting --no-color flag."""
     return getattr(Colors, name, "")
 
+
 # Patterns for detecting other issues (will be mapped to inconclusive)
 # These are detected but not reported as separate categories - they indicate
 # issues that require manual log review and triage
@@ -119,9 +117,7 @@ DETECTION_PATTERNS = {
 }
 
 # Compile patterns with explicit case-sensitivity from 4th tuple element (default: case-sensitive)
-PATTERNS = {
-    k: re.compile(v[0], re.IGNORECASE if (len(v) > 3 and v[3]) else 0) for k, v in CATEGORIES.items()
-}
+PATTERNS = {k: re.compile(v[0], re.IGNORECASE if (len(v) > 3 and v[3]) else 0) for k, v in CATEGORIES.items()}
 # Detection patterns are all case-sensitive
 DETECTION_PATTERNS_COMPILED = {k: re.compile(v) for k, v in DETECTION_PATTERNS.items()}
 
@@ -768,9 +764,7 @@ def _recommend_dram_failure(cats: dict, total: int, analyses: list[LogAnalysis])
     """Generate recommendations for DRAM failures."""
     if not cats.get("dram_failure"):
         return []
-    return [
-        f"- {Colors.RED}DRAM training failures:{Colors.NC} Hardware issue. Report to Syseng."
-    ]
+    return [f"- {Colors.RED}DRAM training failures:{Colors.NC} Hardware issue. Report to Syseng."]
 
 
 @register_recommendation("arc_timeout")
@@ -786,9 +780,7 @@ def _recommend_mpi_error(cats: dict, total: int, analyses: list[LogAnalysis]) ->
     """Generate recommendations for MPI errors."""
     if not cats.get("mpi_error"):
         return []
-    return [
-        f"- {Colors.RED}MPI error:{Colors.NC} Lost connection between hosts. Check SSH agent and network."
-    ]
+    return [f"- {Colors.RED}MPI error:{Colors.NC} Lost connection between hosts. Check SSH agent and network."]
 
 
 @register_recommendation("ssh_error")
@@ -796,9 +788,7 @@ def _recommend_ssh_error(cats: dict, total: int, analyses: list[LogAnalysis]) ->
     """Generate recommendations for SSH errors."""
     if not cats.get("ssh_error"):
         return []
-    return [
-        f"- {Colors.YELLOW}SSH errors:{Colors.NC} Authentication failed. Ensure ssh-agent running and keys added."
-    ]
+    return [f"- {Colors.YELLOW}SSH errors:{Colors.NC} Authentication failed. Ensure ssh-agent running and keys added."]
 
 
 @register_recommendation("unhealthy")
@@ -883,9 +873,7 @@ def print_recommendations(analyses: list[LogAnalysis]) -> None:
                 f"- {Colors.RED}Low success rate ({rate:.0f}%).{Colors.NC} Investigate failure patterns before proceeding."
             )
     else:
-        recs.append(
-            f"- {Colors.YELLOW}No validation logs analyzed.{Colors.NC} Unable to determine cluster health."
-        )
+        recs.append(f"- {Colors.YELLOW}No validation logs analyzed.{Colors.NC} Unable to determine cluster health.")
 
     for r in recs:
         print(r)
