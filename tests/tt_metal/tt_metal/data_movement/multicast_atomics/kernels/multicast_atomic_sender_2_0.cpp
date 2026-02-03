@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc_semaphore.h"
 
 void kernel_main() {
     // Compile-time arguments
@@ -16,24 +17,21 @@ void kernel_main() {
     uint32_t dst_end_y = get_compile_time_arg_val(7);
     constexpr uint32_t test_id = get_compile_time_arg_val(8);
 
-    // Get semaphore L1 address from semaphore ID
-    uint32_t semaphore_addr = get_semaphore(sem_id);
-
     // For NOC_1, the coordinate system is inverted, so start/end need to be swapped
     if (noc_index == 1) {
         std::swap(dst_start_x, dst_end_x);
         std::swap(dst_start_y, dst_end_y);
     }
 
-    uint64_t dst_multicast_noc_addr =
-        get_noc_multicast_addr(dst_start_x, dst_start_y, dst_end_x, dst_end_y, semaphore_addr);
+    experimental::Noc noc(noc_index);
+    experimental::Semaphore semaphore(sem_id);
 
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            noc_semaphore_inc_multicast(dst_multicast_noc_addr, atomic_inc_value, num_dests);
+            semaphore.inc_multicast(noc, dst_start_x, dst_start_y, dst_end_x, dst_end_y, atomic_inc_value, num_dests);
         }
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     }
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);

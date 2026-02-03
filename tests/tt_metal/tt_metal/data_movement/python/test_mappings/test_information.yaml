@@ -582,6 +582,12 @@ tests:
   326:
     name: "Multicast Atomic Larger Increment - NOC 1"
 
+  327:
+    name: "Single source Multicast Atomic Increment 2.0 API"
+
+  328:
+    name: "Multicast Atomic Larger Increment 2.0 API"
+
   400:
     name: "I2S - DRAM Sharded Row Major Writer"
     comment: |
