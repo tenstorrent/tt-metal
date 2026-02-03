@@ -192,7 +192,6 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
 @pytest.mark.parametrize("p", [[0.0, 0.3, 0.5, 0.7, 0.9] * 6 + [0.1, 0.8]])  # Example of per-user p
 @pytest.mark.parametrize("seed", [2024, 11, 123])
 def test_sampling_callback(shape, k, p, seed, device):
-    # Test failing with watcher enabled, github issue #29020
     if (
         is_watcher_enabled()
         and seed == 2024
@@ -268,7 +267,7 @@ def test_sampling_callback(shape, k, p, seed, device):
         ]
         and shape == [1, 1, 32, 256]
     ):
-        pytest.skip("Test is not passing with watcher enabled")
+        pytest.skip("Test is not passing with watcher enabled, github issue #29020")
 
     torch.manual_seed(seed)
     num_program_cache_entries_list = []

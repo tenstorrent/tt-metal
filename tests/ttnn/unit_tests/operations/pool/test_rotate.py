@@ -270,7 +270,7 @@ def test_memory_configs(device, memory_config):
 def test_height_sharded_memory(device, interpolation_mode):
     """Test rotation with height and block sharded memory configurations using full grid."""
     if is_watcher_enabled() and shard_strategy in ("width", "block"):
-        pytest.skip("Skipping due to watcher compilation error")
+        pytest.skip("Skipping since the test fails with watcher, github issue 36263")
     torch.manual_seed(0)
 
     grid_size = device.compute_with_storage_grid_size()

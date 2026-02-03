@@ -68,12 +68,17 @@ def test_conv_features(
         pytest.skip("Row major layout not compatible with bfloat8_b")
     if (
         is_watcher_enabled()
-        and output_layout == ttnn.TILE_LAYOUT
-        and output_channels == 353
-        and input_channels == 384
-        and shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        and math_fidelity == ttnn.MathFidelity.HiFi4
+        and output_channels == 16
+        and input_channels == 16
+        and input_height == 256
+        and input_width == 256
+        and shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        and config == {"act_block_h": 32}
+        and batch_size == 2
+        and stride == 2
     ):
-        pytest.skip("Skipping due to watcher being enabled, see issue #XXXXX")
+        pytest.skip("Skipping due to watcher being enabled, see issue #29531")
 
     run_conv(
         device,
