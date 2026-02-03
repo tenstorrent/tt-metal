@@ -81,6 +81,8 @@ struct BufferWriteDispatchParams {
 class InterleavedBufferWriteDispatchParams : public BufferWriteDispatchParams {
 public:
     uint32_t dst_page_index = 0;
+    // Number of bytes to copy on the CPU at the start of the write to align the write to the host memory alignment.
+    size_t alignment_prefix_bytes = 0;
 
     InterleavedBufferWriteDispatchParams(
         const Buffer& buffer,
@@ -102,6 +104,13 @@ public:
         this->device = buffer.device();
         this->cq_id = cq_id;
         this->expected_num_workers_completed = expected_num_workers_completed;
+        if (src_pinned) {
+            const uint64_t relay_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+            const uint64_t alignment_offset = src_addr % relay_alignment;
+            if (alignment_offset != 0) {
+                this->alignment_prefix_bytes = relay_alignment - alignment_offset;
+            }
+        }
     }
 
     virtual ~InterleavedBufferWriteDispatchParams() = default;
@@ -520,20 +529,14 @@ void populate_interleaved_buffer_write_dispatch_cmds(
 
     bool use_pinned_transfer = dispatch_params.use_pinned_transfer;
 
-    // Check if pinned source address is aligned (required for add_prefetch_relay_paged)
-    const uint64_t relay_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
-    const uint64_t alignment_offset = use_pinned_transfer ? (dispatch_params.pinned_src_addr % relay_alignment) : 0;
-    const bool needs_alignment_prefix = (alignment_offset != 0);
-
     // If we're not using pinned transfer the data will be inline with the dispatch write in a single prefetch command
     // so we need to flush the prefetch. With pinned memory the data will come in a separate command and we shouldn't
     // flush between them.
     const bool flush_prefetch = !use_pinned_transfer;
 
-    if (needs_alignment_prefix) {
+    if (dispatch_params.alignment_prefix_bytes > 0) {
         // Pass the unaligned prefix bytes inline to reach alignment
-        const uint64_t alignment_prefix_bytes = relay_alignment - alignment_offset;
-        TT_ASSERT(alignment_prefix_bytes < buffer.page_size(), "Alignment prefix exceeds page size");
+        TT_ASSERT(dispatch_params.alignment_prefix_bytes < buffer.page_size(), "Alignment prefix exceeds page size");
 
         command_sequence.add_dispatch_write_paged_with_custom_inline_size(
             flush_prefetch,
@@ -542,7 +545,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
             dispatch_params.address,
             dispatch_params.page_size_to_write,
             dispatch_params.total_pages_to_write,
-            alignment_prefix_bytes,
+            dispatch_params.alignment_prefix_bytes,
             static_cast<const char*>(src));
     } else {
         command_sequence.add_dispatch_write_paged(
@@ -678,12 +681,6 @@ void issue_buffer_dispatch_command_sequence(
         use_pinned_memory ? dispatch_params.total_pages_to_write : dispatch_params.pages_per_txn;
     uint64_t data_size_bytes = uint64_t(num_pages_to_write) * dispatch_params.page_size_to_write;
 
-    // Check if pinned source address needs alignment prefix
-    const uint64_t relay_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
-    const uint64_t alignment_offset = use_pinned_memory ? (dispatch_params.pinned_src_addr % relay_alignment) : 0;
-    const bool needs_alignment_prefix = (alignment_offset != 0);
-    const uint64_t alignment_prefix_bytes = needs_alignment_prefix ? (relay_alignment - alignment_offset) : 0;
-
     tt::tt_metal::DeviceCommandCalculator calculator;
     if (dispatch_params.issue_wait) {
         for (int i = 0; i < num_worker_counters; ++i) {
@@ -693,9 +690,9 @@ void issue_buffer_dispatch_command_sequence(
     if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
         calculator.add_dispatch_write_linear<true, false>(data_size_bytes);
     } else {
-        if (needs_alignment_prefix) {
+        if (dispatch_params.alignment_prefix_bytes > 0) {
             // Use custom inline size variant to account for alignment prefix bytes
-            calculator.add_dispatch_write_paged_with_custom_inline_size(0, 0, alignment_prefix_bytes);
+            calculator.add_dispatch_write_paged_with_custom_inline_size(0, 0, dispatch_params.alignment_prefix_bytes);
         } else {
             calculator.add_dispatch_write_paged<false>(0, 0);  // arguments are don't care for <false>
         }
@@ -746,10 +743,10 @@ void issue_buffer_dispatch_command_sequence(
         // Adjust address and length if we sent alignment prefix bytes inline
         uint64_t relay_src_addr = dispatch_params.pinned_src_addr;
         uint64_t relay_data_size = (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
-
-        if (needs_alignment_prefix) {
-            relay_src_addr += alignment_prefix_bytes;
-            relay_data_size -= alignment_prefix_bytes;
+        if constexpr (std::is_same_v<T, InterleavedBufferWriteDispatchParams>) {
+            TT_ASSERT(dispatch_params.alignment_prefix_bytes % MetalContext::instance().hal().get_alignment(HalMemType::L1) == 0, "Alignment prefix is not aligned to L1");
+            relay_src_addr += dispatch_params.alignment_prefix_bytes;
+            relay_data_size -= dispatch_params.alignment_prefix_bytes;
         }
 
         calculator.clear();
