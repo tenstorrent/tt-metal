@@ -68,7 +68,7 @@ void sdpa_single_core(
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     const MathFidelity math_fidelity = MathFidelity::HiFi2;
     const uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
-    
+
     const uint32_t q_buffer_size = 2 * Sq_chunk_t * head_dim_t * single_tile_size;
     const uint32_t kt_buffer_size = 2 * Sk_chunk_t * head_dim_t * single_tile_size;
     const uint32_t out_buffer_size = 2 * Sq_chunk_t * head_dim_t * single_tile_size;
@@ -86,7 +86,7 @@ void sdpa_single_core(
     auto q_dram_buffer = distributed::MeshBuffer::create(buffer_config_Q, dram_config, mesh_device.get());
     auto kt_dram_buffer = distributed::MeshBuffer::create(buffer_config_KT, dram_config, mesh_device.get());
     auto out_dram_buffer = distributed::MeshBuffer::create(buffer_config_out, dram_config, mesh_device.get());
-    
+
     const uint32_t q_cb_index = CBIndex::c_0;
     CircularBufferConfig cb_q_config =
         CircularBufferConfig(q_buffer_size, {{q_cb_index, cb_data_format}})
@@ -98,12 +98,12 @@ void sdpa_single_core(
         CircularBufferConfig(kt_buffer_size, {{kt_cb_index, cb_data_format}})
             .set_page_size(kt_cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_kt_config);
-    
+
     const uint32_t qkt_cb_index = CBIndex::c_2;
     const uint32_t qkt_tiles = Sq_chunk_t * Sk_chunk_t;
-    auto cb_qkt_config = CircularBufferConfig(qk_tiles * single_tile_size, {{qkt_cb_index, cb_data_format}})
-                                  .set_page_size(qkt_cb_index, single_tile_size);
-    CreateCircularBuffer(program, core_grid, cb_qkt_config);
+    auto cb_qkt_config = CircularBufferConfig(qkt_tiles * single_tile_size, {{qkt_cb_index, cb_data_format}})
+                             .set_page_size(qkt_cb_index, single_tile_size);
+    CreateCircularBuffer(program, core, cb_qkt_config);
 
     // Create the data movement kernels and the compute kernel
     std::vector<uint32_t> reader_compile_time_args = {
@@ -213,7 +213,7 @@ int main() {
 
         // Invoke the matrix multiplication on the device
         //std::vector<bfloat16> result_vec(M * N, 0);
-        
+
         //sdpa_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, mesh_device);
         sdpa_single_core(Sq_chunk_t, Sk_chunk_t, head_dim_t, mesh_device);
 
