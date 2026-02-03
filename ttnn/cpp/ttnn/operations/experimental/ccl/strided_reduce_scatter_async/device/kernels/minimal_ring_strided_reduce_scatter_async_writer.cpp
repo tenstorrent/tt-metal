@@ -225,6 +225,7 @@ void kernel_main() {
         // Let's set some particular values for the params used
         const uint32_t batch_size = input_tensor_B;
         const uint32_t last_mm_core_idx = mm_cores_y - 1;
+        const uint32_t tiles_ht_per_core = mm_block_ht * M_blocks_per_core;
 
         uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
         const uint32_t effective_advance_by_tiles = 2 * num_workers;
@@ -333,7 +334,7 @@ void kernel_main() {
                                         m_block_iter,
                                         chunk_idx,
                                         N_block_wt,
-                                        mm_block_ht,
+                                        tiles_ht_per_core,
                                         mm_block_ht,
                                         chunk_width_in_tiles);
 
