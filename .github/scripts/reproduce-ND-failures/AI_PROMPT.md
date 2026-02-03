@@ -183,7 +183,7 @@ if __name__ == "__main__":
 **IMPORTANT: Activate the virtual environment before running tests**
 
 ```bash
-source python_env/bin/activate  # Activate venv
+source /opt/venv/bin/activate  # Activate venv
 python tests/test_*_stress.py   # Run your test
 ```
 
