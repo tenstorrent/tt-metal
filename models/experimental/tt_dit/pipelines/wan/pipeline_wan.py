@@ -31,7 +31,7 @@ from ...utils import cache
 from ...utils.conv3d import conv_pad_in_channels, conv_pad_height
 from ...utils.tensor import bf16_tensor_2dshard
 import os
-
+from contextlib import nullcontext
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -219,6 +219,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
+            device_configs[(2, 2)] = device_configs[(1, 4)]
             device_configs[(1, 8)] = {
                 "sp_axis": 0,
                 "tp_axis": 1,
@@ -235,6 +236,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
+            config = device_configs[tuple(mesh_device.shape)]
         else:
             device_configs[(2, 4)] = {
                 "sp_axis": 0,
@@ -253,7 +255,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "is_fsdp": True,
             }
 
-        config = device_configs[tuple(mesh_device.shape)]
+            config = device_configs[tuple(mesh_device.shape)]
 
         sp_axis = sp_axis or config["sp_axis"]
         tp_axis = tp_axis or config["tp_axis"]
@@ -745,17 +747,18 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if seed is not None:
             torch.manual_seed(seed)
 
-        latents, cond_latents = self.prepare_latents(
-            batch_size=batch_size * num_videos_per_prompt,
-            image_prompt=image_prompt,
-            num_channels_latents=self.vae.config.z_dim,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            dtype=torch.float32,
-            device=device,
-            latents=latents,
-        )
+        with profiler("prepare_latents", profiler_iteration) if profiler else nullcontext():
+            latents, cond_latents = self.prepare_latents(
+                batch_size=batch_size * num_videos_per_prompt,
+                image_prompt=image_prompt,
+                num_channels_latents=self.vae.config.z_dim,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                dtype=torch.float32,
+                device=device,
+                latents=latents,
+            )
 
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
 

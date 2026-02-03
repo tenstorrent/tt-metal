@@ -125,7 +125,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 35,
-              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"wh_4x8sp1tp0 and resolution_720p\"",
+              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k \"wh_4x8sp1tp0 and resolution_720p and t2v\"",
               "owner_id": "U03FJB5TM5Y"
             }, # Colman Glagovich
             {
