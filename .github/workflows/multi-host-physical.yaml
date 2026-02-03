@@ -17,8 +17,13 @@ on:
         required: false
         default: false
         type: boolean
-      glx_4x_deepseekv3_tests:
-        description: 'Run Galaxy 4x DeepSeekV3 tests'
+      glx_4x_deepseekv3_unit_tests:
+        description: 'Run Galaxy 4x DeepSeek V3 unit tests'
+        required: false
+        default: false
+        type: boolean
+      glx_4x_deepseekv3_module_tests:
+        description: 'Run Galaxy 4x DeepSeek V3 module tests'
         required: false
         default: false
         type: boolean
@@ -191,7 +196,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
-    if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.inputs.glx_4x_deepseekv3_tests == 'true' || github.event.inputs.glx_4x_teacher_forced == 'true' || github.event.inputs.glx_4x_dual_demo == 'true' || github.event.inputs.glx_4x_dual_demo_stress == 'true' || github.event.schedule == '0 4 * * *' }}
+    if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.inputs.glx_4x_deepseekv3_unit_tests == 'true' || github.event.inputs.glx_4x_deepseekv3_module_tests == 'true' || github.event.inputs.glx_4x_teacher_forced == 'true' || github.event.inputs.glx_4x_dual_demo == 'true' || github.event.inputs.glx_4x_dual_demo_stress == 'true' || github.event.schedule == '0 4 * * *' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x
@@ -242,8 +247,8 @@ jobs:
           run_args: |
             ./tests/scripts/multihost/setup_shared_venv.sh
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests
-      - name: Run DeepSeek V3 unit and module tests
-        if: ${{ github.event.inputs.glx_4x_deepseekv3_tests == 'true' || github.event.schedule == '0 4 * * *' }}
+      - name: Run DeepSeek V3 unit tests
+        if: ${{ github.event.inputs.glx_4x_deepseekv3_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
@@ -265,6 +270,28 @@ jobs:
           run_args: |
             ./tests/scripts/multihost/setup_shared_venv.sh
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh deepseekv3_unit_tests
+      - name: Run DeepSeek V3 module tests
+        if: ${{ github.event.inputs.glx_4x_deepseekv3_module_tests == 'true' || github.event.schedule == '0 4 * * *' }}
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 80
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            ./tests/scripts/multihost/setup_shared_venv.sh
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh deepseekv3_module_tests
       - name: Run teacher forced accuracy test
         if: ${{ github.event.inputs.glx_4x_teacher_forced == 'true' || github.event.schedule == '0 4 * * *' }}
