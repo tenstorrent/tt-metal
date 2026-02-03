@@ -496,7 +496,9 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
 }
 
 size_t JitBuildState::compile(
-    const string& out_dir, const JitBuildSettings* settings, jit_build::utils::FileGroupRenamer& renamer) const {
+    const string& out_dir,
+    const JitBuildSettings* settings,
+    [[maybe_unused]] jit_build::utils::FileGroupRenamer& renamer) const {
     // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
