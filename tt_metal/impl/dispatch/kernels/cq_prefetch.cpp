@@ -156,13 +156,6 @@ const uint32_t scratch_db_top[2] = {scratch_db_base0, scratch_db_base1};
 
 constexpr uint32_t cmddat_q_pages_per_block = cmddat_q_pages / cmddat_q_blocks;
 
-enum Trid : uint32_t {
-    TRID_DEFAULT = 0,
-    TRID_EXEC_BUF_READ = 1,
-    TRID_SCRATCH_DB_READ_0 = 2,
-    TRID_SCRATCH_DB_READ_1 = 3,
-};
-
 // Currently capping the same as dispatch
 constexpr uint32_t max_read_packed_cmd =
     CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS * sizeof(CQPrefetchRelayPagedPackedSubCmd) / sizeof(uint32_t);
@@ -954,9 +947,8 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream__
     return stride;
 }
 
-template <bool set_src_noc_addr = false, bool set_trid = false>
-void noc_read_64bit_any_len(
-    uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size, uint32_t trid = 0) {
+template <bool set_src_noc_addr = false>
+void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
     // noc_read_state_init is unnecessary.
     if constexpr (set_src_noc_addr) {
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sNdL, CQ_NOC_send, CQ_NOC_WAIT>(
@@ -965,9 +957,6 @@ void noc_read_64bit_any_len(
         // wait on command buf to be ready before issuing new programming
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndl, CQ_NOC_send, CQ_NOC_WAIT>(
             noc_index, 0, 0, 0, 0);
-    }
-    if constexpr (set_trid) {
-        noc_async_read_set_trid(trid);
     }
     if (size > NOC_MAX_BURST_SIZE) {
         // Set length to max burst size.
@@ -998,24 +987,19 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     uint64_t wlength = cmd->relay_linear.length;
     // DPRINT << "relay_linear: " << cmd_ptr << " " << wlength << " " << read_addr << " " << noc_xy_addr << ENDL();
 
-    uint32_t current_trid = TRID_SCRATCH_DB_READ_1;
-
-    static_assert(
-        scratch_db_half_size / NOC_MAX_BURST_SIZE < NOC_MAX_TRANSACTION_ID_COUNT,
-        "Full buffer size must not have more transactions than fit in one NOC transaction counter");
-    noc_async_read_barrier_with_trid(current_trid);
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint32_t amt_to_read = (scratch_db_half_size > wlength) ? wlength : scratch_db_half_size;
-    noc_read_64bit_any_len<true, true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read, current_trid);
+    noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
 
     read_addr += amt_to_read;
     wlength -= amt_to_read;
+    noc_async_read_barrier();
 
     // Second step - read into DB[x], write from DB[x], toggle x, iterate
     // Writes are fast, reads are slow
-    uint32_t scratch_read_start_addr = scratch_db_top[1];
-    uint32_t scratch_write_start_addr = scratch_db_top[0];
+    uint32_t db_toggle = 0;
+    uint32_t scratch_write_addr;
     constexpr uint32_t max_batch_size = ~(scratch_db_half_size - 1);
     while (wlength != 0) {
         uint32_t read_length = (wlength > max_batch_size) ? max_batch_size : wlength;
@@ -1025,20 +1009,14 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
             // TODO(pgk); we can do better on WH w/ tagging
             noc_async_writes_flushed();
 
-            uint32_t scratch_read_addr = scratch_read_start_addr;
-            uint32_t scratch_write_addr = scratch_write_start_addr;
-            std::swap(scratch_read_start_addr, scratch_write_start_addr);
-
-            uint32_t last_trid = current_trid;
-            // Alternate between trids 2 and 3.
-            current_trid = (TRID_SCRATCH_DB_READ_0 + TRID_SCRATCH_DB_READ_1) - current_trid;
+            db_toggle ^= 1;
+            scratch_read_addr = scratch_db_top[db_toggle];
+            scratch_write_addr = scratch_db_top[db_toggle ^ 1];
 
             uint32_t amt_to_write = amt_to_read;
             amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
-            noc_read_64bit_any_len<false, true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read, current_trid);
+            noc_read_64bit_any_len<false>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
             read_addr += amt_to_read;
-
-            noc_async_read_barrier_with_trid(last_trid);
 
             // Third step - write from DB
             uint32_t npages =
@@ -1047,20 +1025,22 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
             DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
 
             read_length -= amt_to_read;
+
+            // TODO(pgk); we can do better on WH w/ tagging
+            noc_async_read_barrier();
         }
     }
-    noc_async_read_barrier_with_trid(current_trid);
 
     // Third step - write from DB
+    scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
-    uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
+    uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
 
-    noc_async_read_set_trid(TRID_DEFAULT);
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
@@ -1109,7 +1089,7 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
 
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
     // set transaction ID to 1 for all read
-    noc_async_read_set_trid(TRID_EXEC_BUF_READ);
+    noc_async_read_set_trid(1);
     ASSERT(page_size <= NOC_MAX_BURST_SIZE);
     // Initialize the read size for all later commands.
     noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT>(0, 0, 0, page_size);
@@ -1136,7 +1116,7 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
                 pages_to_read--;
             }
         }
-        noc_async_read_barrier_with_trid(TRID_EXEC_BUF_READ);
+        noc_async_read_barrier_with_trid(1);
         // update length always after barrier to make sure data in cmddat_q
         exec_buf_state.page_id = page_id;
         exec_buf_state.pages = pages;
@@ -1145,7 +1125,7 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
     } else {
         ASSERT(exec_buf_state.length == 0);
         // add barrier to wait for prefetch noc read to complete
-        noc_async_read_barrier_with_trid(TRID_EXEC_BUF_READ);
+        noc_async_read_barrier_with_trid(1);
         // update always after barrier to make sure data in cmddat_q
         exec_buf_state.length += exec_buf_state.prefetch_length;
         exec_buf_state.prefetch_length = 0;
@@ -1188,7 +1168,7 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
 
     // set transaction ID to 0 for other noc read to not use transaction id 1
     // to remove unnecessary barrier delay
-    noc_async_read_set_trid(TRID_DEFAULT);
+    noc_async_read_set_trid(0);
     // Ensure reads receive the updated data.
     invalidate_l1_cache();
 }
