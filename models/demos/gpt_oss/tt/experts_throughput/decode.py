@@ -174,12 +174,14 @@ def decode_forward(
     # With output_concat_dim=2, outputs have seq_len scaled:
     #   - dispatch_output: [D, 1, total_tokens, H] - tokens scattered to expert devices
     #   - dispatch_metadata: [D, 1, total_tokens, K] - expert indices (for combine routing)
+    ttnn.synchronize_device(mesh_device)
     dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
         hidden_rm,
         topk_indices_rm,
         expert_mapping_tensors,
         **dispatch_config.as_dict(),
     )
+    ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(hidden_rm)
     ttnn.deallocate(topk_indices_rm)
 
@@ -343,12 +345,14 @@ def decode_forward(
     # With output_shard_dim=2, output has tokens sharded on dim -2:
     # Output shape: [num_experts_per_tok, 1, tokens_per_device, H]
     # (each token gets outputs from k experts stacked in first dimension)
+    ttnn.synchronize_device(mesh_device)
     combine_output = ttnn.all_to_all_combine(
         expert_output,
         dispatch_metadata,
         expert_mapping_tensors,
         **combine_config.as_dict(),
     )
+    ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(expert_output)
     ttnn.deallocate(dispatch_metadata)
 
@@ -387,6 +391,7 @@ def decode_forward(
     # 3. But tokens may route to experts in different COLUMNS
     # 4. After combine, each device has partial results from experts in its column
     # 5. We need to sum these partials across columns to get complete expert outputs
+    ttnn.synchronize_device(mesh_device)
     output_all_reduced = ttnn.all_reduce(
         output,
         num_links=1,
@@ -394,6 +399,7 @@ def decode_forward(
         cluster_axis=1,
         memory_config=memory_config,
     )
+    ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(output)
 
     # Final shape: [1, 1, tokens_per_device, H] (tokens on dim -2)
