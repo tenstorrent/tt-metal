@@ -1317,7 +1317,7 @@ class MLA1D(AbstractModule):
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz//8, num_heads * v_head_dim))
         # All_gather
         v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v_out = ttnn.all_broadcast(v_out, num_links = 4, cluster_axis=1, topology=ttnn.Topology.Ring, memory_config=ttnn.L1_MEMORY_CONFIG)
+        v_out = ttnn.all_broadcast(v_out, num_links = 4, cluster_axis=1, topology=ttnn.Topology.Linear, memory_config=ttnn.L1_MEMORY_CONFIG)
         v_out = ttnn.concat(v_out, dim=2)
         v_out = ttnn.tilize(v_out)
         # 1,1,32,16384 L1 interleaved
