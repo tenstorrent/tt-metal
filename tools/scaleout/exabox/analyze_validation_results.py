@@ -20,7 +20,6 @@ from typing import Any
 # Optional matplotlib import for plotting
 try:
     import matplotlib.pyplot as plt
-    import matplotlib.colors as mcolors
 
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
@@ -965,9 +964,9 @@ def print_errors(analyses: list[LogAnalysis]) -> None:
                 if not re.search(r"(Error|Failed|fatal|exception)", c, re.IGNORECASE):
                     continue
             # Normalize: remove timestamps, file paths, MPI prefixes
-            msg = re.sub(
-                r"^\d{4}-\d{2}-\d{2}.*?\|\s*|^\[\d+,\d+\]<\w+>:\s*|\s*\([^)]+\.(cpp|hpp):\d+\)\s*$", "", c
-            ).strip()
+            msg = re.sub(r"^\d{4}-\d{2}-\d{2}.*?\|\s*", "", c)
+            msg = re.sub(r"^\[\d+,\d+\]<\w+>:\s*", "", msg)
+            msg = re.sub(r"\s*\([^)]+\.(cpp|hpp):\d+\)\s*$", "", msg).strip()
             if len(msg) > 15 and msg not in seen:
                 seen.add(msg)
                 errors[msg].append(os.path.basename(a.filepath))
@@ -1031,7 +1030,7 @@ def plot_link_histogram(analyses: list[LogAnalysis], output_dir: str) -> str | N
     fig, ax = plt.subplots(figsize=(12, max(6, len(labels) * 0.4)))
 
     y_pos = range(len(labels))
-    bars = ax.barh(y_pos, counts, color="steelblue", edgecolor="black", label="Occurrences")
+    ax.barh(y_pos, counts, color="steelblue", edgecolor="black", label="Occurrences")
 
     # Add CRC error overlay if present
     if any(crc_errors):
