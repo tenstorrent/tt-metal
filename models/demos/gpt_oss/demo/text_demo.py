@@ -232,10 +232,11 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
         ),
         (
-            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            # "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",  # input_prompts
             1,  # data_parallel
             128,  # batch_size
-            1,  # repeat_batches
+            43,  # repeat_batches (43 repeat batches ~ 5hrs at current perf)
             128 * 1024,  # max_seq_len
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
@@ -324,6 +325,7 @@ def prepare_gpt_oss_generator_args(
         # "prefill_128k",
     ],
 )
+@pytest.mark.parametrize("do_decode", [True, False])
 @parametrize_mesh_with_fabric()
 def test_gpt_oss_demo(
     mesh_device,
@@ -343,6 +345,7 @@ def test_gpt_oss_demo(
     long_context_mode,
     is_ci_env,
     state_dict,
+    do_decode,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     if batch_size > 1 and mesh_shape[0] == 1:
@@ -598,6 +601,8 @@ def test_gpt_oss_demo(
             logger.info(f"Prefill finished")
             logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
 
+        if not do_decode:
+            continue
         # Initialize generation state like tt_transformers
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
         for user in range(global_batch_size):
@@ -700,6 +705,8 @@ def test_gpt_oss_demo(
 
     # Performance metrics calculation (like tt-transformers)
     profiler.end("run")
+    if not do_decode:
+        return
 
     # Calculate performance metrics for the first batch only
     compile_prefill_time = profiler.get_duration("compile_prefill")
