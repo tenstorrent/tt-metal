@@ -111,11 +111,11 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(RELATIONAL_OP == SfpuType::eq, "Supported operation types: eq ");
+    constexpr uint dst_tile_size_sfpi = 32;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-        constexpr uint dst_tile_size_sfpi = 32;
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
         sfpi::vFloat result = 0.0f;

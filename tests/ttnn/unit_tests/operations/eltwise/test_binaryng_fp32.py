@@ -7,7 +7,6 @@ import ttnn
 
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
-from models.common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.use_module_device
 
@@ -476,10 +475,5 @@ def test_special_values(device, op_name, dtype):
         y_tt,
     )
     tt_out = ttnn.to_torch(z_tt)
-
-    # Note: In Blackhole, (-0.0 == 0.0) returns false
-    if is_blackhole():
-        mask = torch.logical_and(torch.eq(x_torch, -0.0), torch.eq(y_torch, 0.0))
-        tt_out[mask] = 1.0
 
     assert torch.equal(z_torch, tt_out), "Mismatches found"
