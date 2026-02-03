@@ -414,6 +414,7 @@ from ttnn.operations.normalization import (
     dram_group_norm_params_from_torch,
     layernorm_default_compute_config,
     rmsnorm_default_compute_config,
+    create_layernorm_program_config,
 )
 
 from ttnn.operations.embedding import (

@@ -91,6 +91,24 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             ttnn.DeviceComputeKernelConfig: The default compute config for layer norm (HiFi4, approx_mode=False, fp32_dest_acc_en=True).
         )doc");
 
+    // Bind create_layernorm_program_config function
+    mod.def(
+        "create_layernorm_program_config",
+        &ttnn::prim::create_layernorm_program_config,
+        nb::arg("shard_spec") = nb::none(),
+        R"doc(
+        Creates a program config from shard spec.
+
+        If shard_spec has value, creates a sharded config derived from it.
+        Otherwise, returns a default DRAM config.
+
+        Args:
+            shard_spec (Optional[tt.ShardSpec]): The shard specification. Defaults to None.
+
+        Returns:
+            ttnn.LayerNormProgramConfig: The program configuration (either LayerNormDefaultProgramConfig or LayerNormShardedMultiCoreProgramConfig).
+        )doc");
+
     const auto* doc = R"doc(
         Computes layer norm over :attr:`input_tensor`.
         See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
