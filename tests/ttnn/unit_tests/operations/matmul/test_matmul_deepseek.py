@@ -617,57 +617,6 @@ def test_matmul_batched_dram_sharded(device, test_case):
 
     # Lower PCC threshold due to bfloat8_b weights (lower precision than bfloat16)
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
-    logger.info(f"Batch-sharded DRAM matmul test: {pcc_message}")
-
-    if not pcc_passed:
-        logger.info("=" * 80)
-        logger.info("PCC FAILED - Tensor comparison:")
-        logger.info("=" * 80)
-        logger.info(f"pt_out shape: {pt_out.shape}")
-        logger.info(f"output_tensor shape: {output_tensor.shape}")
-        logger.info("")
-
-        # Compute absolute differences
-        diff = (pt_out.float() - output_tensor.float()).abs()
-
-        # Find top 20 biggest discrepancies
-        logger.info("TOP 20 BIGGEST DISCREPANCIES:")
-        logger.info("-" * 80)
-        diff_flat = diff.flatten()
-        pt_flat = pt_out.float().flatten()
-        out_flat = output_tensor.float().flatten()
-
-        # Get indices of top 20 largest differences
-        top_k = min(20, diff_flat.numel())
-        top_values, top_indices = torch.topk(diff_flat, top_k)
-
-        for rank, (idx, diff_val) in enumerate(zip(top_indices.tolist(), top_values.tolist())):
-            # Convert flat index to multi-dimensional index
-            n_dim = pt_out.shape[3]
-            m_dim = pt_out.shape[2]
-            b_dim = pt_out.shape[1]
-
-            n_idx = idx % n_dim
-            idx //= n_dim
-            m_idx = idx % m_dim
-            idx //= m_dim
-            b_idx = idx % b_dim
-
-            pt_val = pt_flat[top_indices[rank]].item()
-            out_val = out_flat[top_indices[rank]].item()
-            logger.info(
-                f"  #{rank+1:2d}: [batch={b_idx}, m={m_idx}, n={n_idx}] pt_out={pt_val:10.4f}, output={out_val:10.4f}, diff={diff_val:10.4f}"
-            )
-
-        logger.info("")
-        logger.info("STATISTICS:")
-        logger.info(f"  Max diff: {diff.max().item():.6f}")
-        logger.info(f"  Mean diff: {diff.mean().item():.6f}")
-        logger.info(f"  Median diff: {diff.median().item():.6f}")
-        logger.info(f"  Num elements with diff > 0.1: {(diff > 0.1).sum().item()}")
-        logger.info(f"  Num elements with diff > 1.0: {(diff > 1.0).sum().item()}")
-        logger.info("")
-
     assert pcc_passed
 
 
