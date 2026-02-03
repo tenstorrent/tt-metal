@@ -105,8 +105,10 @@ struct DRAMStreamingMatmul {
 
     // ========================================================================
     // Op - the actual operation, templated on CTArgs and IsActiveCore
+    // PopIn0: If true (default), pops in0 after compute. Set to false to reuse
+    //         in0 for multiple matmuls (e.g., gate_proj and up_proj).
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore>
+    template <typename CTArgs, bool IsActiveCore, bool PopIn0 = true>
     class Op {
     public:
         void operator()() {
@@ -322,7 +324,9 @@ struct DRAMStreamingMatmul {
                 cb_push_back(CTArgs::cb_out, CTArgs::subblock_w);
             }
 
-            cb_pop_front(CTArgs::cb_in0, num_tiles_k);
+            if constexpr (PopIn0) {
+                cb_pop_front(CTArgs::cb_in0, num_tiles_k);
+            }
 #endif
         }
     };  // class Op
