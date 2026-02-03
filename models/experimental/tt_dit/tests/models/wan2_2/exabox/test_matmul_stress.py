@@ -30,10 +30,7 @@ def test_open_4x32_mesh(
 
     tt_input_tensor = bf16_tensor(torch_input_tensor, device=mesh_device)
 
-    # with torch.no_grad():
-    #     torch_output = torch_model(torch_input_tensor)
-
-    for i in range(1000):
+    for i in range(1_000_000_000):
         ttnn.synchronize_device(mesh_device)
         logger.info(f"Iteration {i}")
 
