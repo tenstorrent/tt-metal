@@ -371,7 +371,7 @@ def test_attention_1d_config_defaults():
     # Check defaults
     assert config.max_batch_size == 32
     assert config.max_seq_len == 128 * 1024
-    assert config.use_paged_kv_cache is False
+    assert config.use_vllm_paged_kv_cache is False
     assert config.kv_cache_dtype == ttnn.bfloat8_b
     assert config.use_qk_fused is False
     assert config.num_reduce_scatter_links == 1
@@ -788,11 +788,11 @@ def _run_prefill_test(
             max_num_blocks = paged_attention_config.max_num_blocks
 
             tt_k_cache_raw = ttnn.to_torch(
-                tt_model.layer_past[0],
+                tt_model.kv_cache[0],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(ttnn_mesh_device, dims=(0, 1), mesh_shape=mesh_shape),
             )
             tt_v_cache_raw = ttnn.to_torch(
-                tt_model.layer_past[1],
+                tt_model.kv_cache[1],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(ttnn_mesh_device, dims=(0, 1), mesh_shape=mesh_shape),
             )
 
@@ -817,12 +817,12 @@ def _run_prefill_test(
             # Non-paged attention: cache is stored contiguously
             # TT cache shape: [batch_size, n_kv_heads, max_seq_len, head_dim]
             tt_k_cache = ttnn.to_torch(
-                tt_model.layer_past[0],
+                tt_model.kv_cache[0],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(ttnn_mesh_device, dims=(0, 1), mesh_shape=mesh_shape),
             )[:batch_size, :n_kv_heads, :seq_len, :head_dim]
 
             tt_v_cache = ttnn.to_torch(
-                tt_model.layer_past[1],
+                tt_model.kv_cache[1],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(ttnn_mesh_device, dims=(0, 1), mesh_shape=mesh_shape),
             )[:batch_size, :n_kv_heads, :seq_len, :head_dim]
 
@@ -1260,12 +1260,13 @@ def test_attention_1d_vs_reference(
         )
 
     # Build Attention1DConfig with explicit parameters
+    # Note: kv_cache is auto-created by config resolution if not using paged attention
     config = Attention1DConfig(
         wqkv=lazy_wqkv,
         wo=lazy_wo,
         q_norm_config=q_norm_config,
         k_norm_config=k_norm_config,
-        wqkv_bias=wqkv_bias_torch,
+        wqkv_bias=LazyWeight(source=wqkv_bias_torch) if wqkv_bias_torch is not None else None,
         mesh_device=ttnn_mesh_device,
         tt_ccl=tt_ccl,
         topology=topology,
@@ -1278,7 +1279,9 @@ def test_attention_1d_vs_reference(
         scale=head_dim**-0.5,
         sliding_window=sliding_window,
         use_qk_fused=False,
-        use_paged_kv_cache=paged_attention,
+        # Note: use_vllm_paged_kv_cache=False means kv_cache is managed internally (auto-created).
+        # paged_attention_config controls whether the cache uses paged layout.
+        use_vllm_paged_kv_cache=False,
         paged_attention_config=paged_attention_config,
         wqkv_dtype=wqkv_dtype,
         wo_dtype=wqkv_dtype,
@@ -1294,9 +1297,6 @@ def test_attention_1d_vs_reference(
     assert tt_model.config.n_heads == n_heads
     assert tt_model.config.n_kv_heads == n_kv_heads
     assert tt_model.config.head_dim == head_dim
-
-    # Initialize KV cache for non-paged mode
-    tt_model.init_kv_cache()
 
     if mode == "prefill":
         _run_prefill_test(
@@ -1706,6 +1706,7 @@ def test_attention_1d_sliding_window(
     lazy_wqkv = LazyWeight(source=wqkv_torch, dtype=ttnn.bfloat8_b, cache_dir_weight_name=None)
     lazy_wo = LazyWeight(source=wo_torch, dtype=ttnn.bfloat8_b, cache_dir_weight_name=None)
 
+    # Note: kv_cache is auto-created by config resolution
     config = Attention1DConfig(
         wqkv=lazy_wqkv,
         wo=lazy_wo,
@@ -1718,12 +1719,11 @@ def test_attention_1d_sliding_window(
         max_seq_len=max_seq_len,
         scale=head_dim**-0.5,
         sliding_window=sliding_window,  # Enable sliding window
-        use_paged_kv_cache=False,
+        use_vllm_paged_kv_cache=False,
         activation_dtype=ttnn.bfloat16,
     )
 
     tt_model = Attention1D.from_config(config)
-    tt_model.init_kv_cache()
 
     # Setup RoPE
     rope_setup = RotarySetup(ttnn_mesh_device, batch_size, head_dim, max_seq_len, rope_theta, None, use_qk_fused=False)
@@ -1996,12 +1996,13 @@ def _create_attention_model_for_benchmark(
     freqs_cis = torch.complex(cos, sin)
 
     # Build Attention1DConfig with specified use_qk_fused
+    # Note: kv_cache is auto-created by config resolution if not using paged attention
     config = Attention1DConfig(
         wqkv=lazy_wqkv,
         wo=lazy_wo,
         q_norm_config=q_norm_config,
         k_norm_config=k_norm_config,
-        wqkv_bias=wqkv_bias_torch,
+        wqkv_bias=LazyWeight(source=wqkv_bias_torch) if wqkv_bias_torch is not None else None,
         mesh_device=ttnn_mesh_device,
         tt_ccl=tt_ccl,
         topology=topology,
@@ -2013,7 +2014,7 @@ def _create_attention_model_for_benchmark(
         max_seq_len=max_seq_len,
         scale=head_dim**-0.5,
         use_qk_fused=use_qk_fused,  # KEY: this is what we're benchmarking
-        use_paged_kv_cache=paged_attention,
+        use_vllm_paged_kv_cache=False,  # kv_cache managed internally
         paged_attention_config=paged_attention_config,
         wqkv_dtype=wqkv_dtype,
         wo_dtype=wqkv_dtype,
@@ -2022,7 +2023,6 @@ def _create_attention_model_for_benchmark(
 
     # Create Attention1D
     tt_model = Attention1D.from_config(config)
-    tt_model.init_kv_cache()
 
     config_params = {
         "dim": dim,

@@ -97,7 +97,7 @@ class Attention1DConfig:
     k_norm_config: RMSNorm1DConfig | None = None
 
     # Optional: QKV bias (e.g., for Qwen models)
-    wqkv_bias: "torch.Tensor | None" = None  # type: ignore
+    wqkv_bias: LazyWeight | None = None
 
     # Device and collectives
     mesh_device: ttnn.MeshDevice | None = None
@@ -123,9 +123,22 @@ class Attention1DConfig:
     use_qk_fused: bool = False  # Fused Q/K rotary embedding
 
     # KV cache config
-    use_paged_kv_cache: bool = False
+    #
+    # The KV cache is a static configuration, allocated once and reused for all forward calls.
+    # This reflects how inference engines like vLLM manage KV caches:
+    # - Cache shape is determined by static model config (num_kv_heads, head_dim, block_size)
+    # - The cache is allocated once during model initialization (allocate_vllm_kv_cache)
+    # - The same cache tensors are passed to every forward call
+    #
+    # kv_cache options:
+    # - None: Set externally before forward (e.g., via from_model_args or direct assignment)
+    # - tuple[LazyWeight, LazyWeight]: (keys, values) backed by cache files, resolved lazily
+    # - tuple[ttnn.Tensor, ttnn.Tensor]: Pre-allocated (keys, values) tensors (e.g., from vLLM)
+    use_vllm_paged_kv_cache: bool = False
+    kv_cache: "tuple[LazyWeight, LazyWeight] | tuple[ttnn.Tensor, ttnn.Tensor] | None" = None
     paged_attention_config: "PagedAttentionConfig | None" = None  # type: ignore
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
+    # todo)) double check this against TTTv1
     min_kv_prefill_shard_seqlen: int | None = None
 
     # Weight dtypes
@@ -170,12 +183,13 @@ class Attention1DConfig:
     li_o_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
 
     # Transformation matrices for rotary embedding (static, computed once)
+    # todo)) add explanation for not using LazyWeight here
     transformation_mat_decode: ttnn.Tensor | None = None
     transformation_mat_prefill: ttnn.Tensor | None = None
 
-    # Internal: pre-computed bias tensors
-    _wqkv_bias_decode: list[ttnn.Tensor] | None = field(default=None, repr=False)
-    _wqkv_bias_prefill: ttnn.Tensor | None = field(default=None, repr=False)
+    # Internal: pre-computed bias LazyWeights (materialized in __init__)
+    _wqkv_bias_decode: list[LazyWeight] | None = field(default=None, repr=False)
+    _wqkv_bias_prefill: LazyWeight | None = field(default=None, repr=False)
 
     def is_resolved(self) -> bool:
         """Check if all required fields are resolved."""
@@ -227,6 +241,17 @@ class Attention1D(LightweightModule):
     Execution paths:
       Decode:  QKV matmul → all_reduce → create_qkv_heads → rotary → KV cache → SDPA → concat_heads → WO matmul → all_reduce
       Prefill: [reshape] → QKV matmul → all_reduce → create_qkv_heads → rotary → KV cache → SDPA → concat_heads → WO matmul
+
+    KV Cache Management:
+        The KV cache is a static configuration stored in Attention1DConfig.kv_cache,
+        allocated once and reused for all forward calls. This design reflects how
+        inference engines like vLLM manage KV caches: the cache shape is determined
+        by static model config and the same tensors are reused for all forward calls.
+
+        Options:
+        - from_model_args(): Automatically allocates KV cache (TTTv1 compatibility)
+        - from_config() with kv_cache: Pre-allocated (keys, values) tensors (vLLM integration)
+        - from_config() with kv_cache as LazyWeight tuple: Cache backed by files
     """
 
     def __init__(self, wqkv: LazyWeight, wo: LazyWeight):
@@ -244,7 +269,6 @@ class Attention1D(LightweightModule):
         super().__init__()
         self.config = _resolve_attention1d_config(Attention1DConfig(wqkv=wqkv, wo=wo))
         self._device_weights_loaded = False
-        self.layer_past = None  # KV cache for non-paged mode
 
     @classmethod
     def from_config(cls, config: Attention1DConfig):
@@ -259,7 +283,6 @@ class Attention1D(LightweightModule):
         super(Attention1D, instance).__init__()
         instance.config = _resolve_attention1d_config(config)
         instance._device_weights_loaded = False
-        instance.layer_past = None
         return instance
 
     def load_device_weights(self):
@@ -286,58 +309,28 @@ class Attention1D(LightweightModule):
         else:
             self.k_norm = None
 
-        # Pre-computed bias tensors
-        self.wqkv_bias_decode = cfg._wqkv_bias_decode
-        self.wqkv_bias_prefill = cfg._wqkv_bias_prefill
+        # Materialize bias LazyWeights
+        if cfg._wqkv_bias_decode is not None:
+            self.wqkv_bias_decode = [bias.get_device_weight() for bias in cfg._wqkv_bias_decode]
+        else:
+            self.wqkv_bias_decode = None
+        if cfg._wqkv_bias_prefill is not None:
+            self.wqkv_bias_prefill = cfg._wqkv_bias_prefill.get_device_weight()
+        else:
+            self.wqkv_bias_prefill = None
+
+        # Resolve kv_cache from config (may be LazyWeight or ttnn.Tensor)
+        if cfg.kv_cache is not None:
+            keys, values = cfg.kv_cache
+            if isinstance(keys, LazyWeight):
+                keys = keys.get_device_weight()
+            if isinstance(values, LazyWeight):
+                values = values.get_device_weight()
+            self.kv_cache = (keys, values)
+        else:
+            self.kv_cache = None
 
         self._device_weights_loaded = True
-
-    def init_kv_cache(self):
-        """
-        Initialize KV cache for non-paged mode.
-        Called automatically if use_paged_kv_cache=False.
-        """
-        cfg = self.config
-
-        if cfg.paged_attention_config:
-            # Paged attention - external cache
-            cache_k = zeros_like_paged_cache(
-                cfg.paged_attention_config,
-                cfg.n_kv_heads // cfg.mesh_device.get_num_devices(),
-                cfg.head_dim,
-            )
-            cache_v = zeros_like_paged_cache(
-                cfg.paged_attention_config,
-                cfg.n_kv_heads // cfg.mesh_device.get_num_devices(),
-                cfg.head_dim,
-            )
-        else:
-            # Standard cache
-            n_local_kv_heads = cfg.n_kv_heads // cfg.mesh_device.get_num_devices()
-            cache_k = zeros_like_kv_cache(
-                cfg.max_batch_size,
-                n_local_kv_heads,
-                cfg.max_seq_len,
-                cfg.head_dim,
-            )
-            cache_v = zeros_like_kv_cache(
-                cfg.max_batch_size,
-                n_local_kv_heads,
-                cfg.max_seq_len,
-                cfg.head_dim,
-            )
-
-        self.layer_past = [
-            ttnn.from_torch(
-                k_or_v,
-                dtype=cfg.kv_cache_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=cfg.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(cfg.mesh_device),
-            )
-            for k_or_v in [cache_k, cache_v]
-        ]
 
     def decode_forward(
         self,
@@ -345,7 +338,6 @@ class Attention1D(LightweightModule):
         current_pos: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
         page_table: ttnn.Tensor | None = None,
-        kv_cache: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         Decode forward - single token per user.
@@ -355,7 +347,6 @@ class Attention1D(LightweightModule):
             current_pos: Current position tensor (batch_size,)
             rot_mats: Tuple of (cos, sin) rotation matrices for rotary embedding
             page_table: Page table for paged attention (optional)
-            kv_cache: External KV cache [keys, values] (optional, uses self.layer_past if None)
 
         Returns:
             Output tensor with same shape as input
@@ -434,10 +425,7 @@ class Attention1D(LightweightModule):
         ttnn.deallocate(k_heads_pre_rot)
 
         # --- STAGE 6: KV Cache Update ---
-        if kv_cache:
-            keys, values = kv_cache[0], kv_cache[1]
-        else:
-            keys, values = self.layer_past[0], self.layer_past[1]
+        keys, values = self.kv_cache
 
         # todo)) always use fused qk if it is better! --> does this work for all our models?
         # if it does not cover all models, we can make a separate module for fused --> maybe experimental?
@@ -528,7 +516,6 @@ class Attention1D(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
-        kv_cache: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         Prefill forward - multiple tokens.
@@ -540,7 +527,6 @@ class Attention1D(LightweightModule):
             page_table: Page table for paged attention
             chunk_page_table: Page table for chunked prefill
             chunk_start_idx: Start index for chunked prefill
-            kv_cache: External KV cache [keys, values]
 
         Returns:
             Output tensor (1, 1, seq_len, dim)
@@ -626,10 +612,7 @@ class Attention1D(LightweightModule):
         ttnn.deallocate(k_heads_pre_rot)
 
         # --- STAGE 7: Typecast to cache dtype ---
-        if kv_cache:
-            keys, values = kv_cache[0], kv_cache[1]
-        else:
-            keys, values = self.layer_past[0], self.layer_past[1]
+        keys, values = self.kv_cache
 
         k_heads_cache_dtype = ttnn.typecast(k_heads, dtype=keys.dtype)
         ttnn.deallocate(k_heads)
@@ -756,7 +739,6 @@ class Attention1D(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
-        kv_cache: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """Dispatch to the appropriate forward method based on mode."""
         if mode == "prefill":
@@ -767,7 +749,6 @@ class Attention1D(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache,
             )
         else:
             return self.decode_forward(
@@ -775,7 +756,6 @@ class Attention1D(LightweightModule):
                 current_pos,
                 rot_mats,
                 page_table=page_table,
-                kv_cache=kv_cache,
             )
 
     # =========================================================================
@@ -1160,7 +1140,7 @@ class Attention1D(LightweightModule):
                 ],
                 dim=-1,
             )
-            wqkv_bias = qkv_bias
+            wqkv_bias = LazyWeight(source=qkv_bias)
 
         # Determine scale
         if configuration.query_pre_attn_scalar is not None:
@@ -1169,6 +1149,8 @@ class Attention1D(LightweightModule):
             scale = configuration.head_dim**-0.5
 
         # Build config
+        # Note: kv_cache is created by default in _resolve_attention1d_config if not provided
+        # and use_paged_kv_cache=False. For paged cache (vLLM), set use_paged_kv_cache=True.
         config = Attention1DConfig(
             wqkv=wqkv,
             wo=wo,
@@ -1190,7 +1172,7 @@ class Attention1D(LightweightModule):
             scale=scale,
             sliding_window=configuration.sliding_window if hasattr(configuration, "sliding_window") else None,
             use_qk_fused=getattr(configuration, "use_qk_fused", False),
-            use_paged_kv_cache=use_paged_kv_cache,
+            use_vllm_paged_kv_cache=use_paged_kv_cache,
             paged_attention_config=paged_attention_config,
             kv_cache_dtype=kv_cache_dtype,
             min_kv_prefill_shard_seqlen=configuration.min_kv_prefill_shard_seqlen,
@@ -1221,13 +1203,7 @@ class Attention1D(LightweightModule):
             transformation_mat_prefill=transformation_mats.get("prefill") if transformation_mats else None,
         )
 
-        instance = cls.from_config(config)
-
-        # Initialize KV cache if not using paged attention
-        if not use_paged_kv_cache:
-            instance.init_kv_cache()
-
-        return instance
+        return cls.from_config(config)
 
 
 # =============================================================================
@@ -1647,35 +1623,45 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     # --- Phase 8: Handle QKV bias ---
 
     if config.wqkv_bias is not None:
-        pass
+        # Extract source tensor from LazyWeight for custom transformation
+        qkv_bias = config.wqkv_bias.source
 
-        qkv_bias = config.wqkv_bias
+        # Mesh mapper config for sharding bias on last dimension
+        # For 1D mesh: [Replicate on dim 0, Shard on dim -1]
+        bias_mesh_mapper_config = (
+            ttnn.MeshMapperConfig(
+                placements=[ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)],
+                mesh_shape_override=ttnn.MeshShape(1, num_devices),
+            )
+            if num_devices > 1
+            else None  # Single device: replicate (no sharding)
+        )
 
-        # Prefill bias
-        wqkv_bias_prefill = ttnn.from_torch(
-            qkv_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0),
+        # Prefill bias: transform to 4D shape (1, 1, 1, qkv_size)
+        # Use replace() to create new LazyWeight with transformed source, then resolve_lazy_weight
+        prefill_bias_lazy = resolve_lazy_weight(
+            replace(config.wqkv_bias, source=qkv_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0)),
+            device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            mesh_mapper_config=bias_mesh_mapper_config,
         )
-        to_set["_wqkv_bias_prefill"] = wqkv_bias_prefill
+        to_set["_wqkv_bias_prefill"] = prefill_bias_lazy
 
         # Decode bias - one per batch size multiple
         # Match TTTv1 pattern: 2D tensor (batch_size, qkv_size)
         wqkv_bias_decode = []
         for batch_size in range(tile_size, tile_padded_batch_rows + tile_size, tile_size):
-            qkv_bias_decode = qkv_bias.unsqueeze(0).expand(batch_size, -1)
-            bias_tensor = ttnn.from_torch(
-                qkv_bias_decode,
+            decode_bias_lazy = resolve_lazy_weight(
+                replace(config.wqkv_bias, source=qkv_bias.unsqueeze(0).expand(batch_size, -1)),
+                device=mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                mesh_mapper_config=bias_mesh_mapper_config,
             )
-            wqkv_bias_decode.append(bias_tensor)
+            wqkv_bias_decode.append(decode_bias_lazy)
         to_set["_wqkv_bias_decode"] = wqkv_bias_decode
 
     # --- Phase 9: Create transformation matrices for rotary embedding ---
@@ -1720,6 +1706,41 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         to_set["transformation_mat_prefill"] = transformation_mat_prefill
+
+    # --- Phase 10: Resolve KV cache ---
+    # KV cache is a static configuration, allocated once and reused for all forward calls.
+    # If use_paged_kv_cache=True, the cache is managed externally (e.g., by vLLM) and not created here.
+    if not config.use_vllm_paged_kv_cache:
+        n_local_kv_heads = n_kv_heads // num_devices
+        kv_cache_dtype = config.kv_cache_dtype
+        kv_cache_defaults = dict(
+            device=mesh_device,
+            dtype=kv_cache_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper_config=ttnn.MeshMapperConfig(
+                placements=[ttnn.PlacementReplicate()],
+                mesh_shape_override=ttnn.MeshShape([num_devices]),
+            ),
+        )
+
+        if config.kv_cache is None:
+            # Create default kv_cache LazyWeights
+            if config.paged_attention_config:
+                cache_k = zeros_like_paged_cache(config.paged_attention_config, n_local_kv_heads, head_dim)
+                cache_v = zeros_like_paged_cache(config.paged_attention_config, n_local_kv_heads, head_dim)
+            else:
+                cache_k = zeros_like_kv_cache(config.max_batch_size, n_local_kv_heads, config.max_seq_len, head_dim)
+                cache_v = zeros_like_kv_cache(config.max_batch_size, n_local_kv_heads, config.max_seq_len, head_dim)
+            kv_cache = (LazyWeight(source=cache_k), LazyWeight(source=cache_v))
+        else:
+            kv_cache = config.kv_cache
+
+        # Resolve defaults for both keys and values LazyWeights
+        to_set["kv_cache"] = (
+            resolve_lazy_weight(kv_cache[0], **kv_cache_defaults),
+            resolve_lazy_weight(kv_cache[1], **kv_cache_defaults),
+        )
 
     return replace(config, **to_set)
 
