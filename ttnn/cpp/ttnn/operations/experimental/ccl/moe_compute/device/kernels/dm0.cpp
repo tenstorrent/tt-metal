@@ -175,7 +175,6 @@ void kernel_main() {
         uint32_t num_expert_tokens = num_tokens_per_expert[expert_id];
         uint32_t num_expert_chunks = (num_expert_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            // TODO: (GR) does this change
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
             // while first expert still being processed
