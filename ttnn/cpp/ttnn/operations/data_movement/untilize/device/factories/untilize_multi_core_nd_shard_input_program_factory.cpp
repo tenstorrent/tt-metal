@@ -67,7 +67,10 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     const auto& compute_core_range = grid;
 
     uint32_t num_tiles_per_input_block = input_shard_width / tile_width;
-    uint32_t num_blocks_per_shard_plane = input_shard_height / tile_height;
+    uint32_t num_blocks_per_shard_plane =
+        input_shard_height /
+        tile_height;  // Note: a "shard plane" here refers to a 2D plane the size of the last 2 dimensions of the shard.
+                      // For eaxmple, a shard of shape [b, c, h, w] has b * c planes each of shapr [h, w].
     const auto& shard_shape = nd_shard_spec.shard_shape;
     size_t num_planes_per_shard = 1;
     if (shard_shape.rank() > 2) {
