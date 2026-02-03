@@ -62,7 +62,7 @@ class TtnnYoloV11:
             device,
             parameters.conv_args[20],
             parameters.model[20],
-            deallocate_activation=False,
+            deallocate_activation=True,
             enable_act_double_buffer=False,
             enable_weights_double_buffer=False,
         )

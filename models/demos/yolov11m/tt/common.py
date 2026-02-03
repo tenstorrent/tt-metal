@@ -106,10 +106,6 @@ class Yolov11Conv2D:
             input_height = self.conv.input_height
             input_width = self.conv.input_width
 
-        kernel_size = [self.kernel_size[0], self.kernel_size[1]]
-        stride = [self.stride[0], self.stride[1]]
-        padding = [self.padding[0], self.padding[1]]
-
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -237,6 +233,8 @@ class TtnnConv:
         enable_act_double_buffer=True,
         enable_weights_double_buffer=True,
         core_count=None,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        config_override=None,
     ):
         self.enable_act = enable_act
         if self.enable_act:
@@ -252,6 +250,8 @@ class TtnnConv:
             enable_act_double_buffer=enable_act_double_buffer,
             enable_weights_double_buffer=enable_weights_double_buffer,
             core_count=core_count,
+            shard_layout=shard_layout,
+            config_override=config_override,
         )
 
     def __call__(self, device, x):
