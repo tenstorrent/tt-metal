@@ -1,0 +1,119 @@
+name: "ttnn - Sweeps Slack Notification"
+
+on:
+  workflow_run:
+    workflows: ["ttnn - Run sweeps"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "GitHub Actions run ID to process (for re-sending notifications)"
+        required: true
+        type: string
+
+jobs:
+  check-and-notify:
+    name: Check trigger and send notification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/sweep-run-analysis
+
+      - name: Determine if notification should be sent
+        id: check
+        env:
+          # Required for `gh api` to fetch workflow run details when triggered via workflow_dispatch
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Default values
+          SHOULD_NOTIFY="false"
+          RUN_TYPE=""
+          RUN_ID=""
+          CONCLUSION=""
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual trigger - always notify
+            RUN_ID="${{ github.event.inputs.run_id }}"
+            SHOULD_NOTIFY="true"
+
+            # Get workflow run details
+            WORKFLOW_INFO=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID} 2>/dev/null || echo "{}")
+            CONCLUSION=$(echo "$WORKFLOW_INFO" | jq -r '.conclusion // "unknown"')
+            RUN_NAME=$(echo "$WORKFLOW_INFO" | jq -r '.name // ""')
+
+            # Determine run type from name
+            if [[ "$RUN_NAME" == *"lead models"* ]] || [[ "$RUN_NAME" == *"Lead Models"* ]]; then
+              RUN_TYPE="lead_models"
+            elif [[ "$RUN_NAME" == *"model traced"* ]] || [[ "$RUN_NAME" == *"Model Traced"* ]]; then
+              RUN_TYPE="model_traced"
+            elif [[ "$RUN_NAME" == *"comprehensive"* ]] || [[ "$RUN_NAME" == *"Comprehensive"* ]]; then
+              RUN_TYPE="comprehensive"
+            else
+              RUN_TYPE="nightly"
+            fi
+
+            echo "Manual trigger for run $RUN_ID (type: $RUN_TYPE, conclusion: $CONCLUSION)"
+
+          elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            # Triggered by workflow_run event
+            RUN_ID="${{ github.event.workflow_run.id }}"
+            CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+            RUN_NAME="${{ github.event.workflow_run.name }}"
+            EVENT_TYPE="${{ github.event.workflow_run.event }}"
+
+            echo "Workflow run event: name='$RUN_NAME', event='$EVENT_TYPE', conclusion='$CONCLUSION'"
+
+            # Determine run type from name
+            if [[ "$RUN_NAME" == *"lead models"* ]] || [[ "$RUN_NAME" == *"Lead Models"* ]]; then
+              RUN_TYPE="lead_models"
+            elif [[ "$RUN_NAME" == *"model traced"* ]] || [[ "$RUN_NAME" == *"Model Traced"* ]]; then
+              RUN_TYPE="model_traced"
+            elif [[ "$RUN_NAME" == *"comprehensive"* ]] || [[ "$RUN_NAME" == *"Comprehensive"* ]]; then
+              RUN_TYPE="comprehensive"
+            else
+              RUN_TYPE="nightly"
+            fi
+
+            # Only notify for lead_models runs (scheduled or manual)
+            if [[ "$RUN_TYPE" == "lead_models" ]]; then
+              # Check if it's a scheduled run or workflow_dispatch
+              if [[ "$EVENT_TYPE" == "schedule" ]] || [[ "$EVENT_TYPE" == "workflow_dispatch" ]]; then
+                SHOULD_NOTIFY="true"
+                echo "Lead models run detected - will send notification"
+              else
+                echo "Skipping: lead_models but not scheduled/manual (event: $EVENT_TYPE)"
+              fi
+            else
+              echo "Skipping: not a lead_models run (type: $RUN_TYPE)"
+            fi
+          fi
+
+          # Set outputs
+          echo "should_notify=$SHOULD_NOTIFY" >> $GITHUB_OUTPUT
+          echo "run_type=$RUN_TYPE" >> $GITHUB_OUTPUT
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "conclusion=$CONCLUSION" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "=== Decision ==="
+          echo "Should notify: $SHOULD_NOTIFY"
+          echo "Run type: $RUN_TYPE"
+          echo "Run ID: $RUN_ID"
+          echo "Conclusion: $CONCLUSION"
+
+      - name: Run sweep analysis and notify
+        if: steps.check.outputs.should_notify == 'true'
+        uses: ./.github/actions/sweep-run-analysis
+        with:
+          github-run-id: ${{ steps.check.outputs.run_id }}
+          run-type: ${{ steps.check.outputs.run_type }}
+          conclusion: ${{ steps.check.outputs.conclusion }}
+          slack-webhook-url: ${{ secrets.SLACK_LEAD_MODEL_SWEEPS_WEBHOOK_URL }}
+          database-url: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+
+      - name: Skip notification
+        if: steps.check.outputs.should_notify != 'true'
+        run: |
+          echo "Notification skipped - not a lead_models scheduled/manual run"
