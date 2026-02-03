@@ -118,6 +118,28 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     return fixed_asic_position_pinnings;
 }
 
+// Generate hard pinning for UBB systems to pin ASIC ID 0 to tray 1, asic 1.
+// This ensures consistent mapping of the first fabric node to a specific physical location.
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_ubb_hard_pinned_asic_position_pinnings(
+    const tt::Cluster& cluster) {
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+
+    // Check if this is a UBB system
+    const auto& unique_chip_ids = cluster.get_unique_chip_ids();
+    if (!unique_chip_ids.empty()) {
+        auto first_chip_id = unique_chip_ids.begin()->first;
+        auto board_type = cluster.get_board_type(first_chip_id);
+        if (board_type == BoardType::UBB_WORMHOLE || board_type == BoardType::UBB_BLACKHOLE) {
+            // Hard pin fabric node chip_id 0 (ASIC ID 0) to tray 1, asic location 1
+            FabricNodeId fabric_node_0{MeshId{0}, 0};
+            AsicPosition tray1_asic1{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}};
+            fixed_asic_position_pinnings.emplace_back(fabric_node_0, std::vector<AsicPosition>{tray1_asic1});
+        }
+    }
+
+    return fixed_asic_position_pinnings;
+}
+
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -485,7 +507,9 @@ void ControlPlane::init_control_plane(
         const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
         if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
-            fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_);
+            auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_);
+            fixed_asic_position_pinnings.insert(
+                fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
         }
 
         // Add MGD pinnings to the topology mapper
@@ -568,9 +592,16 @@ void ControlPlane::init_control_plane_auto_discovery() {
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
     const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
+    // Hard pin ASIC ID 0 to tray 1, asic 1 for UBB systems
+    auto ubb_pinnings = get_ubb_hard_pinned_asic_position_pinnings(cluster);
+    fixed_asic_position_pinnings.insert(fixed_asic_position_pinnings.end(), ubb_pinnings.begin(), ubb_pinnings.end());
+
     // Special corner pinning for galaxy systems to avoid MGD folding across torus edges
     if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
-        fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_);
+        auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_);
+        // Merge galaxy pinnings with existing pinnings (e.g., the hard pin above)
+        fixed_asic_position_pinnings.insert(
+            fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
     }
 
     this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
