@@ -437,9 +437,11 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
     // untilize - DEST capacity auto-detected
-    compute_kernel_lib::untilize<per_core_N, cb_untilize_in, cb_untilize_out>(
-        per_core_M,
+    compute_kernel_lib::untilize<
+        per_core_N,
+        cb_untilize_in,
+        cb_untilize_out,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront);
+        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront>(per_core_M);
 #endif
 }

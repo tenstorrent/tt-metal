@@ -258,10 +258,12 @@ void kernel_main() {
                                 }
 
                                 // After reduction (if any), untilize result using helper
-                                compute_kernel_lib::untilize<matmul_N_t, cb_matmul_interm_tiled, cb_matmul_result_rm>(
-                                    matmul_M_t,
+                                compute_kernel_lib::untilize<
+                                    matmul_N_t,
+                                    cb_matmul_interm_tiled,
+                                    cb_matmul_result_rm,
                                     compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront);
+                                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront>(matmul_M_t);
                             }
                         }
                     }

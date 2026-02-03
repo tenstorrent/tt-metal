@@ -45,10 +45,12 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 
 template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb>
 ALWI void UNTILIZE_TILES() {
-    compute_kernel_lib::untilize<num_tiles, in0_cb, out_cb>(
-        1,
+    compute_kernel_lib::untilize<
+        num_tiles,
+        in0_cb,
+        out_cb,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront);
+        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront>(1);
 }
 
 template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb>
