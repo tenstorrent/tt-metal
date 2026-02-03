@@ -4,6 +4,7 @@
 
 #include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
 
+#include <cmath>
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
 #include <tt-metalium/constants.hpp>
@@ -61,6 +62,21 @@ void RotateDeviceOperation::validate_inputs(
             mem_layout != tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
             "Width sharding is not supported for rotate operation. Got memory layout {}",
             static_cast<int>(mem_layout));
+    }
+
+    // Wide reduction validation for bilinear mode
+    if (operation_attributes.interpolation_mode == "bilinear") {
+        constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
+        const uint32_t input_channels = input.padded_shape()[-1];
+        const uint32_t in_ntiles_c =
+            static_cast<uint32_t>(std::ceil(static_cast<float>(input_channels) / tt::constants::TILE_WIDTH));
+        TT_FATAL(
+            in_ntiles_c <= MAX_TILES_PER_REDUCTION,
+            "Wide reduction (in_ntiles_c > MAX_TILES_PER_REDUCTION) is not supported for bilinear rotate. "
+            "in_ntiles_c={} exceeds MAX_TILES_PER_REDUCTION={}. Reduce channel count to <= {}.",
+            in_ntiles_c,
+            MAX_TILES_PER_REDUCTION,
+            MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH);
     }
 }
 

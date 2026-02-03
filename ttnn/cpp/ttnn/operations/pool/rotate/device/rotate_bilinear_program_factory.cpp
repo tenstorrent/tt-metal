@@ -195,14 +195,6 @@ RotateDeviceOperation::BilinearProgramFactory::cached_program_t RotateDeviceOper
 
     const uint32_t in_nblocks_c = (uint32_t)std::ceil((float)in_ntiles_c / MAX_TILES_PER_REDUCTION);
 
-    TT_FATAL(
-        in_nblocks_c == 1,
-        "Wide reduction (in_nblocks_c > 1) is not supported for bilinear rotate. "
-        "in_ntiles_c={} exceeds MAX_TILES_PER_REDUCTION={}. Reduce channel count to <= {}.",
-        in_ntiles_c,
-        MAX_TILES_PER_REDUCTION,
-        MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH);
-
     auto create_compute_kernel = [&](tt::tt_metal::CoreRangeSet cores, uint32_t total_interpolations) {
         std::vector<uint32_t> compute_compile_time_args = {
             in_ntiles_c,
