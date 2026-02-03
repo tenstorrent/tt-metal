@@ -4,15 +4,26 @@
 // MoE Routed Expert fused kernel
 // Single kernel file, compiles correctly for all RISC cores
 //
-// Implements: Mcast -> Matmul+Activation -> Gather -> Gate
-// - Sender core: Mcast sender, Gather receiver, Gate compute (outside compute grid)
-// - Compute cores: Mcast receiver, Matmul+Activation compute, Gather sender
+// Implements:
+//   1. Mcast Input: Broadcast input from sender → compute cores
+//   2. Matmul+Sigmoid: Routing matmul on compute cores
+//   3. Gather: Collect outputs from compute cores → sender core
+//   4. Gate: Top-K expert selection on sender core (produces expert indices)
+//   5. Mcast Index: Broadcast expert indices from sender → compute cores
+//   6. DRAM Streaming Matmul+SiLU: Expert computation on compute cores
+//
+// Core roles:
+// - Sender core: Mcast sender, Gather receiver, Gate compute, Index mcast sender
+// - Compute cores: Mcast receiver, Routing matmul, Gather sender, DRAM matmul
 // - Mcast grid: Rectangle encompassing sender and compute cores
 //
 // RISC assignments:
-// - BRISC: Mcast sender (sender core), Gather receiver (sender core), Gate writer (sender core)
-// - NCRISC: Mcast receiver, setup sharded buffers, Gather sender (compute cores), Gate reader (sender core)
-// - TRISC: Matmul+Activation compute (compute cores), Gate compute (sender core)
+// - BRISC: Mcast sender (sender core), Gather receiver (sender core), Gate writer (sender core),
+//          Index mcast sender (sender core), DRAM streaming reader (compute cores)
+// - NCRISC: Mcast receiver, setup sharded buffers, Gather sender (compute cores),
+//           Index mcast receiver (compute cores)
+// - TRISC: Matmul+Activation compute (compute cores), Gate compute (sender core),
+//          DRAM matmul+SiLU compute (compute cores)
 
 #include "../../unified_kernels/kernel_op_api.hpp"
 #include "../../unified_kernels/kernel_utils.hpp"
@@ -20,20 +31,26 @@
 #include "../../unified_kernels/matmul.hpp"
 #include "../../unified_kernels/gather.hpp"
 #include "../../unified_kernels/deepseek_moe_gate.hpp"
+#include "../../unified_kernels/dram_streaming_matmul.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
     static constexpr bool is_sender_core = get_named_compile_time_arg_val("is_sender_core") == 1;
     static constexpr bool is_mcast_grid_core = get_named_compile_time_arg_val("is_mcast_grid_core") == 1;
-    static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
+    static constexpr bool is_gate_mm_core = get_named_compile_time_arg_val("is_gate_mm_core") == 1;
+    static constexpr bool is_dram_mm_silu_core = get_named_compile_time_arg_val("is_dram_mm_silu_core") == 1;
+    // Cores that need to receive the input mcast (routing matmul OR dram matmul)
+    static constexpr bool is_input_mcast_receiver = is_gate_mm_core || is_dram_mm_silu_core;
 };
 
 void kernel_main() {
 // ============================================================================
-// Define CTArgs and args per RISC (different compile-time arg layout per processor)
+// Compile-time args and runtime args per RISC
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
-    // Mcast CTArgs and args
+    // ------------------------------------------------------------------------
+    // Mcast (receiver)
+    // ------------------------------------------------------------------------
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
     deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
         get_named_compile_time_arg_val("mcast_data_receiver_semaphore"),
@@ -41,11 +58,15 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_dst_num_pages"),
     };
 
-    // Matmul CTArgs and args
-    using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
-    deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
+    // ------------------------------------------------------------------------
+    // Matmul (reader)
+    // ------------------------------------------------------------------------
+    using GateMMCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    deepseek_b1_ops::Matmul::ReaderArgs gate_mm_args{};
 
-    // Gather sender args (compute cores send to sender core)
+    // ------------------------------------------------------------------------
+    // Gather (sender - compute cores send to sender core)
+    // ------------------------------------------------------------------------
     deepseek_b1_ops::Gather::SenderArgs gather_args{
         get_named_compile_time_arg_val("gather_dest_noc_x"),
         get_named_compile_time_arg_val("gather_dest_noc_y"),
@@ -61,10 +82,28 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_receiver_data_addr"),
     };
 
-    // Gate CTArgs (NCRISC: reader on sender core) - empty, setup done below
+    // ------------------------------------------------------------------------
+    // Gate (reader - empty, setup done below)
+    // ------------------------------------------------------------------------
     using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ReaderCTArgs;
 
+    // ------------------------------------------------------------------------
+    // Index Mcast (receiver) - reuses same mcast Op, just different args
+    // ------------------------------------------------------------------------
+    deepseek_b1_ops::Mcast::ReceiverArgs index_mcast_args{
+        get_named_compile_time_arg_val("index_mcast_receiver_semaphore"),
+        get_named_compile_time_arg_val("dram_mm_silu_cb_index"),
+        get_named_compile_time_arg_val("index_mcast_num_pages"),
+    };
+
+    // ------------------------------------------------------------------------
+    // DRAM Streaming Matmul (reader - no-op, cb_in0 reuses mcast_dst_cb)
+    // ------------------------------------------------------------------------
+    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs;
+
+    // ------------------------------------------------------------------------
     // Setup sharded persistent buffers
+    // ------------------------------------------------------------------------
     if constexpr (Core::is_sender_core) {
         constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
         constexpr uint32_t mcast_src_num_pages = get_named_compile_time_arg_val("mcast_src_num_pages");
@@ -77,15 +116,17 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(gate_bias_cb, 1);
         unified_kernels::setup_sharded_buffer(gate_input_indices_cb, 1);
     }
-    if constexpr (Core::is_matmul_core) {
-        constexpr uint32_t matmul_in1 = get_named_compile_time_arg_val("matmul_in1");
-        constexpr uint32_t matmul_k_num_tiles = get_named_compile_time_arg_val("matmul_k_num_tiles");
-        constexpr uint32_t matmul_out_w = get_named_compile_time_arg_val("matmul_out_w");
-        unified_kernels::setup_sharded_buffer(matmul_in1, matmul_k_num_tiles * matmul_out_w);
+    if constexpr (Core::is_gate_mm_core) {
+        constexpr uint32_t gate_mm_in1 = get_named_compile_time_arg_val("gate_mm_in1");
+        constexpr uint32_t gate_mm_k_num_tiles = get_named_compile_time_arg_val("gate_mm_k_num_tiles");
+        constexpr uint32_t gate_mm_out_w = get_named_compile_time_arg_val("gate_mm_out_w");
+        unified_kernels::setup_sharded_buffer(gate_mm_in1, gate_mm_k_num_tiles * gate_mm_out_w);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
-    // Mcast CTArgs and args (loopback if sender is in the mcast grid)
+    // ------------------------------------------------------------------------
+    // Mcast (sender - loopback if sender is in the mcast grid)
+    // ------------------------------------------------------------------------
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_num_cores"),
         get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid"),
@@ -107,11 +148,15 @@ void kernel_main() {
         get_write_ptr(mcast_dst_cb),
     };
 
-    // Matmul CTArgs and args
-    using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
-    deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
+    // ------------------------------------------------------------------------
+    // Matmul (writer)
+    // ------------------------------------------------------------------------
+    using GateMMCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+    deepseek_b1_ops::Matmul::WriterArgs gate_mm_args{};
 
-    // Gather receiver args (sender core receives from compute cores)
+    // ------------------------------------------------------------------------
+    // Gather (receiver - sender core receives from compute cores)
+    // ------------------------------------------------------------------------
     deepseek_b1_ops::Gather::ReceiverArgs gather_args{
         get_named_compile_time_arg_val("gather_noc0_num_senders"),
         get_named_compile_time_arg_val("gather_noc1_num_senders"),
@@ -121,31 +166,80 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_dst_num_pages"),
     };
 
-    // Gate CTArgs (BRISC: writer on sender core)
+    // ------------------------------------------------------------------------
+    // Gate (writer)
+    // ------------------------------------------------------------------------
     using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::WriterCTArgs<
         get_named_compile_time_arg_val("gate_output_cb"),
         get_named_compile_time_arg_val("gate_output_indices_cb")>;
 
+    // ------------------------------------------------------------------------
+    // Index Mcast (sender) - reuses same mcast Op, just different args
+    // ------------------------------------------------------------------------
+    constexpr uint32_t index_mcast_src_cb = get_named_compile_time_arg_val("gate_output_indices_cb");
+    constexpr uint32_t index_mcast_dst_cb = get_named_compile_time_arg_val("dram_mm_silu_cb_index");
+    deepseek_b1_ops::Mcast::SenderArgs index_mcast_args{
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("index_mcast_sender_semaphore"),
+        get_named_compile_time_arg_val("index_mcast_receiver_semaphore"),
+        get_named_compile_time_arg_val("index_mcast_data_size_bytes"),
+        index_mcast_src_cb,
+        get_named_compile_time_arg_val("index_mcast_num_pages"),
+        get_read_ptr(index_mcast_src_cb),
+        get_write_ptr(index_mcast_dst_cb),
+    };
+
+    // ------------------------------------------------------------------------
+    // DRAM Streaming Matmul (writer)
+    // ------------------------------------------------------------------------
+    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs<
+        get_named_compile_time_arg_val("dram_mm_silu_cb_in1"),
+        get_named_compile_time_arg_val("dram_mm_silu_cb_out"),
+        get_named_compile_time_arg_val("dram_mm_silu_in1_tensor_addr"),
+        get_named_compile_time_arg_val("dram_mm_silu_in1_page_size"),
+        get_named_compile_time_arg_val("dram_mm_silu_in1_num_pages"),
+        get_named_compile_time_arg_val("dram_mm_silu_subblock_k"),
+        get_named_compile_time_arg_val("dram_mm_silu_per_core_n"),
+        get_named_compile_time_arg_val("dram_mm_silu_in1_block_size_bytes"),
+        get_named_compile_time_arg_val("dram_mm_silu_out_num_tiles"),
+        get_named_compile_time_arg_val("dram_mm_silu_num_subblocks_k"),
+        get_named_compile_time_arg_val("dram_mm_silu_bank_id"),
+        get_named_compile_time_arg_val("dram_mm_silu_vc"),
+        1,  // enable_indexing = true
+        get_named_compile_time_arg_val("dram_mm_silu_cb_index"),
+        get_named_compile_time_arg_val("dram_mm_silu_index_offset")>;
+
 #elif defined(COMPILE_FOR_TRISC)
-    // Mcast CTArgs and args (no-op for TRISC)
+    // ------------------------------------------------------------------------
+    // Mcast (no-op for TRISC)
+    // ------------------------------------------------------------------------
     using McastCTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
 
-    // Matmul CTArgs and args
-    using MatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
-        get_named_compile_time_arg_val("matmul_out_w"),
-        get_named_compile_time_arg_val("matmul_fused_activation")>;
-    deepseek_b1_ops::Matmul::ComputeArgs matmul_args{
-        get_named_compile_time_arg_val("matmul_in0"),
-        get_named_compile_time_arg_val("matmul_in1"),
-        get_named_compile_time_arg_val("matmul_out"),
-        get_named_compile_time_arg_val("matmul_k_num_tiles"),
+    // ------------------------------------------------------------------------
+    // Matmul (compute)
+    // ------------------------------------------------------------------------
+    using GateMMCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
+        get_named_compile_time_arg_val("gate_mm_out_w"),
+        get_named_compile_time_arg_val("gate_mm_fused_activation")>;
+    deepseek_b1_ops::Matmul::ComputeArgs gate_mm_args{
+        get_named_compile_time_arg_val("gate_mm_in0"),
+        get_named_compile_time_arg_val("gate_mm_in1"),
+        get_named_compile_time_arg_val("gate_mm_out"),
+        get_named_compile_time_arg_val("gate_mm_k_num_tiles"),
     };
 
-    // Gather args (no-op for TRISC)
+    // ------------------------------------------------------------------------
+    // Gather (no-op for TRISC)
+    // ------------------------------------------------------------------------
     deepseek_b1_ops::Gather::ComputeArgs gather_args{};
 
-    // Gate CTArgs (TRISC: compute on sender core)
+    // ------------------------------------------------------------------------
+    // Gate (compute)
+    // ------------------------------------------------------------------------
     using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ComputeCTArgs<
         get_named_compile_time_arg_val("gate_input_cb"),
         get_named_compile_time_arg_val("gate_bias_cb"),
@@ -155,48 +249,93 @@ void kernel_main() {
         get_named_compile_time_arg_val("gate_eps"),
         get_named_compile_time_arg_val("gate_scaling_factor"),
         get_named_compile_time_arg_val("gate_enable_sigmoid")>;
+
+    // ------------------------------------------------------------------------
+    // Index Mcast (no-op for TRISC) - reuses same mcast Op
+    // ------------------------------------------------------------------------
+    deepseek_b1_ops::Mcast::ComputeArgs index_mcast_args{};
+
+    // ------------------------------------------------------------------------
+    // DRAM Streaming Matmul (compute)
+    // ------------------------------------------------------------------------
+    using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+        get_named_compile_time_arg_val("dram_mm_silu_cb_in0"),
+        get_named_compile_time_arg_val("dram_mm_silu_cb_in1"),
+        get_named_compile_time_arg_val("dram_mm_silu_cb_out"),
+        get_named_compile_time_arg_val("dram_mm_silu_subblock_k"),
+        get_named_compile_time_arg_val("dram_mm_silu_per_core_n"),
+        get_named_compile_time_arg_val("dram_mm_silu_subblock_w"),
+        get_named_compile_time_arg_val("dram_mm_silu_num_subblocks_k"),
+        get_named_compile_time_arg_val("dram_mm_silu_tile_r_dim"),
+        get_named_compile_time_arg_val("dram_mm_silu_fuse_silu")>;
 #endif
 
+    // ============================================================================
+    // Operation calls
+    // ============================================================================
+
     // ========================================================================
-    // Mcast: Broadcast input from sender core to all matmul cores
+    // 1. Mcast Input: Broadcast input from sender core to all cores that need input
+    //    (routing matmul cores AND dram matmul cores)
     // ========================================================================
-    deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_sender_core, Core::is_mcast_grid_core, Core::is_matmul_core, true>
-        mcast;
+    deepseek_b1_ops::Mcast::
+        Op<McastCTArgs, Core::is_sender_core, Core::is_mcast_grid_core, Core::is_input_mcast_receiver, true>
+            mcast;
     mcast.init(mcast_args);
     {
         DeviceZoneScopedN("MCAST");
         mcast(mcast_args);
     }
-    mcast.teardown();
 
     // ========================================================================
-    // Matmul + Activation: Compute on all matmul cores
+    // 2. Matmul + Activation: Routing matmul on all matmul cores
     // ========================================================================
     {
         DeviceZoneScopedN("MATMUL");
-        // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-        deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, false> matmul;
-        matmul(matmul_args);
+        // pop_in0 = false (kept for DRAM matmul), pop_in1 = false (weights are persistent)
+        deepseek_b1_ops::Matmul::Op<GateMMCTArgs, Core::is_gate_mm_core, false, false> gate_mm;
+        gate_mm(gate_mm_args);
     }
 
     // ========================================================================
-    // Gather: Collect matmul outputs from compute cores to sender core
+    // 3. Gather: Collect matmul outputs from compute cores to sender core
     // ========================================================================
     {
         DeviceZoneScopedN("GATHER");
         // pop_src = true (matmul output consumed after gather)
-        deepseek_b1_ops::Gather::Op<Core::is_matmul_core, Core::is_sender_core, true> gather;
+        deepseek_b1_ops::Gather::Op<Core::is_gate_mm_core, Core::is_sender_core, true> gather;
         gather(gather_args);
     }
 
     // ========================================================================
-    // Gate: Top-8 expert selection with normalized scores (on sender core only)
+    // 4. Gate: Top-K expert selection with normalized scores (on sender core only)
     // ========================================================================
     {
         DeviceZoneScopedN("GATE");
         deepseek_b1_ops::DeepseekMoeGate::Op<GateCTArgs, Core::is_sender_core> gate;
         gate();
     }
+
+    // ========================================================================
+    // 5. Mcast Index: Broadcast expert indices from sender core to matmul cores
+    //    Reuse the same mcast Op (same grid, same semaphores)
+    // ========================================================================
+    {
+        DeviceZoneScopedN("MCAST_INDEX");
+        mcast(index_mcast_args);
+    }
+
+    // ========================================================================
+    // 6. DRAM Streaming Matmul + SiLU: Expert computation on DRAM matmul cores
+    // ========================================================================
+    {
+        DeviceZoneScopedN("DRAM_STREAMING_MATMUL");
+        deepseek_b1_ops::DRAMStreamingMatmul::Op<DRAMMMCTArgs, Core::is_dram_mm_silu_core> dram_mm;
+        dram_mm();
+    }
+
+    // Only need one teardown since both mcasts reuse the same semaphores
+    mcast.teardown();
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     noc_async_write_barrier();

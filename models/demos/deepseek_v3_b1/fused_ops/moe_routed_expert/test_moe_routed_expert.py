@@ -6,20 +6,128 @@
 Test for MoE Routed Expert fused operation.
 
 Tests the fused operation:
-- Input: [1, 7168] tensor on sender core (outside compute grid)
-- Mcast from sender to 8 compute cores
-- Each compute core: [1, 7168] @ [7168, 32] -> [1, 32] + sigmoid
-- Gather outputs back to sender core -> [1, 256] = [16, 16]
-- Gate: top-8 expert selection with normalized scores
-- Output: top8 scores [1, 16] + top8 indices [1, 16] on sender core
+1. Input: [1, 7168] tensor on sender core (outside compute grid)
+2. Mcast from sender to 8 compute cores
+3. Each compute core: [1, 7168] @ [7168, 32] -> [1, 32] + sigmoid
+4. Gather outputs back to sender core -> [1, 256] = [16, 16]
+5. Gate: top-8 expert selection with normalized scores
+6. Mcast expert indices to compute cores
+7. DRAM streaming matmul + SiLU with indexed expert weights
+8. Output: expert computation result [1, N] on compute cores
 """
 
 import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MoeRoutedExpert
-from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
+
+
+def create_dram_mm_silu_tensors(
+    device,
+    K,
+    N,
+    num_experts,
+    compute_core_grid,
+    num_cores,
+    tile_h=1,
+    tile_w=32,
+    dtype=ttnn.bfloat4_b,
+    seed=1000,
+):
+    """
+    Create DRAM streaming matmul weight and output tensors.
+
+    This helper is designed to be reused for multiple DRAM matmuls in the fused kernel.
+
+    Args:
+        device: TT device
+        K: K dimension (input width)
+        N: N dimension (output width, will be padded to num_banks)
+        num_experts: Number of expert weight matrices
+        compute_core_grid: CoreRangeSet for compute cores
+        num_cores: Number of compute cores
+        tile_h: Tile height (default 1)
+        tile_w: Tile width (default 32)
+        dtype: Data type for weights (default bfloat4_b)
+        seed: Random seed for weight generation
+
+    Returns:
+        Tuple of:
+        - weights_tensor: First expert tensor (kernel uses base addr + offset for others)
+        - output_tensor: Output tensor for matmul result
+        - expert_weights_for_validation: Dict of expert weights for golden validation
+    """
+    num_banks = device.dram_grid_size().x
+
+    # Pad N to be divisible by num_banks * tile_w
+    N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    per_core_N = N_padded // num_banks
+
+    logger.info(f"DRAM MM: K={K}, N={N}, N_padded={N_padded}, per_core_N={per_core_N}, num_experts={num_experts}")
+
+    # DRAM shard spec for weights
+    in1_shard_shape = [K, per_core_N]
+    in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+
+    # Upload experts as separate contiguous tensors
+    # Keep unshuffled weights for validation
+    logger.info(f"Uploading {num_experts} experts as separate contiguous tensors...")
+    expert_tensors = []
+    expert_weights_for_validation = {}  # Store unshuffled weights for validation
+
+    for expert_idx in range(num_experts):
+        torch.manual_seed(seed + expert_idx)
+        expert_weights = torch.randn(1, 1, K, N_padded).bfloat16()
+
+        # Store unshuffled weights for validation
+        expert_weights_for_validation[expert_idx] = expert_weights.clone()
+
+        # Shuffle tiles for this expert
+        expert_shuffled = shuffle_tensor_tiles(expert_weights.reshape(1, K, N_padded), tile_w, num_banks)
+        expert_shuffled = expert_shuffled.reshape(1, 1, K, N_padded)
+
+        # Upload to DRAM
+        expert_t = ttnn.from_torch(
+            expert_shuffled.contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=in1_memory_config,
+        )
+        expert_tensors.append(expert_t)
+
+        del expert_shuffled
+
+        if (expert_idx + 1) % 32 == 0:
+            logger.info(f"  Uploaded {expert_idx + 1}/{num_experts} experts")
+
+    logger.info(f"All experts uploaded.")
+
+    # Use first expert tensor for the op
+    weights_tensor = expert_tensors[0]
+
+    # Output tensor - WIDTH_SHARDED in L1
+    out_tile = ttnn.Tile([tile_h, tile_w])
+    out_shard_shape = [tile_h, per_core_N]
+    out_shard_spec = ttnn.ShardSpec(compute_core_grid, out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    out_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec)
+
+    output_tensor = ttnn.from_torch(
+        torch.zeros(1, 1, tile_h, N_padded).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=out_memory_config,
+        tile=out_tile,
+    )
+
+    return weights_tensor, output_tensor, expert_weights_for_validation
 
 
 def test_moe_routed_expert(device):
@@ -30,7 +138,12 @@ def test_moe_routed_expert(device):
     K = 7168
     N_per_core = 32
     num_cores = 8
-    N = N_per_core * num_cores  # 256 total output width
+    N = N_per_core * num_cores  # 256 total output width (routing matmul)
+
+    # DRAM matmul + SiLU parameters
+    dram_mm_silu_K = K  # Same K as routing matmul (7168)
+    dram_mm_silu_N = 2048  # Expert output width
+    num_experts = 256  # Number of expert weight matrices (must match gate indices range)
 
     # Tile definitions
     tile_1x32 = ttnn.Tile([1, 32])
@@ -39,6 +152,9 @@ def test_moe_routed_expert(device):
     tile_1x16 = ttnn.Tile([1, 16])  # For gate output tensors
 
     logger.info(f"Testing MoE routed expert: [{M}, {K}] x [{K}, {N}] with {num_cores} cores")
+    logger.info(
+        f"DRAM matmul + SiLU: [{M}, {dram_mm_silu_K}] x [{dram_mm_silu_K}, {dram_mm_silu_N}] with {num_experts} experts"
+    )
 
     # Gate parameters (must match op.py)
     gate_eps = 1e-20
@@ -47,22 +163,12 @@ def test_moe_routed_expert(device):
     # Create input, weights, and gate tensors
     torch.manual_seed(0)
     torch_input = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_weights = torch.randn((K, N), dtype=torch.bfloat16)
+    torch_gate_mm_weights = torch.randn((K, N), dtype=torch.bfloat16)
     torch_bias = torch.randn(
         (1, 8, 32), dtype=torch.bfloat16
     )  # Gate bias (batch=1, 8, 32) - matches golden expectation
     # Expert indices 0-255, transposed as expected by gate
     torch_indices = torch.arange(N, dtype=torch.int32).reshape(16, 16).T.contiguous().to(torch.uint16)
-
-    # Compute reference output using DeepseekMoeGateSingleCore.golden
-    # First compute matmul + sigmoid (what the kernel does before gate)
-    expected_matmul_sigmoid = torch.sigmoid(torch_input.float() @ torch_weights.float())
-    # Reshape to (1, 8, 32) for gate golden (golden expects 8 rows x 32 cols)
-    expected_gate_input = expected_matmul_sigmoid.reshape(1, 8, 32)
-    # Use the correct gate golden with enable_sigmoid=False (sigmoid already applied)
-    torch_expected_scores, torch_expected_indices = DeepseekMoeGateSingleCore.golden(
-        expected_gate_input, torch_bias.float(), gate_eps, gate_scaling_factor, enable_sigmoid=False
-    )
 
     # Define core grid for compute (first column, 8 cores)
     compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))])
@@ -89,48 +195,76 @@ def test_moe_routed_expert(device):
     )
     logger.info(f"Created input tensor with shard shape ({M}, {K}) on core ({input_core.x}, {input_core.y})")
 
-    # Weights: width-sharded across 8 cores
+    # Get optimal DRAM bank cores for DRAM streaming matmul + SiLU
+    dram_mm_silu_noc = ttnn.NOC.NOC_0
+    dram_mm_silu_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(dram_mm_silu_noc)
+    dram_mm_silu_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in dram_mm_silu_worker_cores])
+    num_dram_mm_silu_cores = len(dram_mm_silu_worker_cores)
+
+    # Mcast output tensor: sharded on rectangular grid from (0,0) to sender core
+    # This rectangle includes all cores that need the input (routing matmul + DRAM matmul + sender)
+    mcast_output_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), input_core)])
+    mcast_output_shard_spec = ttnn.ShardSpec(
+        mcast_output_core_grid,
+        (M, K),  # Each core gets full input [1, K]
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mcast_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, mcast_output_shard_spec
+    )
+    ttnn_mcast_output = ttnn.from_torch(
+        torch.zeros((M, K), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mcast_output_mem_config,
+        tile=tile_1x32,
+    )
+    logger.info(
+        f"Created mcast output tensor with shard shape ({M}, {K}) on {mcast_output_core_grid.num_cores()} cores"
+    )
+
+    # Gate matmul weights: width-sharded across 8 cores
     # Each core gets [K, N_per_core] = [7168, 32]
-    weights_shard_spec = ttnn.ShardSpec(
+    gate_mm_weights_shard_spec = ttnn.ShardSpec(
         compute_core_grid,
         (K, N_per_core),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    weights_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, weights_shard_spec
+    gate_mm_weights_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, gate_mm_weights_shard_spec
     )
 
-    ttnn_weights = ttnn.from_torch(
-        torch_weights,
+    ttnn_gate_mm_weights = ttnn.from_torch(
+        torch_gate_mm_weights,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=weights_mem_config,
+        memory_config=gate_mm_weights_mem_config,
         tile=tile_32x32,
     )
-    logger.info(f"Created weights tensor with shard shape ({K}, {N_per_core}) on {num_cores} cores")
+    logger.info(f"Created gate matmul weights tensor with shard shape ({K}, {N_per_core}) on {num_cores} cores")
 
-    # Intermediate tensor: matmul output width-sharded across compute cores
+    # Gate matmul output: width-sharded across compute cores
     # Each core produces [1, N_per_core] = [1, 32]
-    intermediate_shard_spec = ttnn.ShardSpec(
+    gate_mm_output_shard_spec = ttnn.ShardSpec(
         compute_core_grid,
         (M, N_per_core),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    intermediate_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, intermediate_shard_spec
+    gate_mm_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, gate_mm_output_shard_spec
     )
 
-    torch_intermediate_zeros = torch.zeros((M, N), dtype=torch.bfloat16)
-    ttnn_intermediate = ttnn.from_torch(
-        torch_intermediate_zeros,
+    ttnn_gate_mm_output = ttnn.from_torch(
+        torch.zeros((M, N), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=intermediate_mem_config,
+        memory_config=gate_mm_output_mem_config,
         tile=tile_1x32,
     )
-    logger.info(f"Created intermediate tensor with shard shape ({M}, {N_per_core}) on {num_cores} cores")
+    logger.info(f"Created gate matmul output tensor with shard shape ({M}, {N_per_core}) on {num_cores} cores")
 
     # Gate input tensor: sharded on sender core (gathered from compute cores)
     # [16, 16] = 256 elements on single core (receives gathered matmul output)
@@ -212,54 +346,93 @@ def test_moe_routed_expert(device):
     )
     logger.info(f"Created gate output indices tensor with shard shape (1, 16) on sender core")
 
+    # ========== DRAM Streaming Matmul + SiLU Tensors ==========
+    # The gate output indices determine which expert to use (we'll validate after op runs)
+
+    # DRAM matmul index tensor: sharded on mcast grid for consistent CB addresses
+    # This receives the mcasted expert indices from the gate
+    dram_mm_silu_index_shard_spec = ttnn.ShardSpec(
+        mcast_output_core_grid,  # Same grid as mcast for consistent addresses
+        (1, 16),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    dram_mm_silu_index_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, dram_mm_silu_index_shard_spec
+    )
+    ttnn_dram_mm_silu_index = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.uint16),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=dram_mm_silu_index_mem_config,
+        tile=tile_1x16,
+    )
+    logger.info(f"Created DRAM matmul + SiLU index tensor with shard shape (1, 16) on mcast grid")
+
+    dram_mm_silu_weights, dram_mm_silu_output, expert_weights_dict = create_dram_mm_silu_tensors(
+        device=device,
+        K=dram_mm_silu_K,
+        N=dram_mm_silu_N,
+        num_experts=num_experts,
+        compute_core_grid=dram_mm_silu_core_ranges,  # Use optimal DRAM bank cores
+        num_cores=num_dram_mm_silu_cores,
+        tile_h=M,
+        tile_w=32,
+        dtype=ttnn.bfloat4_b,
+        seed=1000,
+    )
+    logger.info(
+        f"Created DRAM matmul + SiLU tensors: weights={dram_mm_silu_weights.shape}, output={dram_mm_silu_output.shape}"
+    )
+
     # Run fused operation
     logger.info("Running MoE routed expert fused operation...")
-    ttnn_result_scores, ttnn_result_indices = MoeRoutedExpert.op(
+    ttnn_result_scores, ttnn_result_indices, ttnn_result_dram_mm_silu = MoeRoutedExpert.op(
         ttnn_input,
-        ttnn_weights,
-        ttnn_intermediate,
+        ttnn_mcast_output,
+        ttnn_gate_mm_weights,
+        ttnn_gate_mm_output,
         ttnn_gate_input,
         ttnn_gate_bias,
         ttnn_gate_indices,
         ttnn_gate_output_scores,
         ttnn_gate_output_indices,
-        fp32_dest_acc_en=True,
+        ttnn_dram_mm_silu_index,
+        dram_mm_silu_weights,
+        dram_mm_silu_output,
     )
 
     # Convert back to torch for comparison
     output_scores_torch = ttnn.to_torch(ttnn_result_scores)
     output_indices_torch = ttnn.to_torch(ttnn_result_indices)
+    output_dram_mm_silu_torch = ttnn.to_torch(ttnn_result_dram_mm_silu)
 
-    # Verify output shapes
-    assert output_scores_torch.shape == (1, 16), f"Expected scores shape (1, 16), got {output_scores_torch.shape}"
-    assert output_indices_torch.shape == (1, 16), f"Expected indices shape (1, 16), got {output_indices_torch.shape}"
+    # Compute golden reference (includes gate + expert matmul)
+    torch_expected_scores, torch_expected_indices, torch_expected_expert_out = MoeRoutedExpert.golden(
+        torch_input,
+        torch_gate_mm_weights,
+        torch_bias,
+        expert_weights_dict=expert_weights_dict,
+        eps=gate_eps,
+        scaling_factor=gate_scaling_factor,
+    )
 
-    # Extract top-8 values (first 8 elements are valid)
-    output_scores_top8 = output_scores_torch[0, :8]
+    # ========== Verify Outputs ==========
+    # Verify gate: sort by indices to handle tie-breaking differences
     output_indices_top8 = output_indices_torch[0, :8]
-
-    # Verify results
-    logger.info("Verifying results...")
-
-    # Sort both actual and expected by indices to handle tie-breaking differences
+    output_scores_top8 = output_scores_torch[0, :8]
     sorted_output_indices, sort_idx = torch.sort(output_indices_top8.to(torch.int64), dim=-1)
     sorted_output_scores = torch.gather(output_scores_top8, dim=-1, index=sort_idx)
 
-    # Squeeze batch dimension from golden output and sort
     sorted_expected_indices, sort_idx_expected = torch.sort(torch_expected_indices.squeeze(0).to(torch.int64), dim=-1)
     sorted_expected_scores = torch.gather(torch_expected_scores.squeeze(0).bfloat16(), dim=-1, index=sort_idx_expected)
 
-    logger.info(f"Expected indices (sorted): {sorted_expected_indices.tolist()}")
-    logger.info(f"Actual indices (sorted): {sorted_output_indices.tolist()}")
-    logger.info(f"Expected scores (sorted): {sorted_expected_scores.tolist()}")
-    logger.info(f"Actual scores (sorted): {sorted_output_scores.tolist()}")
+    assert torch.equal(sorted_output_indices, sorted_expected_indices), "Gate indices mismatch"
+    assert torch.allclose(sorted_output_scores, sorted_expected_scores, atol=1e-2, rtol=1e-4), "Gate scores mismatch"
 
-    # Check indices match (after sorting)
-    assert torch.equal(sorted_output_indices, sorted_expected_indices), "Output indices do not match"
+    # Verify expert matmul + SiLU
+    passing, pcc_output = comp_pcc(torch_expected_expert_out, output_dram_mm_silu_torch, 0.98)
+    logger.info(pcc_output)
+    assert passing, f"Expert matmul PCC check failed: {pcc_output}"
 
-    # Check scores match (after sorting)
-    assert torch.allclose(
-        sorted_output_scores, sorted_expected_scores, atol=1e-2, rtol=1e-4
-    ), "Output scores do not match"
-
-    logger.info("MoE routed expert fused operation test passed!")
+    logger.info("MoE routed expert test passed!")
