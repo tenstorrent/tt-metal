@@ -25,6 +25,7 @@ class Program;
 
 namespace experimental::quasar {
 static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;
+static constexpr uint32_t QUASAR_NUM_COMPUTE_CORES_PER_CLUSTER = 4;
 
 struct QuasarDataMovementConfig {
     // Number of data movement cores per cluster to use
@@ -46,6 +47,33 @@ struct QuasarDataMovementConfig {
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
 };
 
+struct QuasarComputeConfig {
+    // Number of compute cores per cluster to use
+    uint32_t num_processors_per_cluster = QUASAR_NUM_COMPUTE_CORES_PER_CLUSTER;
+
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    bool fp32_dest_acc_en = false;
+    bool dst_full_sync_en = false;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode;
+    bool bfp8_pack_precise = false;
+    bool math_approx_mode = false;
+
+    std::vector<uint32_t> compile_args;
+
+    std::map<std::string, std::string> defines;
+
+    // Both compile_args and named_compile_args contain compile time arguments
+    // The former is accessed by index, the latter by name
+    // Can be used in new/existing kernels by explicitly defining them in the config
+    // Ex. std::vector<uint32_t> compile_args = {5, 7};
+    //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
+    //     CreateKernel(program, "kernel.cpp", core, QuasarComputeConfig{.compile_args = compile_args,
+    //     .named_compile_args = named_compile_args})
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
+};
+
 /**
  * @brief Create a data movement kernel and add it to the program.
  *
@@ -61,5 +89,21 @@ KernelHandle CreateKernel(
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const QuasarDataMovementConfig& config);
+
+/**
+ * @brief Create a compute kernel and add it to the program.
+ *
+ * @param program The program to which this kernel will be added to
+ * @param file_name Path to kernel source file
+ * @param core_spec Either a single logical cluster, a range of logical clusters or a set of logical cluster ranges that
+ * indicate which clusters the kernel is placed on
+ * @param config Config for compute kernel
+ * @return Kernel ID
+ */
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const QuasarComputeConfig& config);
 }  // namespace experimental::quasar
 }  // namespace tt::tt_metal
