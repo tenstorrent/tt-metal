@@ -74,9 +74,12 @@ jobs:
         TRACY_NO_INVARIANT_CHECK: 1
         HF_MODEL: ${{ github.event.inputs.hf_model || 'Qwen/Qwen2.5-Coder-7B-Instruct' }}
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
