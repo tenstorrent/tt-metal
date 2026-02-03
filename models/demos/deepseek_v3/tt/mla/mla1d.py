@@ -97,6 +97,7 @@ class MLA1D(AbstractModule):
                     ),
                     mesh_dims,
                     mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
                 ),
             }
             for hf_name, ttnn_name, shape, mesh_dims in [
@@ -131,6 +132,7 @@ class MLA1D(AbstractModule):
                     wq_kv_a_weight,
                     (0, -2),  # Shard along input dim
                     mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
                 ),
             },
         }
@@ -158,12 +160,20 @@ class MLA1D(AbstractModule):
             **fused_weight_configs,
             "wkv_b1": {
                 "input_tensor_b": cls._convert_weight(
-                    output_path / "wkv_b1.input_tensor_b", torch_weights_k, (0, -3), mesh_device
+                    output_path / "wkv_b1.input_tensor_b",
+                    torch_weights_k,
+                    (0, -3),
+                    mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
                 ),
             },
             "wkv_b2": {
                 "input_tensor_b": cls._convert_weight(
-                    output_path / "wkv_b2.input_tensor_b", torch_weights_v, (0, None), mesh_device
+                    output_path / "wkv_b2.input_tensor_b",
+                    torch_weights_v,
+                    (0, None),
+                    mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
                 ),
             },
         }
@@ -175,6 +185,7 @@ class MLA1D(AbstractModule):
         torch_metaweight: torch.Tensor,
         dims: tuple[int | None, int | None],
         mesh_device: ttnn.MeshDevice,
+        memory_config: ttnn.MemoryConfig,
     ) -> SavedWeight:
         return shard_and_save(
             path,
@@ -183,7 +194,7 @@ class MLA1D(AbstractModule):
             mesh_device=mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=memory_config,
         )
 
     @classmethod
