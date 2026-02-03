@@ -2339,6 +2339,28 @@ void py_module(nb::module_& mod) {
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
+    detail::bind_binary_operation_with_fast_approx(
+        mod,
+        ttnn::multiply,
+        R"doc(Multiplies :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i)doc",
+        R"doc(BFLOAT16, FLOAT32, INT32, UINT16, UINT32)doc",
+        R"doc(
+        When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
+        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        )doc");
+    detail::bind_binary_operation_with_fast_approx(
+        mod,
+        ttnn::divide,
+        R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i / \mathrm{{input\_tensor\_b}}_i))doc",
+        R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
+        R"doc(
+        When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero.
+        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handle division by zero.
+        When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.
+        )doc");
+
     detail::bind_binary_operation(
         mod,
         ttnn::xlogy,
@@ -2644,8 +2666,19 @@ void py_module(nb::module_& mod) {
 
     detail::bind_inplace_operation_with_fast_approx(
         mod,
+        ttnn::multiply_,
+        R"doc(Performs in-place multiplication operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
+        R"doc(\verb|multiply|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        R"doc(BFLOAT16, FLOAT32, UINT16)doc",
+        R"doc(
+        When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
+        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.
+        )doc");
+    detail::bind_inplace_operation_with_fast_approx(
+        mod,
         ttnn::divide_,
-        R"doc(Performs division in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
+        R"doc(Performs in-place division operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|divide|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         R"doc(BFLOAT16, FLOAT32, UINT16)doc",
         R"doc(

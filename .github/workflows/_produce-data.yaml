@@ -73,7 +73,7 @@ on:
       - "(Galaxy) demo tests"
       - "(Galaxy) frequent tests"
       - "(Galaxy) model perf tests"
-      - "(Galaxy) nightly tests"
+      - "(Galaxy) e2e tests"
       - "(Galaxy) profiler tests"
       - "(Galaxy) Stress"
       - "(Galaxy) unit tests"
