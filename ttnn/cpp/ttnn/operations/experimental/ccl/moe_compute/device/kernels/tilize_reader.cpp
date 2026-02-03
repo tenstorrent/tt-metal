@@ -310,12 +310,21 @@ void kernel_main() {
     constexpr uint32_t num_tilize_cores = get_named_compile_time_arg_val("num_tilize_cores");
 
     // Multicast coordinates for signalling MM cores
-    constexpr uint32_t matmul_mcast_start_x = get_named_compile_time_arg_val("matmul_mcast_start_x");
-    constexpr uint32_t matmul_mcast_start_y = get_named_compile_time_arg_val("matmul_mcast_start_y");
-    constexpr uint32_t matmul_mcast_end_x = get_named_compile_time_arg_val("matmul_mcast_end_x");
-    constexpr uint32_t matmul_mcast_end_y = get_named_compile_time_arg_val("matmul_mcast_end_y");
     constexpr uint32_t num_matmul_cores = get_named_compile_time_arg_val("num_matmul_cores");
-    constexpr uint32_t num_matmul_bounding_box_cores = get_named_compile_time_arg_val("num_matmul_bounding_box_cores");
+
+    constexpr uint32_t matmul_mcast_box_one_start_x = get_named_compile_time_arg_val("matmul_mcast_box_one_start_x");
+    constexpr uint32_t matmul_mcast_box_one_start_y = get_named_compile_time_arg_val("matmul_mcast_box_one_start_y");
+    constexpr uint32_t matmul_mcast_box_one_end_x = get_named_compile_time_arg_val("matmul_mcast_box_one_end_x");
+    constexpr uint32_t matmul_mcast_box_one_end_y = get_named_compile_time_arg_val("matmul_mcast_box_one_end_y");
+    constexpr uint32_t num_matmul_bounding_box_one_cores =
+        get_named_compile_time_arg_val("num_matmul_bounding_box_one_cores");
+
+    constexpr uint32_t matmul_mcast_box_two_start_x = get_named_compile_time_arg_val("matmul_mcast_box_two_start_x");
+    constexpr uint32_t matmul_mcast_box_two_start_y = get_named_compile_time_arg_val("matmul_mcast_box_two_start_y");
+    constexpr uint32_t matmul_mcast_box_two_end_x = get_named_compile_time_arg_val("matmul_mcast_box_two_end_x");
+    constexpr uint32_t matmul_mcast_box_two_end_y = get_named_compile_time_arg_val("matmul_mcast_box_two_end_y");
+    constexpr uint32_t num_matmul_bounding_box_two_cores =
+        get_named_compile_time_arg_val("num_matmul_bounding_box_two_cores");
 
     // Semaphores
     constexpr uint32_t partial_metadata_ready_semaphore_id =
@@ -783,7 +792,7 @@ void kernel_main() {
         }
 
         /*
-         * Send metadata to MM cores;
+         * Send metadata to MM cores (repeat for both bounding boxes):
          * 1) Send number of tokens to MM
          * 2) Signal via semaphore to MM that metadata has arrived
          */
@@ -791,19 +800,30 @@ void kernel_main() {
         // == 1 ==
 
         // get mcast address
-        uint64_t matmul_per_expert_total_tokens_mcast_addr = get_safe_multicast_noc_addr(
-            matmul_mcast_start_x,
-            matmul_mcast_start_y,
-            matmul_mcast_end_x,
-            matmul_mcast_end_y,
+        uint64_t matmul_per_expert_total_tokens_mcast_box_one_addr = get_safe_multicast_noc_addr(
+            matmul_mcast_box_one_start_x,
+            matmul_mcast_box_one_start_y,
+            matmul_mcast_box_one_end_x,
+            matmul_mcast_box_one_end_y,
+            per_expert_total_tokens_cb_read_ptr);
+        uint64_t matmul_per_expert_total_tokens_mcast_box_two_addr = get_safe_multicast_noc_addr(
+            matmul_mcast_box_two_start_x,
+            matmul_mcast_box_two_start_y,
+            matmul_mcast_box_two_end_x,
+            matmul_mcast_box_two_end_y,
             per_expert_total_tokens_cb_read_ptr);
 
         // multicast data
         noc_async_write_multicast(
             per_expert_total_tokens_cb_read_ptr,
-            matmul_per_expert_total_tokens_mcast_addr,
+            matmul_per_expert_total_tokens_mcast_box_one_addr,
             experts_per_device * sizeof(uint32_t),
-            num_matmul_bounding_box_cores);
+            num_matmul_bounding_box_one_cores);
+        noc_async_write_multicast(
+            per_expert_total_tokens_cb_read_ptr,
+            matmul_per_expert_total_tokens_mcast_box_two_addr,
+            experts_per_device * sizeof(uint32_t),
+            num_matmul_bounding_box_two_cores);
 
         // == 2 ==
 
@@ -811,16 +831,28 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
 
         // get mcast address
-        uint64_t matmul_metadata_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
-            matmul_mcast_start_x,
-            matmul_mcast_start_y,
-            matmul_mcast_end_x,
-            matmul_mcast_end_y,
+        uint64_t matmul_metadata_ready_semaphore_mcast_box_one_addr = get_safe_multicast_noc_addr(
+            matmul_mcast_box_one_start_x,
+            matmul_mcast_box_one_start_y,
+            matmul_mcast_box_one_end_x,
+            matmul_mcast_box_one_end_y,
+            metadata_ready_semaphore_addr);
+        uint64_t matmul_metadata_ready_semaphore_mcast_box_two_addr = get_safe_multicast_noc_addr(
+            matmul_mcast_box_two_start_x,
+            matmul_mcast_box_two_start_y,
+            matmul_mcast_box_two_end_x,
+            matmul_mcast_box_two_end_y,
             metadata_ready_semaphore_addr);
 
         // multicast semaphore
         noc_semaphore_set_multicast(
-            metadata_ready_semaphore_addr, matmul_metadata_ready_semaphore_mcast_addr, num_matmul_bounding_box_cores);
+            metadata_ready_semaphore_addr,
+            matmul_metadata_ready_semaphore_mcast_box_one_addr,
+            num_matmul_bounding_box_one_cores);
+        noc_semaphore_set_multicast(
+            metadata_ready_semaphore_addr,
+            matmul_metadata_ready_semaphore_mcast_box_two_addr,
+            num_matmul_bounding_box_two_cores);
 
     }  // End of is_drain_tilize_core block
     else {

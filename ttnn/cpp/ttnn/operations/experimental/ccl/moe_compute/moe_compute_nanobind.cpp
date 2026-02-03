@@ -63,15 +63,6 @@ void bind_moe_compute(nb::module_& mod) {
         ttnn::experimental::moe_compute,
         R"doc(
         Experimental, high-performance MoE operation for DeepSeek.
-
-        // TODO: (GR)
-        Args:
-            input_tensor: Input tensor (sharded)
-            w0_w1_tensor: Interleaved tensors for first and second matmul
-            w2_tensor: Weight tensor for third matmul
-            output_tensor: Output tensor (sharded)
-            num_experts: Number of experts per layer
-            layer_id: The layer for which the MoE operation is being performed
         )doc");
 }
 

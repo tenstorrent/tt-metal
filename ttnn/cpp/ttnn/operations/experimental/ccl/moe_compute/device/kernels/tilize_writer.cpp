@@ -90,8 +90,6 @@ void kernel_main() {
     constexpr uint32_t brisc_expert_counts_cb_id = get_named_compile_time_arg_val("brisc_expert_counts_cb_id");
     constexpr uint32_t brisc_expert_activation_cb_id = get_named_compile_time_arg_val("brisc_expert_activation_cb_id");
     constexpr uint32_t brisc_activated_count_cb_id = get_named_compile_time_arg_val("brisc_activated_count_cb_id");
-    constexpr uint32_t cb_s2c_in_id = get_named_compile_time_arg_val("cb_s2c_in_id");
-    // constexpr uint32_t cb_s2c_in_address = get_named_compile_time_arg_val("cb_s2c_in_address");
 
     // Alignment
     constexpr uint32_t l1_alignment = get_named_compile_time_arg_val("l1_alignment");
@@ -133,12 +131,21 @@ void kernel_main() {
     constexpr uint32_t num_tilize_cores = get_named_compile_time_arg_val("num_tilize_cores");
 
     // Multicast coordinates for signalling MM cores
-    constexpr uint32_t matmul_mcast_start_x = get_named_compile_time_arg_val("matmul_mcast_start_x");
-    constexpr uint32_t matmul_mcast_start_y = get_named_compile_time_arg_val("matmul_mcast_start_y");
-    constexpr uint32_t matmul_mcast_end_x = get_named_compile_time_arg_val("matmul_mcast_end_x");
-    constexpr uint32_t matmul_mcast_end_y = get_named_compile_time_arg_val("matmul_mcast_end_y");
     constexpr uint32_t num_matmul_cores = get_named_compile_time_arg_val("num_matmul_cores");
-    constexpr uint32_t num_matmul_bounding_box_cores = get_named_compile_time_arg_val("num_matmul_bounding_box_cores");
+
+    constexpr uint32_t matmul_mcast_box_one_start_x = get_named_compile_time_arg_val("matmul_mcast_box_one_start_x");
+    constexpr uint32_t matmul_mcast_box_one_start_y = get_named_compile_time_arg_val("matmul_mcast_box_one_start_y");
+    constexpr uint32_t matmul_mcast_box_one_end_x = get_named_compile_time_arg_val("matmul_mcast_box_one_end_x");
+    constexpr uint32_t matmul_mcast_box_one_end_y = get_named_compile_time_arg_val("matmul_mcast_box_one_end_y");
+    constexpr uint32_t num_matmul_bounding_box_one_cores =
+        get_named_compile_time_arg_val("num_matmul_bounding_box_one_cores");
+
+    constexpr uint32_t matmul_mcast_box_two_start_x = get_named_compile_time_arg_val("matmul_mcast_box_two_start_x");
+    constexpr uint32_t matmul_mcast_box_two_start_y = get_named_compile_time_arg_val("matmul_mcast_box_two_start_y");
+    constexpr uint32_t matmul_mcast_box_two_end_x = get_named_compile_time_arg_val("matmul_mcast_box_two_end_x");
+    constexpr uint32_t matmul_mcast_box_two_end_y = get_named_compile_time_arg_val("matmul_mcast_box_two_end_y");
+    constexpr uint32_t num_matmul_bounding_box_two_cores =
+        get_named_compile_time_arg_val("num_matmul_bounding_box_two_cores");
 
     // Semaphores
     constexpr uint32_t matmul_chunk_available_semaphore_id =
@@ -363,7 +370,11 @@ void kernel_main() {
 
     /* Synchronization info for signalling between tilize and matmul cores */
 
+    // Base address on the matmul cores we send chunks to
+    uint32_t matmul_chunk_input_cb_base_addr = get_read_ptr(tilize_output_cb_id);
+
     // Semaphore we wait on to indicate we cand send another chunk
+    // Matmul sends to T drain sync, which propagates it to the T non-drain-sync cores
     uint32_t matmul_chunk_available_semaphore_wait_value = num_matmul_cores;
     uint64_t matmul_chunk_available_semaphore_mcast_addr = get_safe_multicast_noc_addr(
         tilize_mcast_start_x,
@@ -372,17 +383,19 @@ void kernel_main() {
         tilize_mcast_end_y,
         matmul_chunk_available_semaphore_addr);
 
-    // Base address on the matmul cores we send chunks to
-    uint32_t matmul_chunk_input_cb_addr = get_read_ptr(cb_s2c_in_id);
-    // constexpr uint32_t matmul_chunk_input_cb_addr = cb_s2c_in_address;
-
     // Semaphore we use to signal to matmul cores that a chunk has arrived
     uint32_t matmul_chunk_ready_semaphore_set_value = 1;
-    uint64_t matmul_chunk_ready_semaphore_mcast_addr = get_safe_multicast_noc_addr(
-        matmul_mcast_start_x,
-        matmul_mcast_start_y,
-        matmul_mcast_end_x,
-        matmul_mcast_end_y,
+    uint64_t matmul_chunk_ready_semaphore_mcast_box_one_addr = get_safe_multicast_noc_addr(
+        matmul_mcast_box_one_start_x,
+        matmul_mcast_box_one_start_y,
+        matmul_mcast_box_one_end_x,
+        matmul_mcast_box_one_end_y,
+        matmul_chunk_ready_semaphore_addr);
+    uint64_t matmul_chunk_ready_semaphore_mcast_box_two_addr = get_safe_multicast_noc_addr(
+        matmul_mcast_box_two_start_x,
+        matmul_mcast_box_two_start_y,
+        matmul_mcast_box_two_end_x,
+        matmul_mcast_box_two_end_y,
         matmul_chunk_ready_semaphore_addr);
 
     // Process each expert's chunks
@@ -407,13 +420,19 @@ void kernel_main() {
         // TODO: (GR) this may change based on how/where matmul accepts the chunks
         // Address we send the current chunk to, each expert has one chunk reserved
         uint32_t matmul_chunk_input_l1_addr =
-            matmul_chunk_input_cb_addr + (e * tiles_per_row + width_tile_start) * tilize_output_page_size;
-        // uint64_t matmul_chunk_input_mcast_addr = get_safe_multicast_noc_addr(
-        //     matmul_mcast_start_x,
-        //     matmul_mcast_start_y,
-        //     matmul_mcast_end_x,
-        //     matmul_mcast_end_y,
-        //     matmul_chunk_input_l1_addr);
+            matmul_chunk_input_cb_base_addr + (e * tiles_per_row + width_tile_start) * tilize_output_page_size;
+        uint64_t matmul_chunk_input_mcast_box_one_addr = get_safe_multicast_noc_addr(
+            matmul_mcast_box_one_start_x,
+            matmul_mcast_box_one_start_y,
+            matmul_mcast_box_one_end_x,
+            matmul_mcast_box_one_end_y,
+            matmul_chunk_input_l1_addr);
+        uint64_t matmul_chunk_input_mcast_box_two_addr = get_safe_multicast_noc_addr(
+            matmul_mcast_box_two_start_x,
+            matmul_mcast_box_two_start_y,
+            matmul_mcast_box_two_end_x,
+            matmul_mcast_box_two_end_y,
+            matmul_chunk_input_l1_addr);
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; chunk++) {
             // Wait for compute to push tiles_per_chunk tiles
@@ -449,11 +468,17 @@ void kernel_main() {
             }
 
             // == 2 ==
-            // noc_async_write_multicast(
-            //     l1_read_addr,
-            //     matmul_chunk_input_mcast_addr,
-            //     tiles_per_chunk * tilize_output_page_size,
-            //     num_matmul_bounding_box_cores);
+            noc_async_write_multicast(
+                l1_read_addr,
+                matmul_chunk_input_mcast_box_one_addr,
+                tiles_per_chunk * tilize_output_page_size,
+                num_matmul_bounding_box_one_cores);
+            noc_async_write_multicast(
+                l1_read_addr,
+                matmul_chunk_input_mcast_box_two_addr,
+                tiles_per_chunk * tilize_output_page_size,
+                num_matmul_bounding_box_two_cores);
+
             noc_async_write_barrier();
 
             if (is_drain_tilize_core) {
@@ -466,7 +491,6 @@ void kernel_main() {
                 }
 
                 // == 5 ==
-                // set local value
                 noc_semaphore_set(
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                     matmul_chunk_ready_semaphore_set_value);
@@ -474,8 +498,12 @@ void kernel_main() {
 
                 noc_semaphore_set_multicast(
                     matmul_chunk_ready_semaphore_addr,
-                    matmul_chunk_ready_semaphore_mcast_addr,
-                    num_matmul_bounding_box_cores);
+                    matmul_chunk_ready_semaphore_mcast_box_one_addr,
+                    num_matmul_bounding_box_one_cores);
+                noc_semaphore_set_multicast(
+                    matmul_chunk_ready_semaphore_addr,
+                    matmul_chunk_ready_semaphore_mcast_box_two_addr,
+                    num_matmul_bounding_box_one_cores);
             } else {
                 // == 3 ==
                 // signal drain-sync core that we've sent our chunk

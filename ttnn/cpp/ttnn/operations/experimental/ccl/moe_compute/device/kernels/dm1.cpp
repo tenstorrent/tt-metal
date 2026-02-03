@@ -108,6 +108,10 @@ void kernel_main() {
     // Set state for the writes
     noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
+    //-------------------------------------------------------------------------
+    // Init synchronization with tilize cores
+    //-------------------------------------------------------------------------
+
     // Receive number of tokens per expert from the tilize cores
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
