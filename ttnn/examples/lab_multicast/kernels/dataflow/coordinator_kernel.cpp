@@ -18,20 +18,25 @@ void kernel_main() {
     uint32_t end_y = get_arg_val<uint32_t>(3);
     uint32_t sender_addr = get_semaphore(get_arg_val<uint32_t>(4));
     uint32_t receiver_addr = get_semaphore(get_arg_val<uint32_t>(5));
-    uint32_t dram_bank_id = get_arg_val<uint32_t>(6);
-    uint32_t src0_dram = get_arg_val<uint32_t>(7);
-    uint32_t single_tile_size = get_arg_val<uint32_t>(8);
-    uint32_t num_dests = get_arg_val<uint32_t>(9);
+    uint32_t src0_base_addr = get_arg_val<uint32_t>(6);
+    uint32_t single_tile_size = get_arg_val<uint32_t>(7);
+    uint32_t num_dests = get_arg_val<uint32_t>(8);
 
     ////////// BUFFER SETUP //////////
-    uint64_t src0_dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, src0_dram);
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;   // index=0
-    constexpr uint32_t cb_id_out0 = tt::CB::c_out0; // index=16
-    uint32_t ublock_size_bytes = get_tile_size(cb_id_in0);
+    // Use TensorAccessorArgs to handle DRAM addressing without needing to know bank IDs.
+    // The layout parameters are passed as compile-time arguments.
+    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;  // index=0
+    constexpr uint32_t tile_size_bytes = get_tile_size(cb_id_in0);
     uint32_t tile_l1_addr = get_write_ptr(cb_id_in0);
 
+    // Create address generator for the input buffer using TensorAccessorArgs.
+    // TensorAccessorArgs extracts data distribution details from compile-time arguments.
+    constexpr auto src0_layout_args = TensorAccessorArgs<0>();
+    const auto src0_addr_gen = TensorAccessor(src0_layout_args, src0_base_addr, tile_size_bytes);
+
     ////////// READ TILE DRAM->L1 //////////
-    noc_async_read(src0_dram_noc_addr, tile_l1_addr, ublock_size_bytes);
+    // Read tile index 0 (the only tile in the input tensor) using the address generator.
+    noc_async_read_tile(0, src0_addr_gen, tile_l1_addr);
     noc_async_read_barrier();
 
     ////////// PRINT TILE SLICE //////////
