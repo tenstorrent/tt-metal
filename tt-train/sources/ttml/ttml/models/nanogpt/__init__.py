@@ -221,6 +221,8 @@ def create_nanogpt(config: NanoGPTConfig) -> NanoGPT:
 
 __all__ = [
     "Embedding",
+    "PositionalEmbedding",
+    "TrainablePositionalEmbedding",
     "GPTBlock",
     "NanoGPT",
     "NanoGPTExperimentalConfig",
