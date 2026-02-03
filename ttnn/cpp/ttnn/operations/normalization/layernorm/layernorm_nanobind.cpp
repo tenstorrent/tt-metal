@@ -20,6 +20,7 @@
 #include "device/layernorm_device_operation.hpp"
 #include "device/layernorm_device_operation_types.hpp"
 #include "device/layernorm_types.hpp"
+#include "device/layernorm_common.hpp"
 
 // NOLINTBEGIN(bugprone-unused-raii)
 

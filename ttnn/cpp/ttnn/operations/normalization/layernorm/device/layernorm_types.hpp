@@ -34,9 +34,4 @@ struct LayerNormShardedMultiCoreProgramConfig {
 
 using LayerNormProgramConfig = std::variant<LayerNormDefaultProgramConfig, LayerNormShardedMultiCoreProgramConfig>;
 
-// Creates a program config from shard spec.
-// - If shard_spec has value, creates a sharded config derived from it
-// - Otherwise, returns a default interleaved config
-LayerNormProgramConfig create_layernorm_program_config(const std::optional<tt::tt_metal::ShardSpec>& shard_spec);
-
 }  // namespace ttnn::prim
