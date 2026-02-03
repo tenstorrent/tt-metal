@@ -23,23 +23,21 @@ protected:
 };
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
-    // Use 2x2 T3K multiprocess MGD (has 2 meshes: mesh_id 0 and 1)
-    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
-    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    // Use 2x2 T3K multiprocess MGD (has 2 compute meshes: mesh_id 0 and 1)
     const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt_metal_home) /
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
 
     // Create mesh graph from descriptor
     auto mesh_graph = MeshGraph(mesh_graph_desc_path.string());
 
-    // Build adjacency map logical
+    // Build adjacency map logical (includes all meshes, including switches if present)
     auto adjacency_map = build_adjacency_graph_logical(mesh_graph);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_GT(adjacency_map.size(), 0u);
 
-    // Verify each mesh has a valid adjacency graph
+    // Verify each mesh has a valid adjacency graph (including switches)
     for (const auto& [mesh_id, adj_graph] : adjacency_map) {
         const auto& nodes = adj_graph.get_nodes();
         EXPECT_GT(nodes.size(), 0u) << "Mesh " << mesh_id.get() << " should have nodes";
@@ -56,8 +54,58 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
         }
     }
 
-    // For T3K 2x2 multiprocess, we expect 2 meshes
-    EXPECT_EQ(adjacency_map.size(), 2u);
+    // For T3K 2x2 multiprocess, we expect 2 meshes (mesh_id 0 and 1)
+    // Note: This includes all meshes returned by get_all_mesh_ids() (compute meshes and switches if present)
+    EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes (mesh_id 0 and 1)";
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalWithSwitch) {
+    // Use T3K 2x2 MGD with TT-Switch (has 1 compute mesh: mesh_id 0, and 1 switch: mesh_id 1)
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_ttswitch_mgd.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph = MeshGraph(mesh_graph_desc_path.string());
+
+    // Build adjacency map logical (includes all meshes, including switches)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph);
+
+    // Verify that we have adjacency graphs for each mesh
+    EXPECT_GT(adjacency_map.size(), 0u);
+
+    // Count compute meshes and switches separately
+    size_t compute_mesh_count = 0;
+    size_t switch_mesh_count = 0;
+
+    // Verify each mesh has a valid adjacency graph (including switches)
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        const auto& nodes = adj_graph.get_nodes();
+        EXPECT_GT(nodes.size(), 0u) << "Mesh " << mesh_id.get() << " should have nodes";
+
+        // Verify that nodes belong to the correct mesh
+        for (const auto& node : nodes) {
+            EXPECT_EQ(node.mesh_id, mesh_id) << "Node should belong to mesh " << mesh_id.get();
+
+            // Verify we can query neighbors
+            const auto& neighbors = adj_graph.get_neighbors(node);
+            for (const auto& neighbor : neighbors) {
+                EXPECT_EQ(neighbor.mesh_id, mesh_id) << "Neighbor should belong to the same mesh " << mesh_id.get();
+            }
+        }
+
+        // Count compute meshes and switches
+        if (mesh_graph.is_switch_mesh(mesh_id)) {
+            switch_mesh_count++;
+        } else {
+            compute_mesh_count++;
+        }
+    }
+
+    // For T3K 2x2 with TT-Switch, we expect 1 compute mesh and 1 switch mesh (total 2 meshes)
+    EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes total (1 compute + 1 switch)";
+    EXPECT_EQ(compute_mesh_count, 1u) << "Should have 1 compute mesh (mesh_id 0)";
+    EXPECT_EQ(switch_mesh_count, 1u) << "Should have 1 switch mesh (mesh_id 1)";
 }
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
