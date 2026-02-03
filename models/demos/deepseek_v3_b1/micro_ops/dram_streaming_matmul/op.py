@@ -110,6 +110,7 @@ class DRAMStreamingMatmul:
         math_approx_mode: bool = False,
         subblock_k: int = None,  # K subblock size in tiles, None means full K
         fused_activation: str = None,  # "silu" to fuse SiLU activation
+        index_tensor: ttnn.Tensor = None,  # Expert index tensor for indexed access
     ) -> ttnn.Tensor:
         """
         Execute simplified DRAM streaming matmul.
@@ -120,7 +121,14 @@ class DRAMStreamingMatmul:
           (K tiles contiguous per N column in physical memory)
         - CBs are backed directly by tensors (no L1-to-L1 copies)
         - Simple loop: for each N output tile, accumulate across K
+
+        Expert indexing (optional):
+        - index_tensor: HEIGHT_SHARDED tensor with expert indices [1, 16] per core
+          The first element is the expert index to use
+        - When enabled, reads K tiles from in1 starting at expert_idx * K_tiles offset
+          (K_tiles derived from input_a shard shape, no separate expert_k parameter needed)
         """
+        enable_indexing = index_tensor is not None
         device = input_a.device()
 
         # Get tiles
@@ -137,6 +145,7 @@ class DRAMStreamingMatmul:
         K = in0_shard_shape[1]
 
         # in1 is WIDTH_SHARDED on [K, N], shard shape is [K, per_core_N]
+        # When indexing is enabled, in1 has [K * num_experts, N] stacked experts
         in1_shard_shape = input_b.memory_config().shard_spec.shape
         K_from_in1 = in1_shard_shape[0]
 
@@ -147,6 +156,8 @@ class DRAMStreamingMatmul:
 
         # Validate
         assert Mt == 1, f"Mt must be 1 for simplified matmul, got {Mt}"
+        # With indexing, in1 is the first expert tensor (K rows); other experts are contiguous in DRAM
+        # Kernel uses expert_idx * expert_size offset to access different experts
         assert K == K_from_in1, f"K dimension mismatch: {K} vs {K_from_in1}"
 
         # Determine subblock_k (K subblock size in tiles)
@@ -249,6 +260,12 @@ class DRAMStreamingMatmul:
         cb4_descriptor = ttnn.cb_descriptor_from_sharded_tensor(4, output_tensor)
         cb_descriptors.append(cb4_descriptor)
 
+        # CB 5: index tensor (optional, for expert indexing)
+        cb_id_index = 5
+        if enable_indexing:
+            cb5_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_id_index, index_tensor)
+            cb_descriptors.append(cb5_descriptor)
+
         # ========== KERNEL ARGS ==========
 
         # CB IDs
@@ -287,6 +304,9 @@ class DRAMStreamingMatmul:
         ncrisc_named_compile_time_args = [
             ("dram_mm_cb_in0", cb_id_in0),
             ("dram_mm_num_tiles_k", Kt),
+            # Expert indexing parameters
+            ("dram_mm_enable_indexing", 1 if enable_indexing else 0),
+            ("dram_mm_cb_index", cb_id_index if enable_indexing else 0),
         ]
 
         # Named compile-time args for BRISC (in1 reader / DRAM streaming)
@@ -302,6 +322,10 @@ class DRAMStreamingMatmul:
             ("dram_mm_in1_block_size_bytes", in1_block_size_bytes),
             ("dram_mm_out_num_tiles", out_num_tiles),
             ("dram_mm_num_subblocks_k", num_subblocks_k),
+            # Expert indexing parameters
+            ("dram_mm_enable_indexing", 1 if enable_indexing else 0),
+            ("dram_mm_cb_index", cb_id_index if enable_indexing else 0),
+            ("dram_mm_index_offset", 0),  # TODO: make configurable, offset into index tensor
         ]
 
         # Named compile-time args for TRISC (compute)
@@ -362,6 +386,9 @@ class DRAMStreamingMatmul:
 
         # Execute
         io_tensors = [input_a, input_b, output_tensor]
-        output = ttnn.generic_op(io_tensors, program_descriptor)
+        if enable_indexing:
+            io_tensors.append(index_tensor)
+        ttnn.generic_op(io_tensors, program_descriptor)
 
-        return output
+        # Output is written in-place to output_tensor
+        return output_tensor
