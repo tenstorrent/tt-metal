@@ -316,4 +316,29 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
     barrier();
 }
 
+TEST(DistributedBarrierDebug, WorldBarrierDebug) {
+    using tt::tt_metal::distributed::multihost::DistributedContext;
+
+    const auto& distributed_context = DistributedContext::get_current_world();
+    auto rank = *distributed_context->rank();
+    auto size = *distributed_context->size();
+
+    // Log before barrier so we can see if all ranks reach this point.
+    log_critical(
+        tt::LogDistributed,
+        "WorldBarrierDebug: BEFORE barrier rank={}/{} (expect all {} ranks to reach here)",
+        rank,
+        size,
+        size);
+
+    distributed_context->barrier();
+
+    // If we see this log from all ranks, the MPI barrier itself is healthy
+    // under the current tt-run + rankfile + mpi-args configuration.
+    log_critical(
+        tt::LogDistributed, "WorldBarrierDebug: AFTER barrier rank={}/{} (all ranks passed barrier)", rank, size);
+
+    SUCCEED();
+}
+
 }  // namespace tt::tt_metal
