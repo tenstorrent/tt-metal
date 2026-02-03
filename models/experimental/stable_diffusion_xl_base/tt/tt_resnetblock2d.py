@@ -200,6 +200,7 @@ class TtResnetBlock2D(LightweightModule):
             program_config=self.linear_program_config,
             compute_kernel_config=self.default_compute_config,
         )
+
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         # Note: moving this add to NG has perf impact, to be investigated
         hidden_states = ttnn.add_(hidden_states, temb, use_legacy=True)

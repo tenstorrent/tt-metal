@@ -20,9 +20,6 @@ class TtFeedForward(LightweightModule):
         super().__init__()
 
         self.device = device
-
-        self.module_path = module_path
-
         self.tt_geglu = TtGEGLU(device, state_dict, f"{module_path}.net.0", model_config)
 
         weights = state_dict[f"{module_path}.net.2.weight"].unsqueeze(0).unsqueeze(0)
@@ -46,4 +43,5 @@ class TtFeedForward(LightweightModule):
             memory_config=self.ff2_memory_config,
             compute_kernel_config=self.default_compute_kernel_config,
         )
+
         return hidden_states

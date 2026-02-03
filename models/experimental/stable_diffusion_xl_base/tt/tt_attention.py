@@ -25,8 +25,6 @@ class TtAttention(LightweightModule):
         super().__init__()
         self.device = device
 
-        self.module_path = module_path
-
         self.inner_dim = out_dim if out_dim is not None else dim_head * heads
         self.inner_kv_dim = self.inner_dim if kv_heads is None else dim_head * kv_heads
         self.query_dim = query_dim
@@ -106,6 +104,7 @@ class TtAttention(LightweightModule):
                 compute_kernel_config=self.q_compute_kernel_config,
                 program_config=self.q_program_config,
             )
+
             (
                 q_heads,
                 k_heads,
@@ -136,6 +135,7 @@ class TtAttention(LightweightModule):
                 compute_kernel_config=self.default_compute_kernel_config,
                 program_config=self.v_program_config,
             )
+
             q_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
                 q_heads,
                 num_heads=self.heads,
@@ -159,6 +159,7 @@ class TtAttention(LightweightModule):
                 transpose_k_heads=False,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
+
         hidden_states = ttnn.transformer.scaled_dot_product_attention(
             q_heads,
             k_heads,
@@ -170,6 +171,7 @@ class TtAttention(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_out_weights,
@@ -178,4 +180,5 @@ class TtAttention(LightweightModule):
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=self.out_memory_config,
         )
+
         return hidden_states

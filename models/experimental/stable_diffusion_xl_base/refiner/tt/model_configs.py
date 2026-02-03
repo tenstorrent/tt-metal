@@ -526,17 +526,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                     transpose_mcast=False,
                     fused_activation=None,
                 ),
-                "1D_ATTN_QKV_LINEAR_1536": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
-                    in0_block_w=6,
-                    per_core_M=8,
-                    per_core_N=4,
-                    out_subblock_h=1,
-                    out_subblock_w=4,
-                    mcast_in0=True,
-                    fuse_batch=False,
-                    fused_activation=None,
-                ),
                 # # # ATTENTION OUT # # #
                 "2D_ATTN_OUT_LINEAR_768": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
@@ -746,8 +735,8 @@ class RefinerModelOptimisations(ModelOptimisations):
             packer_l1_acc=True,
         )
 
-        self.refiner_layernorm_configs = {}
-        self.refiner_layernorm_configs["1536_mid_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        self.layernorm_configs = {}
+        self.layernorm_configs["1536_mid_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
             subblock_w=5,
             block_h=1,
@@ -756,7 +745,7 @@ class RefinerModelOptimisations(ModelOptimisations):
             legacy_reduction=True,
             legacy_rsqrt=True,
         )
-        self.refiner_layernorm_configs["1536_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        self.layernorm_configs["1536_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
             subblock_w=5,
             block_h=4,
@@ -765,7 +754,7 @@ class RefinerModelOptimisations(ModelOptimisations):
             legacy_reduction=True,
             legacy_rsqrt=True,
         )
-        self.refiner_layernorm_configs["768_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        self.layernorm_configs["768_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
             subblock_w=5,
             block_h=16,
@@ -928,7 +917,6 @@ class RefinerModelOptimisations(ModelOptimisations):
                 return ttnn.L1_MEMORY_CONFIG
             else:
                 return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
-        # GEGLU linear 2 (proj.split.gelu) uses DRAM to avoid L1 OOM; checked before broad ff.net
         if "proj.split.gelu" in module_path:
             return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
         if "proj.split" in module_path:
@@ -1029,11 +1017,11 @@ class RefinerModelOptimisations(ModelOptimisations):
 
     def get_layernorm_config(self, module_path):
         if "mid_block" in module_path:
-            return self.refiner_layernorm_configs["1536_mid_config"]
+            return self.layernorm_configs["1536_mid_config"]
         elif "down_blocks.2" in module_path or "up_blocks.1" in module_path:
-            return self.refiner_layernorm_configs["1536_config"]
+            return self.layernorm_configs["1536_config"]
         elif "down_blocks.1" in module_path or "up_blocks.2" in module_path:
-            return self.refiner_layernorm_configs["768_config"]
+            return self.layernorm_configs["768_config"]
         return ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)
 
     def get_sdpa_config(self, module_path, is_self_attention):

@@ -18,8 +18,6 @@ class TtTransformer2DModel(LightweightModule):
 
         self.device = device
 
-        self.module_path = module_path
-
         self.norm_groups = 32
         self.norm_eps = 1e-6
 
@@ -89,7 +87,6 @@ class TtTransformer2DModel(LightweightModule):
             )
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -104,8 +101,9 @@ class TtTransformer2DModel(LightweightModule):
 
         # C=1280 appears only in base, C=1536/768 appear only in refiner
         if C == 1280 or C == 1536 or C == 768:
+            # For 1280 channels shard layout will be over 64 cores, but MM runs on 40
+            # To avoid assertion error we move data to L1 interleaved
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_in,
@@ -114,8 +112,10 @@ class TtTransformer2DModel(LightweightModule):
             compute_kernel_config=self.compute_config_in,
             memory_config=self.memory_config_in,
         )
+
         for i, transformer_block in enumerate(self.transformer_blocks):
             hidden_states = transformer_block(hidden_states, attention_mask, encoder_hidden_states)
+
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_out,
@@ -124,6 +124,7 @@ class TtTransformer2DModel(LightweightModule):
             compute_kernel_config=self.compute_config_out,
             memory_config=self.memory_config_out,
         )
+
         hidden_states = ttnn.add(hidden_states, input_tensor, use_legacy=False)
 
         return hidden_states
