@@ -108,7 +108,7 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     CoreCoord core;
 };
 
-void write_to_device_buffer(
+bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
     uint32_t cq_id,

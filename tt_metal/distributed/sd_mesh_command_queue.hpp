@@ -10,7 +10,7 @@ namespace tt::tt_metal::distributed {
 
 class SDMeshCommandQueue final : public MeshCommandQueueBase {
 protected:
-    void write_shard_to_device(
+    bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
         const void* src,

@@ -868,7 +868,7 @@ void write_sharded_buffer_to_core(
 }
 
 // Main API to write buffer data
-void write_to_device_buffer(
+bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
     uint32_t cq_id,
@@ -880,7 +880,7 @@ void write_to_device_buffer(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
-        return;
+        return false;
     }
 
     const BufferDispatchConstants buf_dispatch_constants =
@@ -984,7 +984,9 @@ void write_to_device_buffer(
 
         write_interleaved_buffer_to_device(
             src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
+        return use_pinned_transfer;
     }
+    return use_pinned_transfer;
 }
 
 // ====== Utility Functions for Reads ======
