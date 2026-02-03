@@ -2,17 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from enum import Enum
 from io import BytesIO
 from pathlib import Path
-from typing import Optional
+from typing import List, Literal, Optional, Union
 
-import llama_models.llama3.reference_impl.generation as llama_reference_generation
 import requests
-from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
 from loguru import logger
 from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
+from pydantic import BaseModel
 
+# from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
+from models.tt_transformers.tt.common import ImageMedia
 from models.tt_transformers.tt.generator import create_submeshes
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
@@ -32,11 +34,58 @@ from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
+class Role(Enum):
+    system = "system"
+    user = "user"
+    assistant = "assistant"
+    ipython = "ipython"
+
+
+InterleavedTextMedia = Union[
+    str,
+    # Specific modalities can be placed here, but not generic attachments
+    # since models don't consume them in a generic way
+    ImageMedia,
+    List[Union[str, ImageMedia]],
+]
+
+
+class UserMessage(BaseModel):
+    role: Literal[Role.user.value] = Role.user.value
+    content: InterleavedTextMedia
+    context: Optional[InterleavedTextMedia] = None
+
+
+def sample_top_p(probs, p):
+    """
+    Perform top-p (nucleus) sampling on a probability distribution.
+
+    Args:
+        probs (torch.Tensor): Probability distribution tensor.
+        p (float): Probability threshold for top-p sampling.
+
+    Returns:
+        torch.Tensor: Sampled token indices.
+
+    Note:
+        Top-p sampling selects the smallest set of tokens whose cumulative probability mass
+        exceeds the threshold p. The distribution is renormalized based on the selected tokens.
+    """
+    probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
+    probs_sum = torch.cumsum(probs_sort, dim=-1)
+    mask = probs_sum - probs_sort > p
+    probs_sort[mask] = 0.0
+    probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
+    next_token = torch.multinomial(probs_sort, num_samples=1)
+    next_token = torch.gather(probs_idx, -1, next_token)
+    return next_token
+
+
 def get_batch_sampler(temperature, top_p, tokenizer):
     def sample(logits):
         if temperature > 0:
             probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
-            next_token = llama_reference_generation.sample_top_p(probs, top_p)
+            next_token = sample_top_p(probs, top_p)
         else:
             next_token = torch.argmax(logits[:, -1], dim=-1)
 

@@ -7,14 +7,28 @@ import os
 import re
 from enum import Enum
 from types import SimpleNamespace
-from typing import Optional
+from typing import Optional, Union
 
 import torch
-from llama_models.llama3.api.datatypes import ImageMedia
 from loguru import logger
+from PIL import Image as PIL_Image
 from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
+
+
+class URL(BaseModel):
+    uri: str
+
+    def __str__(self) -> str:
+        return self.uri
+
+
+class ImageMedia(BaseModel):
+    image: Union[PIL_Image.Image, URL]
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 class HostEmbedding(torch.nn.Module):
