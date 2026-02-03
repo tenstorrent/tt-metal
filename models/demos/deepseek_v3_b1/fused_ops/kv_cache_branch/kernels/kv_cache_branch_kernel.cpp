@@ -232,17 +232,20 @@ void kernel_main() {
     // BRISC handles writing from output CBs to DRAM
     // ========================================================================
 #if defined(COMPILE_FOR_BRISC)
+    // Unit testing the KV Cache write to DRAM.
+    // Support 8 shards, one per DRAM core, each shard is 576x2 bytes (BFLOAT16)
+    // KNOPE writes to first 512x2 bytes, each KROPE core writes to the remaining 64x2 bytes.
     DeviceZoneScopedN("KV_CACHE_UPDATE");
     // Get runtime args: buffer address and starting tile ID
     uint32_t kv_cache_buffer_addr = get_common_arg_val<uint32_t>(0);
     uint32_t kv_cache_start_tile_id = get_common_arg_val<uint32_t>(1);
 
-    // Create address generator for
-    const InterleavedAddrGenFast<true> kv_cache_addr_gen = {
-        .bank_base_address = kv_cache_buffer_addr,
-        .page_size = 576 * 2,
-        .data_format = DataFormat::Float16_b,
-    };
+    // Create TensorAccessor for DRAM interleaved tensor
+    auto kv_cache_addr_gen = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+        kv_cache_buffer_addr,
+        576 * 2  // page_size
+    );
     // Actual calculations will differ in deepseek fused kernel, depending on the sharding scheme
     // Write RMSNorm output (nope portion) to KV cache
     if constexpr (Core::is_kv_rmsnorm_core) {
@@ -257,7 +260,7 @@ void kernel_main() {
 
         for (uint32_t tile_idx = 0; tile_idx < kv_rmsnorm_num_tiles; tile_idx++) {
             uint32_t tile_id = kv_cache_start_tile_id + tile_idx;
-            noc_async_write_page(tile_id, kv_cache_addr_gen, l1_read_addr, /*size=*/tile_size, /*offset=*/0);
+            noc_async_write_page(tile_id, kv_cache_addr_gen, l1_read_addr, tile_size, 0);
             l1_read_addr += tile_size;
         }
         noc_async_write_barrier();
@@ -280,11 +283,7 @@ void kernel_main() {
             // Rope tiles come after nope tiles
             uint32_t tile_id = kv_cache_start_tile_id + tile_idx;
             noc_async_write_page(
-                tile_id,
-                kv_cache_addr_gen,
-                l1_read_addr,
-                /*size=*/tile_size,
-                /*offset=*/512 * 2 + tile_size * rope_offset);
+                tile_id, kv_cache_addr_gen, l1_read_addr, tile_size, 512 * 2 + tile_size * rope_offset);
             l1_read_addr += tile_size;
         }
         noc_async_write_barrier();
