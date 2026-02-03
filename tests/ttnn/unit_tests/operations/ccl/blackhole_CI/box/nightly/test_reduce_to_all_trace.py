@@ -12,7 +12,7 @@ from models.common.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
-def compute_reduction(l1, s1, m1, l2, s2, m2, scale_value, l_width=128):
+def compute_reduction(l1, s1, m1, l2, s2, m2, scale_value):
     """
     Compute the online softmax reduction of two partial results.
     Returns (l_new, s_new, m_new)
@@ -29,12 +29,7 @@ def compute_reduction(l1, s1, m1, l2, s2, m2, scale_value, l_width=128):
 
 
 def compute_reference_reduce_to_all(
-    l_data_per_device,
-    s_data_per_device,
-    m_data_per_device,
-    num_cores=8,
-    scale_value=1.0,
-    l_width=128,
+    l_data_per_device, s_data_per_device, m_data_per_device, num_cores=8, scale_value=1.0
 ):
     """
     Compute the reference output for reduce_to_all operation.
@@ -82,19 +77,17 @@ def compute_reference_reduce_to_all(
         # Round 1: D0<->D1 and D2<->D3 exchanges
         # D0 and D1 both compute reduction(D0, D1)
         l_r1_01, s_r1_01, m_r1_01 = compute_reduction(
-            l_dev[0], s_dev[0], m_dev[0], l_dev[1], s_dev[1], m_dev[1], scale_value, l_width
+            l_dev[0], s_dev[0], m_dev[0], l_dev[1], s_dev[1], m_dev[1], scale_value
         )
 
         # D2 and D3 both compute reduction(D2, D3)
         l_r1_23, s_r1_23, m_r1_23 = compute_reduction(
-            l_dev[2], s_dev[2], m_dev[2], l_dev[3], s_dev[3], m_dev[3], scale_value, l_width
+            l_dev[2], s_dev[2], m_dev[2], l_dev[3], s_dev[3], m_dev[3], scale_value
         )
 
         # Round 2: D0<->D3 and D1<->D2 exchanges
         # All devices compute final reduction of (D0+D1) with (D2+D3)
-        l_final, s_final, m_final = compute_reduction(
-            l_r1_01, s_r1_01, m_r1_01, l_r1_23, s_r1_23, m_r1_23, scale_value, l_width
-        )
+        l_final, s_final, m_final = compute_reduction(l_r1_01, s_r1_01, m_r1_01, l_r1_23, s_r1_23, m_r1_23, scale_value)
 
         # Final division: l_out = l_final / s_final (s_final is [batch, 1], broadcast)
         l_out = l_final / s_final.expand(-1, l_final.shape[1])
@@ -106,11 +99,24 @@ def compute_reference_reduce_to_all(
     return torch.cat(l_final_cores, dim=1), torch.cat(s_final_cores, dim=1), torch.cat(m_final_cores, dim=1)
 
 
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 548880}),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "trace_region_size": 548880,
+                "fabric_router_config": create_fabric_router_config(12288),
+            }
+        ),
     ],
     indirect=["device_params"],
     ids=["fabric_2d_trace"],
@@ -123,13 +129,13 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     # Setup
     num_devices = 4
     num_cores = 8
-    l_width = 128
+    l_width = 512
     ms_width = 32  # Combined MS tile: col 0 = max, col 1 = sum
 
     batch_size = 8
     l_shape = [batch_size, l_width * num_cores]
     ms_shape = [batch_size, ms_width * num_cores]  # Combined MS shape
-    intermediate_shape = [batch_size, 160 * num_cores]  # L + MS = 128 + 32 = 160
+    intermediate_shape = [batch_size, (l_width + ms_width) * num_cores]
 
     scale_value = 1.0
     topology = ttnn.Topology.Torus
@@ -155,9 +161,11 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
             ttnn.CoreRange(ttnn.CoreCoord(2, 9), ttnn.CoreCoord(5, 9)),
         }
     )
-    shard_spec_l = ttnn.ShardSpec(shard_grid, [8, 128], ttnn.ShardOrientation.ROW_MAJOR)
-    shard_spec_ms = ttnn.ShardSpec(shard_grid, [8, 32], ttnn.ShardOrientation.ROW_MAJOR)
-    shard_spec_int = ttnn.ShardSpec(shard_grid, [8, 160], ttnn.ShardOrientation.ROW_MAJOR)  # L + MS
+    shard_spec_l = ttnn.ShardSpec(shard_grid, [batch_size, l_width], ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec_ms = ttnn.ShardSpec(shard_grid, [batch_size, ms_width], ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec_int = ttnn.ShardSpec(
+        shard_grid, [batch_size, (l_width + ms_width)], ttnn.ShardOrientation.ROW_MAJOR
+    )  # L + MS
 
     mem_config_l = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_l
@@ -209,9 +217,7 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     s_data_f32 = [t.float() for t in s_data_per_device]
     m_data_f32 = [t.float() for t in m_data_per_device]
 
-    ref_l, ref_s, ref_m = compute_reference_reduce_to_all(
-        l_data_f32, s_data_f32, m_data_f32, num_cores, scale_value, l_width
-    )
+    ref_l, ref_s, ref_m = compute_reference_reduce_to_all(l_data_f32, s_data_f32, m_data_f32, num_cores, scale_value)
     ref_l = ref_l.to(torch.bfloat16)
 
     # Stack data for mesh tensor
@@ -271,12 +277,16 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     # - Payload: 160 * 4 = 640 columns (L+MS per slot * 4 slots per round direction * 2 rounds)
     # - Header padding: 256B * 8 slots / 2 bytes = 1024 elements = 128 columns (at 8 rows)
     # Total shard width: 640 + 128 = 768 columns
+    header_size_bytes = 256
+    packet_slot_size_bytes = l_width + ms_width + header_size_bytes  # L + MS + header padding
     forwarder_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(forwarder_cores[0], forwarder_cores[1])})
-    forwarder_shard_spec = ttnn.ShardSpec(forwarder_shard_grid, [8, 160 * 4 + 256 * 4], ttnn.ShardOrientation.ROW_MAJOR)
+    forwarder_shard_spec = ttnn.ShardSpec(
+        forwarder_shard_grid, [8, packet_slot_size_bytes * 4], ttnn.ShardOrientation.ROW_MAJOR
+    )
     forwarder_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, forwarder_shard_spec
     )
-    forwarder_scratch_shape = [8, (160 * 4 + 256 * 4) * 2]  # shard_width * 2 cores
+    forwarder_scratch_shape = [8, (packet_slot_size_bytes * 4) * 2]  # shard_width * 2 cores
     forwarder_scratch_tensor = ttnn.from_torch(
         torch.zeros(forwarder_scratch_shape, dtype=torch.bfloat16),
         device=submesh_device,
