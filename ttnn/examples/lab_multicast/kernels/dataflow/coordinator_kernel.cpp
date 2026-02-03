@@ -64,6 +64,12 @@ void kernel_main() {
             get_noc_multicast_addr(receiver_start_x, receiver_start_y, receiver_end_x, receiver_end_y, l1_read_addr);
         noc_async_write_multicast(l1_read_addr, tile_mcast_addr, tile_size_bytes, num_receivers);
 
+        // Flush is needed to ensure the multicast command is sent before the semaphore set command
+        // because the commands go into separate command buffer FIFOs on some architectures and may not be
+        // sent in order they are issued.
+        // Note that this doesn't wait on the multicast command to complete, only ensures it is sent.
+        noc_async_writes_flushed();
+
         // Signal receivers that tile has been sent by multicasting VALID to receiver semaphore
         *receiver_sem_ptr = VALID;
         noc_semaphore_set_multicast(tile_sent_semaphore_addr, receiver_sem_mcast_addr, num_receivers);
