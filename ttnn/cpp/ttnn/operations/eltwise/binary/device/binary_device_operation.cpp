@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -48,7 +48,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::LEFT_SHIFT:
         case BinaryOpType::RIGHT_SHIFT:
         case BinaryOpType::LOGICAL_RIGHT_SHIFT:
-            return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT32 && b == DataType::UINT32));
+            return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT32 && b == DataType::UINT32) || (a == DataType::UINT16 && b == DataType::UINT16) || (a == DataType::UINT8 && b == DataType::UINT8));
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_OR:
         case BinaryOpType::BITWISE_AND:
