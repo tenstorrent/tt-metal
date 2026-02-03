@@ -106,6 +106,10 @@ jobs:
           echo "HuggingFace Model: $HF_MODEL"
           echo "Test Path: ${{ github.event.inputs.test_path || 'models/tt_transformers/demo/simple_text_demo.py::test_demo_text' }}"
           echo ""
+          echo "Python Environment:"
+          which python3
+          python3 --version
+          echo ""
           echo "Available Devices:"
           tt-smi -ls || echo "tt-smi not available"
           echo "════════════════════════════════════════════════════════"
@@ -115,7 +119,13 @@ jobs:
           echo "Starting model tracing..."
           TEST_PATH="${{ github.event.inputs.test_path || 'models/tt_transformers/demo/simple_text_demo.py::test_demo_text' }}"
 
-          python model_tracer/generic_ops_tracer.py "$TEST_PATH"
+          # The setup-job action should have already configured the environment
+          # Just use python3 directly which should be available from the Docker container
+          echo "Using Python: $(which python3)"
+          python3 --version
+
+          # Run the tracer
+          python3 model_tracer/generic_ops_tracer.py "$TEST_PATH"
 
       - name: 📦 Display Trace Results
         if: always()
