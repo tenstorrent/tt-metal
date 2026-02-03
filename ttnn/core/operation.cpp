@@ -67,6 +67,10 @@ OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
         }
     } else if constexpr (std::is_same_v<OutputTensors, Tensor>) {
         this->outputs_bytes.push_back(output_tensors.physical_volume() * output_tensors.element_size());
+        auto output_ns = tensor_ns(output_tensors);
+        if (output_ns > this->ideal_bandwidth_ns) {
+            this->ideal_bandwidth_ns = output_ns;
+        }
     } else if constexpr (
         std::is_same_v<OutputTensors, std::array<std::vector<Tensor>, 2>> ||
         std::is_same_v<OutputTensors, std::array<Tensor, 2>>) {
