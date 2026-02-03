@@ -744,7 +744,10 @@ void issue_buffer_dispatch_command_sequence(
         uint64_t relay_src_addr = dispatch_params.pinned_src_addr;
         uint64_t relay_data_size = (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
         if constexpr (std::is_same_v<T, InterleavedBufferWriteDispatchParams>) {
-            TT_ASSERT(dispatch_params.alignment_prefix_bytes % MetalContext::instance().hal().get_alignment(HalMemType::L1) == 0, "Alignment prefix is not aligned to L1");
+            TT_ASSERT(
+                dispatch_params.alignment_prefix_bytes % MetalContext::instance().hal().get_alignment(HalMemType::L1) ==
+                    0,
+                "Alignment prefix is not aligned to L1");
             relay_src_addr += dispatch_params.alignment_prefix_bytes;
             relay_data_size -= dispatch_params.alignment_prefix_bytes;
         }
