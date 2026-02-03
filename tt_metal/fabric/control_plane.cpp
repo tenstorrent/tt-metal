@@ -84,8 +84,12 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> get_ethernet_cores_grouped_by
 // o o o o
 // o o o o
 // * o o * < Corners pinned with *
+// Generate fixed ASIC position pinnings for UBB galaxy systems during auto-discovery.
+// This function is only called during auto-discovery (when no manual mapping is provided).
+// For UBB galaxy runs with 32 chips, it can optionally hard pin fabric node id 0 to asic 1 tray 1.
+// If MGD pinnings are provided for fabric node id 0, MGD pinnings take precedence and hard pinning is skipped.
 std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings(
-    const MeshGraph& mesh_graph) {
+    const MeshGraph& mesh_graph, bool hard_pin_node_0 = false) {
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 
     // Get all 4 possible corners ASIC positions
@@ -106,11 +110,13 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
 
     fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
     for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
-        // Special case the that NW corner needs to be pinned to asic 1 1
-        // if (corner_fabric_node_id == FabricNodeId{MeshId{0}, 0}) {
-        //    fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, std::vector<AsicPosition>{AsicPosition{1,
-        //    1}}); continue;
-        //}
+        // Special case: Hard pin NW corner (fabric node id 0) to asic 1 tray 1 if requested
+        // This is only used when MGD pinnings are not provided for fabric node id 0
+        if (corner_fabric_node_id == FabricNodeId{MeshId{0}, 0} && hard_pin_node_0) {
+            fixed_asic_position_pinnings.emplace_back(
+                corner_fabric_node_id, std::vector<AsicPosition>{AsicPosition{1, 1}});
+            continue;
+        }
 
         fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
     }
@@ -485,7 +491,7 @@ void ControlPlane::init_control_plane(
         const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
         if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
-            auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_);
+            auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, false);
             fixed_asic_position_pinnings.insert(
                 fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
         }
@@ -572,7 +578,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Special corner pinning for galaxy systems to avoid MGD folding across torus edges
     if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
-        auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_);
+        auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, true);
         // Merge galaxy pinnings with existing pinnings (e.g., the hard pin above)
         fixed_asic_position_pinnings.insert(
             fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
