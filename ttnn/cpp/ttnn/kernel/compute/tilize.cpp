@@ -10,8 +10,8 @@
 // #include "api/debug/dprint.h"
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
+    constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     compute_kernel_lib::tilize<per_core_block_tile_cnt, tt::CBIndex::c_0, tt::CBIndex::c_16>(per_core_block_cnt);

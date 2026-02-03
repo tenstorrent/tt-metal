@@ -51,7 +51,8 @@ ALWI void UNTILIZE_TILES() {
         compute_kernel_lib::untilize_config::WaitMode::WaitUpfront);
 }
 
-ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
+template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb>
+ALWI void TILIZE_ROWS(uint32_t sync_cb) {
     cb_wait_front(sync_cb, num_tiles);
     compute_kernel_lib::tilize<num_tiles, in0_cb, out_cb>(1);
     cb_pop_front(sync_cb, num_tiles);
@@ -90,8 +91,8 @@ void kernel_main() {
     UNTILIZE_TILES<Wt, cos_cb, untilized_cos_cb>();
     reconfig_data_format_srca(cos_cb, untilized_sin_cb);
     pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
-    TILIZE_ROWS(untilized_sin_cb, untilized_sin_sync_cb, retilized_sin_cb, Wt);
-    TILIZE_ROWS(untilized_cos_cb, untilized_cos_sync_cb, retilized_cos_cb, Wt);
+    TILIZE_ROWS<Wt, untilized_sin_cb, retilized_sin_cb>(untilized_sin_sync_cb);
+    TILIZE_ROWS<Wt, untilized_cos_cb, retilized_cos_cb>(untilized_cos_sync_cb);
     updated_cos_cb = retilized_cos_cb;
     updated_sin_cb = retilized_sin_cb;
 #else
