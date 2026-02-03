@@ -13,33 +13,6 @@ import ttnn
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
 
-def _create_layernorm_program_config(input_tensor: "ttnn.Tensor") -> "ttnn.LayerNormProgramConfig":
-    """
-    Create appropriate program config based on input tensor's shard spec.
-
-    For sharded inputs, creates LayerNormShardedMultiCoreProgramConfig.
-    For non-sharded inputs, creates LayerNormDefaultProgramConfig.
-    """
-    if not input_tensor.is_sharded():
-        return ttnn.LayerNormDefaultProgramConfig(use_welford=False)
-
-    # Create sharded config from shard spec
-    shard_spec = input_tensor.memory_config().shard_spec
-    shard_shape = shard_spec.shape
-    block_h = shard_shape[0] // 32
-    block_w = shard_shape[1] // 32
-    bbox = shard_spec.grid.bounding_box()
-    grid_size = ttnn.CoreCoord(bbox.end.x - bbox.start.x + 1, bbox.end.y - bbox.start.y + 1)
-    return ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        subblock_w=min(block_w, 4),
-        block_h=block_h,
-        block_w=block_w,
-        inplace=True,
-        use_welford=False,
-    )
-
-
 def _build_layernorm_io_tensors(
     input_tensor: "ttnn.Tensor",
     output_tensor: "ttnn.Tensor",
@@ -72,10 +45,10 @@ def _create_layernorm_op_descriptor(
     memory_config: Optional["ttnn.MemoryConfig"] = None,
     core_range_set: Optional["ttnn.CoreRangeSet"] = None,
     epsilon: float = 1e-12,
+    program_config: Optional["ttnn.LayerNormProgramConfig"] = None,
 ) -> "OpDescriptor":
     """Create a layernorm/rmsnorm op descriptor."""
     device = input_tensor.device()
-    arch = device.arch()
 
     # For non-sharded inputs, core_range_set is required
     if not input_tensor.is_sharded() and core_range_set is None:
@@ -87,8 +60,10 @@ def _create_layernorm_op_descriptor(
     # Use input's memory config if not provided
     output_mem_config = memory_config if memory_config is not None else input_tensor.memory_config()
 
-    # Create appropriate program config based on input tensor
-    program_config = _create_layernorm_program_config(input_tensor)
+    # Create appropriate program config based on input tensor if not provided
+    if program_config is None:
+        shard_spec = input_tensor.memory_config().shard_spec if input_tensor.is_sharded() else None
+        program_config = ttnn.create_layernorm_program_config(shard_spec)
 
     operation_params = ttnn.LayerNormParams()
     operation_params.norm_type = norm_type
