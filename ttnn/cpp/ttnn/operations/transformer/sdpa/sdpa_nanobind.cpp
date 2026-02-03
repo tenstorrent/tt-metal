@@ -107,10 +107,11 @@ void bind_sdpa(nb::module_& mod) {
         **Flexible (chunk_start_idx_tensor):**
         Pass ``chunk_start_idx_tensor`` (ttnn.Tensor of shape [1], dtype int32) on device.
         The kernel reads the start index from device memory at runtime. Use for:
+
         - Trace capture/replay: capture one SDPA call, then replay with different
           chunk_start_idx by updating the tensor on device (no recompile).
-          One program handles variable prefix lengths by updating
-          the tensor each step.
+          One program handles variable prefix lengths by updating the tensor each step.
+
         The program is compiled once (fixed max page table size); the trace key does not
         include the runtime offset.
 
@@ -151,7 +152,7 @@ void bind_sdpa(nb::module_& mod) {
                const ttnn::Tensor& input_tensor_k,
                const ttnn::Tensor& input_tensor_v,
                const ttnn::Tensor& page_table_tensor,
-               nb::object chunk_start_idx_arg,
+               const nb::object chunk_start_idx_arg,
                std::optional<ttnn::Tensor> chunk_start_idx_tensor_opt,
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,

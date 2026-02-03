@@ -637,7 +637,7 @@ def run_test_chunked_sdpa(
         tt_Q_chunk = ttnn.Tensor(Q[:, :, 0:prefill_chunk_size], q_dtype).to(ttnn.TILE_LAYOUT).to(device)
         chunk_start_idx_tensor = ttnn.Tensor(torch.tensor([0], dtype=torch.int32), ttnn.int32).to(device)
         # Compile: run chunk 0 once
-        tt_back = ttnn.transformer.chunked_scaled_dot_product_attention(
+        ttnn.transformer.chunked_scaled_dot_product_attention(
             tt_Q_chunk,
             tt_paged_K,
             tt_paged_V,
