@@ -24,7 +24,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
-using tt::tt_fabric::fabric_router_tests::compare_asic_mapping_files;
 
 namespace tt::tt_fabric::multi_host_tests {
 
