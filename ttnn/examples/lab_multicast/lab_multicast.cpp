@@ -133,43 +133,6 @@ void create_cb(Program& program, const CoreSpec& core, uint32_t num_tiles, tt::C
 
 // clang-format off
 /**
- * Verify DPRINT environment variables are set correctly for device-side debug output.
- *
- * | Argument     | Description                                               |
- * |--------------|-----------------------------------------------------------|
- * | program_path | Path to the program executable (for help messages)        |
- */
-// clang-format on
-void VerifyDPRINTEnvironment(const std::string& program_path) {
-    fmt::print("\n=========== DPRINT ENVIRONMENT CHECK ===========\n");
-    const char* dprint_env = std::getenv("TT_METAL_DPRINT_CORES");
-    if (!dprint_env || std::string(dprint_env).empty()) {
-        fmt::print(stderr, "[WARNING] TT_METAL_DPRINT_CORES is not set.\n");
-        fmt::print(stderr, "          Device-side DPRINT output will not appear.\n");
-        fmt::print(stderr, "          To enable output, run:\n");
-        fmt::print(stderr, "              export TT_METAL_DPRINT_CORES='(0,0)-(3,0)'\n");
-    } else {
-        fmt::print("[INFO] TT_METAL_DPRINT_CORES is set to: {}\n", dprint_env);
-    }
-    const char* prepend_env = std::getenv("TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC");
-    if (!prepend_env || std::string(prepend_env).empty()) {
-        fmt::print(stderr, "[WARNING] TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC is not set.\n");
-        fmt::print(stderr, "          DPRINT output may be auto-prefixed with <device>:<core>:<risc>.\n");
-        fmt::print(stderr, "          To disable prefixing, run:\n");
-        fmt::print(stderr, "              export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0\n");
-    } else {
-        fmt::print("[INFO] TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC is set to: {}\n", prepend_env);
-    }
-    if (isatty(fileno(stderr))) {
-        fmt::print(stderr, "[INFO] You are viewing DPRINT in the terminal.\n");
-        fmt::print(stderr, "       For a clean and organized viewing experience, consider running with redirection:\n");
-        fmt::print(stderr, "           {} &> multicast_dprint_out.txt\n", program_path);
-    }
-    fmt::print("================================================\n\n");
-}
-
-// clang-format off
-/**
  * Verify that received tiles match the golden (original) tile.
  *
  * | Argument       | Description                                               |
@@ -265,15 +228,13 @@ bool verify_tiles(
  * | output_tiles    | Output vector to store received tiles from all receivers  |
  * | num_receivers   | Number of receiver cores                                  |
  * | prog_state      | Program state containing device, program, and context     |
- * | program_path    | Path to executable for DPRINT environment check           |
  */
 // clang-format on
 void multicast_tile_tensix(
     const std::vector<bfloat16>& input_tile,
     std::vector<bfloat16>& output_tiles,
     const uint32_t num_receivers,
-    ProgramState& prog_state,
-    const std::string& program_path) {
+    ProgramState& prog_state) {
     constexpr uint32_t num_input_tiles = 1;
 
     TT_FATAL(input_tile.size() == TILE_HW, "Input tile must have exactly TILE_HW ({}) elements", TILE_HW);
@@ -336,6 +297,17 @@ void multicast_tile_tensix(
     create_cb(prog_state.program, all_cores_logical, num_input_tiles, tt::CBIndex::c_16);
 
     ////////// DATA MOVEMENT CONFIG SETUP //////////
+    // Compile-time args for coordinator kernel to read input tile from DRAM.
+    // TensorAccessorArgs extracts data distribution details from MeshBuffer so kernels
+    // don't need to deal with low-level details like bank IDs.
+    std::vector<uint32_t> coordinator_compile_time_args;
+    TensorAccessorArgs(*src0_mesh_buffer).append_to(coordinator_compile_time_args);
+    DataMovementConfig DataMovementConfigCoordinator = {
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::RISCV_0_default,
+        .compile_args = coordinator_compile_time_args};
+
+    // Receiver cores use the default config for inbound (no compile-time args needed).
     DataMovementConfig DataMovementConfigIn = {
         .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
 
@@ -352,7 +324,7 @@ void multicast_tile_tensix(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/dataflow/coordinator_kernel.cpp",
         sender_core_logical,
-        DataMovementConfigIn);
+        DataMovementConfigCoordinator);
 
     ////////// DATAFLOW KERNELS SETUP //////////
     // Inbound kernel: receives the multicast tile on each receiver core.
@@ -386,7 +358,7 @@ void multicast_tile_tensix(
     ////////// RUNTIME ARGS SETUP //////////
     // Args for the sender core to multicast tile.
     // They must have access to coordinates of all receiver cores to execute multicast operation.
-    uint32_t dram_bank_id = 0;
+    // Note: DRAM addressing is handled via TensorAccessorArgs (compile-time args), so no bank ID needed.
     SetRuntimeArgs(
         prog_state.program,
         coordinator_kernel_id,
@@ -397,7 +369,6 @@ void multicast_tile_tensix(
          (uint32_t)(receiver_core_end.y),
          sender_semaphore,
          receiver_semaphore,
-         dram_bank_id,
          src0_mesh_buffer->address(),
          sizeof(bfloat16) * TILE_HW,
          num_dests});
@@ -423,7 +394,6 @@ void multicast_tile_tensix(
     }
 
     ////////// PROGRAM LAUNCH //////////
-    VerifyDPRINTEnvironment(program_path);
     fmt::print("Launching program\n");
     fmt::print(
         "Hello, Core ({}, {}) on Device {}, please multicast the tile to your neighbors.\n",
@@ -459,7 +429,7 @@ void multicast_tile_tensix(
  * Return value: int (0 on success, non-zero on failure)
  */
 // clang-format on
-int main(int /*argc*/, char** argv) {
+int main() {
     bool pass = true;
 
     try {
@@ -477,7 +447,7 @@ int main(int /*argc*/, char** argv) {
         ProgramState prog_state = init_program();
 
         // Perform the multicast operation
-        multicast_tile_tensix(identity_tile, received_tiles, num_receivers, prog_state, argv[0]);
+        multicast_tile_tensix(identity_tile, received_tiles, num_receivers, prog_state);
 
         log_info(tt::LogAlways, "Output vector of size {}", received_tiles.size());
 
