@@ -29,6 +29,7 @@
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/deepseek_minimal_broadcast_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/deepseek_minimal_all_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/deepseek_b1_reduce_to_one/deepseek_b1_reduce_to_one_nanobind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -56,6 +57,7 @@ void py_module(nb::module_& mod) {
     ccl::bind_deepseek_minimal_broadcast(mod);
     ccl::bind_deepseek_minimal_all_reduce(mod);
     ccl::bind_deepseek_moe_reduce_scatter(mod);
+    ccl::bind_deepseek_b1_reduce_to_one(mod);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
