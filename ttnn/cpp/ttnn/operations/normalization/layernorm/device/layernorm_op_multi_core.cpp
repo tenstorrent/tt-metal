@@ -433,10 +433,12 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         CircularBufferConfig(im2_t * single_tile_size, {{tt::CBIndex::c_19, cb_data_format}})
             .set_page_size(tt::CBIndex::c_19, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_intermed2_config);
-    CircularBufferConfig cb_intermed0_config =
-        CircularBufferConfig(im0_t * single_tile_size, {{tt::CBIndex::c_24, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_24, single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_intermed0_config);
+    if (!b.has_value()) {
+        CircularBufferConfig cb_intermed0_config =
+            CircularBufferConfig(im0_t * single_tile_size, {{tt::CBIndex::c_24, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_24, single_tile_size);
+        CreateCircularBuffer(program, all_cores, cb_intermed0_config);
+    }
     if (!use_welford) {
         CircularBufferConfig c_intermed3_config =
             CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_20, cb_data_format}})
