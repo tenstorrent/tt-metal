@@ -20,8 +20,6 @@ try:
     # Ensure _ttml is also visible as a submodule of this package for relative imports
     sys.modules[__name__ + "._ttml"] = _ttml
 
-    # Ensure _ttml is also visible as a submodule of this package for relative imports
-    sys.modules[__name__ + "._ttml"] = _ttml
 except ImportError:
     from . import _ttml
 
