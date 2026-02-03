@@ -5,18 +5,16 @@
 
 #include "gtest/gtest.h"
 
-#include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async.hpp"
-#include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async.hpp"
-#include "ttnn/operations/experimental/ccl/send_recv_async/socket_forward/socket_forward.hpp"
-
-#include "ttnn/operations/experimental/reshape/view.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/distributed/distributed_tensor.hpp"
+#include "tests/ttnn/unit_tests/gtests/multiprocess/utils/mesh_socket_send_recv.hpp"
+#include "tests/ttnn/unit_tests/gtests/multiprocess/utils/mesh_socket_forward.hpp"
 
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include "tests/ttnn/unit_tests/gtests/ccl/send_recv_op_utils.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <chrono>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 
@@ -242,14 +240,10 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
 
     const distributed::SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
 
-    const auto tensor_spec = TensorSpec(
-        ttnn::Shape({1, 1, 1, XFER_SIZE / sizeof(uint32_t)}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::UINT32,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM)));
-
-    const uint32_t num_elems = tensor_spec.logical_shape().volume();
+    // Metal-level buffer configuration - no ttnn dependencies
+    const uint32_t num_elems = XFER_SIZE / sizeof(uint32_t);
+    const DeviceAddr buffer_size = XFER_SIZE;
+    const DeviceAddr page_size = XFER_SIZE;  // Single page buffer
 
     // Helper to create an intermediate socket pair for local forwarding
     auto create_intermed_socket_pair = [&](const distributed::MeshCoordinate& sender_coord,
@@ -317,21 +311,39 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
 
         auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_recv, start_coord);
 
-        auto input_tensor = ttnn::distributed::distribute_tensor(
-                                ttnn::experimental::view(
-                                    ttnn::arange(0, num_elems, 1, tensor_spec.data_type()), tensor_spec.logical_shape())
-                                    .to_layout(tensor_spec.layout()),
-                                *ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device_),
-                                std::nullopt)
-                                .to_device(mesh_device_.get(), tensor_spec.memory_config());
+        // Create device buffer using metal-level API (no ttnn dependencies)
+        CoreRangeSet buffer_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+        auto shard_params = ShardSpecBuffer(buffer_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+        distributed::DeviceLocalBufferConfig buffer_config = {
+            .page_size = page_size,
+            .buffer_type = BufferType::DRAM,
+            .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::INTERLEAVED),
+            .bottom_up = std::nullopt,
+            .sub_device_id = std::nullopt,
+        };
+        auto input_mesh_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device_.get());
+
+        // Initialize buffer with data (arange equivalent: 0, 1, 2, ..., num_elems-1)
+        std::vector<uint32_t> host_data(num_elems);
+        for (uint32_t i = 0; i < num_elems; i++) {
+            host_data[i] = i;
+        }
+
+        // Write data to device buffer
+        distributed::EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_mesh_buffer, host_data, true);
+
+        // Extract buffer pointer for metal-level operations
+        Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
 
         // Warmup iteration
         // Forward data to sender over intermed_send. Recv data over intermed_recv_2
-        ttnn::experimental::send_async(input_tensor, intermed_send, intermed_recv_2);
+        tt::tt_metal::send_async(
+            mesh_device_.get(), input_buffer, tt::DataFormat::UInt32, intermed_send, intermed_recv_2);
         // Forward data to downstream over send_socket.
-        ttnn::experimental::socket_forward(input_tensor, intermed_recv, send_socket, XFER_SIZE);
+        tt::tt_metal::socket_forward(mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE);
         // Recv data over recv_socket. Forward data to start over intermed_send_2.
-        ttnn::experimental::socket_forward(input_tensor, recv_socket, intermed_send_2, XFER_SIZE);
+        tt::tt_metal::socket_forward(mesh_device_.get(), recv_socket, intermed_send_2, XFER_SIZE);
     } else {
         auto [my_recv, upstream_send] = get_connecting_coords(pipeline_stages, my_mesh_id, upstream_mesh_id);
 
@@ -362,10 +374,23 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
 
         std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, my_sender);
-        Tensor output_tensor = tt::tt_metal::create_device_tensor(tensor_spec, mesh_device_.get());
+
+        // Create device buffer using metal-level API (no ttnn dependencies)
+        CoreRangeSet buffer_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+        auto shard_params = ShardSpecBuffer(buffer_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+        distributed::DeviceLocalBufferConfig buffer_config = {
+            .page_size = page_size,
+            .buffer_type = BufferType::DRAM,
+            .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::INTERLEAVED),
+            .bottom_up = std::nullopt,
+            .sub_device_id = std::nullopt,
+        };
+        auto output_mesh_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device_.get());
+
         // Warmup iteration
-        ttnn::experimental::socket_forward(output_tensor, recv_socket, intermed_send, XFER_SIZE);
-        ttnn::experimental::socket_forward(output_tensor, intermed_recv, send_socket, XFER_SIZE);
+        tt::tt_metal::socket_forward(mesh_device_.get(), recv_socket, intermed_send, XFER_SIZE);
+        tt::tt_metal::socket_forward(mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE);
     }
     barrier();
     if (is_pipeline_start) {
