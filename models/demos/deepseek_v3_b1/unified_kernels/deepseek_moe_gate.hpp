@@ -30,7 +30,7 @@ namespace deepseek_b1_ops {
 // Output: top8 scores [1, 16] + top8 indices [1, 16] (only first 8 valid)
 //
 // CB States:
-//   NCRISC: Signals tensor-backed input CBs ready (input, bias, indices)
+//   NCRISC: No-op (sharded buffer setup done in kernel file via setup_sharded_buffer)
 //   BRISC: Waits for output CBs (scores, indices)
 //   TRISC: Computes sigmoid (optional), bias add, sorting, normalization
 // ============================================================================
@@ -39,15 +39,8 @@ struct DeepseekMoeGate {
     // Compile-time args structs
     // ========================================================================
 
-    // Reader CTArgs (NCRISC)
-    // skip_input_signal: set to true when input CB is already pushed by another op (e.g., gather)
-    template <uint32_t input_cb_, uint32_t bias_cb_, uint32_t input_indices_cb_, bool skip_input_signal_ = false>
-    struct ReaderCTArgs {
-        static constexpr uint32_t input_cb = input_cb_;
-        static constexpr uint32_t bias_cb = bias_cb_;
-        static constexpr uint32_t input_indices_cb = input_indices_cb_;
-        static constexpr bool skip_input_signal = skip_input_signal_;
-    };
+    // Reader CTArgs (NCRISC) - empty, sharded buffer setup done in kernel file
+    struct ReaderCTArgs {};
 
     // Writer CTArgs (BRISC)
     template <uint32_t output_cb_, uint32_t output_indices_cb_>
@@ -94,17 +87,8 @@ struct DeepseekMoeGate {
         void impl() {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
-            // NCRISC: Signal that tensor-backed input CBs are ready
+            // NCRISC: No-op - sharded buffer setup done in kernel file
             // ================================================================
-            cb_reserve_back(CTArgs::bias_cb, 1);
-            cb_push_back(CTArgs::bias_cb, 1);
-            cb_reserve_back(CTArgs::input_indices_cb, 1);
-            cb_push_back(CTArgs::input_indices_cb, 1);
-            // Skip input CB signaling if already pushed by another op (e.g., gather)
-            if constexpr (!CTArgs::skip_input_signal) {
-                cb_reserve_back(CTArgs::input_cb, 1);
-                cb_push_back(CTArgs::input_cb, 1);
-            }
 
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
