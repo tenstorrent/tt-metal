@@ -212,6 +212,7 @@ def prepare_generator_args(
     [{"fabric_config": True, "trace_region_size": 21448704, "num_command_queues": 2, "l1_small_size": 24576}],
     indirect=True,
 )
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "optimizations",
     [
