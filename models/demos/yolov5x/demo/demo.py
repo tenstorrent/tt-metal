@@ -44,7 +44,7 @@ def init_model_and_runner(model_location_generator, device, model_type, batch_si
             weights_mesh_mapper=weights_mapper,
             mesh_composer=outputs_composer,
         )
-        # runner._capture_yolov5x_trace_2cqs()
+        runner._capture_yolov5x_trace_2cqs()
 
     return torch_model, runner, outputs_composer, batch_size
 
@@ -147,7 +147,7 @@ def run_yolov5x_demo_dataset(model_location_generator, device, model_type, batch
     "model_type",
     [
         "tt_model",
-        # "torch_model", # Uncomment to run the demo with torch model.
+        "torch_model",  # Uncomment to run the demo with torch model.
     ],
 )
 def test_demo(model_location_generator, device, batch_size_per_device, input_loc, model_type):

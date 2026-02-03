@@ -35,7 +35,7 @@ def run_yolov5x_inference(
         weights_mesh_mapper=weights_mesh_mapper,
         mesh_composer=outputs_mesh_composer,
     )
-    # performant_runner._capture_yolov5x_trace_2cqs()
+    performant_runner._capture_yolov5x_trace_2cqs()
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
 
