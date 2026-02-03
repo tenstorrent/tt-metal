@@ -310,84 +310,99 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
     uint32_t num_channels_processed_in_current_batch = 0;
     uint32_t chunk_count = 0;
-    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-        chunk_count = 0;
-        while (tiles_read < tiles_to_read) {
-            uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-            uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
+    {
+        DeviceZoneScopedN("writer writing local slice");
+        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+            chunk_count = 0;
+            while (tiles_read < tiles_to_read) {
+                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+                uint32_t tiles_to_put_in_current_packet =
+                    std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-            cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
-            size_t l1_read_addr = get_read_ptr(cb_output_id);
+                cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
+                size_t l1_read_addr = get_read_ptr(cb_output_id);
 
-            uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
-            uint64_t noc_addrs[4] = {0, 0, 0, 0};
-            uint64_t local_noc_addrs[4] = {0, 0, 0, 0};
-            for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
-                uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
-                pages_read_in_row++;
-                if (pages_read_in_row >= input_tensor_Wt) {
-                    row_offset += output_tensor_Wt;
-                    pages_read_in_row = 0;
-                }
-
-                noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
-                local_noc_addrs[i] = get_noc_addr(tile_id, output_addrgen);
-            }
-
-            if (direction == 1) {
-                if constexpr (num_targets_backward_direction) {
-                    if (tiles_to_put_in_current_packet > 1) {
-                        fabric_unicast_noc_scatter_write_with_state<
-                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                            UnicastScatterWriteUpdateMask::PayloadSize>(
-                            mux_connection_handle,
-                            pkt_scatter_hdr,
-                            l1_read_addr,
-                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                            page_size * tiles_to_put_in_current_packet);
-                    } else {
-                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            mux_connection_handle,
-                            pkt_unicast_hdr,
-                            l1_read_addr,
-                            NocUnicastCommandHeader{noc_addrs[0]});
-                    }
-                }
-
+                uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
+                uint64_t noc_addrs[4] = {0, 0, 0, 0};
+                uint64_t local_noc_addrs[4] = {0, 0, 0, 0};
                 for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
-                    noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
-                }
-                noc_async_write_barrier();
+                    uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
+                    pages_read_in_row++;
+                    if (pages_read_in_row >= input_tensor_Wt) {
+                        row_offset += output_tensor_Wt;
+                        pages_read_in_row = 0;
+                    }
 
-            } else {
-                if constexpr (num_targets_forward_direction) {
-                    if (tiles_to_put_in_current_packet > 1) {
-                        fabric_unicast_noc_scatter_write_with_state<
-                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                            UnicastScatterWriteUpdateMask::PayloadSize>(
-                            mux_connection_handle,
-                            pkt_scatter_hdr,
-                            l1_read_addr,
-                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                            page_size * tiles_to_put_in_current_packet);
-                    } else {
-                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                            mux_connection_handle,
-                            pkt_unicast_hdr,
-                            l1_read_addr,
-                            NocUnicastCommandHeader{noc_addrs[0]});
+                    noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
+                    local_noc_addrs[i] = get_noc_addr(tile_id, output_addrgen);
+                }
+
+                if (direction == 1) {
+                    if constexpr (num_targets_backward_direction) {
+                        if (tiles_to_put_in_current_packet > 1) {
+                            fabric_unicast_noc_scatter_write_with_state<
+                                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                                UnicastScatterWriteUpdateMask::PayloadSize>(
+                                mux_connection_handle,
+                                pkt_scatter_hdr,
+                                l1_read_addr,
+                                NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                                page_size * tiles_to_put_in_current_packet);
+                        } else {
+                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                mux_connection_handle,
+                                pkt_unicast_hdr,
+                                l1_read_addr,
+                                NocUnicastCommandHeader{noc_addrs[0]});
+                        }
+                    }
+
+                    for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
+                        noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
+                    }
+                    noc_async_write_barrier();
+
+                } else {
+                    if constexpr (num_targets_forward_direction) {
+                        if (tiles_to_put_in_current_packet > 1) {
+                            fabric_unicast_noc_scatter_write_with_state<
+                                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                                UnicastScatterWriteUpdateMask::PayloadSize>(
+                                mux_connection_handle,
+                                pkt_scatter_hdr,
+                                l1_read_addr,
+                                NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                                page_size * tiles_to_put_in_current_packet);
+                        } else {
+                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                mux_connection_handle,
+                                pkt_unicast_hdr,
+                                l1_read_addr,
+                                NocUnicastCommandHeader{noc_addrs[0]});
+                        }
                     }
                 }
+                tiles_read += tiles_to_put_in_current_packet;
+
+                noc_async_writes_flushed();
+
+                cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
+
+                chunk_count++;
+                if (chunk_count % chunks_per_sync == 0) {
+                    // 2. unicast output ready semaphore
+                    if (detail::valid_targets(direction)) {
+                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                            mux_connection_handle,
+                            pkt_hdr_sem_inc,
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    }
+                }
+                noc_async_writes_flushed();
             }
-            tiles_read += tiles_to_put_in_current_packet;
 
-            noc_async_writes_flushed();
-
-            cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
-
-            chunk_count++;
-            if (chunk_count % chunks_per_sync == 0) {
-                // 2. unicast output ready semaphore
+            if (chunk_count % chunks_per_sync != 0) {
+                // Write the unicast packet
                 if (detail::valid_targets(direction)) {
                     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         mux_connection_handle,
@@ -395,34 +410,23 @@ void kernel_main() {
                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                 }
             }
-            noc_async_writes_flushed();
-        }
 
-        if (chunk_count % chunks_per_sync != 0) {
-            // Write the unicast packet
-            if (detail::valid_targets(direction)) {
-                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                    mux_connection_handle,
-                    pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+            num_channels_processed_in_current_batch++;
+            if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
+                tile_id_start += output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
+            } else {
+                tile_id_start += output_tensor_Wt * output_tensor_Ht;
             }
-        }
 
-        num_channels_processed_in_current_batch++;
-        if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
-            tile_id_start += output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
-        } else {
-            tile_id_start += output_tensor_Wt * output_tensor_Ht;
-        }
+            if (num_channels_processed_in_current_batch == input_tensor_C) {
+                num_channels_processed_in_current_batch = 0;
+            }
 
-        if (num_channels_processed_in_current_batch == input_tensor_C) {
-            num_channels_processed_in_current_batch = 0;
+            tiles_read = input_tile_id_start;
+            tiles_to_read = input_tile_id_end;
+            pages_read_in_row = start_pages_read_in_row;
+            row_offset = start_row_offset;
         }
-
-        tiles_read = input_tile_id_start;
-        tiles_to_read = input_tile_id_end;
-        pages_read_in_row = start_pages_read_in_row;
-        row_offset = start_row_offset;
     }
 
     // increment locally
@@ -462,6 +466,7 @@ void kernel_main() {
     }
 
     while (slice_writes < writes_expected) {
+        DeviceZoneScopedN("writer writing split slice");
         // Direction == backward
         // Did I get something from my left to send to my right?
         // In the linear case, I expect num_targets_backward_direction slices from the left, and check if I have a

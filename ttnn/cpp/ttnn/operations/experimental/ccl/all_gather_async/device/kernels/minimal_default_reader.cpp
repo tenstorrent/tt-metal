@@ -111,28 +111,31 @@ void kernel_main() {
     uint32_t tiles_read = input_tile_id_start;
     uint32_t tiles_to_read = input_tile_id_end;
     uint32_t output_tile_id_start = 0;
-    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-        while (tiles_read < tiles_to_read) {
-            uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-            uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
+    {
+        DeviceZoneScopedN("reader reading local slice");
+        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+            while (tiles_read < tiles_to_read) {
+                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+                uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-            cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
-            size_t l1_write_addr = get_write_ptr(cb_output_id);
-            for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
-                uint32_t tile_id = output_tile_id_start + tiles_read;
-                uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
-                noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
+                size_t l1_write_addr = get_write_ptr(cb_output_id);
+                for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
+                    uint32_t tile_id = output_tile_id_start + tiles_read;
+                    uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
+                    noc_async_read(noc_read_addr, l1_write_addr, page_size);
 
-                l1_write_addr += page_size;
-                tiles_read++;
+                    l1_write_addr += page_size;
+                    tiles_read++;
+                }
+
+                noc_async_read_barrier();
+                cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
             }
-
-            noc_async_read_barrier();
-            cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
+            tiles_read = input_tile_id_start;
+            tiles_to_read = input_tile_id_end;
+            output_tile_id_start += input_tensor_Wt * input_tensor_Ht;
         }
-        tiles_read = input_tile_id_start;
-        tiles_to_read = input_tile_id_end;
-        output_tile_id_start += input_tensor_Wt * input_tensor_Ht;
     }
 
     uint32_t slices_received = 0;
@@ -278,80 +281,84 @@ void kernel_main() {
             }
 
             uint32_t num_channels_processed_in_current_batch = 0;
-            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-                chunk_count = 0;
-                while (tiles_read < tiles_to_read) {
-                    if (chunk_count % chunks_per_sync == 0) {
-                        noc_semaphore_wait_min(
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
-                        sem_target++;
-                    }
-                    chunk_count++;
+            {
+                DeviceZoneScopedN("reader reading split slice");
 
-                    uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                    uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
-
-                    cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
-                    size_t l1_write_addr = get_write_ptr(cb_output_id);
-                    for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
-                        uint32_t tile_id = output_tile_id_start + row_offset + pages_read_in_row;
-                        uint64_t noc_read_addr = get_noc_addr(tile_id, output_tensor_addrgen);
-                        noc_async_read(noc_read_addr, l1_write_addr, page_size);
-
-                        l1_write_addr += page_size;
-                        tiles_read++;
-
-                        pages_read_in_row++;
-                        if (pages_read_in_row >= slice_Wt) {
-                            row_offset += stride_Wt;
-                            pages_read_in_row = 0;
+                for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+                    chunk_count = 0;
+                    while (tiles_read < tiles_to_read) {
+                        if (chunk_count % chunks_per_sync == 0) {
+                            noc_semaphore_wait_min(
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                            sem_target++;
                         }
-                    }
+                        chunk_count++;
 
-                    noc_async_read_barrier();
-                    cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
-                }
-                num_channels_processed_in_current_batch++;
-                if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
-                    output_tile_id_start +=
-                        output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
-                } else {
-                    output_tile_id_start += output_tensor_Wt * output_tensor_Ht;
-                }
+                        uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+                        uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-                if (num_channels_processed_in_current_batch == input_tensor_C) {
-                    num_channels_processed_in_current_batch = 0;
-                }
+                        cb_reserve_back(cb_output_id, num_tiles_to_write_per_packet);
+                        size_t l1_write_addr = get_write_ptr(cb_output_id);
+                        for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
+                            uint32_t tile_id = output_tile_id_start + row_offset + pages_read_in_row;
+                            uint64_t noc_read_addr = get_noc_addr(tile_id, output_tensor_addrgen);
+                            noc_async_read(noc_read_addr, l1_write_addr, page_size);
 
-                // Reset for next batch, but respect split slice boundaries
-                // Use is_split_forwarded_slice (based on forwarded count) to match writer's logic
-                pages_read_in_row = start_pages_read_in_row;
-                row_offset = start_row_offset;
-                if (is_split_forwarded_slice) {
-                    uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
-                    uint32_t first_half_tiles = total_tiles / 2;
-                    if (direction == 0) {
-                        tiles_read = input_tile_id_start;
-                        tiles_to_read = input_tile_id_start + first_half_tiles;
-                    } else {
-                        tiles_read = input_tile_id_start + first_half_tiles;
-                        tiles_to_read = input_tile_id_end;
-                        // Re-adjust position for second half
-                        uint32_t tiles_to_skip = first_half_tiles;
-                        while (tiles_to_skip > 0) {
-                            if (tiles_to_skip < slice_Wt - pages_read_in_row) {
-                                pages_read_in_row += tiles_to_skip;
-                                tiles_to_skip = 0;
-                            } else {
-                                tiles_to_skip -= (slice_Wt - pages_read_in_row);
+                            l1_write_addr += page_size;
+                            tiles_read++;
+
+                            pages_read_in_row++;
+                            if (pages_read_in_row >= slice_Wt) {
                                 row_offset += stride_Wt;
                                 pages_read_in_row = 0;
                             }
                         }
+
+                        noc_async_read_barrier();
+                        cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
                     }
-                } else {
-                    tiles_read = input_tile_id_start;
-                    tiles_to_read = input_tile_id_end;
+                    num_channels_processed_in_current_batch++;
+                    if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
+                        output_tile_id_start +=
+                            output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
+                    } else {
+                        output_tile_id_start += output_tensor_Wt * output_tensor_Ht;
+                    }
+
+                    if (num_channels_processed_in_current_batch == input_tensor_C) {
+                        num_channels_processed_in_current_batch = 0;
+                    }
+
+                    // Reset for next batch, but respect split slice boundaries
+                    // Use is_split_forwarded_slice (based on forwarded count) to match writer's logic
+                    pages_read_in_row = start_pages_read_in_row;
+                    row_offset = start_row_offset;
+                    if (is_split_forwarded_slice) {
+                        uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
+                        uint32_t first_half_tiles = total_tiles / 2;
+                        if (direction == 0) {
+                            tiles_read = input_tile_id_start;
+                            tiles_to_read = input_tile_id_start + first_half_tiles;
+                        } else {
+                            tiles_read = input_tile_id_start + first_half_tiles;
+                            tiles_to_read = input_tile_id_end;
+                            // Re-adjust position for second half
+                            uint32_t tiles_to_skip = first_half_tiles;
+                            while (tiles_to_skip > 0) {
+                                if (tiles_to_skip < slice_Wt - pages_read_in_row) {
+                                    pages_read_in_row += tiles_to_skip;
+                                    tiles_to_skip = 0;
+                                } else {
+                                    tiles_to_skip -= (slice_Wt - pages_read_in_row);
+                                    row_offset += stride_Wt;
+                                    pages_read_in_row = 0;
+                                }
+                            }
+                        }
+                    } else {
+                        tiles_read = input_tile_id_start;
+                        tiles_to_read = input_tile_id_end;
+                    }
                 }
             }
             slices_forwarded++;  // Track forwarded slices for split-forwarding logic
