@@ -12,6 +12,20 @@
 
 using namespace tt::constants;
 
+namespace {
+
+// Returns the neutral policy for a given reduce operation
+// 0 = Zero (for sum/mean), 1 = NegInf (for max), 2 = PosInf (for min)
+uint32_t get_neutral_policy(tt::tt_metal::ReduceOpMath math_op) {
+    switch (math_op) {
+        case tt::tt_metal::ReduceOpMath::MAX: return 1;  // NegInf
+        case tt::tt_metal::ReduceOpMath::MIN: return 2;  // PosInf
+        default: return 0;                               // Zero for SUM
+    }
+}
+
+}  // namespace
+
 namespace ttnn::prim {
 
 ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory::create(
@@ -25,6 +39,13 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
+
+    // Calculate padding dimensions from logical shape
+    const auto& logical_shape = a.logical_shape();
+    uint32_t logical_W = logical_shape[3];
+    uint32_t logical_H = logical_shape[2];
+    uint32_t last_w = logical_W % TILE_WIDTH;  // 0 means no padding needed
+    uint32_t last_h = logical_H % TILE_HEIGHT; // 0 means no padding needed
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
@@ -80,8 +101,21 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt_metal::Buffer* src_buffer = a.buffer();
-    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+
+    // Prepare reader compile-time args with padding support
+    uint32_t in_df = static_cast<uint32_t>(src0_cb_data_format);
+    uint32_t neutral_kind = get_neutral_policy(operation_attributes.math_op);
+    std::vector<uint32_t> reader_compile_time_args = {
+        packed_scaler_value,
+        Wt,
+        Ht,
+        in_df,
+        last_w,
+        last_h,
+        neutral_kind
+    };
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+
     tt_metal::Buffer* dst_buffer = output.buffer();
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
@@ -91,7 +125,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-        "reader_unary_reduce_universal_start_id.cpp",
+        "reader_unary_reduce_w_with_padding.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
 
