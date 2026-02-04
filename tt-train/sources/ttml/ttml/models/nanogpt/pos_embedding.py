@@ -59,6 +59,7 @@ class PositionalEmbedding(AbstractModuleBase):
         emb_np = sinusoidal_positional_embedding_np(sequence_length, embedding_dim)
         emb_np = emb_np.astype(np.float32)
         emb_np = emb_np.reshape(1, 1, sequence_length, embedding_dim)
+        # TODO: Migrate to autograd tensor after branch pruning optimization.
         emb = ttnn.Tensor(emb_np, ttnn.float32, device, ttnn.TILE_LAYOUT)
         emb = ttnn.typecast(emb, ttnn.bfloat16)
         self.positional_embedding = emb
