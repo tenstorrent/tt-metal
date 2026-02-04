@@ -25,7 +25,7 @@ constexpr std::uint16_t hashString16(const char (&s)[N])
         hash32 ^= c;
         hash32 *= UINT32_C(16777619);
     }
-    return static_cast<uint16_t>(hash32 ^ (hash32 >> 16));
+    return static_cast<std::uint16_t>(hash32 ^ (hash32 >> 16));
 }
 
 // clang-format off
@@ -47,15 +47,15 @@ constexpr std::uint16_t hashString16(const char (&s)[N])
 namespace llk_profiler
 {
 
-constexpr uint32_t ENTRY_TYPE_SHAMT = 28;
-constexpr uint32_t ENTRY_ID_SHAMT   = ENTRY_TYPE_SHAMT - 16;
-constexpr uint32_t ENTRY_META_SHAMT = ENTRY_ID_SHAMT;
+constexpr std::uint32_t ENTRY_TYPE_SHAMT = 28;
+constexpr std::uint32_t ENTRY_ID_SHAMT   = ENTRY_TYPE_SHAMT - 16;
+constexpr std::uint32_t ENTRY_META_SHAMT = ENTRY_ID_SHAMT;
 
-constexpr uint32_t ENTRY_META_MASK = ~((1 << ENTRY_META_SHAMT) - 1);
+constexpr std::uint32_t ENTRY_META_MASK = ~((1 << ENTRY_META_SHAMT) - 1);
 
-constexpr uint32_t ENTRY_EXISTS_BIT = 0b1000 << ENTRY_TYPE_SHAMT;
+constexpr std::uint32_t ENTRY_EXISTS_BIT = 0b1000 << ENTRY_TYPE_SHAMT;
 
-enum class EntryType : uint32_t
+enum class EntryType : std::uint32_t
 {
     TIMESTAMP      = 0b1000,
     TIMESTAMP_DATA = 0b1001,
@@ -65,30 +65,30 @@ enum class EntryType : uint32_t
 
 // Initialize id of the core executing the kernel
 #if defined(LLK_TRISC_UNPACK)
-constexpr uint32_t TRISC_ID = 0;
+constexpr std::uint32_t TRISC_ID = 0;
 #elif defined(LLK_TRISC_MATH)
-constexpr uint32_t TRISC_ID = 1;
+constexpr std::uint32_t TRISC_ID = 1;
 #elif defined(LLK_TRISC_PACK)
-constexpr uint32_t TRISC_ID = 2;
+constexpr std::uint32_t TRISC_ID = 2;
 #else
 #error "Profiler can only be used on TRISC cores"
 #endif
 
-constexpr uint32_t BUFFER_LENGTH = 0x400; // 1024 entries per core
-constexpr uint32_t NUM_CORES     = 3;     // TRISC cores: unpack, math, pack
-constexpr uint32_t BUFFERS_END   = 0x16E000;
-constexpr uint32_t BUFFERS_START = BUFFERS_END - (NUM_CORES * BUFFER_LENGTH * sizeof(uint32_t));
+constexpr std::uint32_t BUFFER_LENGTH = 0x400; // 1024 entries per core
+constexpr std::uint32_t NUM_CORES     = 3;     // TRISC cores: unpack, math, pack
+constexpr std::uint32_t BUFFERS_END   = 0x16E000;
+constexpr std::uint32_t BUFFERS_START = BUFFERS_END - (NUM_CORES * BUFFER_LENGTH * sizeof(std::uint32_t));
 
-constexpr uint32_t BARRIER_END   = BUFFERS_START;
-constexpr uint32_t BARRIER_START = BARRIER_END - (NUM_CORES * sizeof(uint32_t));
+constexpr std::uint32_t BARRIER_END   = BUFFERS_START;
+constexpr std::uint32_t BARRIER_START = BARRIER_END - (NUM_CORES * sizeof(std::uint32_t));
 
-using barrier_ptr_t = volatile uint32_t (*)[NUM_CORES];
-using buffer_ptr_t  = uint32_t (*)[BUFFER_LENGTH];
+using barrier_ptr_t = volatile std::uint32_t (*)[NUM_CORES];
+using buffer_ptr_t  = std::uint32_t (*)[BUFFER_LENGTH];
 
 extern barrier_ptr_t barrier_ptr;
 extern buffer_ptr_t buffer;
-extern uint32_t write_idx;
-extern uint32_t open_zone_cnt;
+extern std::uint32_t write_idx;
+extern std::uint32_t open_zone_cnt;
 
 __attribute__((always_inline)) inline void sync_threads()
 {
@@ -97,7 +97,7 @@ __attribute__((always_inline)) inline void sync_threads()
     // wait for all the threads to set the barrier
     barrier[TRISC_ID] = 1;
     asm volatile("fence" ::: "memory");
-    for (uint32_t i = 0; i < NUM_CORES; ++i)
+    for (std::uint32_t i = 0; i < NUM_CORES; ++i)
     {
         if (i == TRISC_ID)
         {
@@ -129,25 +129,25 @@ __attribute__((always_inline)) inline bool is_buffer_full()
     return (BUFFER_LENGTH - (write_idx + open_zone_cnt)) < 4;
 }
 
-__attribute__((always_inline)) inline void write_entry(EntryType type, uint16_t id16)
+__attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16)
 {
-    uint64_t timestamp      = ckernel::read_wall_clock();
-    uint32_t timestamp_high = static_cast<uint32_t>(timestamp >> 32);
+    std::uint64_t timestamp      = ckernel::read_wall_clock();
+    std::uint32_t timestamp_high = static_cast<std::uint32_t>(timestamp >> 32);
 
-    uint32_t type_numeric = static_cast<uint32_t>(type);
-    uint32_t meta         = (type_numeric << ENTRY_TYPE_SHAMT) | ((uint32_t)id16 << ENTRY_ID_SHAMT);
+    std::uint32_t type_numeric = static_cast<std::uint32_t>(type);
+    std::uint32_t meta         = (type_numeric << ENTRY_TYPE_SHAMT) | ((std::uint32_t)id16 << ENTRY_ID_SHAMT);
 
     buffer[TRISC_ID][write_idx++] = meta | (timestamp_high & ~ENTRY_META_MASK);
-    buffer[TRISC_ID][write_idx++] = static_cast<uint32_t>(timestamp);
+    buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
 }
 
-__attribute__((always_inline)) inline void write_data(uint64_t data)
+__attribute__((always_inline)) inline void write_data(std::uint64_t data)
 {
-    buffer[TRISC_ID][write_idx++] = static_cast<uint32_t>(data >> 32);
-    buffer[TRISC_ID][write_idx++] = static_cast<uint32_t>(data);
+    buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data >> 32);
+    buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data);
 }
 
-template <uint16_t id16>
+template <std::uint16_t id16>
 class zone_scoped
 {
 private:
@@ -179,7 +179,7 @@ public:
     }
 };
 
-__attribute__((always_inline)) inline void write_timestamp(uint16_t id16)
+__attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16)
 {
     if (!is_buffer_full())
     {
@@ -187,7 +187,7 @@ __attribute__((always_inline)) inline void write_timestamp(uint16_t id16)
     }
 }
 
-__attribute__((always_inline)) inline void write_timestamp(uint16_t id16, uint64_t data)
+__attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, std::uint64_t data)
 {
     if (!is_buffer_full())
     {

@@ -97,86 +97,86 @@ constexpr std::uint32_t TILE_NUM_FACES = ((TILE_R_DIM * TILE_C_DIM) / (FACE_R_DI
 
 constexpr std::uint32_t FACE_SIZE = FACE_R_DIM * FACE_C_DIM; // 256 elements per face
 
-constexpr uint32_t DEST_NUM_TILES_FP16      = (DEST_REGISTER_FULL_SIZE * DEST_FACE_WIDTH) / (TILE_HEIGHT * TILE_HEIGHT);
-constexpr uint32_t DEST_NUM_TILES_FP16_HALF = DEST_NUM_TILES_FP16 / 2;
+constexpr std::uint32_t DEST_NUM_TILES_FP16      = (DEST_REGISTER_FULL_SIZE * DEST_FACE_WIDTH) / (TILE_HEIGHT * TILE_HEIGHT);
+constexpr std::uint32_t DEST_NUM_TILES_FP16_HALF = DEST_NUM_TILES_FP16 / 2;
 static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
 
 // For instructions that address lower/upper 16 bits of a register
 #define LO_16(REG) (2 * (REG))
 #define HI_16(REG) (2 * (REG) + 1)
 
-constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(uint format)
+constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
 {
     switch (format & 0xF)
     {
-        case ((uint8_t)DataFormat::Int32):
-        case ((uint8_t)DataFormat::Float32):
+        case ((std::uint8_t)DataFormat::Int32):
+        case ((std::uint8_t)DataFormat::Float32):
             return (4096 >> 4);
-        case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Float16_b):
+        case ((std::uint8_t)DataFormat::Float16):
+        case ((std::uint8_t)DataFormat::Float16_b):
             return (2048 >> 4);
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp8_b):
+        case ((std::uint8_t)DataFormat::Bfp8):
+        case ((std::uint8_t)DataFormat::Bfp8_b):
             return ((1024 >> 4) + (64 >> 4));
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b):
+        case ((std::uint8_t)DataFormat::Bfp4):
+        case ((std::uint8_t)DataFormat::Bfp4_b):
             return ((512 >> 4) + (64 >> 4));
-        case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b):
+        case ((std::uint8_t)DataFormat::Bfp2):
+        case ((std::uint8_t)DataFormat::Bfp2_b):
             return ((256 >> 4) + (64 >> 4));
-        case ((uint8_t)DataFormat::Int8):
-        case ((uint8_t)DataFormat::Lf8):
+        case ((std::uint8_t)DataFormat::Int8):
+        case ((std::uint8_t)DataFormat::Lf8):
             return (1024 >> 4);
         default:
             return ((1024 >> 4) + (64 >> 4));
     };
 }
 
-constexpr static bool IS_BFP_FORMAT(uint format)
+constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
 {
     switch (format & 0xF)
     {
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp8_b):
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b):
-        case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b):
+        case ((std::uint8_t)DataFormat::Bfp8):
+        case ((std::uint8_t)DataFormat::Bfp8_b):
+        case ((std::uint8_t)DataFormat::Bfp4):
+        case ((std::uint8_t)DataFormat::Bfp4_b):
+        case ((std::uint8_t)DataFormat::Bfp2):
+        case ((std::uint8_t)DataFormat::Bfp2_b):
             return true;
         default:
             return false;
     };
 }
 
-constexpr static bool IS_BFP_A_FORMAT(uint format)
+constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
 {
     switch (format & 0xF)
     {
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp2):
+        case ((std::uint8_t)DataFormat::Bfp8):
+        case ((std::uint8_t)DataFormat::Bfp4):
+        case ((std::uint8_t)DataFormat::Bfp2):
             return true;
         default:
             return false;
     };
 }
 
-constexpr static bool IS_A_FORMAT(uint format)
+constexpr static bool IS_A_FORMAT(std::uint32_t format)
 {
     switch (format & 0xF)
     {
-        case ((uint8_t)DataFormat::Lf8):
-        case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp2):
+        case ((std::uint8_t)DataFormat::Lf8):
+        case ((std::uint8_t)DataFormat::Float16):
+        case ((std::uint8_t)DataFormat::Bfp8):
+        case ((std::uint8_t)DataFormat::Bfp4):
+        case ((std::uint8_t)DataFormat::Bfp2):
             return true;
         default:
             return false;
     };
 }
 
-constexpr static std::uint32_t SCALE_DATUM_SIZE(uint format, uint datum_count)
+constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
 {
     switch (static_cast<DataFormat>(format & 0xF))
     {
@@ -206,14 +206,14 @@ enum class ActivationType
     Hardsigmoid = 4,
 };
 
-enum class RoundingMode : uint8_t
+enum class RoundingMode : std::uint8_t
 {
     None  = 0,
     Trunc = 1,
     Floor = 2,
 };
 
-enum class BinaryOp : uint8_t
+enum class BinaryOp : std::uint8_t
 {
     ADD           = 0,
     SUB           = 1,

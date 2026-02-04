@@ -62,11 +62,11 @@ template <
 inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    const uint PACKCNT              = diagonal ? (num_faces > 2 ? num_faces / 2 : num_faces) : ((face_r_dim < FACE_R_DIM) ? 1 : num_faces);
-    constexpr uint MEGAROW          = 1;
-    constexpr uint ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
-    constexpr uint MOP_INNER_LOOP   = narrow_row ? (TILE_R_DIM / 4) : (diagonal ? FACE_R_DIM - 1 : 1);
-    constexpr uint MOP_OUTER_LOOP   = narrow_row ? 1 : block_ct_dim;
+    const std::uint32_t PACKCNT              = diagonal ? (num_faces > 2 ? num_faces / 2 : num_faces) : ((face_r_dim < FACE_R_DIM) ? 1 : num_faces);
+    constexpr std::uint32_t MEGAROW          = 1;
+    constexpr std::uint32_t ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
+    constexpr std::uint32_t MOP_INNER_LOOP   = narrow_row ? (TILE_R_DIM / 4) : (diagonal ? FACE_R_DIM - 1 : 1);
+    constexpr std::uint32_t MOP_OUTER_LOOP   = narrow_row ? 1 : block_ct_dim;
 
     if constexpr (diagonal)
     {
@@ -167,11 +167,11 @@ inline void _llk_pack_untilize_uninit_(const std::uint32_t face_r_dim)
 
 template <
     std::uint32_t block_ct_dim,
-    std::uint32_t full_ct_dim    = block_ct_dim,
-    bool diagonal                = false,
-    bool narrow_row              = false,
-    std::uint32_t row_num_datums = TILE_C_DIM,
-    uint32_t tile_dst_ct_offset  = 0>
+    std::uint32_t full_ct_dim        = block_ct_dim,
+    bool diagonal                    = false,
+    bool narrow_row                  = false,
+    std::uint32_t row_num_datums     = TILE_C_DIM,
+    std::uint32_t tile_dst_ct_offset = 0>
 inline void _llk_pack_untilize_(
     const std::uint32_t address,
     const std::uint32_t pack_dst_format,

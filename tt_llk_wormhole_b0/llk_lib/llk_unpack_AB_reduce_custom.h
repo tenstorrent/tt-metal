@@ -31,17 +31,17 @@ using namespace ckernel::unpacker;
  * This function should NOT be used as a substitute for native reduce unpacking LLK MOP configuration.
  * Use the standard _llk_unpack_AB_mop_config_ for general-purpose block reduction operations.
  */
-template <uint32_t block_ct_dim>
+template <std::uint32_t block_ct_dim>
 inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 {
     // Constraint on the outerloop and innerloop dim
     static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
     // Single UNPACR because TTI_SETADCXX for UNP_A is 1023, increment Z counter to point to the next tile, set dvalid each time
-    static constexpr uint unpack_srca_op =
+    static constexpr std::uint32_t unpack_srca_op =
         TT_OP_UNPACR(SrcA, 0b00000001 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
-    constexpr uint32_t outerloop = block_ct_dim;
-    const uint32_t innerloop     = 1; // Unpack tile by tile of the input operand into SrcA
+    constexpr std::uint32_t outerloop = block_ct_dim;
+    const std::uint32_t innerloop     = 1; // Unpack tile by tile of the input operand into SrcA
     ckernel_template tmp(outerloop, innerloop, unpack_srca_op);
     tmp.program();
 }
@@ -61,7 +61,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
  * This function should NOT be used as a substitute for native reduce unpacking LLK initialization.
  * Use the standard _llk_unpack_AB_reduce_init_ for general-purpose reduction operations.
  */
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_unpack_AB_reduce_block_max_row_init_()
 {
     if constexpr (is_fp32_dest_acc_en)
@@ -106,7 +106,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_(const std::uint32_t address_a, 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
     // Program srcA and srcB base addresses
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // Wait for free context
     wait_for_next_context(2);

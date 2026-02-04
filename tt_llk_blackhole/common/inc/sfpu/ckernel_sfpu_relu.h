@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_converter.h"
 #include "sfpi.h"
 #include "sfpi_fp16.h"
@@ -14,10 +16,10 @@ namespace sfpu
 {
 
 template <typename T>
-constexpr bool is_supported_relu_type_v = std::is_same_v<T, float> || std::is_same_v<T, uint32_t>;
+constexpr bool is_supported_relu_type_v = std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>;
 
 template <bool APPROXIMATION_MODE>
-inline void _calculate_lrelu_(const int iterations, uint slope)
+inline void _calculate_lrelu_(const int iterations, std::uint32_t slope)
 {
     TT_SFPLOADI(p_sfpu::LREG2, 10, slope & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG2, 8, slope >> 16);
@@ -81,7 +83,7 @@ inline void _relu_max_(T threshold)
     {
         v_threshold = threshold;
     }
-    else if constexpr (std::is_same_v<T, uint32_t>)
+    else if constexpr (std::is_same_v<T, std::uint32_t>)
     {
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
@@ -94,7 +96,7 @@ inline void _relu_max_(T threshold)
     }
     else
     {
-        static_assert(std::is_same_v<T, float> || std::is_same_v<T, uint32_t>, "Threshold type must be float or uint32_t");
+        static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
     }
 
     _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
@@ -126,7 +128,7 @@ inline void _relu_min_(T threshold)
     {
         v_threshold = threshold;
     }
-    else if constexpr (std::is_same_v<T, uint32_t>)
+    else if constexpr (std::is_same_v<T, std::uint32_t>)
     {
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
@@ -139,7 +141,7 @@ inline void _relu_min_(T threshold)
     }
     else
     {
-        static_assert(std::is_same_v<T, float> || std::is_same_v<T, uint32_t>, "Threshold type must be float or uint32_t");
+        static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
     }
 
     _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);

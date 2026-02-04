@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include <utility>
 
 #include "llk_math_eltwise_ternary_sfpu.h"
@@ -10,7 +11,13 @@
 
 template <bool APPROXIMATE, typename Callable, typename... Args>
 inline void _llk_math_eltwise_ternary_sfpu_params_(
-    Callable&& sfpu_func, uint dst_index_in0, uint dst_index_in1, uint dst_index_in2, uint dst_index_out, int vector_mode = (int)VectorMode::RC, Args&&... args)
+    Callable&& sfpu_func,
+    std::uint32_t dst_index_in0,
+    std::uint32_t dst_index_in1,
+    std::uint32_t dst_index_in2,
+    std::uint32_t dst_index_out,
+    int vector_mode = (int)VectorMode::RC,
+    Args&&... args)
 {
     _llk_math_eltwise_ternary_sfpu_start_<DST_SYNC_MODE>(0); // Reuse same sync primitive
 

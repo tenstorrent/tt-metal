@@ -16,6 +16,8 @@ extern "C"
 #include <assert.h>
 #include <stdint.h>
 
+#include <cstdint>
+
 // Reg - mop_config_regs::LOOP_LENGTH
 #define MOP_CONFIG_REGS__LOOP_LENGTH__LENGTH_bm    0x3ff
 #define MOP_CONFIG_REGS__LOOP_LENGTH__LENGTH_bp    0
@@ -41,27 +43,27 @@ extern "C"
     // Regfile - mop_config_regs
     typedef struct __attribute__((__packed__))
     {
-        uint32_t BANK0_LOOP0_LEN;
-        uint32_t BANK0_LOOP1_LEN;
-        uint32_t BANK0_LOOP_START_INSTR0;
-        uint32_t BANK0_LOOP_END_INSTR0;
-        uint32_t BANK0_LOOP_END_INSTR1;
-        uint32_t BANK0_LOOP_INSTR0;
-        uint32_t BANK0_LOOP_INSTR1;
-        uint32_t BANK0_LOOP0_LAST_INSTR;
-        uint32_t BANK0_LOOP1_LAST_INSTR;
-        uint8_t RESERVED_24_2f[0xc];
-        uint32_t BANK1_LOOP0_LEN;
-        uint32_t BANK1_LOOP1_LEN;
-        uint32_t BANK1_LOOP_START_INSTR0;
-        uint32_t BANK1_LOOP_END_INSTR0;
-        uint32_t BANK1_LOOP_END_INSTR1;
-        uint32_t BANK1_LOOP_INSTR0;
-        uint32_t BANK1_LOOP_INSTR1;
-        uint32_t BANK1_LOOP0_LAST_INSTR;
-        uint32_t BANK1_LOOP1_LAST_INSTR;
-        uint8_t RESERVED_54_7f[0x2c];
-        uint32_t MOP_CONFIG;
+        std::uint32_t BANK0_LOOP0_LEN;
+        std::uint32_t BANK0_LOOP1_LEN;
+        std::uint32_t BANK0_LOOP_START_INSTR0;
+        std::uint32_t BANK0_LOOP_END_INSTR0;
+        std::uint32_t BANK0_LOOP_END_INSTR1;
+        std::uint32_t BANK0_LOOP_INSTR0;
+        std::uint32_t BANK0_LOOP_INSTR1;
+        std::uint32_t BANK0_LOOP0_LAST_INSTR;
+        std::uint32_t BANK0_LOOP1_LAST_INSTR;
+        std::uint8_t RESERVED_24_2f[0xc];
+        std::uint32_t BANK1_LOOP0_LEN;
+        std::uint32_t BANK1_LOOP1_LEN;
+        std::uint32_t BANK1_LOOP_START_INSTR0;
+        std::uint32_t BANK1_LOOP_END_INSTR0;
+        std::uint32_t BANK1_LOOP_END_INSTR1;
+        std::uint32_t BANK1_LOOP_INSTR0;
+        std::uint32_t BANK1_LOOP_INSTR1;
+        std::uint32_t BANK1_LOOP0_LAST_INSTR;
+        std::uint32_t BANK1_LOOP1_LAST_INSTR;
+        std::uint8_t RESERVED_54_7f[0x2c];
+        std::uint32_t MOP_CONFIG;
     } mop_config_regs_t;
 
     // Addrmap - t6_mop_config_map

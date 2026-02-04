@@ -10,14 +10,14 @@
 #include "llk_sfpu_types.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 // Constants for packer configuration
-const uint32_t ct_dim    = 1; // Only one column tile (32×32 tensor)
-const bool UNTILIZE      = true;
-const uint32_t tile_size = 16 * 16 * 4; // bytes per face
+const std::uint32_t ct_dim    = 1; // Only one column tile (32×32 tensor)
+const bool UNTILIZE           = true;
+const std::uint32_t tile_size = 16 * 16 * 4; // bytes per face
 
 #ifdef LLK_TRISC_UNPACK
 

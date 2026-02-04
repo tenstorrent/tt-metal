@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_trisc_common.h"
 #include "llk_unpack_common.h"
 using namespace ckernel;
@@ -27,12 +29,12 @@ using namespace ckernel;
 inline void _llk_unpack_matmul_mop_config_(
     std::uint32_t buf_desc_id_0, std::uint32_t buf_desc_id_1, std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim)
 {
-    const bool reuse_a                = ct_dim >= rt_dim;
-    constexpr uint32_t MOP_OUTER_LOOP = 1;
-    const uint32_t MOP_INNER_LOOP     = reuse_a ? ct_dim : rt_dim;
-    uint unpack_instrn;
+    const bool reuse_a                     = ct_dim >= rt_dim;
+    constexpr std::uint32_t MOP_OUTER_LOOP = 1;
+    const std::uint32_t MOP_INNER_LOOP     = reuse_a ? ct_dim : rt_dim;
+    std::uint32_t unpack_instrn;
     // static uint inc_l1_instrn;
-    uint unpack_reuse_instrn;
+    std::uint32_t unpack_reuse_instrn;
 
     if (reuse_a)
     {

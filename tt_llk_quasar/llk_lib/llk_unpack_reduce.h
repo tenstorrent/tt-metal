@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_trisc_common.h"
 #include "llk_unpack_common.h"
 using namespace ckernel;
@@ -21,20 +23,21 @@ using namespace ckernel;
  * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <ReduceDim REDUCE_DIM>
-inline void _llk_unpack_reduce_mop_config_(const uint32_t buf_desc_id_0, const uint32_t buf_desc_id_1, const uint32_t num_tiles, const TileShape& tile_shape)
+inline void _llk_unpack_reduce_mop_config_(
+    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t num_tiles, const TileShape& tile_shape)
 {
-    const uint32_t MOP_OUTER_LOOP = num_tiles;
-    const uint32_t MOP_INNER_LOOP = tile_shape.num_faces;
+    const std::uint32_t MOP_OUTER_LOOP = num_tiles;
+    const std::uint32_t MOP_INNER_LOOP = tile_shape.num_faces;
 
-    uint unpack_srcA_face = TT_OP_UNPACR0_FACE_INC(0, 1 /*Src face Idx*/, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
-    uint unpack_srcB_face = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+    std::uint32_t unpack_srcA_face = TT_OP_UNPACR0_FACE_INC(0, 1 /*Src face Idx*/, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
+    std::uint32_t unpack_srcB_face = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_srcA_face);
 
     if constexpr (REDUCE_DIM == ReduceDim::REDUCE_SCALAR)
     {
         // Need to zero out srcA first, because math will do some copying over to SrcA later
-        constexpr static uint unpack_zero_srcA =
+        constexpr static std::uint32_t unpack_zero_srcA =
             TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC_ZERO);
         temp.set_loop_instr(unpack_zero_srcA, unpack_srcA_face);
     }
@@ -56,7 +59,8 @@ inline void _llk_unpack_reduce_mop_config_(const uint32_t buf_desc_id_0, const u
  * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <ReduceDim REDUCE_DIM>
-inline void _llk_unpack_reduce_init_(const uint32_t buf_desc_id_0, const uint32_t buf_desc_id_1, const uint32_t num_tiles, const TileShape& tile_shape)
+inline void _llk_unpack_reduce_init_(
+    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t num_tiles, const TileShape& tile_shape)
 {
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, (REDUCE_DIM == ReduceDim::REDUCE_ROW));
 
@@ -69,7 +73,7 @@ inline void _llk_unpack_reduce_init_(const uint32_t buf_desc_id_0, const uint32_
  * start_l1_tile_idx_0 -> UNPACKER0 -> SRCA
  * start_l1_tile_idx_1 -> UNPACKER1 -> SRCB
  */
-inline void _llk_unpack_reduce_(const uint start_l1_tile_idx_0, const uint start_l1_tile_idx_1)
+inline void _llk_unpack_reduce_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
 {
     // RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must

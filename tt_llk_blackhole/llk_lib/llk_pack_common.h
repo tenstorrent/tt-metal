@@ -24,7 +24,7 @@ inline void _llk_packer_wait_for_math_done_()
 }
 
 // Tell math that it can write again
-template <uint WaitRes = p_stall::NONE>
+template <std::uint32_t WaitRes = p_stall::NONE>
 inline void _llk_packer_set_math_semaphore_()
 {
     t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done and header is written into L1
@@ -118,8 +118,8 @@ inline void _llk_pack_debug_dump_seek_(std::uint8_t offset)
 
 TT_ALWAYS_INLINE void _llk_pack_relu_config_(const std::uint32_t config)
 {
-    ReluType mode = (config & 0xf) == 0 ? ReluType::NO_RELU : ((config & 0xf) == 3 ? ReluType::MAX_THRESHOLD_RELU : ReluType::MIN_THRESHOLD_RELU);
-    uint32_t val  = ((config >> 16) << STACC_RELU_ReluThreshold_SHAMT) | (((uint32_t)mode) << STACC_RELU_ApplyRelu_SHAMT);
+    ReluType mode     = (config & 0xf) == 0 ? ReluType::NO_RELU : ((config & 0xf) == 3 ? ReluType::MAX_THRESHOLD_RELU : ReluType::MIN_THRESHOLD_RELU);
+    std::uint32_t val = ((config >> 16) << STACC_RELU_ReluThreshold_SHAMT) | (((std::uint32_t)mode) << STACC_RELU_ApplyRelu_SHAMT);
     TTI_SETDMAREG(0, val & 0xffff, 0, LO_16(p_gpr_pack::TMP0));
     TTI_SETDMAREG(0, val >> 16, 0, HI_16(p_gpr_pack::TMP0));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
@@ -139,9 +139,9 @@ inline void _llk_pack_reduce_mask_config_()
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
 
     // We initialize PCK_EDGE_OFFSET_SEC0 mask to clear out all the datums in the row
-    pack_edge_offset.f.mask        = 0x0;
-    uint32_t row_set_mapping_1     = 0;
-    uint32_t edge_offset_sec1_mask = 0;
+    pack_edge_offset.f.mask             = 0x0;
+    std::uint32_t row_set_mapping_1     = 0;
+    std::uint32_t edge_offset_sec1_mask = 0;
 
     if constexpr (dim == ReduceDim::REDUCE_ROW)
     {

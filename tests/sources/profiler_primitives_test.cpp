@@ -7,8 +7,8 @@
 #include "profiler.h"
 
 // Globals
-uint32_t unp_cfg_context        = 0;
-uint32_t pack_sync_tile_dst_ptr = 0;
+std::uint32_t unp_cfg_context        = 0;
+std::uint32_t pack_sync_tile_dst_ptr = 0;
 
 #ifdef LLK_TRISC_UNPACK
 

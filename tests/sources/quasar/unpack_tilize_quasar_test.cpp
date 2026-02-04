@@ -18,7 +18,7 @@
 void run_kernel(const volatile struct RuntimeParams*)
 {
     tdma_descriptor_t td_val;
-    const uint buf_desc_id = 0;
+    const std::uint32_t buf_desc_id = 0;
 
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -36,18 +36,18 @@ void run_kernel(const volatile struct RuntimeParams*)
     }
 
     bd_val.f.l1_addr_16B = l1_addr_16B;
-    bd_val.f.format      = static_cast<uint8_t>(formats.unpack_src);
+    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_src);
     bd_val.f.x_dim       = TEST_FACE_C_DIM;
     bd_val.f.y_dim       = TEST_FACE_R_DIM;
     bd_val.f.z_dim       = num_faces;
 
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
+    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_dst);
 
-    constexpr TileShape tile_shape = {.num_faces = num_faces, .face_r_dim = TEST_FACE_R_DIM, .face_c_dim = TEST_FACE_C_DIM, .narrow_tile = 0};
-    constexpr uint32_t C_DIM_FACES = (tile_shape.narrow_tile ? 1 : 2);                    // Tile width in faces
-    constexpr uint32_t R_DIM_FACES = (num_faces == 2 && !tile_shape.narrow_tile) ? 1 : 2; // Tile height in faces
+    constexpr TileShape tile_shape      = {.num_faces = num_faces, .face_r_dim = TEST_FACE_R_DIM, .face_c_dim = TEST_FACE_C_DIM, .narrow_tile = 0};
+    constexpr std::uint32_t C_DIM_FACES = (tile_shape.narrow_tile ? 1 : 2);                    // Tile width in faces
+    constexpr std::uint32_t R_DIM_FACES = (num_faces == 2 && !tile_shape.narrow_tile) ? 1 : 2; // Tile height in faces
 
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
     if (is_fp32_dest_acc_en)
@@ -66,8 +66,8 @@ void run_kernel(const volatile struct RuntimeParams*)
     // x_stride = x_stride_internal = col dim of a tile in L1 in units of 16 datums (1 face);
     // y_stride = y_stride_external + x_stride_internal
     // In this case x = 0 because the entire tile row fits into Dest
-    uint y_stride_external = FULL_CT_DIM * R_DIM_FACES * TEST_FACE_R_DIM;
-    for (uint y = 0; y < BLOCK_RT_DIM; y++)
+    std::uint32_t y_stride_external = FULL_CT_DIM * R_DIM_FACES * TEST_FACE_R_DIM;
+    for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
     {
         _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(y * y_stride_external /*  + 0 * x_stride  */);
     }
@@ -114,14 +114,14 @@ void run_kernel(const volatile struct RuntimeParams*)
 
 void run_kernel(const volatile struct RuntimeParams*)
 {
-    uint32_t const buf_desc_id    = 8;
-    const uint num_tiles_per_pack = TILE_CNT;
+    std::uint32_t const buf_desc_id        = 8;
+    const std::uint32_t num_tiles_per_pack = TILE_CNT;
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     buffer_descriptor_u bd_val = {0};
     bd_val.f.l1_addr_16B       = buffer_Res[0] / 16;
-    bd_val.f.format            = static_cast<uint8_t>(formats.pack_dst);
+    bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
     bd_val.f.x_dim             = TEST_FACE_C_DIM;
     bd_val.f.y_dim             = TEST_FACE_R_DIM;
     bd_val.f.z_dim             = num_faces;
@@ -129,7 +129,7 @@ void run_kernel(const volatile struct RuntimeParams*)
     tdma_descriptor_t tdma_desc;
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<uint8_t>(formats.pack_src);
+    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);

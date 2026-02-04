@@ -63,14 +63,14 @@ inline void _llk_pack_mop_config_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    const uint PACKCNT              = (partial_face && IS_BFP_FORMAT(pack_dst_format)) ? 1 : num_faces;
-    constexpr uint MEGAROW          = 1;
-    constexpr uint ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
-    constexpr uint MOP_INNER_LOOP   = 1;
+    const std::uint32_t PACKCNT              = (partial_face && IS_BFP_FORMAT(pack_dst_format)) ? 1 : num_faces;
+    constexpr std::uint32_t MEGAROW          = 1;
+    constexpr std::uint32_t ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
+    constexpr std::uint32_t MOP_INNER_LOOP   = 1;
 
     if constexpr (!untilize)
     {
-        constexpr uint MOP_OUTER_LOOP = 1;
+        constexpr std::uint32_t MOP_OUTER_LOOP = 1;
 
         ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
 
@@ -85,7 +85,7 @@ inline void _llk_pack_mop_config_(
     }
     else
     {
-        const uint MOP_OUTER_LOOP = ((face_r_dim == 1) || narrow_tile) ? 1 : (face_r_dim >> 1);
+        const std::uint32_t MOP_OUTER_LOOP = ((face_r_dim == 1) || narrow_tile) ? 1 : (face_r_dim >> 1);
 
         if ((face_r_dim == 1) || narrow_tile)
         {
@@ -151,8 +151,8 @@ inline void _llk_pack_init_(
     _llk_pack_mop_config_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile);
 
     set_packer_l1_offset(pack_dst_format, face_r_dim);
-    const uint face_dim   = face_r_dim * FACE_C_DIM;
-    const uint pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
+    const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
+    const std::uint32_t pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
     TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }
 
@@ -171,8 +171,8 @@ inline void _llk_pack_init_(
     _llk_pack_mop_config_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile);
 
     set_packer_l1_offset(pack_dst_format);
-    const uint face_dim   = face_r_dim * FACE_C_DIM;
-    const uint pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
+    const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
+    const std::uint32_t pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
     TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }
 
@@ -216,7 +216,7 @@ inline void _llk_pack_fast_tilize_addrmod_config_(const std::uint32_t unit_dim)
     // first two address mods move to the next row, the stride depends on the number of contiguous faces loaded in the single unpacker instruction
     // for unit_dim 1, that is 2 so the stride is 2, and analogously for unit_dims 2 and 3 its 4 and 6
     addr_mod_pack_t {
-        .y_src = {.incr = (uint8_t)(unit_dim == 1 ? 2 : 4)},
+        .y_src = {.incr = (std::uint8_t)(unit_dim == 1 ? 2 : 4)},
     }
         .set(ADDR_MOD_0);
 
@@ -270,13 +270,13 @@ inline void _llk_pack_fast_tilize_init_(const std::uint32_t use_32bit_dest, cons
     }
 
     // set the address offset to the size of the tile in 16B words
-    uint tile_size = SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM * TILE_R_DIM);
+    std::uint32_t tile_size = SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM * TILE_R_DIM);
     // Not sure why BFP formats are not included SCALE_DATUM_SIZE but too scared to change that.
-    if (pack_dst_format == (uint)DataFormat::Bfp4 || pack_dst_format == (uint)DataFormat::Bfp4_b)
+    if (pack_dst_format == (std::uint32_t)DataFormat::Bfp4 || pack_dst_format == (std::uint32_t)DataFormat::Bfp4_b)
     {
         tile_size = tile_size / 2; // 2 BFP4 datums per byte
     }
-    else if (pack_dst_format == (uint)DataFormat::Bfp2 || pack_dst_format == (uint)DataFormat::Bfp2_b)
+    else if (pack_dst_format == (std::uint32_t)DataFormat::Bfp2 || pack_dst_format == (std::uint32_t)DataFormat::Bfp2_b)
     {
         tile_size = tile_size / 4; // 4 BFP2 datums per byte
     }
@@ -365,7 +365,7 @@ inline void _llk_pack_fast_tilize_block_(
     // so only move 2 faces per tile_index
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Z, tile_index << 1);
 
-    for (uint i = 0; i < num_units; i++)
+    for (std::uint32_t i = 0; i < num_units; i++)
     {
         if (unit_dim == 1)
         {

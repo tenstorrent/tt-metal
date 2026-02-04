@@ -11,14 +11,14 @@
 #include "llk_memory_checks.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 // Buffer descriptor IDs for TDMA engines - these are indices into the hardware buffer descriptor table
-constexpr uint32_t buf_desc_id_src_a = 29; // Source A matrix input buffer
-constexpr uint32_t buf_desc_id_src_b = 30; // Source B matrix input buffer
-constexpr uint32_t buf_desc_id_dst   = 31; // Destination matrix output buffer
+constexpr std::uint32_t buf_desc_id_src_a = 29; // Source A matrix input buffer
+constexpr std::uint32_t buf_desc_id_src_b = 30; // Source B matrix input buffer
+constexpr std::uint32_t buf_desc_id_dst   = 31; // Destination matrix output buffer
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -33,24 +33,24 @@ void run_kernel(const volatile struct RuntimeParams *params)
     // src A input configuration
     tdma_descriptor_t tdma_desc_src_a;
     tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(buffer_A[0]);
-    tdma_desc_src_a.buf_desc.f.format       = static_cast<uint8_t>(formats.unpack_src);
+    tdma_desc_src_a.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_src);
     tdma_desc_src_a.buf_desc.f.lmt_addr_16B = 0;
     tdma_desc_src_a.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
     tdma_desc_src_a.buf_desc.f.y_dim        = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
     tdma_desc_src_a.buf_desc.f.z_dim        = num_faces_A; // Number of faces = 4, tiny tiles not supported for quasar
     tdma_desc_src_a.buf_desc_id             = buf_desc_id_src_a;
-    tdma_desc_src_a.reg_data_format         = (uint)formats.unpack_dst;
+    tdma_desc_src_a.reg_data_format         = (std::uint32_t)formats.unpack_dst;
 
     // src B input configuration
     tdma_descriptor_t tdma_desc_src_b;
     tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(buffer_B[0]);
-    tdma_desc_src_b.buf_desc.f.format       = static_cast<uint8_t>(formats.unpack_src);
+    tdma_desc_src_b.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_src);
     tdma_desc_src_b.buf_desc.f.lmt_addr_16B = 0;
     tdma_desc_src_b.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
     tdma_desc_src_b.buf_desc.f.y_dim        = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
     tdma_desc_src_b.buf_desc.f.z_dim        = num_faces_B; // Number of faces = 4, tiny tiles not supported for quasar
     tdma_desc_src_b.buf_desc_id             = buf_desc_id_src_b;
-    tdma_desc_src_b.reg_data_format         = (uint)formats.unpack_dst;
+    tdma_desc_src_b.reg_data_format         = (std::uint32_t)formats.unpack_dst;
 
     _configure_buf_desc_table_(tdma_desc_src_a.buf_desc_id, tdma_desc_src_a.buf_desc);
     _configure_buf_desc_table_(tdma_desc_src_b.buf_desc_id, tdma_desc_src_b.buf_desc);
@@ -60,7 +60,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, CT_DIM, RT_DIM, KT_DIM); // transpose in src_A not supported for
                                                                                                                     // quasar
 
-    for (uint32_t j = 0; j < KT_DIM; j++)
+    for (std::uint32_t j = 0; j < KT_DIM; j++)
     {
         _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
     }
@@ -83,7 +83,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, false, false>(CT_DIM, RT_DIM); // disable flags for matmul with indexing and mxfp_2x not part
                                                                                                 // of P0 test suite
 
-    for (uint32_t i = 0; i < KT_DIM; i++)
+    for (std::uint32_t i = 0; i < KT_DIM; i++)
     {
         _llk_math_matmul_block_(CT_DIM, RT_DIM);
     }
@@ -105,12 +105,12 @@ void run_kernel(const volatile struct RuntimeParams *params)
     tdma_descriptor_t tdma_desc_dst;
     tdma_desc_dst.buf_desc.f.l1_addr_16B  = L1_ADDRESS(buffer_Res[0]);
     tdma_desc_dst.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_dst.buf_desc.f.format       = static_cast<uint8_t>(formats.pack_dst);
+    tdma_desc_dst.buf_desc.f.format       = static_cast<std::uint8_t>(formats.pack_dst);
     tdma_desc_dst.buf_desc.f.x_dim        = FACE_C_DIM;
     tdma_desc_dst.buf_desc.f.y_dim        = FACE_R_DIM;
     tdma_desc_dst.buf_desc.f.z_dim        = num_faces;
     tdma_desc_dst.buf_desc_id             = buf_desc_id_dst;
-    tdma_desc_dst.reg_data_format         = static_cast<uint8_t>(formats.pack_src);
+    tdma_desc_dst.reg_data_format         = static_cast<std::uint8_t>(formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include <limits>
 
 #include "ckernel_addrmod.h"
@@ -51,8 +52,8 @@ sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in)
 
     if constexpr (APPROXIMATION_MODE)
     {
-        constexpr int FRAC_BITS = 3;
-        constexpr uint SP_BIAS  = 127 << FRAC_BITS;
+        constexpr int FRAC_BITS         = 3;
+        constexpr std::uint32_t SP_BIAS = 127 << FRAC_BITS;
 
         // * by 1/ln2 and add convert to 7.3 FxP format
         sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
@@ -100,7 +101,7 @@ inline sfpi::vFloat _calculate_exponential_approx_(sfpi::vFloat in)
 }
 
 template <bool APPROXIMATION_MODE, bool SCALE_EN, bool SKIP_POSITIVE_CHECK>
-inline sfpi::vFloat _calculate_exponential_piecewise_(sfpi::vFloat in, const uint16_t exp_base_scale_factor /* 1.0f in BF16 */)
+inline sfpi::vFloat _calculate_exponential_piecewise_(sfpi::vFloat in, const std::uint16_t exp_base_scale_factor /* 1.0f in BF16 */)
 {
     // This function is used to calculate the exponential of a value in a more accurate manner.
     sfpi::vFloat result = 0.0f;
@@ -158,7 +159,7 @@ inline sfpi::vFloat _calculate_exponential_piecewise_(sfpi::vFloat in, const uin
 }
 
 template <bool APPROXIMATION_MODE, bool SCALE_EN, int ITERATIONS, bool FAST_APPROX, bool SKIP_POSITIVE_CHECK>
-void _calculate_exponential_(const uint16_t exp_base_scale_factor /* 1.0f in BF16 */)
+void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f in BF16 */)
 {
     if constexpr (FAST_APPROX && APPROXIMATION_MODE)
     {
@@ -269,7 +270,7 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, uint32_t scale /* 1.0f in FP32 */>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, std::uint32_t scale /* 1.0f in FP32 */>
 inline void _init_exponential_()
 {
     if constexpr (FAST_APPROX && APPROXIMATION_MODE)

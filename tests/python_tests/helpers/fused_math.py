@@ -124,7 +124,7 @@ class MatmulFpu(Fpu):
         kt_dim = operation.kt_dim
         math_fidelity = operation.math_fidelity.value
         return (
-            f"    for (uint32_t j = 0; j < {kt_dim}; j++)\n"
+            f"    for (std::uint32_t j = 0; j < {kt_dim}; j++)\n"
             f"    {{\n"
             f"        _llk_math_matmul_<{math_fidelity}>(0, {ct}, {rt});\n"
             f"    }}\n"
@@ -736,8 +736,8 @@ class Math:
     ) -> str:
         rt_dim = operation.rt_dim
         ct_dim = operation.ct_dim
-        code = f"for (uint32_t mt = 0; mt < {rt_dim}; ++mt) {{\n"
-        code += f"for (uint32_t nt = 0; nt < {ct_dim}; ++nt) {{\n"
+        code = f"for (std::uint32_t mt = 0; mt < {rt_dim}; ++mt) {{\n"
+        code += f"for (std::uint32_t nt = 0; nt < {ct_dim}; ++nt) {{\n"
         code += body_fn()
         code += "}\n"
         code += "}\n"
@@ -755,9 +755,7 @@ class Math:
         code = ""
 
         if num_full_batches > 0:
-            code += (
-                f"for (uint32_t batch = 0; batch < {num_full_batches}; ++batch) {{\n"
-            )
+            code += f"for (std::uint32_t batch = 0; batch < {num_full_batches}; ++batch) {{\n"
             code += body_fn(batch_size)
             code += "}\n"
 
@@ -899,7 +897,7 @@ class Math:
         format = f"DataFormat::{operation.math_format.name}"
         code = (
             f"    // Operation {stage}: Math Setup\n"
-            f"    const uint32_t math_format{stage} = static_cast<std::underlying_type_t<DataFormat>>({format});\n"
+            f"    const std::uint32_t math_format{stage} = static_cast<std::underlying_type_t<DataFormat>>({format});\n"
             f"    const DstSync dest_sync{stage} = DstSync::Sync{operation.dest_sync.name};\n"
         )
 

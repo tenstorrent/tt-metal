@@ -10,14 +10,14 @@
 #include "llk_defs.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 // TODO: CLEANUP
 
-constexpr uint32_t buffer_A_tilized = 0x16000;
-constexpr uint32_t buffer_B_tilized = 0x17000;
+constexpr std::uint32_t buffer_A_tilized = 0x16000;
+constexpr std::uint32_t buffer_B_tilized = 0x17000;
 
 #ifdef LLK_TRISC_UNPACK
 

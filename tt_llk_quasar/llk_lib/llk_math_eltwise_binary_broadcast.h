@@ -5,6 +5,8 @@
 // TODO: Plumb MATH_FIDELITY
 #pragma once
 
+#include <cstdint>
+
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
 using namespace ckernel;
@@ -23,20 +25,21 @@ template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, c
 inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TileShape& tile_shape)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
-    const uint32_t num_eltwise_instrn_per_face = (tile_shape.face_r_dim >> math_rows_log2(ELTWISE_MATH_ROWS));
+    const std::uint32_t num_eltwise_instrn_per_face = (tile_shape.face_r_dim >> math_rows_log2(ELTWISE_MATH_ROWS));
 
     constexpr auto SRCB_BROADCAST_TYPE = (BROADCAST_TYPE == BroadcastType::COL)
                                              ? p_elwise::SRCB_BCAST_COL
                                              : ((BROADCAST_TYPE == BroadcastType::ROW) ? p_elwise::SRCB_BCAST_ROW : p_elwise::SRCB_BCAST_ALL);
 
-    constexpr uint32_t EN_DST_ACC_EN = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    constexpr std::uint32_t EN_DST_ACC_EN = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(EN_DST_ACC_EN && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
 
-    const uint32_t MOP_OUTER_LOOP = tile_shape.num_faces;
-    const uint32_t MOP_INNER_LOOP = num_eltwise_instrn_per_face;
+    const std::uint32_t MOP_OUTER_LOOP = tile_shape.num_faces;
+    const std::uint32_t MOP_INNER_LOOP = num_eltwise_instrn_per_face;
 
-    constexpr static uint eltwise_binary_op = eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, EN_DST_ACC_EN, SRCB_BROADCAST_TYPE, ADDR_MOD_0>();
-    constexpr static uint eltwise_binary_op_clr_srcAB_valid =
+    constexpr static std::uint32_t eltwise_binary_op =
+        eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, EN_DST_ACC_EN, SRCB_BROADCAST_TYPE, ADDR_MOD_0>();
+    constexpr static std::uint32_t eltwise_binary_op_clr_srcAB_valid =
         eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCAB_VLD, EN_DST_ACC_EN, SRCB_BROADCAST_TYPE, ADDR_MOD_1>();
 
     constexpr std::uint32_t replay_buf_len = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : static_cast<std::uint32_t>(MATH_FIDELITY_TYPE) - 1;
@@ -47,7 +50,7 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TileShape& tile
             // Lambda function to load reply buffer
             [replay_buf_len, SRCB_BROADCAST_TYPE]
             {
-                for (uint32_t i = 0; i < replay_buf_len; ++i)
+                for (std::uint32_t i = 0; i < replay_buf_len; ++i)
                 {
                     TTI_ELWMUL(p_elwise::CLR_NONE, true, SRCB_BROADCAST_TYPE, ADDR_MOD_3, 0);
                 }
@@ -65,8 +68,8 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TileShape& tile
     // Only need to clear per face for ROW/COL, since SCALAR only has 1 face from the unpacker
     if constexpr (BROADCAST_TYPE != BroadcastType::SCALAR)
     {
-        constexpr uint ADDR_MOD = (BROADCAST_TYPE == BroadcastType::COL) ? ADDR_MOD_2 : ADDR_MOD_0;
-        constexpr static uint eltwise_binary_op_clr_srcB =
+        constexpr std::uint32_t ADDR_MOD = (BROADCAST_TYPE == BroadcastType::COL) ? ADDR_MOD_2 : ADDR_MOD_0;
+        constexpr static std::uint32_t eltwise_binary_op_clr_srcB =
             eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCB_VLD, EN_DST_ACC_EN, SRCB_BROADCAST_TYPE, ADDR_MOD>();
         temp.set_last_inner_loop_instr(eltwise_binary_op_clr_srcB);
     }
@@ -83,8 +86,8 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
 
-    constexpr uint8_t num_srb_rows_inc  = (BROADCAST_TYPE == BroadcastType::COL) ? ELTWISE_MATH_ROWS : 0;
-    constexpr bool math_fidelity_enable = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    constexpr std::uint8_t num_srb_rows_inc = (BROADCAST_TYPE == BroadcastType::COL) ? ELTWISE_MATH_ROWS : 0;
+    constexpr bool math_fidelity_enable     = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
 
     // For ELWADD/SUB/MUL, can increment source and dest registers
     addr_mod_t {
@@ -162,7 +165,7 @@ inline void _llk_math_eltwise_binary_broadcast_init_(const TileShape& tile_shape
  * If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in full mode
  * If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  */
-inline void _llk_math_eltwise_binary_broadcast_(const uint32_t tile_idx)
+inline void _llk_math_eltwise_binary_broadcast_(const std::uint32_t tile_idx)
 {
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 

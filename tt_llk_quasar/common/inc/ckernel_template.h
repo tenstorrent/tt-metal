@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 
@@ -23,40 +25,40 @@ class ckernel_template
     //   END_OP1
     // END_LOOP_OUTER
 
-    uint m_outer_loop_len;
-    uint m_inner_loop_len;
-    uint m_loop_op0;
-    uint m_loop_op1;
-    uint m_end_op0, m_end_op1, m_start_op0;
-    uint m_loop0_last_instr; // In the last iteration of the outer loop, this instruction replaces the inner loop instruction, if constructed with one inner
-                             // loop instruction or the second inner loop instruction, if constructed with two inner loop instructions.
-    uint m_loop1_last_instr; // In the last iteration of the inner loop, this instruction replaces the inner loop instruction, if constructed with one inner
-                             // loop instruction or the second inner loop instruction, if constructed with two inner loop instructions.
+    std::uint32_t m_outer_loop_len;
+    std::uint32_t m_inner_loop_len;
+    std::uint32_t m_loop_op0;
+    std::uint32_t m_loop_op1;
+    std::uint32_t m_end_op0, m_end_op1, m_start_op0;
+    std::uint32_t m_loop0_last_instr; // In the last iteration of the outer loop, this instruction replaces the inner loop instruction, if constructed with one
+                                      // inner loop instruction or the second inner loop instruction, if constructed with two inner loop instructions.
+    std::uint32_t m_loop1_last_instr; // In the last iteration of the inner loop, this instruction replaces the inner loop instruction, if constructed with one
+                                      // inner loop instruction or the second inner loop instruction, if constructed with two inner loop instructions.
 
     // Note: The last iteration of inner loop will also be the last iteration of the outer loop when outer loop length = 1.
     // This means that in this case, last_inner_loop_instr will be replaced by the last_outer_loop_instr
 
 public:
-    ckernel_template(uint outer_loop_len, uint inner_loop_len, uint loop_op);
-    ckernel_template(uint outer_loop_len, uint inner_loop_len, uint loop_op0, uint loop_op1);
-    void set_end_ops(uint end_op0, uint end_op1);
-    void set_end_op(uint end_op0);
-    void set_start_op(uint start_op0);
-    void set_last_inner_loop_instr(uint op);
-    void set_last_outer_loop_instr(uint op);
-    void set_outer_loop_len(uint len);
-    void set_inner_loop_len(uint len);
-    void set_loop_instr(uint loop_op0, uint loop_op1);
+    ckernel_template(std::uint32_t outer_loop_len, std::uint32_t inner_loop_len, std::uint32_t loop_op);
+    ckernel_template(std::uint32_t outer_loop_len, std::uint32_t inner_loop_len, std::uint32_t loop_op0, std::uint32_t loop_op1);
+    void set_end_ops(std::uint32_t end_op0, std::uint32_t end_op1);
+    void set_end_op(std::uint32_t end_op0);
+    void set_start_op(std::uint32_t start_op0);
+    void set_last_inner_loop_instr(std::uint32_t op);
+    void set_last_outer_loop_instr(std::uint32_t op);
+    void set_outer_loop_len(std::uint32_t len);
+    void set_inner_loop_len(std::uint32_t len);
+    void set_loop_instr(std::uint32_t loop_op0, std::uint32_t loop_op1);
 
-    void program(volatile uint *instrn_buffer);                    // just programs the registers
-    void program_bank0_sw_cntl(volatile uint *instrn_buffer);      // programs BANK0 in software control mode
-    void program_bank1_sw_cntl(volatile uint *instrn_buffer);      // programs BANK1 in software control mode
-    static void run(volatile uint *instrn_buffer);                 // runs - assumes that registers were already programmed
-    static void run_and_finish(volatile uint *instrn_buffer);      // runs and switches mop_config bank - assumes that registers were already programmed
-    static void run_bank0_sw_cntl(volatile uint *instrn_buffer);   // run bank 0 in SW control mode
-    static void run_bank1_sw_cntl(volatile uint *instrn_buffer);   // run bank 1 in SW control mode
-    void program_and_run(volatile uint *instrn_buffer);            // calls program, then run
-    void program_and_run_and_finish(volatile uint *instrn_buffer); // calls program, then runs and switches the mop_config bank
+    void program(volatile std::uint32_t *instrn_buffer);                  // just programs the registers
+    void program_bank0_sw_cntl(volatile std::uint32_t *instrn_buffer);    // programs BANK0 in software control mode
+    void program_bank1_sw_cntl(volatile std::uint32_t *instrn_buffer);    // programs BANK1 in software control mode
+    static void run(volatile std::uint32_t *instrn_buffer);               // runs - assumes that registers were already programmed
+    static void run_and_finish(volatile std::uint32_t *instrn_buffer);    // runs and switches mop_config bank - assumes that registers were already programmed
+    static void run_bank0_sw_cntl(volatile std::uint32_t *instrn_buffer); // run bank 0 in SW control mode
+    static void run_bank1_sw_cntl(volatile std::uint32_t *instrn_buffer); // run bank 1 in SW control mode
+    void program_and_run(volatile std::uint32_t *instrn_buffer);          // calls program, then run
+    void program_and_run_and_finish(volatile std::uint32_t *instrn_buffer); // calls program, then runs and switches the mop_config bank
 };
 
 #if 0
@@ -88,11 +90,11 @@ class ckernel_unpack_template {
     const bool m_unpackB;
     const bool m_unpack_halo;
 
-    const uint m_A0_instr, m_A1_instr, m_A2_instr, m_A3_instr;
-    const uint m_B_instr;
+    const std::uint32_t m_A0_instr, m_A1_instr, m_A2_instr, m_A3_instr;
+    const std::uint32_t m_B_instr;
 
-    const uint m_skipA_instr;
-    const uint m_skipB_instr;
+    const std::uint32_t m_skipA_instr;
+    const std::uint32_t m_skipB_instr;
 
 
 public:
@@ -100,14 +102,14 @@ public:
     ckernel_unpack_template(
             bool unpackB,
             bool unpackHalo,
-            uint A0_instr,
-            uint A1_instr,
-            uint A2_instr,
-            uint A3_instr,
-            uint skipA_instr,
+            std::uint32_t A0_instr,
+            std::uint32_t A1_instr,
+            std::uint32_t A2_instr,
+            std::uint32_t A3_instr,
+            std::uint32_t skipA_instr,
 
-            uint B_instr,
-            uint skipB_instr
+            std::uint32_t B_instr,
+            std::uint32_t skipB_instr
      ) : m_unpackB(unpackB), m_unpack_halo(unpackHalo),
          m_A0_instr(A0_instr),
          m_A1_instr(A1_instr),
@@ -120,21 +122,21 @@ public:
 public:
 
     // Default ZeroSrcA UNPACR_NOP
-    static constexpr uint DEF_ZEROSRCA = TT_OP_UNPACR_NOP(0, 0,0,0,0,0,0,p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
-    static constexpr uint DEF_NINFSRCA = TT_OP_UNPACR_NOP(0, 0,0,0,0,0,0,p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
-    static constexpr uint DEF_UNPACR_NOP = TT_OP_UNPACR_NOP(0, 0,0,0,0,0,0,0,p_unpacr::UNP_NOP);
+    static constexpr std::uint32_t DEF_ZEROSRCA = TT_OP_UNPACR_NOP(0, 0,0,0,0,0,0,p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+    static constexpr std::uint32_t DEF_NINFSRCA = TT_OP_UNPACR_NOP(0, 0,0,0,0,0,0,p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
+    static constexpr std::uint32_t DEF_UNPACR_NOP = TT_OP_UNPACR_NOP(0, 0,0,0,0,0,0,0,p_unpacr::UNP_NOP);
 
 
     // Default skip A/B instructions that increment Z counters by 1
-    static constexpr uint DEF_SKIP_A = TT_OP_INCADCZW(0b001, 0, 0, 0, 1);
-    static constexpr uint DEF_SKIP_B = TT_OP_INCADCZW(0b010, 0, 0, 0, 1);
+    static constexpr std::uint32_t DEF_SKIP_A = TT_OP_INCADCZW(0b001, 0, 0, 0, 1);
+    static constexpr std::uint32_t DEF_SKIP_B = TT_OP_INCADCZW(0b010, 0, 0, 0, 1);
 
     // Default non-halo A instruction
     //EMC1 static constexpr uint DEF_A_instr  = TT_OP_UNPACR(0,0b1, 0, 0, 0, 0, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     //EMC1 static constexpr uint DEF_A_cntx_ovrd_instr  = TT_OP_UNPACR(0,0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr uint DEF_A_instr  = TT_OP_UNPACR0(0,0b1, 0, 0, 0, 1, 0, 0, 0, 1);
+    static constexpr std::uint32_t DEF_A_instr  = TT_OP_UNPACR0(0,0b1, 0, 0, 0, 1, 0, 0, 0, 1);
     //EMC1 static constexpr uint DEF_A_cntx_ovrd_instr  = TT_OP_UNPACR0(0,0b1, 0, 0, 1, 1, 0, 0, 0, 1);
-    static constexpr uint DEF_A_cntx_ovrd_instr  = TT_OP_UNPACR0(0,0b1, 0, 0, 0, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t DEF_A_cntx_ovrd_instr  = TT_OP_UNPACR0(0,0b1, 0, 0, 0, 0, 0, 0, 0, 1);
 
     // Default B instruction with rarefy
     //EMC1 static constexpr uint DEF_B_rarefy_instr = TT_OP_UNPACR(1, 0b01, 0, 0, 0, 0, 1, p_unpacr::RAREFYB_ENABLE, 0, 0, 0, 0, 1);
@@ -152,21 +154,21 @@ public:
 
     // Default B instruction without rarefy
     //EMC1 static constexpr uint DEF_B_instr = TT_OP_UNPACR(1, 0b01, 0, 0, 0, 0, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr uint DEF_B_instr = TT_OP_UNPACR1(0, 0b01, 0, 0, 0, 1, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t DEF_B_instr = TT_OP_UNPACR1(0, 0b01, 0, 0, 0, 1, 0, 0, 0, 0, 1);
     // MM Dec 28 2023 stupid compiler workaround until we decide what to do with the TDMA kernels
-    static constexpr uint DEF_B_cntx_ovrd_instr = DEF_B_instr;
-    static constexpr uint DEF_B_cntx_ovrd_no_z_inc_instr = DEF_B_instr;
-    static constexpr uint DEF_B_rarefy_cntx_ovrd_instr = DEF_B_instr;
+    static constexpr std::uint32_t DEF_B_cntx_ovrd_instr = DEF_B_instr;
+    static constexpr std::uint32_t DEF_B_cntx_ovrd_no_z_inc_instr = DEF_B_instr;
+    static constexpr std::uint32_t DEF_B_rarefy_cntx_ovrd_instr = DEF_B_instr;
 
     // Default halo A instructions
     /*EMC1 static constexpr uint DEF_A0_instr = TT_OP_UNPACR(0,0b00,0,p_unpacr::TILE0_CFG_CONTEXT,p_unpacr::TILE0_ADDRCNT_CONTEXT,1,0,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1);
     static constexpr uint DEF_A1_instr = TT_OP_UNPACR(0,0b00,0,p_unpacr::TILE1_CFG_CONTEXT,p_unpacr::TILE1_ADDRCNT_CONTEXT,1,0,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1);
     static constexpr uint DEF_A2_instr = TT_OP_UNPACR(0,0b00,0,p_unpacr::TILE2_CFG_CONTEXT,p_unpacr::TILE2_ADDRCNT_CONTEXT,1,0,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1);
     static constexpr uint DEF_A3_instr = TT_OP_UNPACR(0,0b01,0,p_unpacr::TILE3_CFG_CONTEXT,p_unpacr::TILE3_ADDRCNT_CONTEXT,1,1,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1); */
-    static constexpr uint DEF_A0_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
-    static constexpr uint DEF_A1_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
-    static constexpr uint DEF_A2_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
-    static constexpr uint DEF_A3_instr = TT_OP_UNPACR0(0,0b01,0,0,0,0,1,0,0,1);
+    static constexpr std::uint32_t DEF_A0_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
+    static constexpr std::uint32_t DEF_A1_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
+    static constexpr std::uint32_t DEF_A2_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
+    static constexpr std::uint32_t DEF_A3_instr = TT_OP_UNPACR0(0,0b01,0,0,0,0,1,0,0,1);
 
     // Special case where all later strips are skipped, so this one has to set DVALID because it is last, and increment Z
     /* EMC1
@@ -174,9 +176,9 @@ public:
     static constexpr uint DEF_A1_last_instr = TT_OP_UNPACR(0,0b01,0,p_unpacr::TILE1_CFG_CONTEXT,p_unpacr::TILE1_ADDRCNT_CONTEXT,1,1,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1);
     static constexpr uint DEF_A2_last_instr = TT_OP_UNPACR(0,0b01,0,p_unpacr::TILE2_CFG_CONTEXT,p_unpacr::TILE2_ADDRCNT_CONTEXT,1,1,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1);
     */
-    static constexpr uint DEF_A0_last_instr = TT_OP_UNPACR0(0,0b01,0,0,0,1,0,0,0,1);
-    static constexpr uint DEF_A1_last_instr = TT_OP_UNPACR0(0,0b01,0,0,0,1,0,0,0,1);
-    static constexpr uint DEF_A2_last_instr = TT_OP_UNPACR0(0,0b01,0,0,0,1,0,0,0,1);
+    static constexpr std::uint32_t DEF_A0_last_instr = TT_OP_UNPACR0(0,0b01,0,0,0,1,0,0,0,1);
+    static constexpr std::uint32_t DEF_A1_last_instr = TT_OP_UNPACR0(0,0b01,0,0,0,1,0,0,0,1);
+    static constexpr std::uint32_t DEF_A2_last_instr = TT_OP_UNPACR0(0,0b01,0,0,0,1,0,0,0,1);
 
     // Halo A instructions that skip actual unpacking, but increment context
     /* EMC1
@@ -185,10 +187,10 @@ public:
     static constexpr uint SKIP_A2_instr = TT_OP_UNPACR(0,0b00,1,p_unpacr::TILE2_CFG_CONTEXT,p_unpacr::TILE2_ADDRCNT_CONTEXT,1,0,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1);
     static constexpr uint SKIP_A3_instr = TT_OP_UNPACR(0,0b00,1,p_unpacr::TILE3_CFG_CONTEXT,p_unpacr::TILE3_ADDRCNT_CONTEXT,1,0,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1);
     */
-    static constexpr uint SKIP_A0_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
-    static constexpr uint SKIP_A1_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
-    static constexpr uint SKIP_A2_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
-    static constexpr uint SKIP_A3_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
+    static constexpr std::uint32_t SKIP_A0_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
+    static constexpr std::uint32_t SKIP_A1_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
+    static constexpr std::uint32_t SKIP_A2_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
+    static constexpr std::uint32_t SKIP_A3_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
 
     // Factored conv halo A instructions
     /* EMC1
@@ -197,10 +199,10 @@ public:
     static constexpr uint DEF_A2_fconv_instr = TT_OP_UNPACR(0,0b00,0,p_unpacr::TILE2_CFG_CONTEXT,p_unpacr::TILE2_ADDRCNT_CONTEXT,1,0,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1);
     static constexpr uint DEF_A3_fconv_instr = TT_OP_UNPACR(0,0b00,0,p_unpacr::TILE3_CFG_CONTEXT,p_unpacr::TILE3_ADDRCNT_CONTEXT,1,1,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1);
     */
-    static constexpr uint DEF_A0_fconv_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
-    static constexpr uint DEF_A1_fconv_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
-    static constexpr uint DEF_A2_fconv_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
-    static constexpr uint DEF_A3_fconv_instr = TT_OP_UNPACR0(0,0b00,0,1,0,0,0,0,0,1);
+    static constexpr std::uint32_t DEF_A0_fconv_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
+    static constexpr std::uint32_t DEF_A1_fconv_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
+    static constexpr std::uint32_t DEF_A2_fconv_instr = TT_OP_UNPACR0(0,0b00,0,0,0,0,0,0,0,1);
+    static constexpr std::uint32_t DEF_A3_fconv_instr = TT_OP_UNPACR0(0,0b00,0,1,0,0,0,0,0,1);
 
     // Special case where all later strips are skipped, so this one has to set DVALID because it is last, and increment Z (factored conv)
     /* EMC1
@@ -208,22 +210,22 @@ public:
     static constexpr uint DEF_A1_fconv_last_instr = TT_OP_UNPACR(0,0b00,0,p_unpacr::TILE1_CFG_CONTEXT,p_unpacr::TILE1_ADDRCNT_CONTEXT,1,1,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1);
     static constexpr uint DEF_A2_fconv_last_instr = TT_OP_UNPACR(0,0b00,0,p_unpacr::TILE2_CFG_CONTEXT,p_unpacr::TILE2_ADDRCNT_CONTEXT,1,1,p_unpacr::RAREFYB_DISABLE, 0,p_unpacr::AUTO_INC_CONTEXT,1,0,1);
     */
-    static constexpr uint DEF_A0_fconv_last_instr = TT_OP_UNPACR0(0,0b00,0,0,0,1,0,0,0,1);
-    static constexpr uint DEF_A1_fconv_last_instr = TT_OP_UNPACR0(0,0b00,0,0,0,1,0,0,0,1);
-    static constexpr uint DEF_A2_fconv_last_instr = TT_OP_UNPACR0(0,0b00,0,0,0,1,0,0,0,1);
+    static constexpr std::uint32_t DEF_A0_fconv_last_instr = TT_OP_UNPACR0(0,0b00,0,0,0,1,0,0,0,1);
+    static constexpr std::uint32_t DEF_A1_fconv_last_instr = TT_OP_UNPACR0(0,0b00,0,0,0,1,0,0,0,1);
+    static constexpr std::uint32_t DEF_A2_fconv_last_instr = TT_OP_UNPACR0(0,0b00,0,0,0,1,0,0,0,1);
 
     // Default non-halo D (unpack-to-dest) instruction with context override
     //EMC1 static constexpr uint DEF_D_instr  = TT_OP_UNPACR(0, 0b10001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // unpack0 to dest, and increment Z for src-tile and dest
-    static constexpr uint DEF_D_instr  = TT_OP_UNPACR0(0, 0b10001, 0, 0, 0, 0, 0,  0, 0, 1); // unpack0 to dest, and increment Z for src-tile and dest
+    static constexpr std::uint32_t DEF_D_instr  = TT_OP_UNPACR0(0, 0b10001, 0, 0, 0, 0, 0,  0, 0, 1); // unpack0 to dest, and increment Z for src-tile and dest
 
     //EMC1 static constexpr uint DEF_D_cntx_ovrd_instr  = TT_OP_UNPACR(0, 0b10000, 0, 1, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // unpack0 to dest using context 1
-    static constexpr uint DEF_D_cntx_ovrd_instr  = TT_OP_UNPACR0(0, 0b10000, 0, 0, 0, 0, 0,  0, 0, 1); // unpack0 to dest using context 1
+    static constexpr std::uint32_t DEF_D_cntx_ovrd_instr  = TT_OP_UNPACR0(0, 0b10000, 0, 0, 0, 0, 0,  0, 0, 1); // unpack0 to dest using context 1
 
     // Unpack-to-dest instruction with context override and context auto increment
     //EMC1 static constexpr uint DEF_D_auto_inc_cntx_instr0  = TT_OP_UNPACR(0, 0b00000, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, p_unpacr::AUTO_INC_CONTEXT, 0, 0, 1); // unpack0 to dest, and increment Z for src-tile and dest
     //EMC1 static constexpr uint DEF_D_auto_inc_cntx_instr1  = TT_OP_UNPACR(0, 0b10001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, p_unpacr::AUTO_INC_CONTEXT, 0, 0, 1); // unpack0 to dest, and increment Z for src-tile and dest
-    static constexpr uint DEF_D_auto_inc_cntx_instr0  = TT_OP_UNPACR0(0, 0b00000, 0, 0, 0, 0, 0, 0, 0, 1); // unpack0 to dest, and increment Z for src-tile and dest
-    static constexpr uint DEF_D_auto_inc_cntx_instr1  = TT_OP_UNPACR0(0, 0b10001, 0, 0, 0, 0, 0, 0, 0, 1); // unpack0 to dest, and increment Z for src-tile and dest
+    static constexpr std::uint32_t DEF_D_auto_inc_cntx_instr0  = TT_OP_UNPACR0(0, 0b00000, 0, 0, 0, 0, 0, 0, 0, 1); // unpack0 to dest, and increment Z for src-tile and dest
+    static constexpr std::uint32_t DEF_D_auto_inc_cntx_instr1  = TT_OP_UNPACR0(0, 0b10001, 0, 0, 0, 0, 0, 0, 0, 1); // unpack0 to dest, and increment Z for src-tile and dest
 
 
     //
@@ -231,39 +233,39 @@ public:
     //
     static ckernel_unpack_template lzA(
             bool neginf,
-            uint A_instr = DEF_A_cntx_ovrd_instr,
-            uint skipA_instr = DEF_SKIP_A);
+            std::uint32_t A_instr = DEF_A_cntx_ovrd_instr,
+            std::uint32_t skipA_instr = DEF_SKIP_A);
 
     static ckernel_unpack_template lA(
-            uint A_instr = DEF_A_cntx_ovrd_instr,
-            uint skipA_instr = DEF_SKIP_A);
+            std::uint32_t A_instr = DEF_A_cntx_ovrd_instr,
+            std::uint32_t skipA_instr = DEF_SKIP_A);
 
-    static ckernel_unpack_template lhA(const uint32_t halo_mask);
+    static ckernel_unpack_template lhA(const std::uint32_t halo_mask);
 
-    static ckernel_unpack_template flhA(const uint32_t halo_mask);
+    static ckernel_unpack_template flhA(const std::uint32_t halo_mask);
 
-    static ckernel_unpack_template lBhA(const uint32_t halo_mask, const bool rarefy=true);
+    static ckernel_unpack_template lBhA(const std::uint32_t halo_mask, const bool rarefy=true);
 
-    static ckernel_unpack_template flBhA(const uint32_t halo_mask);
+    static ckernel_unpack_template flBhA(const std::uint32_t halo_mask);
 
     static ckernel_unpack_template lBA(
-            uint A_instr = DEF_A_instr,
-            uint skipA_instr = DEF_SKIP_A,
+            std::uint32_t A_instr = DEF_A_instr,
+            std::uint32_t skipA_instr = DEF_SKIP_A,
 
-            uint B_instr = DEF_B_instr,
-            uint skipB_instr = DEF_SKIP_B
+            std::uint32_t B_instr = DEF_B_instr,
+            std::uint32_t skipB_instr = DEF_SKIP_B
     );
 
     static ckernel_unpack_template lBAD();
 
-    void program(volatile uint *instrn_buffer) const;         // just programs the registers
-    static void run(volatile uint *instrn_buffer, const uint8_t count, const uint32_t zmask = 0);      // runs - assumes that registers were already programmed
-    void program_and_run(volatile uint *instrn_buffer, const uint8_t count, const uint32_t zmask = 0); // calls program, then run
+    void program(volatile std::uint32_t *instrn_buffer) const;         // just programs the registers
+    static void run(volatile std::uint32_t *instrn_buffer, const std::uint8_t count, const std::uint32_t zmask = 0);      // runs - assumes that registers were already programmed
+    void program_and_run(volatile std::uint32_t *instrn_buffer, const std::uint8_t count, const std::uint32_t zmask = 0); // calls program, then run
 
 };
 #endif
 
-ckernel_template::ckernel_template(uint outer_loop_len, uint inner_loop_len, uint loop_op) :
+ckernel_template::ckernel_template(std::uint32_t outer_loop_len, std::uint32_t inner_loop_len, std::uint32_t loop_op) :
     m_outer_loop_len(outer_loop_len),
     m_inner_loop_len(inner_loop_len),
     m_loop_op0(loop_op),
@@ -278,7 +280,7 @@ ckernel_template::ckernel_template(uint outer_loop_len, uint inner_loop_len, uin
     // FWASSERT("MOP OUTER LOOP LENGTH should be non-zero", (m_outer_loop_len > 0));
 }
 
-ckernel_template::ckernel_template(uint outer_loop_len, uint inner_loop_len, uint loop_op0, uint loop_op1) :
+ckernel_template::ckernel_template(std::uint32_t outer_loop_len, std::uint32_t inner_loop_len, std::uint32_t loop_op0, std::uint32_t loop_op1) :
     m_outer_loop_len(outer_loop_len),
     m_inner_loop_len(inner_loop_len),
     m_loop_op0(loop_op0),
@@ -293,81 +295,81 @@ ckernel_template::ckernel_template(uint outer_loop_len, uint inner_loop_len, uin
     // FWASSERT("MOP OUTER LOOP LENGTH should be non-zero", (m_outer_loop_len > 0));
 }
 
-void ckernel_template::set_outer_loop_len(uint len)
+void ckernel_template::set_outer_loop_len(std::uint32_t len)
 {
     m_outer_loop_len = len;
 }
 
-void ckernel_template::set_inner_loop_len(uint len)
+void ckernel_template::set_inner_loop_len(std::uint32_t len)
 {
     m_inner_loop_len = len;
 }
 
-void ckernel_template::set_loop_instr(uint loop_op0, uint loop_op1)
+void ckernel_template::set_loop_instr(std::uint32_t loop_op0, std::uint32_t loop_op1)
 {
     m_loop_op0 = loop_op0;
     m_loop_op1 = loop_op1;
 }
 
-void ckernel_template::set_end_ops(uint end_op0, uint end_op1)
+void ckernel_template::set_end_ops(std::uint32_t end_op0, std::uint32_t end_op1)
 {
     m_end_op0 = end_op0;
     m_end_op1 = end_op1;
 }
 
-void ckernel_template::set_end_op(uint end_op0)
+void ckernel_template::set_end_op(std::uint32_t end_op0)
 {
     set_end_ops(end_op0, TT_OP_NOP);
 }
 
-void ckernel_template::set_start_op(uint start_op0)
+void ckernel_template::set_start_op(std::uint32_t start_op0)
 {
     m_start_op0 = start_op0;
 }
 
-void ckernel_template::set_last_inner_loop_instr(uint op)
+void ckernel_template::set_last_inner_loop_instr(std::uint32_t op)
 {
     m_loop1_last_instr = op;
 }
 
-void ckernel_template::set_last_outer_loop_instr(uint op)
+void ckernel_template::set_last_outer_loop_instr(std::uint32_t op)
 {
     m_loop0_last_instr = op;
 }
 
-void ckernel_template::program_and_run(volatile uint *instrn_buffer)
+void ckernel_template::program_and_run(volatile std::uint32_t *instrn_buffer)
 {
     program(instrn_buffer);
     run(instrn_buffer);
 }
 
-void ckernel_template::program_and_run_and_finish(volatile uint *instrn_buffer)
+void ckernel_template::program_and_run_and_finish(volatile std::uint32_t *instrn_buffer)
 {
     program(instrn_buffer);
     run_and_finish(instrn_buffer);
 }
 
-void ckernel_template::run([[maybe_unused]] volatile uint *instrn_buffer)
+void ckernel_template::run([[maybe_unused]] volatile std::uint32_t *instrn_buffer)
 {
     TTI_MOP(1, 0, 0, 0); // run the double-loop template
 }
 
-void ckernel_template::run_bank0_sw_cntl([[maybe_unused]] volatile uint *instrn_buffer)
+void ckernel_template::run_bank0_sw_cntl([[maybe_unused]] volatile std::uint32_t *instrn_buffer)
 {
     TTI_MOP(1, 0, 0, 0); // run the double-loop template
 }
 
-void ckernel_template::run_and_finish([[maybe_unused]] volatile uint *instrn_buffer)
+void ckernel_template::run_and_finish([[maybe_unused]] volatile std::uint32_t *instrn_buffer)
 {
     TTI_MOP(1, 1, 0, 0); // run the double-loop template
 }
 
-void ckernel_template::run_bank1_sw_cntl([[maybe_unused]] volatile uint *instrn_buffer)
+void ckernel_template::run_bank1_sw_cntl([[maybe_unused]] volatile std::uint32_t *instrn_buffer)
 {
     TTI_MOP(1, 1, 0, 0); // run the double-loop template
 }
 
-void ckernel_template::program([[maybe_unused]] volatile uint *instrn_buffer)
+void ckernel_template::program([[maybe_unused]] volatile std::uint32_t *instrn_buffer)
 {
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
@@ -387,7 +389,7 @@ void ckernel_template::program([[maybe_unused]] volatile uint *instrn_buffer)
     mop_cfg->MOP_CONFIG              = 1;
 }
 
-void ckernel_template::program_bank0_sw_cntl([[maybe_unused]] volatile uint *instrn_buffer)
+void ckernel_template::program_bank0_sw_cntl([[maybe_unused]] volatile std::uint32_t *instrn_buffer)
 {
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
@@ -406,7 +408,7 @@ void ckernel_template::program_bank0_sw_cntl([[maybe_unused]] volatile uint *ins
     //    mop_cfg->MOP_CONFIG               = 1;
 }
 
-void ckernel_template::program_bank1_sw_cntl([[maybe_unused]] volatile uint *instrn_buffer)
+void ckernel_template::program_bank1_sw_cntl([[maybe_unused]] volatile std::uint32_t *instrn_buffer)
 {
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
@@ -426,22 +428,22 @@ void ckernel_template::program_bank1_sw_cntl([[maybe_unused]] volatile uint *ins
 }
 
 #if 0
-void ckernel_unpack_template::program_and_run(volatile uint *instrn_buffer, const uint8_t count, const uint32_t zmask)
+void ckernel_unpack_template::program_and_run(volatile std::uint32_t *instrn_buffer, const std::uint8_t count, const std::uint32_t zmask)
 {
   program(instrn_buffer);
   run(instrn_buffer, count, zmask);
 }
 
-void ckernel_unpack_template::run(volatile uint *instrn_buffer, const uint8_t count, const uint32_t zmask)
+void ckernel_unpack_template::run(volatile std::uint32_t *instrn_buffer, const std::uint8_t count, const std::uint32_t zmask)
 {
   // FWASSERT("Unpack template only supports loops up to 128", count <= 128);
   TT_MOP_CFG(zmask >> 16);                // Set the top 16 bits of zmask - we could skip this for count <= 16
   TT_MOP(0, count-1, zmask & 0xFFFF);     // Run the template
 }
 
-void ckernel_unpack_template::program(volatile uint *instrn_buffer) const
+void ckernel_unpack_template::program(volatile std::uint32_t *instrn_buffer) const
 {
-  volatile uint *mop_cfg = reinterpret_cast<volatile uint *>(TENSIX_MOP_CFG_BASE);
+  volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
   mop_sync(); // wait until previous mops have completed
 
@@ -456,8 +458,8 @@ void ckernel_unpack_template::program(volatile uint *instrn_buffer) const
 }
 
 ckernel_unpack_template ckernel_unpack_template::lA(
-        uint A_instr,
-        uint skipA_instr)
+        std::uint32_t A_instr,
+        std::uint32_t skipA_instr)
 {
   return ckernel_unpack_template(
       false, // src B
@@ -470,8 +472,8 @@ ckernel_unpack_template ckernel_unpack_template::lA(
 
 ckernel_unpack_template ckernel_unpack_template::lzA(
         bool neginf,
-        uint A_instr,
-        uint skipA_instr)
+        std::uint32_t A_instr,
+        std::uint32_t skipA_instr)
 {
   return ckernel_unpack_template(
       false, // src B
@@ -482,10 +484,10 @@ ckernel_unpack_template ckernel_unpack_template::lzA(
       0, 0);
 }
 
-ckernel_unpack_template ckernel_unpack_template::lhA(const uint32_t halo_mask)
+ckernel_unpack_template ckernel_unpack_template::lhA(const std::uint32_t halo_mask)
 {
   // Figure out which unpack is last
-  const uint last_mask = (halo_mask == 0x1) ? 0x1 :
+  const std::uint32_t last_mask = (halo_mask == 0x1) ? 0x1 :
                          (halo_mask <= 0x3) ? 0x2 :
                          (halo_mask <= 0x7) ? 0x4 : 0;
 
@@ -500,10 +502,10 @@ ckernel_unpack_template ckernel_unpack_template::lhA(const uint32_t halo_mask)
           0, 0);
 }
 
-ckernel_unpack_template ckernel_unpack_template::flhA(const uint32_t halo_mask)
+ckernel_unpack_template ckernel_unpack_template::flhA(const std::uint32_t halo_mask)
 {
   // Figure out which unpack is last
-  const uint last_mask = (halo_mask == 0x1) ? 0x1 :
+  const std::uint32_t last_mask = (halo_mask == 0x1) ? 0x1 :
                          (halo_mask <= 0x3) ? 0x2 :
                          (halo_mask <= 0x7) ? 0x4 : 0;
 
@@ -518,10 +520,10 @@ ckernel_unpack_template ckernel_unpack_template::flhA(const uint32_t halo_mask)
           0, 0);
 }
 
-ckernel_unpack_template ckernel_unpack_template::lBhA(const uint32_t halo_mask, const bool rarefy)
+ckernel_unpack_template ckernel_unpack_template::lBhA(const std::uint32_t halo_mask, const bool rarefy)
 {
   // Figure out which unpack is last
-  const uint last_mask = (halo_mask == 0x1) ? 0x1 :
+  const std::uint32_t last_mask = (halo_mask == 0x1) ? 0x1 :
                          (halo_mask <= 0x3) ? 0x2 :
                          (halo_mask <= 0x7) ? 0x4 : 0;
 
@@ -537,10 +539,10 @@ ckernel_unpack_template ckernel_unpack_template::lBhA(const uint32_t halo_mask, 
           DEF_SKIP_B);
 }
 
-ckernel_unpack_template ckernel_unpack_template::flBhA(const uint32_t halo_mask)
+ckernel_unpack_template ckernel_unpack_template::flBhA(const std::uint32_t halo_mask)
 {
   // Figure out which unpack is last
-  const uint last_mask = (halo_mask == 0x1) ? 0x1 :
+  const std::uint32_t last_mask = (halo_mask == 0x1) ? 0x1 :
                          (halo_mask <= 0x3) ? 0x2 :
                          (halo_mask <= 0x7) ? 0x4 : 0;
 
@@ -557,11 +559,11 @@ ckernel_unpack_template ckernel_unpack_template::flBhA(const uint32_t halo_mask)
 }
 
 ckernel_unpack_template ckernel_unpack_template::lBA(
-        uint A_instr,
-        uint skipA_instr,
+        std::uint32_t A_instr,
+        std::uint32_t skipA_instr,
 
-        uint B_instr,
-        uint skipB_instr)
+        std::uint32_t B_instr,
+        std::uint32_t skipB_instr)
 {
   return ckernel_unpack_template(
           true, // src B

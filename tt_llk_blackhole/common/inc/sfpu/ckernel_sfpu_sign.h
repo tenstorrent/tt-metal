@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_is_fp16_zero.h"
 #include "sfpi.h"
 
@@ -13,7 +15,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_sign_(const int iterations, uint exponent_size_8)
+inline void _calculate_sign_(const int iterations, std::uint32_t exponent_size_8)
 {
 // All params are in FP16 format
 // uint format = 1;

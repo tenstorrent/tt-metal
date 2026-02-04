@@ -12,13 +12,13 @@
 #include "params.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
-uint32_t tile_size                = 128;
-const int iterations              = 32; // Dependent on size of input tensor (1024 currently). Could be made dynamic once tensor size becomes variable.
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t tile_size                = 128;
+const int iterations                   = 32; // Dependent on size of input tensor (1024 currently). Could be made dynamic once tensor size becomes variable.
 
-constexpr uint32_t buffer_A_tilized = 0x66000; // L1 address of buffer, placed so both coverage and non-coverage elfs don't run it over
+constexpr std::uint32_t buffer_A_tilized = 0x66000; // L1 address of buffer, placed so both coverage and non-coverage elfs don't run it over
 
 #ifdef LLK_TRISC_UNPACK
 

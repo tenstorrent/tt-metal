@@ -78,9 +78,9 @@
 #define MOP_CFG_REGS        ((volatile mop_config_regs_t *)(MOP_CFG_BASE))
 
 // These addresses are defined by software convention
-#define L1_KERNEL_BASE 0x1F000                       // This is a 128-bit address
-const static uint32_t L1_MATH_KERNEL_BASE = 0x1E000; // This is a 128-bit address
-#define L1_L0_DUMP 0x1D000                           // This is a 128-bit address
+#define L1_KERNEL_BASE 0x1F000                            // This is a 128-bit address
+const static std::uint32_t L1_MATH_KERNEL_BASE = 0x1E000; // This is a 128-bit address
+#define L1_L0_DUMP 0x1D000                                // This is a 128-bit address
 
 // TDMA register base
 #define RISCV_TDMA_REGS_START_ADDR                       TILE_COUNTERS_BASE
@@ -268,7 +268,7 @@ end
 
 ////////////trisc ldm//////////////
 #define TRISC_LDM_BASE     (LOCAL_REGS_BASE + 0x00002000)
-#define TRISC_LDM_BASE_PTR ((uint32_t volatile *)(TRISC_LDM_BASE))
+#define TRISC_LDM_BASE_PTR ((std::uint32_t volatile *)(TRISC_LDM_BASE))
 #define TRISC_LDM(core_id) (TRISC_LDM_BASE_PTR + (core_id) * 2048)
 
 /////////////
@@ -276,7 +276,7 @@ end
 #define HW_INTS                             15
 #define SW_INTS                             4
 #define RISC_PIC_BASE                       (LOCAL_REGS_BASE + 0x00000400)
-#define RISC_PIC_BASE_PTR                   ((uint32_t volatile *)(RISC_PIC_BASE))
+#define RISC_PIC_BASE_PTR                   ((std::uint32_t volatile *)(RISC_PIC_BASE))
 #define RISC_PIC_BRISC_SW_INT_EN(core_id)   (RISC_PIC_BASE_PTR + 0 + (core_id) * 64)
 #define RISC_PIC_BRISC_HW_INT_EN(core_id)   (RISC_PIC_BASE_PTR + 1 + (core_id) * 64)
 #define RISC_PIC_BRISC_INT_NO(core_id)      (RISC_PIC_BASE_PTR + 2 + (core_id) * 64)
@@ -287,8 +287,8 @@ end
 #define RISC_PIC_BRISC_HW_IVT_BASE(core_id) (RISC_PIC_BASE_PTR + 6 + SW_INTS + (core_id) * 64)
 #define RISC_PIC_BRISC_EX_REG_BASE(core_id) (RISC_PIC_BASE_PTR + 6 + SW_INTS + HW_INTS + (core_id) * 64)
 
-#define DEBUG_DEST_BASE_PTR32 ((uint32_t volatile *)(DEST_REGS_BASE))
-#define DEBUG_DEST_BASE_PTR16 ((uint16_t volatile *)(DEST_REGS_BASE))
+#define DEBUG_DEST_BASE_PTR32 ((std::uint32_t volatile *)(DEST_REGS_BASE))
+#define DEBUG_DEST_BASE_PTR16 ((std::uint16_t volatile *)(DEST_REGS_BASE))
 
 /////////////
 // Instruction macro definitions

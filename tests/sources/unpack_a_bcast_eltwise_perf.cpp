@@ -15,9 +15,9 @@
 #include "profiler.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -45,7 +45,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
         }
         else
         {
-            for (uint32_t i = 0; i < params->TILE_CNT / params->SRCA_REUSE_COUNT; i++)
+            for (std::uint32_t i = 0; i < params->TILE_CNT / params->SRCA_REUSE_COUNT; i++)
             {
                 _llk_unpack_bcastA_B_(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i * params->SRCA_REUSE_COUNT]), params->SRCA_REUSE_COUNT);
             }
@@ -84,7 +84,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             _llk_math_wait_for_dest_available_<dest_sync>();
-            for (uint32_t i = 0; i < params->TILE_CNT / params->SRCA_REUSE_COUNT; i++)
+            for (std::uint32_t i = 0; i < params->TILE_CNT / params->SRCA_REUSE_COUNT; i++)
             {
                 _llk_math_eltwise_binary_(i * params->SRCA_REUSE_COUNT /* dst_index */);
             }
@@ -92,7 +92,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
         else
         {
             _llk_math_wait_for_dest_available_<dest_sync>();
-            for (uint32_t i = 0; i < params->TILE_CNT / params->SRCA_REUSE_COUNT; i++)
+            for (std::uint32_t i = 0; i < params->TILE_CNT / params->SRCA_REUSE_COUNT; i++)
             {
                 _llk_math_eltwise_binary_(i * params->SRCA_REUSE_COUNT /* dst_index */);
             }
@@ -127,14 +127,14 @@ void run_kernel(const volatile struct RuntimeParams* params)
         }
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            for (uint32_t tile = 0; tile < params->TILE_CNT; tile++)
+            for (std::uint32_t tile = 0; tile < params->TILE_CNT; tile++)
             {
                 _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(tile, PERF_ADDRESS(PERF_OUTPUT, tile));
             }
         }
         else
         {
-            for (uint32_t tile = 0; tile < params->TILE_CNT; tile++)
+            for (std::uint32_t tile = 0; tile < params->TILE_CNT; tile++)
             {
                 _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(tile, PERF_ADDRESS(PERF_OUTPUT, tile));
             }

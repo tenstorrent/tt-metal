@@ -148,30 +148,32 @@ behave like the Bias counter.
 
 */
 
+#include <cstdint>
+
 #include "tensix.h"
 
 namespace ckernel
 {
 
-constexpr uint8_t ADDR_MOD_0 = 0;
-constexpr uint8_t ADDR_MOD_1 = 1;
-constexpr uint8_t ADDR_MOD_2 = 2;
-constexpr uint8_t ADDR_MOD_3 = 3;
-constexpr uint8_t ADDR_MOD_4 = 4;
-constexpr uint8_t ADDR_MOD_5 = 5;
-constexpr uint8_t ADDR_MOD_6 = 6;
-constexpr uint8_t ADDR_MOD_7 = 7;
+constexpr std::uint8_t ADDR_MOD_0 = 0;
+constexpr std::uint8_t ADDR_MOD_1 = 1;
+constexpr std::uint8_t ADDR_MOD_2 = 2;
+constexpr std::uint8_t ADDR_MOD_3 = 3;
+constexpr std::uint8_t ADDR_MOD_4 = 4;
+constexpr std::uint8_t ADDR_MOD_5 = 5;
+constexpr std::uint8_t ADDR_MOD_6 = 6;
+constexpr std::uint8_t ADDR_MOD_7 = 7;
 
 struct addr_mod_t
 {
     // CLR, CR, INCR(4 bits)
     struct addr_mod_src_t
     {
-        uint8_t incr = 0;
-        uint8_t clr  = 0;
-        uint8_t cr   = 0;
+        std::uint8_t incr = 0;
+        std::uint8_t clr  = 0;
+        std::uint8_t cr   = 0;
 
-        constexpr uint8_t val() const
+        constexpr std::uint8_t val() const
         {
             return (incr & 0x3F) | ((cr & 0x1) << 6) | ((clr & 0x1) << 7);
         }
@@ -183,12 +185,12 @@ struct addr_mod_t
     // CLR, CR, INCR(10 bits)
     struct addr_mod_dest_t
     {
-        uint16_t incr   = 0;
-        uint8_t clr     = 0;
-        uint8_t cr      = 0;
-        uint8_t c_to_cr = 0;
+        std::uint16_t incr   = 0;
+        std::uint8_t clr     = 0;
+        std::uint8_t cr      = 0;
+        std::uint8_t c_to_cr = 0;
 
-        constexpr uint16_t val() const
+        constexpr std::uint16_t val() const
         {
             return (incr & 0x3FF) | ((cr & 0x1) << 10) | ((clr & 0x1) << 11) | ((c_to_cr & 0x1) << 12); // Updated manually when dest incr changed to 10 bits
         }
@@ -197,10 +199,10 @@ struct addr_mod_t
     // CLR, INCT (2 bits)
     struct addr_mod_fidelity_t
     {
-        uint8_t incr = 0;
-        uint8_t clr  = 0;
+        std::uint8_t incr = 0;
+        std::uint8_t clr  = 0;
 
-        constexpr uint16_t val() const
+        constexpr std::uint16_t val() const
         {
             return (incr & 0x3) | ((clr & 0x1) << 2);
         }
@@ -222,18 +224,18 @@ struct addr_mod_t
     addr_mod_fidelity_t fidelity = {};
 
     // SrcA/B register is combination of A and B values
-    constexpr uint16_t src_val() const
+    constexpr std::uint16_t src_val() const
     {
         return srca.val() | (srcb.val() << 8);
     }
 
-    constexpr uint16_t dest_val() const
+    constexpr std::uint16_t dest_val() const
     {
         return dest.val() | fidelity.val() << 13;
     }
 
     // List of addresses of src/dest registers
-    constexpr static uint32_t addr_mod_src_reg_addr[] = {
+    constexpr static std::uint32_t addr_mod_src_reg_addr[] = {
         ADDR_MOD_AB_SEC0_SrcAIncr_ADDR32,
         ADDR_MOD_AB_SEC1_SrcAIncr_ADDR32,
         ADDR_MOD_AB_SEC2_SrcAIncr_ADDR32,
@@ -243,7 +245,7 @@ struct addr_mod_t
         ADDR_MOD_AB_SEC6_SrcAIncr_ADDR32,
         ADDR_MOD_AB_SEC7_SrcAIncr_ADDR32};
 
-    constexpr static uint32_t addr_mod_dest_reg_addr[] = {
+    constexpr static std::uint32_t addr_mod_dest_reg_addr[] = {
         ADDR_MOD_DST_SEC0_DestIncr_ADDR32,
         ADDR_MOD_DST_SEC1_DestIncr_ADDR32,
         ADDR_MOD_DST_SEC2_DestIncr_ADDR32,
@@ -256,9 +258,9 @@ struct addr_mod_t
 #define NUM_MATH_ADDR_MODS 8
 
     // Program source and dest registers
-    __attribute__((always_inline)) inline addr_mod_t const& set(const uint8_t mod_index, uint32_t thread_id = 1) const
+    __attribute__((always_inline)) inline addr_mod_t const& set(const std::uint8_t mod_index, std::uint32_t thread_id = 1) const
     {
-        auto cfg                                                                = (volatile uint32_t*)TENSIX_CFG_BASE;
+        auto cfg                                                                = (volatile std::uint32_t*)TENSIX_CFG_BASE;
         cfg[addr_mod_src_reg_addr[mod_index] + NUM_MATH_ADDR_MODS * thread_id]  = src_val();
         cfg[addr_mod_dest_reg_addr[mod_index] + NUM_MATH_ADDR_MODS * thread_id] = dest_val();
         return *this;

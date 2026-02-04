@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "tensix.h" //RISCV_DEBUG macros
 
-enum class rvdbg_cmd : uint32_t
+enum class rvdbg_cmd : std::uint32_t
 {
     PAUSE      = (1 << 0),
     STEP       = (1 << 1),
@@ -28,7 +30,7 @@ enum class rvdbg_cmd : uint32_t
     DBG_MODE_BIT = (1U << 31)
 };
 
-enum class rvdbg_risc_sel : uint32_t
+enum class rvdbg_risc_sel : std::uint32_t
 {
     TRISC0 = 0x0000'0000,
     TRISC1 = 0x0002'0000,
@@ -36,7 +38,7 @@ enum class rvdbg_risc_sel : uint32_t
     TRISC3 = 0x0006'0000
 };
 
-enum class rvdbg_reg : uint32_t
+enum class rvdbg_reg : std::uint32_t
 {
     STATUS          = 0,
     COMMAND         = 1,
@@ -67,7 +69,7 @@ union rvdbg_status
         unsigned reason    : 8;
     };
 
-    uint32_t val;
+    std::uint32_t val;
 };
 
 /* Quick reference:
@@ -104,9 +106,9 @@ RISC_DBG_STATUS_1[31:0] = reg_rd_data; //Gets saved when rd_valid goes high and
 
 // Using the (rather clumsy) interface in the riscv_debug_regs, write a
 // value to one of the RISCV debug control registers
-void riscv_dbg_wr(rvdbg_risc_sel risc_sel, rvdbg_reg index, uint32_t val)
+void riscv_dbg_wr(rvdbg_risc_sel risc_sel, rvdbg_reg index, std::uint32_t val)
 {
-    uint32_t const cntl0_wr_cmd = CNTL0_PULSE | static_cast<uint32_t>(risc_sel) | CNTL0_WR | static_cast<uint32_t>(index);
+    std::uint32_t const cntl0_wr_cmd = CNTL0_PULSE | static_cast<std::uint32_t>(risc_sel) | CNTL0_WR | static_cast<std::uint32_t>(index);
 
     RISCV_DEBUG_REGS->RISC_DBG_CNTL_1 = val;
     RISCV_DEBUG_REGS->RISC_DBG_CNTL_0 = 0; // Clear pulse bit so we get a 0-1 transition on it
@@ -120,9 +122,9 @@ void riscv_dbg_wr(rvdbg_risc_sel risc_sel, rvdbg_reg index, uint32_t val)
 
 // Using the (rather clumsy) interface in the riscv_debug_regs, read a
 // value from one of the RISCV debug control registers
-uint32_t riscv_dbg_rd(rvdbg_risc_sel risc_sel, rvdbg_reg index)
+std::uint32_t riscv_dbg_rd(rvdbg_risc_sel risc_sel, rvdbg_reg index)
 {
-    uint32_t const cntl0_rd_cmd = CNTL0_PULSE | static_cast<uint32_t>(risc_sel) | CNTL0_RD | static_cast<uint32_t>(index);
+    std::uint32_t const cntl0_rd_cmd = CNTL0_PULSE | static_cast<std::uint32_t>(risc_sel) | CNTL0_RD | static_cast<std::uint32_t>(index);
 
     RISCV_DEBUG_REGS->RISC_DBG_CNTL_0 = 0; // Clear pulse bit so we get a 0-1 transition on it
     RISCV_DEBUG_REGS->RISC_DBG_CNTL_0 = cntl0_rd_cmd;
@@ -141,20 +143,20 @@ uint32_t riscv_dbg_rd(rvdbg_risc_sel risc_sel, rvdbg_reg index)
 
 inline void riscv_dbg_cmd(rvdbg_cmd cmd, rvdbg_risc_sel risc_sel)
 {
-    riscv_dbg_wr(risc_sel, rvdbg_reg::COMMAND, static_cast<uint32_t>(cmd));
+    riscv_dbg_wr(risc_sel, rvdbg_reg::COMMAND, static_cast<std::uint32_t>(cmd));
 }
 
-inline uint32_t riscv_dbg_cmd(rvdbg_cmd cmd, rvdbg_risc_sel risc_sel, uint32_t arg0)
+inline std::uint32_t riscv_dbg_cmd(rvdbg_cmd cmd, rvdbg_risc_sel risc_sel, std::uint32_t arg0)
 {
     riscv_dbg_wr(risc_sel, rvdbg_reg::COMMAND_ARG0, arg0);
-    riscv_dbg_wr(risc_sel, rvdbg_reg::COMMAND, static_cast<uint32_t>(cmd));
+    riscv_dbg_wr(risc_sel, rvdbg_reg::COMMAND, static_cast<std::uint32_t>(cmd));
 
     return riscv_dbg_rd(risc_sel, rvdbg_reg::COMMAND_RET_VAL);
 }
 
-inline void riscv_dbg_cmd(rvdbg_cmd cmd, rvdbg_risc_sel risc_sel, uint32_t arg0, uint32_t arg1)
+inline void riscv_dbg_cmd(rvdbg_cmd cmd, rvdbg_risc_sel risc_sel, std::uint32_t arg0, std::uint32_t arg1)
 {
     riscv_dbg_wr(risc_sel, rvdbg_reg::COMMAND_ARG0, arg0);
     riscv_dbg_wr(risc_sel, rvdbg_reg::COMMAND_ARG1, arg1);
-    riscv_dbg_wr(risc_sel, rvdbg_reg::COMMAND, static_cast<uint32_t>(cmd));
+    riscv_dbg_wr(risc_sel, rvdbg_reg::COMMAND, static_cast<std::uint32_t>(cmd));
 }

@@ -26,31 +26,31 @@ using namespace ckernel;
 namespace ckernel::math
 {
 
-constexpr uint DstTileSize[3] = {
+constexpr std::uint32_t DstTileSize[3] = {
     64, // 32x32 tile shape
     32, // 32x16, 16x32 tile shape
     16  // 16x16 tile shape
 };
-constexpr uint DstTileSizeLog2[3] = {
+constexpr std::uint32_t DstTileSizeLog2[3] = {
     6, // 32x32 tile shape
     5, // 32x16, 16x32 tile shape
     4  // 16x16 tile shape
 };
 
-constexpr uint replay_buf_offset = 16; // split replay buffer usage between fpu/sfpu
-                                       // first 16 for sfpu, next 16 for fpu
+constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage between fpu/sfpu
+                                                // first 16 for sfpu, next 16 for fpu
 
-inline void reset_counters(const uint setrwc)
+inline void reset_counters(const std::uint32_t setrwc)
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, setrwc);
 }
 
-inline void incr_counters(const uint incr_a, const uint incr_b, const uint incr_d, const uint incr_cr)
+inline void incr_counters(const std::uint32_t incr_a, const std::uint32_t incr_b, const std::uint32_t incr_d, const std::uint32_t incr_cr)
 {
     TT_INCRWC(incr_cr, incr_d, incr_b, incr_a);
 }
 
-inline void move_d2a_fixed_face(const uint8_t addrmod)
+inline void move_d2a_fixed_face(const std::uint8_t addrmod)
 {
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD); // MOVD2A for a whole face assumes unpacker will set a dummy data_valid, so we want to wait on that
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, addrmod, p_movd2a::MOV_4_ROWS, 0);
@@ -59,7 +59,7 @@ inline void move_d2a_fixed_face(const uint8_t addrmod)
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 12, addrmod, p_movd2a::MOV_4_ROWS, 12);
 }
 
-inline void move_d2b_fixed_face(const uint8_t addrmod)
+inline void move_d2b_fixed_face(const std::uint8_t addrmod)
 {
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD); // MOVD2B for a whole face assumes unpacker will set a dummy data_valid, so we want to wait on that
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, addrmod, p_movd2b::MOV_4_ROWS, 0);
@@ -68,7 +68,7 @@ inline void move_d2b_fixed_face(const uint8_t addrmod)
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, addrmod, p_movd2b::MOV_4_ROWS, 12);
 }
 
-inline void move_d2a_row_broadcast_fixed_face(const uint8_t addrmod)
+inline void move_d2a_row_broadcast_fixed_face(const std::uint8_t addrmod)
 {
     // // Seems to make things 200 clocks slower. Really shouldn't though.
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, addrmod, p_movd2a::MOV_1_ROW, 0);
@@ -89,13 +89,13 @@ inline void move_d2a_row_broadcast_fixed_face(const uint8_t addrmod)
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 15, addrmod, p_movd2a::MOV_1_ROW, 0);
 }
 
-inline void move_a2d_fixed_face(const uint8_t addrmod)
+inline void move_a2d_fixed_face(const std::uint8_t addrmod)
 {
     TTI_MOVA2D(0, p_mova2d::MATH_HALO_ROWS, addrmod, p_mova2d::MOV_8_ROWS, 0);
     TTI_MOVA2D(0, p_mova2d::MATH_HALO_ROWS, addrmod, p_mova2d::MOV_8_ROWS, 0);
 }
 
-template <uint SrcReg>
+template <std::uint32_t SrcReg>
 inline void wait_bank_valid()
 {
     if constexpr (SrcReg == Srcs::SrcA)
@@ -108,7 +108,7 @@ inline void wait_bank_valid()
     }
 }
 
-template <uint SrcReg>
+template <std::uint32_t SrcReg>
 inline void clear_bank_valid()
 {
     if constexpr (SrcReg == Srcs::SrcA)
@@ -150,10 +150,10 @@ inline void math_unpack_to_dest_tile_ready()
 }
 
 template <DstTileShape tile_shape, UnpackDestination unpack_destination>
-inline void set_dst_write_addr(uint32_t tile_index)
+inline void set_dst_write_addr(std::uint32_t tile_index)
 {
-    uint dst_index = tile_index << DstTileSizeLog2[tile_shape];
-    dst_index      = dst_index + get_dest_buffer_base();
+    std::uint32_t dst_index = tile_index << DstTileSizeLog2[tile_shape];
+    dst_index               = dst_index + get_dest_buffer_base();
     if constexpr (unpack_destination == UnpackDestination::DestReg)
     {
         mailbox_write(ThreadId::UnpackThreadId, dst_index); // Send to unpacker
@@ -181,7 +181,7 @@ inline void clear_addr_mod_base()
     TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 0); // clear addr mod base (use addr mods 0..3)
 }
 
-template <uint num_rows = 8>
+template <std::uint32_t num_rows = 8>
 inline void inc_dst_addr()
 {
     static_assert(num_rows <= 15, "num_rows must be <= 15");
@@ -196,7 +196,7 @@ inline void math_dest_wait()
 inline void dest_section_flip()
 {
     update_dest_offset_id();
-    uint base_addr = get_dest_buffer_base();
+    std::uint32_t base_addr = get_dest_buffer_base();
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
 }
@@ -204,7 +204,7 @@ inline void dest_section_flip()
 template <DstStart Dst>
 inline void set_dest_section_base()
 {
-    uint base_addr;
+    std::uint32_t base_addr;
     if constexpr (Dst == DstStart::StartZero)
     {
         base_addr = 0;
@@ -218,11 +218,11 @@ inline void set_dest_section_base()
 
 inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::uint32_t dst_format)
 {
-    const uint input_df  = src_format & 0xF;
-    const uint output_df = dst_format & 0xF;
+    const std::uint32_t input_df  = src_format & 0xF;
+    const std::uint32_t output_df = dst_format & 0xF;
 
-    return ((input_df == (uint)DataFormat::Int32) || (input_df == (uint)DataFormat::Float32)) &&
-           ((output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32));
+    return ((input_df == (std::uint32_t)DataFormat::Int32) || (input_df == (std::uint32_t)DataFormat::Float32)) &&
+           ((output_df == (std::uint32_t)DataFormat::Int32) || (output_df == (std::uint32_t)DataFormat::Float32));
 }
 
 inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc)

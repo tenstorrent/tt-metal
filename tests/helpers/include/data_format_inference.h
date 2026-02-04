@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <type_traits>
 #include <utility>
 
@@ -45,13 +46,13 @@ constexpr bool is_quasar    = true;
  */
 struct FormatConfig
 {
-    const uint32_t unpack_src;
-    const uint32_t unpack_dst;
-    const uint32_t math;
-    const uint32_t pack_src;
-    const uint32_t pack_dst;
+    const std::uint32_t unpack_src;
+    const std::uint32_t unpack_dst;
+    const std::uint32_t math;
+    const std::uint32_t pack_src;
+    const std::uint32_t pack_dst;
 
-    constexpr FormatConfig(uint32_t unpack_src_, uint32_t unpack_dst_, uint32_t math_, uint32_t pack_src_, uint32_t pack_dst_) :
+    constexpr FormatConfig(std::uint32_t unpack_src_, std::uint32_t unpack_dst_, std::uint32_t math_, std::uint32_t pack_src_, std::uint32_t pack_dst_) :
         unpack_src(unpack_src_), unpack_dst(unpack_dst_), math(math_), pack_src(pack_src_), pack_dst(pack_dst_)
     {
     }

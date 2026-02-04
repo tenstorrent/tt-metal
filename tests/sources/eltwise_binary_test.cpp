@@ -13,9 +13,9 @@
 #include "llk_defs.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -25,11 +25,11 @@ uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel(const volatile struct RuntimeParams *params)
 {
-    const uint32_t face_r_dim    = params->TEST_FACE_R_DIM;
-    const uint32_t num_faces     = params->num_faces;
-    const uint32_t transpose     = params->UNPACK_TRANSPOSE_FACES;
-    const int num_tiles_in_block = params->NUM_TILES_IN_BLOCK;
-    const int num_blocks         = params->NUM_BLOCKS;
+    const std::uint32_t face_r_dim = params->TEST_FACE_R_DIM;
+    const std::uint32_t num_faces  = params->num_faces;
+    const std::uint32_t transpose  = params->UNPACK_TRANSPOSE_FACES;
+    const int num_tiles_in_block   = params->NUM_TILES_IN_BLOCK;
+    const int num_blocks           = params->NUM_BLOCKS;
 
     // Configure hardware for unpacking, no broadcast, no transpose
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -59,9 +59,9 @@ using namespace ckernel;
 
 void run_kernel(const volatile struct RuntimeParams *params)
 {
-    const uint32_t num_faces     = params->num_faces;
-    const int num_tiles_in_block = params->NUM_TILES_IN_BLOCK;
-    const int num_blocks         = params->NUM_BLOCKS;
+    const std::uint32_t num_faces = params->num_faces;
+    const int num_tiles_in_block  = params->NUM_TILES_IN_BLOCK;
+    const int num_blocks          = params->NUM_BLOCKS;
 
     // Initialize math for element-wise subtraction
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
@@ -92,12 +92,12 @@ void run_kernel(const volatile struct RuntimeParams *params)
 void run_kernel(const volatile struct RuntimeParams *params)
 {
     // Cache volatile values to ensure consistent reads
-    const uint32_t face_r_dim    = params->TEST_FACE_R_DIM;
-    const uint32_t num_faces     = params->num_faces;
-    const int num_tiles_in_block = params->NUM_TILES_IN_BLOCK;
-    const int num_blocks         = params->NUM_BLOCKS;
+    const std::uint32_t face_r_dim = params->TEST_FACE_R_DIM;
+    const std::uint32_t num_faces  = params->num_faces;
+    const int num_tiles_in_block   = params->NUM_TILES_IN_BLOCK;
+    const int num_blocks           = params->NUM_BLOCKS;
 
-    const uint32_t tile_size = face_r_dim * 16 * num_faces;
+    const std::uint32_t tile_size = face_r_dim * 16 * num_faces;
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(formats.pack_src, formats.pack_dst, tile_size);

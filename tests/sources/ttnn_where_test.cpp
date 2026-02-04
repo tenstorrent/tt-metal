@@ -10,9 +10,9 @@
 #include "llk_defs.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -25,7 +25,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     using DataFormatUT = std::underlying_type_t<DataFormat>;
     auto to_ufmt       = [](DataFormat fmt) constexpr { return static_cast<DataFormatUT>(fmt); };
 
-    uint8_t UNPACK_FMT;
+    std::uint8_t UNPACK_FMT;
     if (UNPACK_A_IN == to_ufmt(DataFormat::Float32))
     {
         UNPACK_FMT = to_ufmt(DataFormat::Float32);
@@ -43,9 +43,9 @@ void run_kernel(const volatile struct RuntimeParams *params)
         UNPACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-    constexpr uint32_t buffer_condition = buffer_A[0];
-    constexpr uint32_t buffer_true      = buffer_B[0];
-    constexpr uint32_t buffer_false     = buffer_C[0];
+    constexpr std::uint32_t buffer_condition = buffer_A[0];
+    constexpr std::uint32_t buffer_true      = buffer_B[0];
+    constexpr std::uint32_t buffer_false     = buffer_C[0];
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
         UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
@@ -76,7 +76,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     using DataFormatUT = std::underlying_type_t<DataFormat>;
     auto to_ufmt       = [](DataFormat fmt) constexpr { return static_cast<DataFormatUT>(fmt); };
 
-    uint8_t MATH_FMT;
+    std::uint8_t MATH_FMT;
     if (UNPACK_A_IN == to_ufmt(DataFormat::Float32))
     {
         MATH_FMT = to_ufmt(DataFormat::Float32);
@@ -156,7 +156,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
         PACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-    constexpr uint32_t buffer_Dest = buffer_Res[0];
+    constexpr std::uint32_t buffer_Dest = buffer_Res[0];
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4);

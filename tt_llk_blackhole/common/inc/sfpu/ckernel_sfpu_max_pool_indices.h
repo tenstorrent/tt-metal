@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "sfpi.h"
@@ -33,15 +35,15 @@ template <
     int ITERATIONS             = 8,
     ckernel::DataLayout layout = ckernel::DataLayout::TILE,
     bool accumulate            = false>
-inline void _calculate_max_pool_with_indices_(const uint values_tile_idx, const uint indices_tile_idx, const uint chunk)
+inline void _calculate_max_pool_with_indices_(const std::uint32_t values_tile_idx, const std::uint32_t indices_tile_idx, const std::uint32_t chunk)
 {
     // size of each tile in Dest is 64 rows
-    constexpr uint dst_tile_size   = 64;
-    const uint values_tile_offset  = values_tile_idx * dst_tile_size;
-    const uint indices_tile_offset = indices_tile_idx * dst_tile_size;
+    constexpr std::uint32_t dst_tile_size   = 64;
+    const std::uint32_t values_tile_offset  = values_tile_idx * dst_tile_size;
+    const std::uint32_t indices_tile_offset = indices_tile_idx * dst_tile_size;
     // each face is 16 rows
-    constexpr uint face_offset        = 16;
-    constexpr uint8_t instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    constexpr std::uint32_t face_offset    = 16;
+    constexpr std::uint8_t instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
 
     if constexpr (layout == ckernel::DataLayout::ROW_MAJOR)
     {
@@ -66,7 +68,7 @@ inline void _calculate_max_pool_with_indices_(const uint values_tile_idx, const 
         // Face 0 Row 8
         // Face 1 Row 8
 
-        auto process_columns = [values_tile_offset, indices_tile_offset](const uint col_offset) __attribute__((always_inline))
+        auto process_columns = [values_tile_offset, indices_tile_offset](const std::uint32_t col_offset) __attribute__((always_inline))
         {
             // data
             TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, values_tile_offset + 0 + col_offset);
@@ -182,18 +184,18 @@ inline void _calculate_max_pool_with_indices_(const uint values_tile_idx, const 
  * it must be called with layout=DataLayout::ROW_MAJOR.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS, bool accumulate = false>
-inline void _calculate_max_pool_with_indices_generic_(const uint values_tile_idx, const uint indices_tile_idx, const uint chunk)
+inline void _calculate_max_pool_with_indices_generic_(const std::uint32_t values_tile_idx, const std::uint32_t indices_tile_idx, const std::uint32_t chunk)
 {
     // size of each tile in Dest is 64 rows
-    constexpr uint dst_tile_size         = 64;
-    const uint values_tile_offset        = values_tile_idx * dst_tile_size;
-    const uint indices_tile_offset       = indices_tile_idx * dst_tile_size;
-    const uint values_accum_tile_offset  = (values_tile_idx + 1) * dst_tile_size;
-    const uint indices_accum_tile_offset = (indices_tile_idx + 1) * dst_tile_size;
+    constexpr std::uint32_t dst_tile_size         = 64;
+    const std::uint32_t values_tile_offset        = values_tile_idx * dst_tile_size;
+    const std::uint32_t indices_tile_offset       = indices_tile_idx * dst_tile_size;
+    const std::uint32_t values_accum_tile_offset  = (values_tile_idx + 1) * dst_tile_size;
+    const std::uint32_t indices_accum_tile_offset = (indices_tile_idx + 1) * dst_tile_size;
     // each face is 16 rows
-    constexpr uint eight_row_offset   = 16;
-    constexpr uint sixteen_row_offset = 32;
-    constexpr uint8_t instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    constexpr std::uint32_t eight_row_offset   = 16;
+    constexpr std::uint32_t sixteen_row_offset = 32;
+    constexpr std::uint8_t instr_mod_index     = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
 
     // ROW MAJOR DATA VERSION OF MPWI
     // DATA IS EXPECTED TO BE IN THE FOLLOWING ORDER IN DEST:
@@ -208,7 +210,7 @@ inline void _calculate_max_pool_with_indices_generic_(const uint values_tile_idx
     // Face 1 Row 31
 
     // Reduces 8 rows to max in LREG0/LREG4, optionally stores result.
-    auto reduce_8_rows = [instr_mod_index](const uint val_base, const uint idx_base, const bool store_result) __attribute__((always_inline))
+    auto reduce_8_rows = [instr_mod_index](const std::uint32_t val_base, const std::uint32_t idx_base, const bool store_result) __attribute__((always_inline))
     {
         // data - precomputed base address eliminates repeated arithmetic
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_base + 0);  // Row 0 and 1
@@ -239,13 +241,13 @@ inline void _calculate_max_pool_with_indices_generic_(const uint values_tile_idx
     // We only need to reload the first block's result into LREG1/LREG5 for the final swap.
     // store_result: if false, result stays in LREG0/LREG4 for caller to use directly.
     auto process_16_rows = [&reduce_8_rows, values_tile_offset, indices_tile_offset, eight_row_offset, instr_mod_index](
-                               const uint base_offset, const uint col_offset, const bool store_result) __attribute__((always_inline))
+                               const std::uint32_t base_offset, const std::uint32_t col_offset, const bool store_result) __attribute__((always_inline))
     {
         // Precompute base addresses for both 8-row blocks
-        const uint val_base_first  = values_tile_offset + base_offset + col_offset;
-        const uint idx_base_first  = indices_tile_offset + base_offset + col_offset;
-        const uint val_base_second = values_tile_offset + eight_row_offset + base_offset + col_offset;
-        const uint idx_base_second = indices_tile_offset + eight_row_offset + base_offset + col_offset;
+        const std::uint32_t val_base_first  = values_tile_offset + base_offset + col_offset;
+        const std::uint32_t idx_base_first  = indices_tile_offset + base_offset + col_offset;
+        const std::uint32_t val_base_second = values_tile_offset + eight_row_offset + base_offset + col_offset;
+        const std::uint32_t idx_base_second = indices_tile_offset + eight_row_offset + base_offset + col_offset;
 
         // First 8 rows: reduce and STORE (we need to free registers for second block)
         reduce_8_rows(val_base_first, idx_base_first, true);
@@ -272,11 +274,11 @@ inline void _calculate_max_pool_with_indices_generic_(const uint values_tile_idx
     // OPTIMIZATION: After process_16_rows(sixteen_row_offset, col), Max(R16-31) is already in LREG0/LREG4.
     // We only need to load Max(R0-15) into LREG1/LREG5, saving 2 loads per column.
     auto final_swap = [values_tile_offset, indices_tile_offset, values_accum_tile_offset, indices_accum_tile_offset, instr_mod_index, chunk](
-                          const uint col_offset) __attribute__((always_inline))
+                          const std::uint32_t col_offset) __attribute__((always_inline))
     {
         // Precompute addresses
-        const uint val_first = values_tile_offset + col_offset;
-        const uint idx_first = indices_tile_offset + col_offset;
+        const std::uint32_t val_first = values_tile_offset + col_offset;
+        const std::uint32_t idx_first = indices_tile_offset + col_offset;
 
         // LREG0/LREG4 already contains Max(R16-31) from the previous process_16_rows call
         // Only need to load Max(R0-15) into LREG1/LREG5
@@ -286,8 +288,8 @@ inline void _calculate_max_pool_with_indices_generic_(const uint values_tile_idx
 
         if constexpr (accumulate)
         {
-            const uint val_accum = values_accum_tile_offset + col_offset;
-            const uint idx_accum = indices_accum_tile_offset + col_offset;
+            const std::uint32_t val_accum = values_accum_tile_offset + col_offset;
+            const std::uint32_t idx_accum = indices_accum_tile_offset + col_offset;
             if (chunk > 0)
             { // for all but the first chunk we need to load the previous result from DST 1 and 3 and do a max with the current result in DST 0 and 2
                 TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, val_accum); // previous accumulated value

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_trisc_common.h"
 #include "llk_pack_common.h"
 
@@ -18,16 +20,16 @@ using namespace ckernel;
  * stored in the buffer descriptor table, values = 16-31
  * @param num_tiles: number of tiles to pack at a time
  */
-template <uint8_t PACK_SEL>
-inline void _llk_pack_mop_config_(const uint8_t buf_desc_id, const uint32_t num_tiles)
+template <std::uint8_t PACK_SEL>
+inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uint32_t num_tiles)
 {
     static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
 
-    const uint32_t MOP_OUTER_LOOP = 1;
-    const uint32_t MOP_INNER_LOOP = num_tiles;
+    const std::uint32_t MOP_OUTER_LOOP = 1;
+    const std::uint32_t MOP_INNER_LOOP = num_tiles;
 
     // RT: Use defines to remove these constexpr, and replace with a single TT_OP_PACR_FACE_INC
-    uint pack_instrn;
+    std::uint32_t pack_instrn;
     if constexpr (PACK_SEL == p_pacr::PACK0)
     {
         pack_instrn = TT_OP_PACR0_TILE_INC(1 /*Dest Tile Idx*/, 1 /*Src Tile Idx*/, buf_desc_id, 0);
@@ -52,8 +54,8 @@ inline void _llk_pack_mop_config_(const uint8_t buf_desc_id, const uint32_t num_
  * stored in the buffer descriptor table, values = 16-31
  * @param num_tiles: number of tiles to pack at a time
  */
-template <uint8_t PACK_SEL>
-inline void _llk_pack_init_(const uint8_t buf_desc_id, const uint32_t num_tiles)
+template <std::uint8_t PACK_SEL>
+inline void _llk_pack_init_(const std::uint8_t buf_desc_id, const std::uint32_t num_tiles)
 {
     _llk_pack_mop_config_<PACK_SEL>(buf_desc_id, num_tiles);
 }
@@ -67,9 +69,9 @@ inline void _llk_pack_init_(const uint8_t buf_desc_id, const uint32_t num_tiles)
  * @param start_l1_tile_idx: The tile index into the l1 output buffer
  * that packer can start packing into
  */
-template <uint8_t PACK_SEL>
+template <std::uint8_t PACK_SEL>
 inline void _llk_pack_(
-    const uint start_math_dest_tile_idx, const uint start_l1_tile_idx
+    const std::uint32_t start_math_dest_tile_idx, const std::uint32_t start_l1_tile_idx
 
 )
 {

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 
@@ -26,7 +28,7 @@ inline void _calculate_lrelu_sfp_rows_()
 }
 
 // Implements leaky relu which return x when x > 0 and x*slope when x < 0
-inline void _calculate_lrelu_(const int iterations, const uint32_t slope)
+inline void _calculate_lrelu_(const int iterations, const std::uint32_t slope)
 {
     TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (slope >> 16)); // store slope in LREG2
     TTI_SFPENCC(1, 2);                                           // enable cc
@@ -56,7 +58,7 @@ inline void _calculate_relu_min_sfp_rows_()
 }
 
 // Implements relu min which returns x when x > threshold, otherwise return 0
-inline void _calculate_relu_min_(const int iterations, const uint32_t threshold)
+inline void _calculate_relu_min_(const int iterations, const std::uint32_t threshold)
 {
     TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
     TTI_SFPENCC(1, 2);                                               // enable cc
@@ -91,7 +93,7 @@ inline void _calculate_relu_max_sfp_rows_()
 }
 
 // Implements relu max
-inline void _calculate_relu_max_(const int iterations, const uint32_t threshold)
+inline void _calculate_relu_max_(const int iterations, const std::uint32_t threshold)
 {
     TTI_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store slope in LREG2
     TTI_SFPENCC(1, 2);                                               // enable cc

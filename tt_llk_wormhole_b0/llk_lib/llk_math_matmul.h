@@ -431,7 +431,7 @@ inline void matmul_configure_mop(
     }
 
     // TODO: can we commonize this?
-    constexpr uint inner_loops = high_fidelity ? NUM_FIDELITY_PHASES : 1;
+    constexpr std::uint32_t inner_loops = high_fidelity ? NUM_FIDELITY_PHASES : 1;
     ckernel_template tmp(1 /* outer loop */, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len));
 
     if constexpr (high_fidelity)
@@ -634,14 +634,14 @@ inline void matmul_configure_mop_throttled(
         run_throttled_sequence<THROTTLE_LEVEL, high_fidelity>(t_dim, reuse_a);
     }
 
-    constexpr uint outer_loops        = (THROTTLE_LEVEL > 3) ? 2 : (high_fidelity ? NUM_FIDELITY_PHASES : 1);
-    const uint inner_loops            = (!is_in1_16x32) ? 2 : 1;
-    constexpr uint loop_instruction_0 = (THROTTLE_LEVEL == 5)   ? lltt::replay_insn(ckernel::math::replay_buf_offset + 1, 8)
-                                        : (THROTTLE_LEVEL == 4) ? lltt::replay_insn(ckernel::math::replay_buf_offset + 2, 6)
-                                                                : lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buff_len_throttle);
-    constexpr uint loop_instruction_1 = (THROTTLE_LEVEL == 5)   ? lltt::replay_insn(ckernel::math::replay_buf_offset + 9, 4)
-                                        : (THROTTLE_LEVEL == 4) ? lltt::replay_insn(ckernel::math::replay_buf_offset + 8, 4)
-                                                                : TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+    constexpr std::uint32_t outer_loops        = (THROTTLE_LEVEL > 3) ? 2 : (high_fidelity ? NUM_FIDELITY_PHASES : 1);
+    const std::uint32_t inner_loops            = (!is_in1_16x32) ? 2 : 1;
+    constexpr std::uint32_t loop_instruction_0 = (THROTTLE_LEVEL == 5)   ? lltt::replay_insn(ckernel::math::replay_buf_offset + 1, 8)
+                                                 : (THROTTLE_LEVEL == 4) ? lltt::replay_insn(ckernel::math::replay_buf_offset + 2, 6)
+                                                                         : lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buff_len_throttle);
+    constexpr std::uint32_t loop_instruction_1 = (THROTTLE_LEVEL == 5)   ? lltt::replay_insn(ckernel::math::replay_buf_offset + 9, 4)
+                                                 : (THROTTLE_LEVEL == 4) ? lltt::replay_insn(ckernel::math::replay_buf_offset + 8, 4)
+                                                                         : TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
     ckernel_template tmp(outer_loops, inner_loops, loop_instruction_0, loop_instruction_1);
 
     if constexpr (THROTTLE_LEVEL == 5)
@@ -728,7 +728,7 @@ inline void _llk_math_matmul_uninit_()
 }
 
 template <int MATH_FIDELITY_DESC, int THROTTLE_LEVEL = 0>
-inline void _llk_math_matmul_(uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
+inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
     const bool reuse_a                = ct_dim >= rt_dim;
     const std::uint32_t t_dim         = reuse_a ? rt_dim : ct_dim;
@@ -736,9 +736,9 @@ inline void _llk_math_matmul_(uint dst_index, const std::uint32_t ct_dim = 1, co
     constexpr int NUM_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
     constexpr bool high_fidelity      = NUM_FIDELITY_PHASES > 0;
 
-    for (uint t = 0; t < t_dim; t++)
+    for (std::uint32_t t = 0; t < t_dim; t++)
     {
-        for (uint rut = 0; rut < rut_dim; rut++)
+        for (std::uint32_t rut = 0; rut < rut_dim; rut++)
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (reuse_a ? ct_dim * t + rut : t + rut * ct_dim));
 
@@ -746,7 +746,7 @@ inline void _llk_math_matmul_(uint dst_index, const std::uint32_t ct_dim = 1, co
             {
                 if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
                 {
-                    for (uint phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
+                    for (std::uint32_t phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
                     {
                         ckernel_template::run();
                     }
@@ -781,7 +781,7 @@ inline void _llk_math_matmul_(uint dst_index, const std::uint32_t ct_dim = 1, co
             {
                 if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
                 {
-                    for (uint phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
+                    for (std::uint32_t phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
                     {
                         ckernel_template::run();
                     }
@@ -826,7 +826,7 @@ inline void _llk_math_matmul_(uint dst_index, const std::uint32_t ct_dim = 1, co
                         dst_index + (reuse_a ? ct_dim * (t + 1) + rut : t + 1 + rut * ct_dim));
                     if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
                     {
-                        for (uint phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
+                        for (std::uint32_t phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
                         {
                             ckernel_template::run();
                         }

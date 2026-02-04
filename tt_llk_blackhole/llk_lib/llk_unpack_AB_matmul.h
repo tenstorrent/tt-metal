@@ -215,7 +215,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     }
     else
     {
-        const uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
+        const std::uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
         TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
     }
 
@@ -229,7 +229,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     {
         // Do full tile unpacking. No need to program face dim
         // as address counter pointing to the face is not incremented
-        const uint32_t unpB_x_end = unpB_num_faces * unpB_face_r_dim * FACE_C_DIM - 1;
+        const std::uint32_t unpB_x_end = unpB_num_faces * unpB_face_r_dim * FACE_C_DIM - 1;
         TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
     }
 
@@ -262,7 +262,7 @@ inline void _llk_unpack_AB_matmul_(
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
-    volatile uint *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
@@ -272,7 +272,7 @@ inline void _llk_unpack_AB_matmul_(
         TTI_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM);
     }
 
-    for (uint t = 0; t < t_dim; t++)
+    for (std::uint32_t t = 0; t < t_dim; t++)
     {
         std::uint32_t offset_address_a = tile_size_a * (tile_index_a + (reuse_a ? (t * kt_dim) : (0)));
         std::uint32_t offset_address_b = tile_size_b * (tile_index_b + (reuse_a ? (0) : (t)));

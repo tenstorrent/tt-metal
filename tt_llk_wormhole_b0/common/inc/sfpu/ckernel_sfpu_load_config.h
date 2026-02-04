@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_ops.h"
 #include "sfpi.h"
 
@@ -12,18 +14,18 @@ namespace ckernel
 namespace sfpu
 {
 
-inline void _sfpu_load_imm32_(const uint dest, const uint val)
+inline void _sfpu_load_imm32_(const std::uint32_t dest, const std::uint32_t val)
 {
     TT_SFPLOADI(dest, 10, (val & 0xFFFF));      // insmod == 10 will write the lower bits, and not affect the upper bits;
     TT_SFPLOADI(dest, 8, (val >> 16) & 0xFFFF); // insmod == 8 will write the upper bits, and not affect the lower bits;
 }
 
-inline void _sfpu_load_imm16_(const uint dest, const uint val)
+inline void _sfpu_load_imm16_(const std::uint32_t dest, const std::uint32_t val)
 {
     TT_SFPLOADI(dest, 2, val); // insmod == 2 will write imm16 value treated as unsigned integer, right justified and padded with zeroes on the MSBs
 }
 
-inline void _sfpu_load_config32_(const uint dest, const uint upper16, const uint lower16)
+inline void _sfpu_load_config32_(const std::uint32_t dest, const std::uint32_t upper16, const std::uint32_t lower16)
 {
     // registers 11 through 14 are programmable "constants" which are shared across all 4 rows
     // They are updated only through the CONFIG path, which uses LREG[0] first and then copies it to the desired register location

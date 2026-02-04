@@ -14,11 +14,11 @@
 #include "profiler.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
-static constexpr uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
+static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -65,9 +65,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
         }
         else
         {
-            for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+            for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
             {
-                for (uint32_t j = 0; j < params->KT_DIM; j++)
+                for (std::uint32_t j = 0; j < params->KT_DIM; j++)
                 {
                     _llk_unpack_AB_matmul_<>(
                         L1_ADDRESS(buffer_A[0]),
@@ -125,9 +125,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+            for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
             {
-                for (uint32_t j = 0; j < params->KT_DIM; j++)
+                for (std::uint32_t j = 0; j < params->KT_DIM; j++)
                 {
                     _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(
                         /* dest_index */ 0, params->CT_DIM, params->RT_DIM);
@@ -136,10 +136,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
         }
         else
         {
-            for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+            for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
             {
                 _llk_math_wait_for_dest_available_<dest_sync>();
-                for (uint32_t j = 0; j < params->KT_DIM; j++)
+                for (std::uint32_t j = 0; j < params->KT_DIM; j++)
                 {
                     _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(
                         /* dest_index */ 0, params->CT_DIM, params->RT_DIM);
@@ -177,9 +177,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+            for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
             {
-                for (uint32_t tile = 0; tile < params->CT_DIM * params->RT_DIM; tile++)
+                for (std::uint32_t tile = 0; tile < params->CT_DIM * params->RT_DIM; tile++)
                 {
                     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(tile, PERF_ADDRESS(PERF_OUTPUT, tile));
                 }
@@ -187,10 +187,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
         }
         else
         {
-            for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+            for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
             {
                 _llk_packer_wait_for_math_done_();
-                for (uint32_t tile = 0; tile < params->CT_DIM * params->RT_DIM; tile++)
+                for (std::uint32_t tile = 0; tile < params->CT_DIM * params->RT_DIM; tile++)
                 {
                     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(tile, PERF_ADDRESS(PERF_OUTPUT, tile));
                 }

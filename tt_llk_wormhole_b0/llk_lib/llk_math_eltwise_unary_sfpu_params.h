@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include <utility>
 
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_sfpu_types.h"
 
 template <bool APPROXIMATE, typename Callable, typename... Args>
-inline void _llk_math_eltwise_unary_sfpu_params_(Callable&& sfpu_func, uint dst_index, int vector_mode = (int)VectorMode::RC, Args&&... args)
+inline void _llk_math_eltwise_unary_sfpu_params_(Callable&& sfpu_func, std::uint32_t dst_index, int vector_mode = (int)VectorMode::RC, Args&&... args)
 {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     math::set_addr_mod_base();

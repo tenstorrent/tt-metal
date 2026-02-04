@@ -10,9 +10,9 @@
 #include "llk_defs.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 // -----------------------------------------------------------------------------
 // Test description:
@@ -88,7 +88,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     const bool is_int_fpu_en  = false; // Not using int-FPU path
     const bool fp32_transpose = false; // No fp32 transpose on reduce path
 
-    constexpr uint32_t math_fid = 4;
+    constexpr std::uint32_t math_fid = 4;
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid>();
     _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, math_fid, is_int_fpu_en, fp32_transpose>(0);
 

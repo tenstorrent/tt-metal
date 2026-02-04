@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <type_traits>
 
 #include "ckernel.h"
@@ -17,7 +18,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
-inline void _sub_int_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
+inline void _sub_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     // Operand A is input1 (int32/uint16)
     // Operand B is input2 (int32/uint16)
@@ -29,7 +30,7 @@ inline void _sub_int_(const uint dst_index_in0, const uint dst_index_in1, const 
     constexpr int sfpload_instr_mod = SIGN_MAGNITUDE_FORMAT ? INT32_2S_COMP : static_cast<std::underlying_type_t<InstrModLoadStore>>(INSTRUCTION_MODE);
 
     // size of each tile in Dest is 64 rows
-    constexpr uint dst_tile_size = 64;
+    constexpr std::uint32_t dst_tile_size = 64;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)

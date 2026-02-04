@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_ops.h"
 #include "ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_load_config.h"
@@ -38,7 +40,7 @@ inline void _calculate_fill_int_(const int value)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_fill_bitcast_(const uint32_t value_bit_mask)
+inline void _calculate_fill_bitcast_(const std::uint32_t value_bit_mask)
 {
     // SFPU microcode
     sfpi::vFloat fill_val = Converter::as_float(value_bit_mask);

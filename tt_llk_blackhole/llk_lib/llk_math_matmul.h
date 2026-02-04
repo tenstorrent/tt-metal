@@ -397,7 +397,7 @@ inline void matmul_configure_mop(
         });
 
     // TODO: can we commonize this?
-    constexpr uint inner_loops = high_fidelity ? NUM_FIDELITY_PHASES : 1;
+    constexpr std::uint32_t inner_loops = high_fidelity ? NUM_FIDELITY_PHASES : 1;
     ckernel_template tmp(1 /* outer loop */, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len));
 
     if constexpr (high_fidelity)
@@ -558,9 +558,9 @@ inline void matmul_configure_mop_throttled(
             }
         });
 
-    constexpr uint outer_loops            = (THROTTLE_LEVEL > 3) ? 2 : (high_fidelity ? NUM_FIDELITY_PHASES : 1);
-    const uint inner_loops                = (!is_in1_16x32) ? 2 : 1;
-    constexpr uint8_t addr_mod_inner_loop = (THROTTLE_LEVEL > 3) ? ADDR_MOD_2 : ADDR_MOD_4;
+    constexpr std::uint32_t outer_loops        = (THROTTLE_LEVEL > 3) ? 2 : (high_fidelity ? NUM_FIDELITY_PHASES : 1);
+    const std::uint32_t inner_loops            = (!is_in1_16x32) ? 2 : 1;
+    constexpr std::uint8_t addr_mod_inner_loop = (THROTTLE_LEVEL > 3) ? ADDR_MOD_2 : ADDR_MOD_4;
     ckernel_template tmp(
         outer_loops,
         inner_loops,
@@ -624,7 +624,7 @@ inline void _llk_math_matmul_uninit_()
 }
 
 template <int MATH_FIDELITY_DESC, int THROTTLE_LEVEL = 0>
-inline void _llk_math_matmul_(uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
+inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
     const bool reuse_a                = ct_dim >= rt_dim;
     const std::uint32_t t_dim         = reuse_a ? rt_dim : ct_dim;
@@ -632,15 +632,15 @@ inline void _llk_math_matmul_(uint dst_index, const std::uint32_t ct_dim = 1, co
     constexpr int NUM_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
     constexpr bool high_fidelity      = NUM_FIDELITY_PHASES > 0;
 
-    for (uint t = 0; t < t_dim; t++)
+    for (std::uint32_t t = 0; t < t_dim; t++)
     {
-        for (uint rut = 0; rut < rut_dim; rut++)
+        for (std::uint32_t rut = 0; rut < rut_dim; rut++)
         {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (reuse_a ? ct_dim * t + rut : t + rut * ct_dim));
 
             if constexpr (THROTTLE_LEVEL > 3 && high_fidelity)
             {
-                for (uint phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
+                for (std::uint32_t phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
                 {
                     ckernel_template::run();
                 }

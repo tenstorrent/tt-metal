@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <cstdint>
+
 #include "llk_math_common.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
@@ -15,9 +17,9 @@ using namespace ckernel::math;
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_matmul_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
-    constexpr bool high_fidelity     = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
-    constexpr int FIDELITY_INCREMENT = high_fidelity ? 1 : 0;
-    const uint16_t num_tile_incr     = (ct_dim >= rt_dim) ? 64 : ct_dim * 64;
+    constexpr bool high_fidelity      = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    constexpr int FIDELITY_INCREMENT  = high_fidelity ? 1 : 0;
+    const std::uint16_t num_tile_incr = (ct_dim >= rt_dim) ? 64 : ct_dim * 64;
 
     // MVMUL does D = B*A
 
@@ -77,9 +79,9 @@ inline void _llk_math_matmul_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_matmul_di_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
-    constexpr bool high_fidelity     = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
-    constexpr int FIDELITY_INCREMENT = high_fidelity ? 1 : 0;
-    const uint16_t num_tile_incr     = (ct_dim >= rt_dim) ? 64 : ct_dim * 64;
+    constexpr bool high_fidelity      = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    constexpr int FIDELITY_INCREMENT  = high_fidelity ? 1 : 0;
+    const std::uint16_t num_tile_incr = (ct_dim >= rt_dim) ? 64 : ct_dim * 64;
 
     // only increment fidelity if we have more fidelity phases
     addr_mod_t {
@@ -117,7 +119,7 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
     // Unpacker will always load faces in f0,f1,f2,f3 order
     // if in1 is transposed then faces 1&2 need to be swapped during read
     // by changing address increment amount via addr_mods
-    constexpr int FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : static_cast<uint32_t>(MATH_FIDELITY_TYPE);
+    constexpr int FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : static_cast<std::uint32_t>(MATH_FIDELITY_TYPE);
 
     const bool reuse_a = ct_dim >= rt_dim;
 
@@ -147,8 +149,8 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A3 // srca=srca, srcb+=8,  dest+=8
         });
 
-    constexpr static uint matmul_op = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0);
-    const uint matmul_op_last       = reuse_a ? TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_3, 0) : TT_OP_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
+    constexpr static std::uint32_t matmul_op = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0);
+    const std::uint32_t matmul_op_last       = reuse_a ? TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_3, 0) : TT_OP_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
 
     ckernel_template temp(1 /* outer loop */, FIDELITY_PHASES, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), matmul_op);
     temp.set_last_outer_loop_instr(matmul_op_last);
@@ -171,7 +173,7 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
     // Unpacker will always load faces in f0,f1,f2,f3 order
     // if in1 is transposed then faces 1&2 need to be swapped during read
     // by changing address increment amount via addr_mods
-    constexpr int FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : static_cast<uint32_t>(MATH_FIDELITY_TYPE);
+    constexpr int FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : static_cast<std::uint32_t>(MATH_FIDELITY_TYPE);
     const bool reuse_a            = ct_dim >= rt_dim;
 
     constexpr std::uint32_t replay_buf_len = EN_X2 ? 8 - 1 : 16 - 1; // -1 since the last instruction for the Tile * Tile operation will come out of the MOP
@@ -232,10 +234,10 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
     }
 
     /* Just choose what is more readable*/
-    constexpr static uint matmul_op =
+    constexpr static std::uint32_t matmul_op =
         EN_X2 ? TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0x6, 0x4, ADDR_MOD_1, 0xE) : // B1[8:15]*A1 srcb=0x6<<2='d24, srca=0x4<<2='d16, dest=0xE<<2='d56
             TT_OP_MVMULDI(p_setrwc::CLR_NONE, 0x0, 0xE, 0xC, ADDR_MOD_1, 0xE);      // B3[8:15]*A3 srcb=0xE<<2='d56, srca=0xC<<2='d48, dest=0xE<<2='d56
-    uint matmul_op_last;
+    std::uint32_t matmul_op_last;
     if constexpr (EN_X2)
     {
         matmul_op_last =
@@ -291,7 +293,7 @@ inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
  * Output = 1 tile -> Dst reg at specified dst_index
  * @param dst_index: tile index in destination register, values = [0-8] for Float16b, values = [0-4] for Float32
  */
-inline void _llk_math_matmul_tile_(const uint dst_index)
+inline void _llk_math_matmul_tile_(const std::uint32_t dst_index)
 {
     _set_dst_write_addr_<DstTileShape::Tile32x32>(dst_index);
     ckernel_template::run_bank0_sw_cntl(instrn_buffer);
@@ -318,9 +320,9 @@ inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // reuse-dim
 
-    for (uint t = 0; t < t_dim; t++)
+    for (std::uint32_t t = 0; t < t_dim; t++)
     {
-        for (uint rut = 0; rut < rut_dim; rut++)
+        for (std::uint32_t rut = 0; rut < rut_dim; rut++)
         {
             ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 

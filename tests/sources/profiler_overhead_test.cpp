@@ -13,9 +13,9 @@ void run_kernel(const volatile struct RuntimeParams *params)
     // measure length of zones of different sizes
 
     // start with i = 8 because for i < 8, overhead is not consistent
-    for (uint32_t i = 8; i < 40; i++)
+    for (std::uint32_t i = 8; i < 40; i++)
     {
-        uint32_t cnt = i;
+        std::uint32_t cnt = i;
         {
             // The body of the loop without the zone should take i*10 cycles
             // however the ZONE_SCOPED macro will add around 36 cycles of overhead

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_trisc_common.h"
 #include "llk_unpack_common.h"
 using namespace ckernel;
@@ -19,18 +21,18 @@ using namespace ckernel;
  * stored in the buffer descriptor table, values = 0 - 16
  * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
  */
-template <uint32_t UNP_SEL, bool IS_32b_DEST_EN>
-inline void _llk_unpack_unary_operand_mop_config_(const uint32_t buf_desc_id, const uint32_t num_tiles)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
 
-    const uint32_t MOP_OUTER_LOOP     = num_tiles;
-    constexpr uint32_t MOP_INNER_LOOP = 1;
+    const std::uint32_t MOP_OUTER_LOOP     = num_tiles;
+    constexpr std::uint32_t MOP_INNER_LOOP = 1;
 
     // RT: Use defines to remove these constexpr, and replace with a single TT_OP_UNPACR_FACE_INC
-    uint unpack_tile_instrn;
+    std::uint32_t unpack_tile_instrn;
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
         unpack_tile_instrn = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src Tile Idx*/, buf_desc_id, 1 /*Set Dvalid*/);
@@ -68,15 +70,15 @@ inline void _llk_unpack_unary_operand_mop_config_(const uint32_t buf_desc_id, co
  * stored in the buffer descriptor table, values = 0 - 16
  * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
  */
-template <uint32_t UNP_SEL, bool IS_32b_DEST_EN>
-inline void _llk_unpack_unary_operand_transpose_mop_config_(const uint32_t buf_desc_id, const uint32_t num_tiles)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
+inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be p_unpacr::UNP_A or p_unpacr::UNP_B for unpack transpose");
 
-    const uint32_t MOP_OUTER_LOOP = num_tiles;
-    const uint32_t MOP_INNER_LOOP = 1;
+    const std::uint32_t MOP_OUTER_LOOP = num_tiles;
+    const std::uint32_t MOP_INNER_LOOP = 1;
 
-    constexpr uint replay_buf_len = NUM_FACES;
+    constexpr std::uint32_t replay_buf_len = NUM_FACES;
 
     load_replay_buf<0, replay_buf_len>(
         [buf_desc_id]
@@ -128,8 +130,8 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const uint32_t buf_d
  * stored in the buffer descriptor table, values = 0 - 16
  * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
  */
-template <uint32_t UNP_SEL, bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
-inline void _llk_unpack_unary_operand_init_(const uint32_t buf_desc_id, const uint32_t num_tiles)
+template <std::uint32_t UNP_SEL, bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
+inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
@@ -156,8 +158,8 @@ inline void _llk_unpack_unary_operand_init_(const uint32_t buf_desc_id, const ui
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @param l1_tile_idx: Index into the L1 buffer for a tile
  */
-template <uint32_t UNP_SEL>
-inline void _llk_unpack_unary_operand_(const uint l1_tile_idx)
+template <std::uint32_t UNP_SEL>
+inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx)
 {
     // RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must

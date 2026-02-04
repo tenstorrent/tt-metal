@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_rsqrt_compat.h"
 #include "lltt.h"
 #include "sfpi.h"
@@ -253,10 +255,10 @@ inline void _init_reciprocal_fast_7b_()
 
     TTI_SFPARECIP(0, 0, 12, 0);
 
-    constexpr uint simple_bits = 0x00 | 0x40 | (0 << 3) | (4 + 0);
-    constexpr uint mad_bits    = 0;
-    constexpr uint round_bits  = 0;
-    constexpr uint store_bits  = 0x00 | 0x40 | (1 << 3) | 3;
+    constexpr std::uint32_t simple_bits = 0x00 | 0x40 | (0 << 3) | (4 + 0);
+    constexpr std::uint32_t mad_bits    = 0;
+    constexpr std::uint32_t round_bits  = 0;
+    constexpr std::uint32_t store_bits  = 0x00 | 0x40 | (1 << 3) | 3;
 
     TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
     TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -285,30 +287,30 @@ inline void _init_reciprocal_fast_8b_3c_()
     TTI_SFPIADD(0, t, 15, sfpi::SFPIADD_MOD1_CC_NONE);
 
     {
-        constexpr uint simple_bits = 0x00 | 0x00 | (0 << 3) | (4 + 0);
-        constexpr uint mad_bits    = 0x00 | 0x00 | (0 << 3) | (4 + 1);
-        constexpr uint round_bits  = 0;
-        constexpr uint store_bits  = 0x80 | 0x00 | (0 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | (4 + 0);
+        constexpr std::uint32_t mad_bits    = 0x00 | 0x00 | (0 << 3) | (4 + 1);
+        constexpr std::uint32_t round_bits  = 0;
+        constexpr std::uint32_t store_bits  = 0x80 | 0x00 | (0 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
         TTI_SFPCONFIG(0, 4 + 0, 0);
     }
     {
-        constexpr uint simple_bits = 0x80 | 0x40 | (5 << 3) | (4 + 3);
-        constexpr uint mad_bits    = 0x80 | 0x40 | (0 << 3) | (4 + 2);
-        constexpr uint round_bits  = 0;
-        constexpr uint store_bits  = 0x00 | 0x40 | (2 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x80 | 0x40 | (5 << 3) | (4 + 3);
+        constexpr std::uint32_t mad_bits    = 0x80 | 0x40 | (0 << 3) | (4 + 2);
+        constexpr std::uint32_t round_bits  = 0;
+        constexpr std::uint32_t store_bits  = 0x00 | 0x40 | (2 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
         TTI_SFPCONFIG(0, 4 + 1, 0);
     }
     {
-        constexpr uint simple_bits = 0;
-        constexpr uint mad_bits    = 0;
-        constexpr uint round_bits  = 0;
-        constexpr uint store_bits  = 0x00 | 0x40 | (1 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0;
+        constexpr std::uint32_t mad_bits    = 0;
+        constexpr std::uint32_t round_bits  = 0;
+        constexpr std::uint32_t store_bits  = 0x00 | 0x40 | (1 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -345,10 +347,10 @@ inline void _init_reciprocal_fast_24b_5c_()
 
     // Macro 0: [y]
     {
-        constexpr uint simple_bits = 0x00 | 0x00 | (0 << 3) | (4 + 0);
-        constexpr uint mad_bits    = 0;
-        constexpr uint round_bits  = 0;
-        constexpr uint store_bits  = 0x00 | 0x40 | (6 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | (4 + 0);
+        constexpr std::uint32_t mad_bits    = 0;
+        constexpr std::uint32_t round_bits  = 0;
+        constexpr std::uint32_t store_bits  = 0x00 | 0x40 | (6 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -357,10 +359,10 @@ inline void _init_reciprocal_fast_24b_5c_()
 
     // Macro 1: [e]
     {
-        constexpr uint simple_bits = 0x00 | 0x40 | (0 << 3) | (4 + 0);
-        constexpr uint mad_bits    = 0x00 | 0x00 | (2 << 3) | (4 + 1);
-        constexpr uint round_bits  = 0;
-        constexpr uint store_bits  = 0x00 | 0x00 | (2 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x40 | (0 << 3) | (4 + 0);
+        constexpr std::uint32_t mad_bits    = 0x00 | 0x00 | (2 << 3) | (4 + 1);
+        constexpr std::uint32_t round_bits  = 0;
+        constexpr std::uint32_t store_bits  = 0x00 | 0x00 | (2 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -369,18 +371,18 @@ inline void _init_reciprocal_fast_24b_5c_()
 
     // Macro 2: [t2]
     {
-        constexpr uint simple_bits = 0x80 | 0x00 | (2 << 3) | (4 + 3);
-        constexpr uint mad_bits    = 0x00 | 0x00 | (0 << 3) | (4 + 2);
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (2 << 3) | (4 + 3);
+        constexpr std::uint32_t mad_bits    = 0x00 | 0x00 | (0 << 3) | (4 + 2);
 
         TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 2, 1);
     }
 
     // Macro 3: [z]
     {
-        constexpr uint simple_bits = 0;
-        constexpr uint mad_bits    = 0x80 | 0x40 | (1 << 3) | (4 + 2);
-        constexpr uint round_bits  = 0;
-        constexpr uint store_bits  = 0x00 | 0x40 | (3 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0;
+        constexpr std::uint32_t mad_bits    = 0x80 | 0x40 | (1 << 3) | (4 + 2);
+        constexpr std::uint32_t round_bits  = 0;
+        constexpr std::uint32_t store_bits  = 0x00 | 0x40 | (3 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -390,8 +392,8 @@ inline void _init_reciprocal_fast_24b_5c_()
     // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for all macros.
     TTI_SFPCONFIG(0xff0, 8, 1);
 
-    constexpr uint prev_offset = -2 & 0x3ff;
-    constexpr uint offset      = 0;
+    constexpr std::uint32_t prev_offset = -2 & 0x3ff;
+    constexpr std::uint32_t offset      = 0;
 
     load_replay_buf(
         0,

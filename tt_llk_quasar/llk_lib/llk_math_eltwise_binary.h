@@ -4,13 +4,15 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "llk_math_common.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
-template <EltwiseBinaryType ELTWISE_BINARY_TYPE, uint8_t CLR_SRC, uint8_t EN_DST_ACCUM, uint8_t SRCB_BROADCAST_TYPE, uint8_t ADDR_MOD>
-constexpr uint eltwise_binary_func()
+template <EltwiseBinaryType ELTWISE_BINARY_TYPE, std::uint8_t CLR_SRC, std::uint8_t EN_DST_ACCUM, std::uint8_t SRCB_BROADCAST_TYPE, std::uint8_t ADDR_MOD>
+constexpr std::uint32_t eltwise_binary_func()
 {
     if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWADD)
     {
@@ -30,10 +32,16 @@ constexpr uint eltwise_binary_func()
 // Direct Indexing Method
 //----------------------
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE>
-inline uint eltwise_di_binary_func(
-    uint8_t CLR_SRC, uint8_t EN_DST_ACCUM, uint8_t SRCB_BROADCAST_TYPE, uint8_t SRCB_ADDR, uint8_t SRCA_ADDR, uint8_t ADDR_MOD, uint8_t DST_ADDR)
+inline std::uint32_t eltwise_di_binary_func(
+    std::uint8_t CLR_SRC,
+    std::uint8_t EN_DST_ACCUM,
+    std::uint8_t SRCB_BROADCAST_TYPE,
+    std::uint8_t SRCB_ADDR,
+    std::uint8_t SRCA_ADDR,
+    std::uint8_t ADDR_MOD,
+    std::uint8_t DST_ADDR)
 {
-    uint8_t INSTR_MOD = ((SRCB_BROADCAST_TYPE << 0) | (EN_DST_ACCUM << 2));
+    std::uint8_t INSTR_MOD = ((SRCB_BROADCAST_TYPE << 0) | (EN_DST_ACCUM << 2));
     if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWADD)
     {
         return TT_ELWADDDI(CLR_SRC, INSTR_MOD, SRCB_ADDR, SRCA_ADDR, ADDR_MOD, DST_ADDR);
@@ -58,24 +66,24 @@ inline uint eltwise_di_binary_func(
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_mop_config_(const TileShape& tile_shape)
 {
-    const uint32_t total_num_rows_per_tile = tile_shape.num_faces * tile_shape.face_r_dim;
-    const uint32_t MOP_OUTER_LOOP          = (total_num_rows_per_tile >> math_rows_log2(ELTWISE_MATH_ROWS));
-    constexpr uint32_t MOP_INNER_LOOP      = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : static_cast<uint32_t>(MATH_FIDELITY_TYPE);
-    constexpr bool math_fidelity_enable    = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    const std::uint32_t total_num_rows_per_tile = tile_shape.num_faces * tile_shape.face_r_dim;
+    const std::uint32_t MOP_OUTER_LOOP          = (total_num_rows_per_tile >> math_rows_log2(ELTWISE_MATH_ROWS));
+    constexpr std::uint32_t MOP_INNER_LOOP      = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : static_cast<std::uint32_t>(MATH_FIDELITY_TYPE);
+    constexpr bool math_fidelity_enable         = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(math_fidelity_enable && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
-    const uint32_t EN_DST_ACC_EN = math_fidelity_enable;
+    const std::uint32_t EN_DST_ACC_EN = math_fidelity_enable;
 
-    constexpr uint8_t addrmod_fid = math_fidelity_enable ? ADDR_MOD_2 : ADDR_MOD_0;
-    constexpr static uint eltwise_binary_op =
+    constexpr std::uint8_t addrmod_fid = math_fidelity_enable ? ADDR_MOD_2 : ADDR_MOD_0;
+    constexpr static std::uint32_t eltwise_binary_op =
         eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, EN_DST_ACC_EN, p_elwise::SRCB_NO_BCAST, addrmod_fid>();
-    constexpr static uint eltwise_binary_op_clr_valid =
+    constexpr static std::uint32_t eltwise_binary_op_clr_valid =
         eltwise_binary_func<ELTWISE_BINARY_TYPE, p_setrwc::CLR_AB, EN_DST_ACC_EN, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1>();
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, eltwise_binary_op);
     temp.set_last_outer_loop_instr(eltwise_binary_op_clr_valid);
 
     if (math_fidelity_enable)
     {
-        constexpr static uint eltwise_binary_op_clr_fidelity =
+        constexpr static std::uint32_t eltwise_binary_op_clr_fidelity =
             eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, EN_DST_ACC_EN, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0>();
         temp.set_last_inner_loop_instr(eltwise_binary_op_clr_fidelity); // clear math fidelity
     }
@@ -89,12 +97,12 @@ inline void _llk_math_eltwise_binary_mop_config_(const TileShape& tile_shape)
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_di_binary_mop_config_(const TileShape& tile_shape)
 {
-    const uint32_t total_num_rows_per_tile = tile_shape.num_faces * tile_shape.face_r_dim;
-    const uint32_t REPLAY_BUF_LEN          = (total_num_rows_per_tile >> math_rows_log2(ELTWISE_MATH_ROWS));
-    const uint32_t MOP_INNER_LOOP          = static_cast<uint32_t>(MATH_FIDELITY_TYPE) + 1;
-    constexpr bool math_fidelity_enable    = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    const std::uint32_t total_num_rows_per_tile = tile_shape.num_faces * tile_shape.face_r_dim;
+    const std::uint32_t REPLAY_BUF_LEN          = (total_num_rows_per_tile >> math_rows_log2(ELTWISE_MATH_ROWS));
+    const std::uint32_t MOP_INNER_LOOP          = static_cast<std::uint32_t>(MATH_FIDELITY_TYPE) + 1;
+    constexpr bool math_fidelity_enable         = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(math_fidelity_enable && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
-    const uint32_t EN_DST_ACC_EN = math_fidelity_enable;
+    const std::uint32_t EN_DST_ACC_EN = math_fidelity_enable;
 
     load_replay_buf(
         0u,
@@ -104,7 +112,7 @@ inline void _llk_math_eltwise_di_binary_mop_config_(const TileShape& tile_shape)
         0,
         [&]()
         {
-            for (uint32_t i = 0; i < REPLAY_BUF_LEN - 1; ++i)
+            for (std::uint32_t i = 0; i < REPLAY_BUF_LEN - 1; ++i)
             {
                 eltwise_di_binary_func<ELTWISE_BINARY_TYPE>(
                     p_elwise::CLR_NONE,
@@ -229,7 +237,7 @@ inline void _llk_math_eltwise_binary_init_(const TileShape& tile_shape)
  * If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in full mode
  * If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  */
-inline void _llk_math_eltwise_binary_(const uint32_t tile_idx)
+inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx)
 {
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 

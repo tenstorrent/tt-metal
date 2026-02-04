@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "llk_defs.h"
 #include "lltt.h"
 #include "sfpi.h"
@@ -13,7 +15,8 @@ namespace ckernel::sfpu
 {
 
 template <bool APPROXIMATION_MODE, DataFormat data_format, int ITERATIONS>
-inline void _calculate_where_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_in2, const uint dst_index_out)
+inline void _calculate_where_(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_in2, const std::uint32_t dst_index_out)
 {
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b || data_format == DataFormat::Int32 || data_format == DataFormat::UInt32,
@@ -23,7 +26,7 @@ inline void _calculate_where_(const uint dst_index_in0, const uint dst_index_in1
     int offset1 = (dst_index_in1 * 32) << 1;
     int offset2 = (dst_index_in2 * 32) << 1;
 
-    constexpr uint mod0 = data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+    constexpr std::uint32_t mod0 = data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
 
     if (dst_index_out == dst_index_in0)
     {
@@ -94,10 +97,10 @@ inline void _init_where_()
 
     // Macro 0: special case handling for where(a, b, c, a), i.e. write the output to the first input.
     {
-        constexpr uint simple_bits = 0x00 | 0x00 | (0 << 3) | 4;
-        constexpr uint mad_bits    = 0;
-        constexpr uint round_bits  = 0;
-        constexpr uint store_bits  = 0x00 | 0x00 | (2 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | 4;
+        constexpr std::uint32_t mad_bits    = 0;
+        constexpr std::uint32_t round_bits  = 0;
+        constexpr std::uint32_t store_bits  = 0x00 | 0x00 | (2 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -106,16 +109,16 @@ inline void _init_where_()
 
     // Macro 1: otherwise, handle where(a, b, c, d).
     {
-        constexpr uint simple_bits = 0x00 | 0x00 | (0 << 3) | 4;
-        constexpr uint mad_bits    = 0;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | 4;
+        constexpr std::uint32_t mad_bits    = 0;
 
         TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 1, 1);
     }
 
     // Macro 2:
     {
-        constexpr uint simple_bits = 0x00 | 0x00 | (0 << 3) | 5;
-        constexpr uint mad_bits    = 0;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | 5;
+        constexpr std::uint32_t mad_bits    = 0;
 
         TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 2, 1);
     }

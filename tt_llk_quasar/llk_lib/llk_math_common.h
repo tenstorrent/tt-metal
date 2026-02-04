@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "cmath_common.h"
 #include "llk_defs.h"
 using namespace ckernel;
@@ -37,11 +39,11 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
     // Set implied math dest format mode
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
 
-    uint8_t SRCA_FORMAT_MASKED = static_cast<uint8_t>(srcA_format) & 0xFF;
-    uint8_t SRCB_FORMAT_MASKED = static_cast<uint8_t>(srcB_format) & 0xFF;
+    std::uint8_t SRCA_FORMAT_MASKED = static_cast<std::uint8_t>(srcA_format) & 0xFF;
+    std::uint8_t SRCB_FORMAT_MASKED = static_cast<std::uint8_t>(srcB_format) & 0xFF;
 
     alu_config_u alu_config;
-    for (uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
+    for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
     {
         alu_config.val[i] = 0;
     }
@@ -66,7 +68,7 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
     alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_FP32_MATH_FORMAT;
     alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = EN_INT32_MATH_FORMAT;
 
-    for (uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
+    for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
     {
         cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + i] = alu_config.val[i];
     }
@@ -90,7 +92,7 @@ inline void _llk_math_upk_to_dest_hw_configure_()
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
 
     alu_config_u alu_config;
-    for (uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
+    for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
     {
         alu_config.val[i] = 0;
     }
@@ -100,7 +102,7 @@ inline void _llk_math_upk_to_dest_hw_configure_()
     alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_FP32_MATH_FORMAT;
     alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = EN_INT32_MATH_FORMAT;
 
-    for (uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
+    for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
     {
         cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + i] = alu_config.val[i];
     }
@@ -110,7 +112,7 @@ inline void _llk_math_upk_to_dest_hw_configure_()
  * @brief Sets the dest dvalid for a FPU/SFPU
  * @tparam SET_DEST_DVALID: which client to set data valid for, values = <p_cleardvalid::FPU/SFPU>
  **/
-template <uint8_t SET_DEST_DVALID>
+template <std::uint8_t SET_DEST_DVALID>
 inline void _llk_math_set_dvalid_()
 {
     static_assert(SET_DEST_DVALID == p_cleardvalid::FPU || SET_DEST_DVALID == p_cleardvalid::SFPU, "Can only set dest dvalid for FPU and SFPU");
@@ -138,7 +140,7 @@ inline void _llk_math_pack_sync_init_()
     _reset_dest_bank_id_();
     _set_dest_section_base_<TRISC_ID>(_get_dest_buffer_base_());
 
-    constexpr uint32_t num_sem = (DST == DstSync::SyncFull) ? 1 : 2;
+    constexpr std::uint32_t num_sem = (DST == DstSync::SyncFull) ? 1 : 2;
     TTI_SEMINIT(num_sem, 0, 0, p_stall::SEMAPHORE_1);
 }
 
@@ -154,7 +156,7 @@ inline void _llk_math_dest_section_done_()
     if constexpr (DST == DstSync::SyncHalf)
     {
         _update_dest_bank_id_();
-        uint base_addr = _get_dest_buffer_base_();
+        std::uint32_t base_addr = _get_dest_buffer_base_();
         TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::MATH, p_stall::WAIT_SFPU);
         _set_dest_section_base_<TRISC_ID>(base_addr);
     }

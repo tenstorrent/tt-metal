@@ -14,7 +14,7 @@ namespace ckernel
 class [[nodiscard]] T6MutexLockGuard final
 {
 public:
-    explicit T6MutexLockGuard(const uint8_t index) noexcept : mutex_index(index)
+    explicit T6MutexLockGuard(const std::uint8_t index) noexcept : mutex_index(index)
     {
         t6_mutex_acquire(mutex_index);
     }
@@ -33,7 +33,7 @@ public:
     T6MutexLockGuard& operator=(T6MutexLockGuard&&) = delete;
 
 private:
-    const uint8_t mutex_index;
+    const std::uint8_t mutex_index;
 };
 
 } // namespace ckernel

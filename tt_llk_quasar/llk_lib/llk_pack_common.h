@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_trisc_common.h"
 #include "cpack_common.h"
 using namespace ckernel;
@@ -15,7 +17,7 @@ using namespace ckernel::trisc;
  * @param tdma_desc: Contains destination register format
  */
 
-template <uint32_t PACK_SEL>
+template <std::uint32_t PACK_SEL>
 inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc)
 {
     static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
@@ -24,11 +26,11 @@ inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc)
     // Program math destination register format
     if constexpr (PACK_SEL == p_pacr::PACK0)
     {
-        cfg_rmw(THCON_PACKER0_REG0_IN_DATA_FORMAT_RMW, static_cast<uint8_t>(tdma_desc.reg_data_format));
+        cfg_rmw(THCON_PACKER0_REG0_IN_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc.reg_data_format));
     }
     else
     {
-        cfg_rmw(THCON_PACKER1_REG0_IN_DATA_FORMAT_RMW, static_cast<uint8_t>(tdma_desc.reg_data_format));
+        cfg_rmw(THCON_PACKER1_REG0_IN_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc.reg_data_format));
     }
 }
 
@@ -50,8 +52,8 @@ inline void _llk_pack_dest_dvalid_section_done_()
 {
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::WAIT_SFPU, p_stall::PACK);
 
-    constexpr uint ZEROACC_CLR_MODE = (DST == DstSync::SyncHalf) ? p_zeroacc::CLR_HALF : p_zeroacc::CLR_ALL;
-    const uint dest_id              = (DST == DstSync::SyncHalf) ? dest_bank_id : 0;
+    constexpr std::uint32_t ZEROACC_CLR_MODE = (DST == DstSync::SyncHalf) ? p_zeroacc::CLR_HALF : p_zeroacc::CLR_ALL;
+    const std::uint32_t dest_id              = (DST == DstSync::SyncHalf) ? dest_bank_id : 0;
     TT_ZEROACC(ZEROACC_CLR_MODE, IS_FP32_MATH_DEST_EN, 0, ADDR_MOD_0, dest_id);
     TTI_CLEARDVALID(0, 0, 0, 0, p_cleardvalid::PACK, 0);
 
@@ -145,7 +147,7 @@ inline void _llk_pack_reduce_mask_clear_()
  * @tparam PACK_SEL: Sets which packer to configure. values = p_pacr::PACK0/PACK1
  * @param l1_acc_en: if false -> l1 acc is disabled, true -> l1 acc enabled
  **/
-template <uint32_t PACK_SEL>
+template <std::uint32_t PACK_SEL>
 inline void _llk_pack_set_l1_acc_(const bool l1_acc_en)
 {
     if constexpr (PACK_SEL == p_pacr::PACK0)
@@ -171,7 +173,7 @@ inline void _llk_packer_wait_for_math_done_()
 }
 
 // Tell math that it can write again
-template <uint WaitRes = p_stall::NOTHING>
+template <std::uint32_t WaitRes = p_stall::NOTHING>
 inline void _llk_packer_set_math_semaphore_()
 {
     t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done and header is written into L1
@@ -183,7 +185,7 @@ inline void _llk_packer_set_math_semaphore_()
  * @tparam DST: Destination register buffering mode, values = [DstSync::SyncHalf, DstSync::SyncFull]
  * @tparam IS_FP32_MATH_DEST_EN: flag to show if math destination register is set to float32 mode
  */
-template <uint32_t PACK_SEL, DstSync DST, bool IS_FP32_DEST_EN>
+template <std::uint32_t PACK_SEL, DstSync DST, bool IS_FP32_DEST_EN>
 inline void _llk_pack_dest_semaphore_section_done_()
 {
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK); // wait for pack to finish

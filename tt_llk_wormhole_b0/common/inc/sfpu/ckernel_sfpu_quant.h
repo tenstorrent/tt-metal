@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_ops.h"
 #include "ckernel_sfpu_load_config.h"
 #include "sfpi.h"
@@ -14,7 +16,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool SIGN_MAGNITUDE_FORMAT>
-inline void _quant_int32_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
+inline void _quant_int32_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     // Operand A is input (fp32)
     // Operand B is scaling factor (fp32)
@@ -22,7 +24,7 @@ inline void _quant_int32_(const uint dst_index_in0, const uint dst_index_in1, co
     // Output is int32 scaled to int8 range
 
     // size of each tile in Dest is 64 rows
-    constexpr uint dst_tile_size = 64;
+    constexpr std::uint32_t dst_tile_size = 64;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
@@ -44,7 +46,7 @@ inline void _quant_int32_(const uint dst_index_in0, const uint dst_index_in1, co
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool SIGN_MAGNITUDE_FORMAT>
-inline void _requant_int32_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
+inline void _requant_int32_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     // Operand A is input to requant (int32)
     // Operand B is scaling factor (fp32)
@@ -52,7 +54,7 @@ inline void _requant_int32_(const uint dst_index_in0, const uint dst_index_in1, 
     // Output is int32 scaled to int8 range
 
     // size of each tile in Dest is 64 rows
-    constexpr uint dst_tile_size = 64;
+    constexpr std::uint32_t dst_tile_size = 64;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
@@ -76,7 +78,7 @@ inline void _requant_int32_(const uint dst_index_in0, const uint dst_index_in1, 
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool SIGN_MAGNITUDE_FORMAT>
-inline void _dequant_int32_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
+inline void _dequant_int32_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     // Operand A[LREG0] is input to dequant (int32)
     // Operand B[LREG1] is scaling factor (fp32)
@@ -84,7 +86,7 @@ inline void _dequant_int32_(const uint dst_index_in0, const uint dst_index_in1, 
     // Output = (A + (-C)) * B (fp32)
 
     // size of each tile in Dest is 64 rows
-    constexpr uint dst_tile_size = 64;
+    constexpr std::uint32_t dst_tile_size = 64;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
@@ -108,7 +110,7 @@ inline void _dequant_int32_(const uint dst_index_in0, const uint dst_index_in1, 
 }
 
 template <bool APPROXIMATION_MODE /*unused*/>
-inline void _init_quant_zero_point_(const uint zero_point)
+inline void _init_quant_zero_point_(const std::uint32_t zero_point)
 {
     _sfpu_load_imm32_(2, zero_point);
 }

@@ -9,9 +9,9 @@
 #include "llk_defs.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -23,8 +23,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
 {
     // Configure buffer descriptors for both operands
     tdma_descriptor_t td_val_A, td_val_B;
-    const uint buf_desc_id_a = 0;
-    const uint buf_desc_id_b = 1;
+    const std::uint32_t buf_desc_id_a = 0;
+    const std::uint32_t buf_desc_id_b = 1;
 
     // Setup data valid scheme - binary operations always write to SrcA/SrcB, never DEST
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -32,26 +32,26 @@ void run_kernel(const volatile struct RuntimeParams *params)
     // Configure Source A buffer descriptor
     buffer_descriptor_u bd_val_A {};
     bd_val_A.f.l1_addr_16B = buffer_A[0] / 16;
-    bd_val_A.f.format      = static_cast<uint8_t>(formats.unpack_src);
+    bd_val_A.f.format      = static_cast<std::uint8_t>(formats.unpack_src);
     bd_val_A.f.x_dim       = params->TEST_FACE_C_DIM;
     bd_val_A.f.y_dim       = params->TEST_FACE_R_DIM;
     bd_val_A.f.z_dim       = params->num_faces;
 
     td_val_A.buf_desc        = bd_val_A;
     td_val_A.buf_desc_id     = buf_desc_id_a;
-    td_val_A.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
+    td_val_A.reg_data_format = static_cast<std::uint8_t>(formats.unpack_dst);
 
     // Configure Source B buffer descriptor
     buffer_descriptor_u bd_val_B {};
     bd_val_B.f.l1_addr_16B = buffer_B[0] / 16;
-    bd_val_B.f.format      = static_cast<uint8_t>(formats.unpack_src);
+    bd_val_B.f.format      = static_cast<std::uint8_t>(formats.unpack_src);
     bd_val_B.f.x_dim       = params->TEST_FACE_C_DIM;
     bd_val_B.f.y_dim       = params->TEST_FACE_R_DIM;
     bd_val_B.f.z_dim       = params->num_faces;
 
     td_val_B.buf_desc        = bd_val_B;
     td_val_B.buf_desc_id     = buf_desc_id_b;
-    td_val_B.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
+    td_val_B.reg_data_format = static_cast<std::uint8_t>(formats.unpack_dst);
 
     // Configure hardware for binary operations
     _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
@@ -117,7 +117,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 void run_kernel(const volatile struct RuntimeParams *params)
 {
-    uint32_t const buf_desc_id = 8;
+    std::uint32_t const buf_desc_id = 8;
 
     // Setup synchronization - PACK waits for FPU to write to DEST
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -126,7 +126,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     buffer_descriptor_u bd_val {};
 
     bd_val.f.l1_addr_16B = buffer_Res[0] / 16;
-    bd_val.f.format      = static_cast<uint8_t>(formats.pack_dst);
+    bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
     bd_val.f.x_dim       = params->TEST_FACE_C_DIM;
     bd_val.f.y_dim       = params->TEST_FACE_R_DIM;
     bd_val.f.z_dim       = params->num_faces; // Match matmul pattern: set z_dim to actual params->num_faces
@@ -135,7 +135,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<uint8_t>(formats.pack_src);
+    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
 
     // Configure and initialize pack hardware
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);

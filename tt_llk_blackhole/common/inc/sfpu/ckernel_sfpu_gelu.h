@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_cdf.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_load_config.h"
@@ -148,7 +150,7 @@ inline void _calculate_gelu_derivative_()
     }
     else
     {
-        constexpr uint imm2 = 0xFF10;
+        constexpr std::uint32_t imm2 = 0xFF10;
 
         sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
         sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
@@ -215,12 +217,12 @@ inline void _init_gelu_()
 template <bool APPROXIMATION_MODE>
 inline void _init_gelu_derivative_()
 {
-    uint imm0;
-    uint imm1;
-    uint imm2;
-    uint imm3;
-    uint imm4;
-    uint imm5;
+    std::uint32_t imm0;
+    std::uint32_t imm1;
+    std::uint32_t imm2;
+    std::uint32_t imm3;
+    std::uint32_t imm4;
+    std::uint32_t imm5;
 
     if constexpr (APPROXIMATION_MODE)
     {

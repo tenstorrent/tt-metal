@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_load_config.h"
 #include "sfpi.h"
 
@@ -38,9 +40,9 @@ inline void _calculate_tanh_(const int iterations)
 template <bool APPROXIMATION_MODE>
 inline void _init_tanh_()
 {
-    uint imm0;
-    uint imm1;
-    uint imm2;
+    std::uint32_t imm0;
+    std::uint32_t imm1;
+    std::uint32_t imm2;
     imm0 = 0x1DFF; // 0.90625*x
     imm1 = 0x481A; // 0.09375*x + 0.8125
     imm2 = 0xFF00; // 1

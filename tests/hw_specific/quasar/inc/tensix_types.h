@@ -63,24 +63,24 @@ typedef enum
 ////////////
 typedef struct
 {
-    uint32_t row_section_size : 16;
-    uint32_t exp_section_size : 16;
-    uint32_t tile_dst_addr    : 32;
-    uint32_t uncompressed     : 1;
-    uint32_t reserved_0       : 3;
-    uint32_t out_data_format  : 2;
-    uint32_t reserved_1       : 2;
-    uint32_t in_data_format   : 2;
-    uint32_t reserved_2       : 22;
-    uint32_t reserved_3       : 32;
+    std::uint32_t row_section_size : 16;
+    std::uint32_t exp_section_size : 16;
+    std::uint32_t tile_dst_addr    : 32;
+    std::uint32_t uncompressed     : 1;
+    std::uint32_t reserved_0       : 3;
+    std::uint32_t out_data_format  : 2;
+    std::uint32_t reserved_1       : 2;
+    std::uint32_t in_data_format   : 2;
+    std::uint32_t reserved_2       : 22;
+    std::uint32_t reserved_3       : 32;
 } packer_config_t; // 16B
 
 typedef struct
 {
-    uint32_t rd_ptr;
-    uint32_t wr_ptr;
-    uint32_t rsvd0;
-    uint32_t rsvd1;
+    std::uint32_t rd_ptr;
+    std::uint32_t wr_ptr;
+    std::uint32_t rsvd0;
+    std::uint32_t rsvd1;
 #ifndef TENSIX_FIRMWARE
     operator std::string() const
     {
@@ -91,22 +91,22 @@ typedef struct
 
 typedef struct
 {
-    uint32_t val[4];
+    std::uint32_t val[4];
     packer_config_t f;
 } packer_config_u;
 
 typedef struct
 {
-    uint32_t src_addr   : 32;
-    uint32_t dst_addr   : 32;
-    uint32_t xfer_size  : 32;
-    uint32_t xfer_dir   : 2;
-    uint32_t reserved_0 : 30;
+    std::uint32_t src_addr   : 32;
+    std::uint32_t dst_addr   : 32;
+    std::uint32_t xfer_size  : 32;
+    std::uint32_t xfer_dir   : 2;
+    std::uint32_t reserved_0 : 30;
 } mover_config_t; // 16B
 
 typedef struct
 {
-    uint32_t val[4];
+    std::uint32_t val[4];
     mover_config_t f;
 } mover_config_u;
 
@@ -152,7 +152,7 @@ static_assert(sizeof(tile_descriptor_t) == 16, "tile_desc must be 128b!"); // De
 
 typedef union
 {
-    uint32_t val[4];
+    std::uint32_t val[4];
     tile_descriptor_t f;
 } tile_descriptor_u;
 
@@ -208,7 +208,7 @@ struct TileHeader
 
 union TileHeader_u
 {
-    uint32_t val[4];
+    std::uint32_t val[4];
     TileHeader header;
 
     TileHeader_u()
@@ -331,14 +331,14 @@ static_assert(sizeof(buffer_descriptor_t) == 16, "buffer_desc must be 128b!");
 
 typedef union
 {
-    uint32_t words[4];
+    std::uint32_t words[4];
     buffer_descriptor_t f;
 } buffer_descriptor_u;
 
 typedef struct
 {
     buffer_descriptor_u buf_desc;
-    uint32_t buf_desc_id;
+    std::uint32_t buf_desc_id;
     unsigned reg_data_format;
 } tdma_descriptor_t;
 

@@ -24,9 +24,9 @@ using namespace ckernel::unpacker;
 // This function stores a value to memory, and then immediately reads it back.
 // The load result will not be available until the store has completed.
 // This will make sure any subsequent instruction will see the store as complete.
-static inline __attribute__((always_inline)) uint32_t store_then_load(volatile uint32_t *addr, uint32_t to_store)
+static inline __attribute__((always_inline)) std::uint32_t store_then_load(volatile std::uint32_t *addr, std::uint32_t to_store)
 {
-    uint32_t result;
+    std::uint32_t result;
     __asm volatile("sw %2, %1; lw %0, %1" : "=r"(result) : "m"(*addr), "r"(to_store));
     return result;
 }
@@ -58,10 +58,11 @@ inline void _llk_unpack_hw_configure_(
 template <StochRndType stoch_rnd_mode>
 inline void _llk_unpack_configure_stoch_rnd_()
 {
-    constexpr uint alu_stoch_rnd_mask = ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
-    constexpr bool fpu_srnd_en        = (stoch_rnd_mode == StochRndType::All) || (stoch_rnd_mode == StochRndType::Fpu);
-    constexpr bool pack_srnd_en       = (stoch_rnd_mode == StochRndType::All) || (stoch_rnd_mode == StochRndType::Pack);
-    alu_config_u alu_payload          = {.val = 0};
+    constexpr std::uint32_t alu_stoch_rnd_mask =
+        ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
+    constexpr bool fpu_srnd_en                     = (stoch_rnd_mode == StochRndType::All) || (stoch_rnd_mode == StochRndType::Fpu);
+    constexpr bool pack_srnd_en                    = (stoch_rnd_mode == StochRndType::All) || (stoch_rnd_mode == StochRndType::Pack);
+    alu_config_u alu_payload                       = {.val = 0};
     alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en    = fpu_srnd_en;
     alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = pack_srnd_en;
     alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = pack_srnd_en;
@@ -77,7 +78,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring unpack to/from Int8 formats requires FP32 Dest mode enabled");
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcAUnsigned_RMW>(((uint)unpack_src_format == (uint)DataFormat::UInt8) ? 1 : 0);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcAUnsigned_RMW>(((std::uint32_t)unpack_src_format == (std::uint32_t)DataFormat::UInt8) ? 1 : 0);
     }
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format);
@@ -93,7 +94,7 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring unpack to/from Int8 formats requires FP32 Dest mode enabled");
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcBUnsigned_RMW>(((uint)unpack_src_format == (uint)DataFormat::UInt8) ? 1 : 0);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcBUnsigned_RMW>(((std::uint32_t)unpack_src_format == (std::uint32_t)DataFormat::UInt8) ? 1 : 0);
     }
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
     cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format);
@@ -129,7 +130,7 @@ inline void _llk_unpack_set_srcb_dummy_valid_()
  * @param address_b Address for unpacker B (THCON_SEC1)
  * @param cfg Pointer to configuration registers
  */
-inline void _llk_unpack_configure_addresses_(const std::uint32_t address_a, const std::uint32_t address_b, volatile uint tt_reg_ptr *cfg)
+inline void _llk_unpack_configure_addresses_(const std::uint32_t address_a, const std::uint32_t address_b, volatile std::uint32_t tt_reg_ptr *cfg)
 {
     LLK_ASSERT(is_valid_L1_address(address_a), "L1 address_a must be in valid L1 memory region");
     LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
@@ -156,7 +157,7 @@ inline void _llk_unpack_configure_addresses_(const std::uint32_t address_a, cons
  * @param address Address for unpacker A (THCON_SEC0)
  * @param cfg Pointer to configuration registers
  */
-inline void _llk_unpack_configure_single_address_(const std::uint32_t address, volatile uint tt_reg_ptr *cfg)
+inline void _llk_unpack_configure_single_address_(const std::uint32_t address, volatile std::uint32_t tt_reg_ptr *cfg)
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 

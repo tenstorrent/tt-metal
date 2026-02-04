@@ -33,14 +33,14 @@ inline To _bit_cast_(const From& from) noexcept
 // Optimized float to 16-bit parts conversion
 struct FloatBits
 {
-    uint16_t high16;
-    uint16_t low16;
+    std::uint16_t high16;
+    std::uint16_t low16;
 
     explicit FloatBits(float value)
     {
-        const uint32_t bits = _bit_cast_<uint32_t>(value);
-        high16              = static_cast<uint16_t>(bits >> 16);
-        low16               = static_cast<uint16_t>(bits & 0xFFFF);
+        const std::uint32_t bits = _bit_cast_<std::uint32_t>(value);
+        high16                   = static_cast<std::uint16_t>(bits >> 16);
+        low16                    = static_cast<std::uint16_t>(bits & 0xFFFF);
     }
 };
 
@@ -59,7 +59,7 @@ struct FloatBits
  * @note The reciprocal is written to ckernel::p_sfpu::LREG7.
  */
 template <std::size_t reciprocal_size>
-sfpi_inline void _load_recip_of_idx_(const uint32_t idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut)
+sfpi_inline void _load_recip_of_idx_(const std::uint32_t idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
 {
     if constexpr (reciprocal_size > 0)
     {
@@ -84,15 +84,15 @@ sfpi_inline void _load_recip_of_idx_(const uint32_t idx, const std::array<uint32
  * 4 inputs each from 32 columns at the current offset are loaded into the LREG0-3 registers
  * respectively from the current tile in dst 0.
  */
-template <uint32_t I, uint32_t J>
+template <std::uint32_t I, std::uint32_t J>
 sfpi_inline void _welfords_load_block_()
 {
-    constexpr uint32_t tile_offset    = 0; // offset for tile 0 in dst
-    constexpr uint32_t dst_reg_offset = tile_offset + (I * 32) + (4 * J);
-    constexpr uint32_t offset0        = dst_reg_offset;
-    constexpr uint32_t offset1        = dst_reg_offset + 2;
-    constexpr uint32_t offset2        = dst_reg_offset + 16;
-    constexpr uint32_t offset3        = dst_reg_offset + 18;
+    constexpr std::uint32_t tile_offset    = 0; // offset for tile 0 in dst
+    constexpr std::uint32_t dst_reg_offset = tile_offset + (I * 32) + (4 * J);
+    constexpr std::uint32_t offset0        = dst_reg_offset;
+    constexpr std::uint32_t offset1        = dst_reg_offset + 2;
+    constexpr std::uint32_t offset2        = dst_reg_offset + 16;
+    constexpr std::uint32_t offset3        = dst_reg_offset + 18;
 
     TTI_SFPTRANSP(0, 0, 0, 0);
     TTI_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, offset0);
@@ -127,7 +127,7 @@ sfpi_inline void _welfords_load_block_()
  * @tparam input_lreg The input LREG to use for the computation. Either LREG0, LREG1, LREG2, or LREG3.
  * @return None. The updated mean and M2 are left in LREG4 and LREG5, respectively.
  */
-template <uint32_t input_lreg>
+template <std::uint32_t input_lreg>
 sfpi_inline void _compute_welfords_row_()
 {
     // mean calculation
@@ -172,7 +172,7 @@ sfpi_inline void _compute_welfords_row_()
  * @brief The number of instructions required to calculate the running mean and m2 for a single
  * row of 32 columns. If _compute_welfords_row_ is modified, this value must be updated.
  */
-constexpr uint32_t WELFORD_INSTR_PER_ROW = 8;
+constexpr std::uint32_t WELFORD_INSTR_PER_ROW = 8;
 
 /**
  * @brief Programs the replay buffer for the Welford's algorithm.
@@ -197,7 +197,7 @@ sfpi_inline void _program_welfords_replay_buffer_()
  *
  * @tparam input_lreg The index of the input LREG to replay. LREG0-3.
  */
-template <uint32_t input_lreg>
+template <std::uint32_t input_lreg>
 sfpi_inline void _execute_welfords_row_replay_buffer_()
 {
     lltt::replay(WELFORD_INSTR_PER_ROW * input_lreg, WELFORD_INSTR_PER_ROW);
@@ -214,8 +214,8 @@ sfpi_inline void _execute_welfords_row_replay_buffer_()
  * This is a helper function that performs all three steps for a single block:
  * load inputs, load reciprocal and compute running mean and m2. Each block has 4 rows of 32 columns.
  */
-template <std::size_t reciprocal_size, uint32_t I, uint32_t J>
-sfpi_inline void _calculate_welfords_block_(uint32_t start_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut)
+template <std::size_t reciprocal_size, std::uint32_t I, std::uint32_t J>
+sfpi_inline void _calculate_welfords_block_(std::uint32_t start_idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
 {
     _welfords_load_block_<I, J>();
 
@@ -249,13 +249,13 @@ sfpi_inline void _calculate_welfords_block_(uint32_t start_idx, const std::array
  * This is a helper function that performs all three steps for a single block:
  * load inputs, load reciprocal and compute running mean and m2. Each block has 4 rows of 32 columns.
  */
-template <std::size_t reciprocal_size, uint32_t I, uint32_t J>
+template <std::size_t reciprocal_size, std::uint32_t I, std::uint32_t J>
 sfpi_inline void _calculate_welfords_block_w_offset_(
-    uint32_t& start_idx, uint32_t start_row, uint32_t end_row, const std::array<uint32_t, reciprocal_size>& reciprocal_lut)
+    std::uint32_t& start_idx, std::uint32_t start_row, std::uint32_t end_row, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
 {
     // These are the row indices of the block in the tile.
-    constexpr uint32_t block_min_row_idx = I * 16 + J * 4;
-    constexpr uint32_t block_max_row_idx = block_min_row_idx + 4;
+    constexpr std::uint32_t block_min_row_idx = I * 16 + J * 4;
+    constexpr std::uint32_t block_max_row_idx = block_min_row_idx + 4;
 
     // If the start_row and end_row don't intersect with this block, we don't need to process this.
     if (((start_row >= block_max_row_idx) || (end_row <= block_min_row_idx)))
@@ -264,8 +264,8 @@ sfpi_inline void _calculate_welfords_block_w_offset_(
     }
 
     // Trim the start_row and end_row so we only look at rows in this window
-    const uint32_t block_start_row = std::max(block_min_row_idx, start_row);
-    const uint32_t block_end_row   = std::min(block_max_row_idx, end_row);
+    const std::uint32_t block_start_row = std::max(block_min_row_idx, start_row);
+    const std::uint32_t block_end_row   = std::min(block_max_row_idx, end_row);
 
     // Make the start_row and end_row relative to this block
     start_row = block_start_row - block_min_row_idx;
@@ -328,7 +328,7 @@ sfpi_inline void _clear_previous_mean_and_m2_()
  * @param reciprocal_lut The lookup table containing the reciprocals of the sample counts.
  */
 template <std::size_t reciprocal_size>
-sfpi_inline void _calculate_welfords_tile_(uint32_t start_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut)
+sfpi_inline void _calculate_welfords_tile_(std::uint32_t start_idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
 {
     // We load 4 rows of a tile (with 32 columns each) at a time and process them.
     // To finish the entire tile, we need to repeat this process 8 times.
@@ -365,14 +365,14 @@ sfpi_inline void _calculate_welfords_tile_(uint32_t start_idx, const std::array<
  */
 template <std::size_t reciprocal_size>
 sfpi_inline void _calculate_welfords_partial_tile_(
-    uint32_t start_idx, uint32_t start_row, uint32_t num_rows, const std::array<uint32_t, reciprocal_size>& reciprocal_lut)
+    std::uint32_t start_idx, std::uint32_t start_row, std::uint32_t num_rows, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
 {
     if (num_rows == 0)
     {
         return;
     }
 
-    const uint32_t end_row = start_row + num_rows;
+    const std::uint32_t end_row = start_row + num_rows;
 
     // We load 4 rows of a tile (with 32 columns each) at a time and process them.
     // To finish the entire tile, we need to repeat this process 8 times.
@@ -398,8 +398,8 @@ sfpi_inline void _calculate_welfords_partial_tile_(
  */
 sfpi_inline void _store_mean_m2_to_dst_()
 {
-    constexpr uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
-    constexpr uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
+    constexpr std::uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
+    constexpr std::uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
 
     TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, m2_tile_offset);
@@ -415,10 +415,10 @@ sfpi_inline void _store_mean_m2_to_dst_()
  * @note Since group_id is known at runtime, we use TT_SFPSTORE instead of TTI_SFPSTORE.
  * @param group_id The group id to store the data for.
  */
-sfpi_inline void _store_mean_m2_to_dst_group_(uint32_t group_id)
+sfpi_inline void _store_mean_m2_to_dst_group_(std::uint32_t group_id)
 {
-    constexpr uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
-    constexpr uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
+    constexpr std::uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
+    constexpr std::uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
 
     TT_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + (group_id << 2));
     TT_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, m2_tile_offset + (group_id << 2));
@@ -434,8 +434,8 @@ sfpi_inline void _store_mean_m2_to_dst_group_(uint32_t group_id)
  */
 sfpi_inline void _load_mean_m2_from_dst_()
 {
-    constexpr uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
-    constexpr uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
+    constexpr std::uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
+    constexpr std::uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
 
     TTI_SFPLOAD(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset);
     TTI_SFPLOAD(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, m2_tile_offset);
@@ -450,10 +450,10 @@ sfpi_inline void _load_mean_m2_from_dst_()
  * @note Since group_id is known at runtime, we use TT_SFPLOAD instead of TTI_SFPLOAD.
  * @param group_id The group id to load the data for.
  */
-sfpi_inline void _load_mean_m2_from_dst_group_(uint32_t group_id)
+sfpi_inline void _load_mean_m2_from_dst_group_(std::uint32_t group_id)
 {
-    constexpr uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
-    constexpr uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
+    constexpr std::uint32_t mean_tile_offset = 0;  // offset for the mean tile in dst
+    constexpr std::uint32_t m2_tile_offset   = 64; // offset for the m2 tile in dst
 
     TT_SFPLOAD(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + (group_id << 2));
     TT_SFPLOAD(ckernel::p_sfpu::LREG5, sfpi::SFPLOAD_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, m2_tile_offset + (group_id << 2));
@@ -471,7 +471,7 @@ sfpi_inline void _load_mean_m2_from_dst_group_(uint32_t group_id)
  * @param reciprocal_lut The lookup table containing the reciprocals of the sample counts.
  */
 template <std::size_t reciprocal_size>
-sfpi_inline void _store_mean_var_to_dst_row_(uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut)
+sfpi_inline void _store_mean_var_to_dst_row_(std::uint32_t scale_idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
 {
     _load_recip_of_idx_<reciprocal_size>(scale_idx, reciprocal_lut);
     // Move mean to LREG0
@@ -488,19 +488,19 @@ sfpi_inline void _store_mean_var_to_dst_row_(uint32_t scale_idx, const std::arra
     // Move all the values to a single row
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    constexpr uint32_t offset0 = 0;
-    constexpr uint32_t offset1 = 2;
-    constexpr uint32_t offset2 = 16;
-    constexpr uint32_t offset3 = 18;
+    constexpr std::uint32_t offset0 = 0;
+    constexpr std::uint32_t offset1 = 2;
+    constexpr std::uint32_t offset2 = 16;
+    constexpr std::uint32_t offset3 = 18;
 
-    constexpr uint32_t mean_tile_offset = 0; // offset for the mean tile in dst
+    constexpr std::uint32_t mean_tile_offset = 0; // offset for the mean tile in dst
 
     TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + offset0);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + offset1);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG2, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + offset2);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG3, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, mean_tile_offset + offset3);
 
-    constexpr uint32_t var_tile_offset = 64; // offset for the var tile in dst
+    constexpr std::uint32_t var_tile_offset = 64; // offset for the var tile in dst
 
     TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, var_tile_offset + offset0);
     TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, ckernel::ADDR_MOD_3, var_tile_offset + offset1);
@@ -520,17 +520,17 @@ sfpi_inline void _store_mean_var_to_dst_row_(uint32_t scale_idx, const std::arra
  * @param reciprocal_lut The lookup table containing the reciprocals of the sample counts.
  */
 template <std::size_t reciprocal_size>
-sfpi_inline void _store_mean_var_to_dst_raw_(uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut)
+sfpi_inline void _store_mean_var_to_dst_raw_(std::uint32_t scale_idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
 {
     _load_recip_of_idx_<reciprocal_size>(scale_idx, reciprocal_lut);
 
     // Convert M2 to variance in LREG5
     TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
 
-    constexpr uint32_t mean_tile_offset = 0; // offset for the mean tile in dst
+    constexpr std::uint32_t mean_tile_offset = 0; // offset for the mean tile in dst
     TTI_SFPSTORE(ckernel::p_sfpu::LREG4, 0, ckernel::ADDR_MOD_3, mean_tile_offset);
 
-    constexpr uint32_t var_tile_offset = 64; // offset for the var tile in dst
+    constexpr std::uint32_t var_tile_offset = 64; // offset for the var tile in dst
     TTI_SFPSTORE(ckernel::p_sfpu::LREG5, 0, ckernel::ADDR_MOD_3, var_tile_offset);
 }
 
@@ -546,17 +546,18 @@ sfpi_inline void _store_mean_var_to_dst_raw_(uint32_t scale_idx, const std::arra
  * @param reciprocal_lut The lookup table containing the reciprocals of the sample counts.
  */
 template <std::size_t reciprocal_size>
-sfpi_inline void _store_mean_var_to_dst_raw_group_(uint32_t group_id, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut)
+sfpi_inline void _store_mean_var_to_dst_raw_group_(
+    std::uint32_t group_id, std::uint32_t scale_idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
 {
     _load_recip_of_idx_<reciprocal_size>(scale_idx, reciprocal_lut);
 
     // Convert M2 to variance in LREG5
     TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
 
-    constexpr uint32_t mean_tile_offset = 0; // offset for the mean tile in dst
+    constexpr std::uint32_t mean_tile_offset = 0; // offset for the mean tile in dst
     TT_SFPSTORE(ckernel::p_sfpu::LREG4, 0, ckernel::ADDR_MOD_3, mean_tile_offset + (group_id << 2));
 
-    constexpr uint32_t var_tile_offset = 64; // offset for the var tile in dst
+    constexpr std::uint32_t var_tile_offset = 64; // offset for the var tile in dst
     TT_SFPSTORE(ckernel::p_sfpu::LREG5, 0, ckernel::ADDR_MOD_3, var_tile_offset + (group_id << 2));
 }
 } // namespace sfpu

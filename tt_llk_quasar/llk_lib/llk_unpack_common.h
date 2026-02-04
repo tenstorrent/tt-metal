@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_trisc_common.h"
 #include "cunpack_common.h"
 using namespace ckernel;
@@ -14,7 +16,7 @@ using namespace ckernel::trisc;
  * @tparam UNP_SEL: Sets unpacker to configure. values = p_unpacr::UNP_A/UNP_B/UNP_S
  * @param tdma_desc_src: Contains source reg format
  */
-template <uint32_t UNP_SEL>
+template <std::uint32_t UNP_SEL>
 inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
 {
     static_assert(
@@ -25,15 +27,15 @@ inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
     // Program src formats
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
-        cfg_rmw(THCON_UNPACKER0_REG0_OUT_DATA_FORMAT_RMW, static_cast<uint8_t>(tdma_desc_src.reg_data_format));
+        cfg_rmw(THCON_UNPACKER0_REG0_OUT_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc_src.reg_data_format));
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_B)
     {
-        cfg_rmw(THCON_UNPACKER1_REG0_OUT_DATA_FORMAT_RMW, static_cast<uint8_t>(tdma_desc_src.reg_data_format));
+        cfg_rmw(THCON_UNPACKER1_REG0_OUT_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc_src.reg_data_format));
     }
     else if constexpr (UNP_SEL == p_unpacr::UNP_S)
     {
-        cfg_rmw(THCON_UNPACKER2_REG0_OUT_DATA_FORMAT_RMW, static_cast<uint8_t>(tdma_desc_src.reg_data_format));
+        cfg_rmw(THCON_UNPACKER2_REG0_OUT_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc_src.reg_data_format));
     }
 }
 
@@ -43,7 +45,7 @@ inline void _llk_unpack_hw_configure_(const tdma_descriptor_t& tdma_desc_src)
  * @tparam UNP_SEL: Sets unpacker to configure. values = p_unpacr::UNP_A/UNP_B/UNP_S
  * @param tdma_desc_src: Contains L1 buffer descriptor information & source reg format for Src Reg
  */
-template <uint32_t UNP_SEL>
+template <std::uint32_t UNP_SEL>
 inline void _llk_unpack_configure_unary_(const tdma_descriptor_t& tdma_desc_src)
 {
     _llk_unpack_hw_configure_<UNP_SEL>(tdma_desc_src);
@@ -54,7 +56,7 @@ inline void _llk_unpack_configure_unary_(const tdma_descriptor_t& tdma_desc_src)
  * @tparam UNP_SEL0/1: Sets unpacker to configure. values = p_unpacr::UNP_A/UNP_B/UNP_S
  * @param tdma_desc_src0/1: Contains L1 buffer descriptor information & source reg format for Src Reg
  */
-template <uint32_t UNP_SEL_0, uint32_t UNP_SEL_1>
+template <std::uint32_t UNP_SEL_0, std::uint32_t UNP_SEL_1>
 inline void _llk_unpack_configure_binary_(const tdma_descriptor_t& tdma_desc_src0, const tdma_descriptor_t& tdma_desc_src1)
 {
     _llk_unpack_hw_configure_<UNP_SEL_0>(tdma_desc_src0);

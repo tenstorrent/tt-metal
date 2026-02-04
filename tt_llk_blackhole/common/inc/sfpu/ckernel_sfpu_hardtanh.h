@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "sfpi.h"
 #include "sfpi_fp16.h"
 
@@ -13,7 +15,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_hardtanh_(const int iterations, uint param0, uint param1, uint param2)
+inline void _calculate_hardtanh_(const int iterations, std::uint32_t param0, std::uint32_t param1, std::uint32_t param2)
 {
     // All params are in FP16_B format
     // param0 = -(neg_threshold)

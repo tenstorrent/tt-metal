@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "llk_unpack_common.h"
 using namespace ckernel;
 
@@ -19,15 +21,16 @@ using namespace ckernel;
  * @param num_tiles: number of tiles to unpack at a time for both inputs
  */
 template <BroadcastType BROADCAST_TYPE>
-inline void _llk_unpack_binary_broadcast_operands_mop_config_(const uint32_t buf_desc_id_0, const uint32_t buf_desc_id_1, const uint32_t num_tiles)
+inline void _llk_unpack_binary_broadcast_operands_mop_config_(
+    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t num_tiles)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
 
-    const uint32_t MOP_OUTER_LOOP     = num_tiles;
-    constexpr uint32_t MOP_INNER_LOOP = 1;
+    const std::uint32_t MOP_OUTER_LOOP     = num_tiles;
+    constexpr std::uint32_t MOP_INNER_LOOP = 1;
 
-    uint unpack_srca_tile_inc            = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src Tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
-    constexpr static uint replay_buf_len = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1 : 4;
+    std::uint32_t unpack_srca_tile_inc            = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src Tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
+    constexpr static std::uint32_t replay_buf_len = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1 : 4;
 
     load_replay_buf<0, replay_buf_len>(
         [buf_desc_id_1]
@@ -72,7 +75,7 @@ inline void _llk_unpack_binary_broadcast_operands_mop_config_(const uint32_t buf
  * @param num_tiles: number of tiles to unpack at a time for both inputs
  */
 template <BroadcastType BROADCAST_TYPE>
-inline void _llk_unpack_binary_broadcast_operands_init_(const uint32_t buf_desc_id_0, const uint32_t buf_desc_id_1, const uint32_t num_tiles)
+inline void _llk_unpack_binary_broadcast_operands_init_(const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t num_tiles)
 {
     _llk_unpack_binary_broadcast_operands_mop_config_<BROADCAST_TYPE>(buf_desc_id_0, buf_desc_id_1, num_tiles);
 }
@@ -83,7 +86,7 @@ inline void _llk_unpack_binary_broadcast_operands_init_(const uint32_t buf_desc_
  * start_l1_tile_idx_0 -> UNPACKER0 -> SRCA
  * start_l1_tile_idx_1 -> UNPACKER1 -> SRCB
  */
-inline void _llk_unpack_binary_broadcast_operands_(const uint start_l1_tile_idx_0, const uint start_l1_tile_idx_1)
+inline void _llk_unpack_binary_broadcast_operands_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
 {
     // RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must

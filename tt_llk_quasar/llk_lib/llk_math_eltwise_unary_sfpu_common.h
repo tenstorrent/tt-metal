@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
+
 #include "cmath_common.h"
 #include "llk_defs.h"
 using namespace ckernel::math;
@@ -29,7 +31,7 @@ inline void _eltwise_unary_sfpu_configure_addrmod_()
  * @brief Sets up starting index of SFPU, Stalls till all FPU operations are done
  * @param tile_index: Use to index to a tile in Destination register
  */
-inline void _llk_math_eltwise_unary_sfpu_start_(const uint tile_index)
+inline void _llk_math_eltwise_unary_sfpu_start_(const std::uint32_t tile_index)
 {
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_index);
     TTI_STALLWAIT(p_stall::STALL_SFPU, 0, 0, p_stall::MATH);
@@ -83,11 +85,11 @@ inline void _llk_math_eltwise_unary_sfpu_init_()
  * to the SFPU function pointer
  */
 template <bool APPROXIMATE, class F, class... ARGS>
-inline void _llk_math_eltwise_unary_sfpu_params_(F&& sfpu_func, uint dst_tile_index, ARGS&&... args)
+inline void _llk_math_eltwise_unary_sfpu_params_(F&& sfpu_func, std::uint32_t dst_tile_index, ARGS&&... args)
 {
     _llk_math_eltwise_unary_sfpu_start_(dst_tile_index);
 
-    for (uint face = 0; face < NUM_FACES; face++)
+    for (std::uint32_t face = 0; face < NUM_FACES; face++)
     {
         sfpu_func(static_cast<ARGS&&>(args)...);
 
@@ -102,7 +104,7 @@ inline void _llk_math_eltwise_unary_sfpu_params_(F&& sfpu_func, uint dst_tile_in
  * @brief Determines the stochround conversion type based on source and cast data formats
  */
 template <DataFormat SRC_FMT, DataFormat CAST_FMT>
-inline constexpr uint _sfpu_stochround_conversion_()
+inline constexpr std::uint32_t _sfpu_stochround_conversion_()
 {
     if constexpr (SRC_FMT == DataFormat::Float32 && CAST_FMT == DataFormat::Float16)
     {
@@ -144,7 +146,7 @@ inline constexpr uint _sfpu_stochround_conversion_()
  * @brief Determines the sfpmem type parameter based on data format
  */
 template <DataFormat FMT>
-inline constexpr uint _sfpu_sfpmem_type_()
+inline constexpr std::uint32_t _sfpu_sfpmem_type_()
 {
     if constexpr (FMT == DataFormat::Float16)
     {

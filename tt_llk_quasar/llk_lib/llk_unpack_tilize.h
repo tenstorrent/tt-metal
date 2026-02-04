@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_trisc_common.h"
 #include "cunpack_common.h"
 #include "llk_unpack_common.h"
@@ -18,27 +20,27 @@ using namespace ckernel;
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
  */
-template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t BLOCK_CT_DIM>
-inline void _llk_unpack_tilize_mop_config_(const uint32_t buf_desc_id)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t BLOCK_CT_DIM>
+inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
 
-    constexpr uint32_t MOP_OUTER_LOOP = 1;
-    constexpr uint32_t MOP_INNER_LOOP = BLOCK_CT_DIM;
+    constexpr std::uint32_t MOP_OUTER_LOOP = 1;
+    constexpr std::uint32_t MOP_INNER_LOOP = BLOCK_CT_DIM;
 
-    uint unpack_tile_instrn = TT_OP_UNPACR_TILIZE(0, 0, 0 /*dst Z increment*/, 1 /*src Z increment*/, UNP_SEL, buf_desc_id, 1 /*Set Dvalid*/);
+    std::uint32_t unpack_tile_instrn = TT_OP_UNPACR_TILIZE(0, 0, 0 /*dst Z increment*/, 1 /*src Z increment*/, UNP_SEL, buf_desc_id, 1 /*Set Dvalid*/);
 
-    uint reset_src_reg_instrn =
+    std::uint32_t reset_src_reg_instrn =
         TT_OP_UNPACR_TILIZE(0, 1 /*Cntr_Reset_Mask*/, 0 /*dst Z increment*/, 0 /*src Z increment*/, UNP_SEL, buf_desc_id, 1 /*Set Dvalid*/);
 
     if constexpr (IS_32b_DEST_EN)
     {
         // FP32 datacopy uses ELWADD, which requires dvalid from both SrcA and SrcB
         // Set dvalid for the opposite unpacker (if using UNP_A, set dvalid for UNP_B and vice versa)
-        constexpr uint32_t OPPOSITE_UNP                  = (UNP_SEL == p_unpacr::UNP_A) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
-        constexpr static uint set_opposite_dvalid_instrn = TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*UNP_CLR_SRC*/);
+        constexpr std::uint32_t OPPOSITE_UNP                      = (UNP_SEL == p_unpacr::UNP_A) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
+        constexpr static std::uint32_t set_opposite_dvalid_instrn = TT_OP_UNPACR_NOP(OPPOSITE_UNP, 1 /*Dvalid*/, 0, 0, 0 /*clear to 0*/, 0 /*UNP_CLR_SRC*/);
 
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, set_opposite_dvalid_instrn, unpack_tile_instrn);
         temp.set_last_outer_loop_instr(reset_src_reg_instrn);
@@ -62,8 +64,8 @@ inline void _llk_unpack_tilize_mop_config_(const uint32_t buf_desc_id)
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
  */
-template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t BLOCK_CT_DIM, uint32_t C_DIM_FACES>
-inline void _llk_unpack_tilize_init_(const uint32_t buf_desc_id)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM, std::uint32_t C_DIM_FACES>
+inline void _llk_unpack_tilize_init_(const std::uint32_t buf_desc_id)
 {
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
@@ -92,8 +94,8 @@ inline void _llk_unpack_tilize_init_(const uint32_t buf_desc_id)
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @param l1_tile_idx: Index into the L1 buffer for a tile
  */
-template <uint32_t UNP_SEL>
-inline void _llk_unpack_tilize_(const uint l1_tile_idx)
+template <std::uint32_t UNP_SEL>
+inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx)
 {
     // RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must
@@ -118,21 +120,21 @@ inline void _llk_unpack_tilize_(const uint l1_tile_idx)
  * stored in the buffer descriptor table, values = 0 - 16
  * @param c_dim_face: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
  */
-template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
-inline void _llk_unpack_tilize_strided_mop_config_(const uint32_t buf_desc_id)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM, std::uint32_t C_DIM_FACES>
+inline void _llk_unpack_tilize_strided_mop_config_(const std::uint32_t buf_desc_id)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
 
-    constexpr uint32_t MOP_OUTER_LOOP = 1;
-    constexpr uint32_t MOP_INNER_LOOP = 1;
+    constexpr std::uint32_t MOP_OUTER_LOOP = 1;
+    constexpr std::uint32_t MOP_INNER_LOOP = 1;
 
-    uint unpack_half_face_instrn =
+    std::uint32_t unpack_half_face_instrn =
         (UNP_SEL == p_unpacr::UNP_A)
             ? TT_OP_UNPACR0_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id, 0 /*Set Dvalid*/)
             : TT_OP_UNPACR1_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id, 0 /*Set Dvalid*/);
-    constexpr static uint increment_half_face_instrn =
+    constexpr static std::uint32_t increment_half_face_instrn =
         TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, C_DIM_FACES * ckernel::unpack::UNPACR_STRIDE_MAX_ROWS * FULL_CT_DIM);
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_half_face_instrn, increment_half_face_instrn);
@@ -151,8 +153,8 @@ inline void _llk_unpack_tilize_strided_mop_config_(const uint32_t buf_desc_id)
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
  */
-template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t C_DIM_FACES>
-inline void _llk_unpack_tilize_strided_init_(const uint32_t buf_desc_id)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM, std::uint32_t C_DIM_FACES>
+inline void _llk_unpack_tilize_strided_init_(const std::uint32_t buf_desc_id)
 {
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
@@ -180,10 +182,10 @@ inline void _llk_unpack_tilize_strided_init_(const uint32_t buf_desc_id)
  * @param tile_shape: xyz dimensions of the tile
  * @param l1_tile_idx: c_dim index of tile in L1
  */
-template <uint32_t UNP_SEL, uint32_t FULL_CT_DIM, bool IS_32b_DEST_EN, uint32_t C_DIM_FACES>
-inline void _llk_unpack_tilize_strided_(const TileShape& tile_shape, const uint l1_tile_idx)
+template <std::uint32_t UNP_SEL, std::uint32_t FULL_CT_DIM, bool IS_32b_DEST_EN, std::uint32_t C_DIM_FACES>
+inline void _llk_unpack_tilize_strided_(const TileShape& tile_shape, const std::uint32_t l1_tile_idx)
 {
-    const uint32_t f1_row_idx =
+    const std::uint32_t f1_row_idx =
         (tile_shape.narrow_tile ? l1_tile_idx * C_DIM_FACES + C_DIM_FACES * tile_shape.face_r_dim * FULL_CT_DIM : l1_tile_idx * C_DIM_FACES + 1);
 
     // Reset Dest counters for Unpacker to 0
@@ -240,19 +242,20 @@ inline void _llk_unpack_tilize_strided_(const TileShape& tile_shape, const uint 
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
  */
-template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t ROWS_READ>
-inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const uint32_t buf_desc_id)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM, std::uint32_t ROWS_READ>
+inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const std::uint32_t buf_desc_id)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
     static_assert(!(IS_32b_DEST_EN && UNP_SEL != p_unpacr::UNP_A), "If IS_32b_DEST_EN then UNP_SEL should be UNP_A");
 
-    constexpr uint32_t MOP_OUTER_LOOP = 1;
-    constexpr uint32_t MOP_INNER_LOOP = FULL_CT_DIM;
+    constexpr std::uint32_t MOP_OUTER_LOOP = 1;
+    constexpr std::uint32_t MOP_INNER_LOOP = FULL_CT_DIM;
 
-    uint unpack_face0_instrn = TT_OP_UNPACR0_STRIDE(ROWS_READ /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 0, 0, buf_desc_id, 0 /*Set Dvalid*/);
-    uint unpack_face1_instrn = TT_OP_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 1, 0, 0, buf_desc_id, 1 /*Set Dvalid*/);
+    std::uint32_t unpack_face0_instrn =
+        TT_OP_UNPACR0_STRIDE(ROWS_READ /*Src_Reg_Y_Cntr_Incr*/, 0 /*inc by 1*/, 1 /*set to inc*/, 0, 0, buf_desc_id, 0 /*Set Dvalid*/);
+    std::uint32_t unpack_face1_instrn = TT_OP_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 1, 0, 0, buf_desc_id, 1 /*Set Dvalid*/);
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_face0_instrn, unpack_face1_instrn);
 
@@ -280,8 +283,8 @@ inline void _llk_unpack_tilize_strided_mop_config_small_faces_(const uint32_t bu
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
  */
-template <uint32_t UNP_SEL, bool IS_32b_DEST_EN, uint32_t FULL_CT_DIM, uint32_t ROWS_READ, uint32_t C_DIM_FACES>
-inline void _llk_unpack_tilize_strided_init_small_faces_(const uint32_t buf_desc_id)
+template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM, std::uint32_t ROWS_READ, std::uint32_t C_DIM_FACES>
+inline void _llk_unpack_tilize_strided_init_small_faces_(const std::uint32_t buf_desc_id)
 {
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
     cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
@@ -298,7 +301,7 @@ inline void _llk_unpack_tilize_strided_init_small_faces_(const uint32_t buf_desc
  * @param l1_tile_idx: c_dim index of tile in L1
  * @param c_dim_face: number of faces in c_dim = number of tiles in c_dim * faces in c_dim per tile
  */
-template <uint32_t UNP_SEL, uint32_t FULL_CT_DIM>
+template <std::uint32_t UNP_SEL, std::uint32_t FULL_CT_DIM>
 inline void _llk_unpack_tilize_strided_small_faces_(const TileShape& tile_shape)
 {
     // Reset Dest counters for Unpacker to 0

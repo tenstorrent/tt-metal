@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_trisc_common.h"
 #include "llk_pack_common.h"
 #include "llk_unpack_common.h"
@@ -16,14 +18,14 @@ using namespace ckernel;
  * be looped by INSTRN_LOOP_COUNT set in the hw_config
  * @tparam INSTRN_LOOP_COUNT: The number of times to loop the instructions in the auto-loop
  */
-template <uint8_t INSTRN_COUNT, uint8_t INSTRN_LOOP_COUNT>
+template <std::uint8_t INSTRN_COUNT, std::uint8_t INSTRN_LOOP_COUNT>
 inline void _llk_unpack_srcs_config_()
 {
     cfg_rmw(THCON_UNPACKER2_REG0_INSTRN_LOOP_COUNT_RMW, INSTRN_LOOP_COUNT - 1);
     cfg_rmw(THCON_UNPACKER2_REG0_INSTRN_COUNT_RMW, INSTRN_COUNT - 1);
 }
 
-template <uint8_t INSTRN_COUNT, uint8_t INSTRN_LOOP_COUNT>
+template <std::uint8_t INSTRN_COUNT, std::uint8_t INSTRN_LOOP_COUNT>
 inline void _llk_pack_srcs_config_()
 {
     cfg_rmw(THCON_PACKER1_REG0_INSTRN_LOOP_COUNT_RMW, INSTRN_LOOP_COUNT - 1);
@@ -39,9 +41,9 @@ inline void _llk_pack_srcs_config_()
  * @param start_l1_tile_idx: The tile index into the l1 input buffer
  * that unpacker can start unpacking from
  */
-template <uint8_t INSTRN_COUNT>
+template <std::uint8_t INSTRN_COUNT>
 inline void _llk_unpack_srcs_(
-    const uint8_t buf_desc_id, const uint start_l1_tile_idx
+    const std::uint8_t buf_desc_id, const std::uint32_t start_l1_tile_idx
 
 )
 {
@@ -49,7 +51,7 @@ inline void _llk_unpack_srcs_(
     // Tile can only be a maximum of 8x16 rows for 16 bit, 4*16 for 32 bit
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, start_l1_tile_idx);
 
-    for (uint32_t i = 0; i < INSTRN_COUNT; i++)
+    for (std::uint32_t i = 0; i < INSTRN_COUNT; i++)
     {
         TT_UNPACR2_TILE_INC(0b0, 0b1 /*SrcS l1 increment*/, buf_desc_id, 0b1 /*Set dvalid*/);
     }
@@ -64,9 +66,9 @@ inline void _llk_unpack_srcs_(
  * @param start_l1_tile_idx: The tile index into the l1 output buffer
  * that packer can start packing to
  */
-template <uint8_t INSTRN_COUNT>
+template <std::uint8_t INSTRN_COUNT>
 inline void _llk_pack_srcs_(
-    const uint8_t buf_desc_id, const uint start_l1_tile_idx
+    const std::uint8_t buf_desc_id, const std::uint32_t start_l1_tile_idx
 
 )
 {
@@ -74,7 +76,7 @@ inline void _llk_pack_srcs_(
     // Tile can only be a maximum of 8x16 rows for 16 bit, 4*16 for 32 bit
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK1, start_l1_tile_idx);
 
-    for (uint32_t i = 0; i < INSTRN_COUNT; i++)
+    for (std::uint32_t i = 0; i < INSTRN_COUNT; i++)
     {
         TT_PACR1_TILE_INC(0b1 /*DstS l1 increment*/, 0b0 /*SrcS l1 increment*/, buf_desc_id, 0b1 /*Set dvalid*/);
     }

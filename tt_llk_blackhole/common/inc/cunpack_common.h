@@ -13,37 +13,37 @@
 
 namespace ckernel::unpacker
 {
-constexpr uint32_t TILE_DESC_SIZE = 2; // Unpacker descriptor size in dwords
-constexpr uint32_t CONFIG_SIZE    = 2; // Unpacker configuration size in dwords
-constexpr uint32_t NUM_UNPACKERS  = 2; // Number of unpackers
+constexpr std::uint32_t TILE_DESC_SIZE = 2; // Unpacker descriptor size in dwords
+constexpr std::uint32_t CONFIG_SIZE    = 2; // Unpacker configuration size in dwords
+constexpr std::uint32_t NUM_UNPACKERS  = 2; // Number of unpackers
 
 // Unpack tile descriptor
 typedef struct
 {
     // word 0
-    uint32_t in_data_format     : 4;
-    uint32_t uncompressed       : 1;
-    uint32_t reserved_0         : 3;
-    uint32_t blobs_per_xy_plane : 4;
-    uint32_t reserved_1         : 4;
-    uint32_t x_dim              : 16;
+    std::uint32_t in_data_format     : 4;
+    std::uint32_t uncompressed       : 1;
+    std::uint32_t reserved_0         : 3;
+    std::uint32_t blobs_per_xy_plane : 4;
+    std::uint32_t reserved_1         : 4;
+    std::uint32_t x_dim              : 16;
     // word 1
-    uint32_t y_dim : 16;
-    uint32_t z_dim : 16;
+    std::uint32_t y_dim : 16;
+    std::uint32_t z_dim : 16;
     // word 2
-    uint32_t w_dim            : 16;
-    uint32_t blobs_y_start_lo : 16;
+    std::uint32_t w_dim            : 16;
+    std::uint32_t blobs_y_start_lo : 16;
     // word 3
-    uint32_t blobs_y_start_hi : 16;
-    uint32_t digest_type      : 8; // Not used
-    uint32_t digest_size      : 8; // Not used
-} unpack_tile_descriptor_t;        // Unpack configuration
+    std::uint32_t blobs_y_start_hi : 16;
+    std::uint32_t digest_type      : 8; // Not used
+    std::uint32_t digest_size      : 8; // Not used
+} unpack_tile_descriptor_t;             // Unpack configuration
 
-static_assert(sizeof(unpack_tile_descriptor_t) == (sizeof(uint32_t) * 4));
+static_assert(sizeof(unpack_tile_descriptor_t) == (sizeof(std::uint32_t) * 4));
 
 typedef union
 {
-    uint32_t val[4];
+    std::uint32_t val[4];
     unpack_tile_descriptor_t f;
 } unpack_tile_descriptor_u;
 
@@ -51,65 +51,65 @@ typedef union
 typedef struct
 {
     // word 0
-    uint32_t out_data_format           : 4;
-    uint32_t throttle_mode             : 2;
-    uint32_t context_count             : 2;
-    uint32_t haloize_mode              : 1; // this controls xy transpose on unpacker
-    uint32_t tileize_mode              : 1;
-    uint32_t unpack_src_reg_set_update : 1;
-    uint32_t unpack_if_sel             : 1;
-    uint32_t upsample_rate             : 2;
-    uint32_t reserved_1                : 1;
-    uint32_t upsamle_and_interlave     : 1;
-    uint32_t shift_amount              : 16;
+    std::uint32_t out_data_format           : 4;
+    std::uint32_t throttle_mode             : 2;
+    std::uint32_t context_count             : 2;
+    std::uint32_t haloize_mode              : 1; // this controls xy transpose on unpacker
+    std::uint32_t tileize_mode              : 1;
+    std::uint32_t unpack_src_reg_set_update : 1;
+    std::uint32_t unpack_if_sel             : 1;
+    std::uint32_t upsample_rate             : 2;
+    std::uint32_t reserved_1                : 1;
+    std::uint32_t upsamle_and_interlave     : 1;
+    std::uint32_t shift_amount              : 16;
     // word 1
-    uint32_t uncompress_cntx0_3    : 4;
-    uint32_t unpack_if_sel_cntx0_3 : 4;
-    uint32_t force_shared_exp      : 1;
-    uint32_t reserved_2            : 7;
-    uint32_t uncompress_cntx4_7    : 4;
-    uint32_t unpack_if_sel_cntx4_7 : 4;
-    uint32_t reserved_3            : 8;
+    std::uint32_t uncompress_cntx0_3    : 4;
+    std::uint32_t unpack_if_sel_cntx0_3 : 4;
+    std::uint32_t force_shared_exp      : 1;
+    std::uint32_t reserved_2            : 7;
+    std::uint32_t uncompress_cntx4_7    : 4;
+    std::uint32_t unpack_if_sel_cntx4_7 : 4;
+    std::uint32_t reserved_3            : 8;
     // word 2
-    uint32_t limit_addr : 17;
-    uint32_t reserved_4 : 15;
+    std::uint32_t limit_addr : 17;
+    std::uint32_t reserved_4 : 15;
     // word 3
-    uint32_t fifo_size  : 17;
-    uint32_t reserved_5 : 15;
+    std::uint32_t fifo_size  : 17;
+    std::uint32_t reserved_5 : 15;
 } unpack_config_t;
 
-static_assert(sizeof(unpack_config_t) == (sizeof(uint32_t) * 4));
+static_assert(sizeof(unpack_config_t) == (sizeof(std::uint32_t) * 4));
 
 typedef union
 {
-    uint32_t val[4];
+    std::uint32_t val[4];
     unpack_config_t f;
 } unpack_config_u;
 
 // ALU config
 typedef struct
 {
-    uint32_t ALU_ROUNDING_MODE_Fpu_srnd_en     : 1;
-    uint32_t ALU_ROUNDING_MODE_Gasket_srnd_en  : 1;
-    uint32_t ALU_ROUNDING_MODE_Packer_srnd_en  : 1;
-    uint32_t ALU_ROUNDING_MODE_Padding         : 10;
-    uint32_t ALU_ROUNDING_MODE_GS_LF           : 1;
-    uint32_t ALU_ROUNDING_MODE_Bfp8_HF         : 1;
-    uint32_t ALU_FORMAT_SPEC_REG0_SrcAUnsigned : 1;
-    uint32_t ALU_FORMAT_SPEC_REG0_SrcBUnsigned : 1;
-    uint32_t ALU_FORMAT_SPEC_REG0_SrcA         : 4;
-    uint32_t ALU_FORMAT_SPEC_REG1_SrcB         : 4;
-    uint32_t ALU_FORMAT_SPEC_REG2_Dstacc       : 4;
-    uint32_t ALU_ACC_CTRL_Fp32_enabled         : 1;
-    uint32_t ALU_ACC_CTRL_SFPU_Fp32_enabled    : 1;
-    uint32_t ALU_ACC_CTRL_INT8_math_enabled    : 1;
+    std::uint32_t ALU_ROUNDING_MODE_Fpu_srnd_en     : 1;
+    std::uint32_t ALU_ROUNDING_MODE_Gasket_srnd_en  : 1;
+    std::uint32_t ALU_ROUNDING_MODE_Packer_srnd_en  : 1;
+    std::uint32_t ALU_ROUNDING_MODE_Padding         : 10;
+    std::uint32_t ALU_ROUNDING_MODE_GS_LF           : 1;
+    std::uint32_t ALU_ROUNDING_MODE_Bfp8_HF         : 1;
+    std::uint32_t ALU_FORMAT_SPEC_REG0_SrcAUnsigned : 1;
+    std::uint32_t ALU_FORMAT_SPEC_REG0_SrcBUnsigned : 1;
+    std::uint32_t ALU_FORMAT_SPEC_REG0_SrcA         : 4;
+    std::uint32_t ALU_FORMAT_SPEC_REG1_SrcB         : 4;
+    std::uint32_t ALU_FORMAT_SPEC_REG2_Dstacc       : 4;
+    std::uint32_t ALU_ACC_CTRL_Fp32_enabled         : 1;
+    std::uint32_t ALU_ACC_CTRL_SFPU_Fp32_enabled    : 1;
+    std::uint32_t ALU_ACC_CTRL_INT8_math_enabled    : 1;
 } alu_config_t;
 
-static_assert(sizeof(alu_config_t) == sizeof(uint32_t));
+static_assert(sizeof(alu_config_t) == sizeof(std::uint32_t));
 
 typedef union
 {
-    uint32_t val;
+    std::uint32_t val;
     alu_config_t f;
 } alu_config_u;
 
@@ -120,7 +120,7 @@ inline void unpacker_addr_counter_init()
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 }
 
-inline void unpacker_iteration_cleanup(uint &context)
+inline void unpacker_iteration_cleanup(std::uint32_t &context)
 {
     // Indicate that unpacker is done, and we can program the next one
     t6_semaphore_get(semaphore::UNPACK_SYNC);
@@ -149,25 +149,25 @@ inline void unpacker_wrapup()
     TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x1010);
 }
 
-inline uint unpack_16B_address(const uint addr)
+inline std::uint32_t unpack_16B_address(const std::uint32_t addr)
 {
     return (addr << FIFO_BASE_ADDRESS_ALIGN_BITS) >> 4;
 }
 
-inline void flush_xsearch_cache(const uint unpacker)
+inline void flush_xsearch_cache(const std::uint32_t unpacker)
 {
     TTI_UNPACR(unpacker, 0, 0, 0, 0, 0, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 1, 0);
 }
 
 // Wait for threshold of busy contexts to fall below total available contexts
-inline void wait_for_next_context(const uint num_contexts)
+inline void wait_for_next_context(const std::uint32_t num_contexts)
 {
     while (semaphore_read(semaphore::UNPACK_SYNC) >= num_contexts)
     {
     }
 }
 
-inline void switch_config_context(uint &unp_cfg_context)
+inline void switch_config_context(std::uint32_t &unp_cfg_context)
 {
     // Switch config context
     unp_cfg_context = 1 - unp_cfg_context;
@@ -205,15 +205,15 @@ inline void enable_int8_fpu_math()
 
 template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false, bool disable_src_zero_flag = false>
 inline void configure_unpack_AB(
-    const uint unpA_src_format,
-    const uint unpB_src_format,
-    const uint unpA_dst_format,
-    const uint unpB_dst_format,
-    const uint unpA_face_r_dim      = FACE_R_DIM,
-    const uint unpB_face_r_dim      = FACE_R_DIM,
-    const bool transpose_xy_srca_en = false,
-    const uint unpA_num_faces       = 4,
-    const uint unpB_num_faces       = 4)
+    const std::uint32_t unpA_src_format,
+    const std::uint32_t unpB_src_format,
+    const std::uint32_t unpA_dst_format,
+    const std::uint32_t unpB_dst_format,
+    const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
+    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
+    const bool transpose_xy_srca_en     = false,
+    const std::uint32_t unpA_num_faces  = 4,
+    const std::uint32_t unpB_num_faces  = 4)
 {
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
@@ -223,23 +223,23 @@ inline void configure_unpack_AB(
     // Reset address counters
     unpacker_addr_counter_init();
 
-    const uint unpA_src_format_masked = (uint)unpA_src_format & 0x0F;
-    const uint unpB_src_format_masked = (uint)unpB_src_format & 0x0F;
-    const uint unpA_dst_format_masked = (uint)unpA_dst_format & 0x0F;
-    const uint unpB_dst_format_masked = (uint)unpB_dst_format & 0x0F;
+    const std::uint32_t unpA_src_format_masked = (std::uint32_t)unpA_src_format & 0x0F;
+    const std::uint32_t unpB_src_format_masked = (std::uint32_t)unpB_src_format & 0x0F;
+    const std::uint32_t unpA_dst_format_masked = (std::uint32_t)unpA_dst_format & 0x0F;
+    const std::uint32_t unpB_dst_format_masked = (std::uint32_t)unpB_dst_format & 0x0F;
 
     // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
-    uint unpA_ch1_x_stride = (uint)(unpA_dst_format_masked & 0x3) == (uint)DataFormat::Float32   ? 4
-                             : (uint)(unpA_dst_format_masked & 0x3) == (uint)DataFormat::Float16 ? 2
-                                                                                                 : 1;
-    uint unpB_ch1_x_stride = (uint)(unpB_dst_format_masked & 0x3) == (uint)DataFormat::Float32   ? 4
-                             : (uint)(unpB_dst_format_masked & 0x3) == (uint)DataFormat::Float16 ? 2
-                                                                                                 : 1;
-    uint unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
-    uint unpB_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpB_ch1_x_stride;
-    uint exp_width         = ((uint)unpA_dst_format_masked >> 2) & 0x1; // 0=5-bit, 1=8-bit
+    std::uint32_t unpA_ch1_x_stride = (std::uint32_t)(unpA_dst_format_masked & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
+                                      : (std::uint32_t)(unpA_dst_format_masked & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
+                                                                                                                            : 1;
+    std::uint32_t unpB_ch1_x_stride = (std::uint32_t)(unpB_dst_format_masked & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
+                                      : (std::uint32_t)(unpB_dst_format_masked & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
+                                                                                                                            : 1;
+    std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
+    std::uint32_t unpB_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpB_ch1_x_stride;
+    std::uint32_t exp_width         = ((std::uint32_t)unpA_dst_format_masked >> 2) & 0x1; // 0=5-bit, 1=8-bit
 
     // Strides for incrementing ch1 address to srcA and srcB
     cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
@@ -252,20 +252,20 @@ inline void configure_unpack_AB(
 
     // Math ALU_FORMAT_REG
     t6_mutex_acquire(mutex::REG_RMW);
-    uint alu_src_format = (0x0 << ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT);
+    std::uint32_t alu_src_format = (0x0 << ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT);
 
-    constexpr uint mask0 = (1 << (ALU_FORMAT_SPEC_REG_Dstacc_override_SHAMT + 1)) - 1;
+    constexpr std::uint32_t mask0 = (1 << (ALU_FORMAT_SPEC_REG_Dstacc_override_SHAMT + 1)) - 1;
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT, mask0>(alu_src_format);
 
     alu_config_u alu_payload = {.val = 0};
 
-    constexpr uint alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_FORMAT_SPEC_REG0_SrcBUnsigned_MASK;
+    constexpr std::uint32_t alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_FORMAT_SPEC_REG0_SrcBUnsigned_MASK;
 
-    if ((uint)unpA_src_format == (uint)DataFormat::UInt8)
+    if ((std::uint32_t)unpA_src_format == (std::uint32_t)DataFormat::UInt8)
     {
         alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcAUnsigned = 1;
     }
-    if ((uint)unpB_src_format == (uint)DataFormat::UInt8)
+    if ((std::uint32_t)unpB_src_format == (std::uint32_t)DataFormat::UInt8)
     {
         alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcBUnsigned = 1;
     }
@@ -274,27 +274,28 @@ inline void configure_unpack_AB(
     // NOTE: This assumes these config fields are adjacent and in same register!!
     static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_FORMAT_SPEC_REG0_SrcA_ADDR32);
     static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32);
-    constexpr uint alu_stoch_rnd_mask = ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
+    constexpr std::uint32_t alu_stoch_rnd_mask =
+        ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
     alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en    = fpu_srnd_en;
     alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = pack_srnd_en;
     alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = pack_srnd_en;
 
-    constexpr uint alu_mask = alu_format_mask | alu_stoch_rnd_mask;
+    constexpr std::uint32_t alu_mask = alu_format_mask | alu_stoch_rnd_mask;
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
     // TODO NC: Find out why we need to disable src zero flags for uint16 dst format #960
-    bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<uint>(unpA_dst_format) == static_cast<uint>(DataFormat::UInt16)) ||
-                                     (static_cast<uint>(unpB_dst_format) == static_cast<uint>(DataFormat::UInt16));
+    bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<std::uint32_t>(unpA_dst_format) == static_cast<std::uint32_t>(DataFormat::UInt16)) ||
+                                     (static_cast<std::uint32_t>(unpB_dst_format) == static_cast<std::uint32_t>(DataFormat::UInt16));
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
     // Set FP8 E4M3 mode, bit is accessible by unpacker/packer
-    if ((unpA_src_format & 0x1F) == (uint)DataFormat::Fp8_e4m3)
+    if ((unpA_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3)
     {
         cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(1);
     }
 
-    if ((unpB_src_format & 0x1F) == (uint)DataFormat::Fp8_e4m3)
+    if ((unpB_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3)
     {
         cfg_reg_rmw_tensix<THCON_SEC1_REG1_Unp_LF8_4b_exp_RMW>(1);
     }
@@ -303,32 +304,32 @@ inline void configure_unpack_AB(
 
     // Set tile descriptor
     unpack_tile_descriptor_u tile_descriptor;
-    for (uint i = 0; i < TILE_DESC_SIZE; i++)
+    for (std::uint32_t i = 0; i < TILE_DESC_SIZE; i++)
     {
         tile_descriptor.val[i] = 0;
     }
-    tile_descriptor.f.in_data_format = (uint)unpA_src_format_masked;
+    tile_descriptor.f.in_data_format = (std::uint32_t)unpA_src_format_masked;
     tile_descriptor.f.uncompressed   = 1; // Input tile is uncompressed
     tile_descriptor.f.x_dim          = 0; // Not used for unpA as value is overridden by per context x_dim set below. Used for unpB
     tile_descriptor.f.y_dim          = 1;
     tile_descriptor.f.z_dim          = unpA_num_faces;
     // tile_descriptor.f.blobs_per_xy_plane = 0;
     // tile_descriptor.f.blobs_y_start = 0;
-    for (uint i = 0; i < TILE_DESC_SIZE; i++)
+    for (std::uint32_t i = 0; i < TILE_DESC_SIZE; i++)
     {
         cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + i] = tile_descriptor.val[i];
     }
-    tile_descriptor.f.in_data_format = row_pool ? (uint)DataFormat::Float32 : unpB_src_format_masked;
+    tile_descriptor.f.in_data_format = row_pool ? (std::uint32_t)DataFormat::Float32 : unpB_src_format_masked;
     tile_descriptor.f.x_dim          = unpB_face_r_dim * FACE_C_DIM;
     tile_descriptor.f.z_dim          = unpB_num_faces;
-    for (uint i = 0; i < TILE_DESC_SIZE; i++)
+    for (std::uint32_t i = 0; i < TILE_DESC_SIZE; i++)
     {
         cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + i] = tile_descriptor.val[i];
     }
 
     // Set unpacker config
     unpack_config_u config;
-    for (uint i = 0; i < CONFIG_SIZE; i++)
+    for (std::uint32_t i = 0; i < CONFIG_SIZE; i++)
     {
         config.val[i] = 0;
     }
@@ -343,40 +344,40 @@ inline void configure_unpack_AB(
     config.f.uncompress_cntx4_7 = 0xf;
     // config.f.limit_addr = 0; // Set dynamically
     // config.f.fifo_size = 0; // Set dynamically
-    for (uint i = 0; i < CONFIG_SIZE; i++)
+    for (std::uint32_t i = 0; i < CONFIG_SIZE; i++)
     {
         cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + i] = config.val[i];
     }
 
-    config.f.out_data_format = row_pool ? ((uint)DataFormat::Float16 | (exp_width << 2)) : unpB_dst_format_masked;
+    config.f.out_data_format = row_pool ? ((std::uint32_t)DataFormat::Float16 | (exp_width << 2)) : unpB_dst_format_masked;
     config.f.haloize_mode    = 0;
 
-    for (uint i = 0; i < CONFIG_SIZE; i++)
+    for (std::uint32_t i = 0; i < CONFIG_SIZE; i++)
     {
         cfg[THCON_SEC1_REG2_Out_data_format_ADDR32 + i] = config.val[i];
     }
 
-    uint unpA_x_end = (unpA_face_r_dim == 0) ? 1 : (unpA_face_r_dim << 4) - 1;
+    std::uint32_t unpA_x_end = (unpA_face_r_dim == 0) ? 1 : (unpA_face_r_dim << 4) - 1;
     TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, (unpB_face_r_dim << 4) - 1, 0x0);
 
     // Program base address for all 2 sections (each section address is loaded to corresponding context)
     // Load dummy data to unused location if face height is 0
-    const uint Dest_cntx0_address                  = unpA_face_r_dim == 0 ? 22 * 16 : 4 * 16;
-    const uint Dest_cntx1_address                  = unpA_face_r_dim == 0 ? 22 * 16 : 4 * 16;
+    const std::uint32_t Dest_cntx0_address         = unpA_face_r_dim == 0 ? 22 * 16 : 4 * 16;
+    const std::uint32_t Dest_cntx1_address         = unpA_face_r_dim == 0 ? 22 * 16 : 4 * 16;
     cfg[THCON_SEC0_REG5_Dest_cntx0_address_ADDR32] = Dest_cntx0_address | (Dest_cntx1_address << 16);
 
     // Program unpacker0 per context x_dim (face size in l1)
     // Overrides value set by tile descriptor when thread override bit is set in unpack instruction
-    const uint face_dim                          = unpA_face_r_dim * FACE_C_DIM;
+    const std::uint32_t face_dim                 = unpA_face_r_dim * FACE_C_DIM;
     cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = face_dim | (face_dim << 16);
 
-    constexpr uint face_dim_16x16         = FACE_R_DIM * FACE_C_DIM;
-    regfile[p_gpr_unpack::FACE_DIM_16x16] = (face_dim_16x16 / 1) | ((face_dim_16x16 / 1) << 16);
-    regfile[p_gpr_unpack::FACE_DIM_8x16]  = (face_dim_16x16 / 2) | ((face_dim_16x16 / 2) << 16);
-    regfile[p_gpr_unpack::FACE_DIM_4x16]  = (face_dim_16x16 / 4) | ((face_dim_16x16 / 4) << 16);
-    regfile[p_gpr_unpack::FACE_DIM_2x16]  = (face_dim_16x16 / 8) | ((face_dim_16x16 / 8) << 16);
-    regfile[p_gpr_unpack::FACE_DIM_1x16]  = (face_dim_16x16 / 16) | ((face_dim_16x16 / 16) << 16);
+    constexpr std::uint32_t face_dim_16x16 = FACE_R_DIM * FACE_C_DIM;
+    regfile[p_gpr_unpack::FACE_DIM_16x16]  = (face_dim_16x16 / 1) | ((face_dim_16x16 / 1) << 16);
+    regfile[p_gpr_unpack::FACE_DIM_8x16]   = (face_dim_16x16 / 2) | ((face_dim_16x16 / 2) << 16);
+    regfile[p_gpr_unpack::FACE_DIM_4x16]   = (face_dim_16x16 / 4) | ((face_dim_16x16 / 4) << 16);
+    regfile[p_gpr_unpack::FACE_DIM_2x16]   = (face_dim_16x16 / 8) | ((face_dim_16x16 / 8) << 16);
+    regfile[p_gpr_unpack::FACE_DIM_1x16]   = (face_dim_16x16 / 16) | ((face_dim_16x16 / 16) << 16);
     sync_regfile_write(p_gpr_unpack::FACE_DIM_1x16);
 
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4);
@@ -391,7 +392,7 @@ inline void configure_unpack_AB(
 }
 
 template <std::uint32_t UNP_SEL = p_setadc::UNP_AB>
-inline void config_unpacker_x_end(const uint32_t face_r_dim)
+inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
 {
     switch (face_r_dim)
     {
@@ -415,10 +416,10 @@ inline void config_unpacker_x_end(const uint32_t face_r_dim)
 
 inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
 {
-    const uint input_df  = unpack_src_format & 0xF;
-    const uint output_df = unpack_dst_format & 0xF;
-    return ((input_df == (uint)DataFormat::Int32) || (input_df == (uint)DataFormat::Float32)) &&
-           ((output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32));
+    const std::uint32_t input_df  = unpack_src_format & 0xF;
+    const std::uint32_t output_df = unpack_dst_format & 0xF;
+    return ((input_df == (std::uint32_t)DataFormat::Int32) || (input_df == (std::uint32_t)DataFormat::Float32)) &&
+           ((output_df == (std::uint32_t)DataFormat::Int32) || (output_df == (std::uint32_t)DataFormat::Float32));
 }
 
 inline void wait_for_dest_available()
@@ -426,7 +427,7 @@ inline void wait_for_dest_available()
     t6_semaphore_wait_on_max<p_stall::STALL_UNPACK>(semaphore::UNPACK_TO_DEST);
 }
 
-inline void unpack_to_dest_tile_done(uint &context_id)
+inline void unpack_to_dest_tile_done(std::uint32_t &context_id)
 {
     t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
     TTI_WRCFG(p_gpr_unpack::UNPACK_STRIDE, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Restore unpack stride
@@ -444,15 +445,15 @@ inline void unpack_to_dest_tile_done(uint &context_id)
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // re-enable address bit swizzle
 }
 
-inline void set_dst_write_addr(const uint32_t &context_id, const uint32_t &unpack_dst_format)
+inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint32_t &unpack_dst_format)
 {
-    uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId));       // Apply fixed offset of 4*16 to dest address
+    std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId));  // Apply fixed offset of 4*16 to dest address
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                          // Disable address bit swizzle
     TTI_RDCFG(p_gpr_unpack::UNPACK_STRIDE, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Save current stride
-    uint unpA_ch1_x_stride = (uint)(unpack_dst_format & 0x3) == (uint)DataFormat::Float32   ? 4
-                             : (uint)(unpack_dst_format & 0x3) == (uint)DataFormat::Float16 ? 2
-                                                                                            : 1;
-    uint unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
+    std::uint32_t unpA_ch1_x_stride = (std::uint32_t)(unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
+                                      : (std::uint32_t)(unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
+                                                                                                                       : 1;
+    std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
     TT_SETDMAREG(0, LOWER_HALFWORD(unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
     TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Set unpack stride
     if (context_id == 0)
@@ -469,7 +470,7 @@ inline void set_dst_write_addr(const uint32_t &context_id, const uint32_t &unpac
 
 // READERS FOR STRUCTS
 
-inline unpack_tile_descriptor_t read_unpack_tile_descriptor_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr *cfg)
+inline unpack_tile_descriptor_t read_unpack_tile_descriptor_helper(std::uint32_t reg_addr, const volatile std::uint32_t tt_reg_ptr *cfg)
 {
     unpack_tile_descriptor_u tile_descriptor = {.val = 0};
 
@@ -485,7 +486,7 @@ inline std::array<unpack_tile_descriptor_t, NUM_UNPACKERS> read_unpack_tile_desc
 {
     std::array<unpack_tile_descriptor_t, NUM_UNPACKERS> tile_descriptor_vec;
     // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
     tile_descriptor_vec[0] = read_unpack_tile_descriptor_helper(THCON_SEC0_REG0_TileDescriptor_ADDR32, cfg);
     tile_descriptor_vec[1] = read_unpack_tile_descriptor_helper(THCON_SEC1_REG0_TileDescriptor_ADDR32, cfg);
@@ -493,7 +494,7 @@ inline std::array<unpack_tile_descriptor_t, NUM_UNPACKERS> read_unpack_tile_desc
     return tile_descriptor_vec;
 }
 
-inline unpack_config_t read_unpack_config_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr *cfg)
+inline unpack_config_t read_unpack_config_helper(std::uint32_t reg_addr, const volatile std::uint32_t tt_reg_ptr *cfg)
 {
     unpack_config_u config;
 
@@ -509,7 +510,7 @@ inline std::array<unpack_config_t, NUM_UNPACKERS> read_unpack_config()
 {
     std::array<unpack_config_t, NUM_UNPACKERS> config_vec;
     // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
     config_vec[0] = read_unpack_config_helper(THCON_SEC0_REG2_Out_data_format_ADDR32, cfg);
     config_vec[1] = read_unpack_config_helper(THCON_SEC1_REG2_Out_data_format_ADDR32, cfg);
@@ -520,7 +521,7 @@ inline std::array<unpack_config_t, NUM_UNPACKERS> read_unpack_config()
 inline alu_config_t read_alu_config()
 {
     alu_config_u config;
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
     config.val = cfg[ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32];
 

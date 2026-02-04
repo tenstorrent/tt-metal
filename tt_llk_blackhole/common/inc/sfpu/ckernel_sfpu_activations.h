@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "sfpi_fp16.h"
@@ -22,7 +24,7 @@ struct ActivationImpl;
 template <bool APPROXIMATION_MODE>
 struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Celu>
 {
-    static inline void apply(sfpi::vFloat& v, uint32_t param0, uint32_t param1)
+    static inline void apply(sfpi::vFloat& v, std::uint32_t param0, std::uint32_t param1)
     {
         // All params are in FP16_B format
         // param0 = alpha
@@ -56,7 +58,7 @@ struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Hardsigmoid>
 
 // Dispatch wrapper function
 template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE>
-inline void apply_activation(sfpi::vFloat& v, uint32_t param0, uint32_t param1)
+inline void apply_activation(sfpi::vFloat& v, std::uint32_t param0, std::uint32_t param1)
 {
     ActivationImpl<APPROXIMATION_MODE, ACTIVATION_TYPE>::apply(v, param0, param1);
 }
@@ -69,7 +71,7 @@ inline void apply_activation(sfpi::vFloat& v)
 }
 
 template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE, int ITERATIONS = 8>
-inline void _calculate_activation_(uint32_t param0, uint32_t param1)
+inline void _calculate_activation_(std::uint32_t param0, std::uint32_t param1)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)

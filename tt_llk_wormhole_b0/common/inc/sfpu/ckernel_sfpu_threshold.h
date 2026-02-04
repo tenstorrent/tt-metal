@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <type_traits>
 
 #include "ckernel_defs.h"
@@ -15,7 +16,7 @@ namespace ckernel::sfpu
 {
 
 template <typename T>
-constexpr bool is_supported_threshold_type_v = std::is_same_v<T, float> || std::is_same_v<T, uint32_t>;
+constexpr bool is_supported_threshold_type_v = std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>;
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, typename T>
 inline void _calculate_threshold_(T threshold, T value)
@@ -29,7 +30,7 @@ inline void _calculate_threshold_(T threshold, T value)
         v_threshold = threshold;
         v_value     = value;
     }
-    else if constexpr (std::is_same_v<T, uint32_t>)
+    else if constexpr (std::is_same_v<T, std::uint32_t>)
     {
         v_threshold = Converter::as_float(threshold);
         v_value     = Converter::as_float(value);

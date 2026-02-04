@@ -7,6 +7,8 @@
 #ifndef CKERNEL_DEST_H
 #define CKERNEL_DEST_H 1
 
+#include <cstdint>
+
 #include "cfg_defines.h"
 #include "ckernel.h"
 #include "ckernel_vector.h"
@@ -33,7 +35,7 @@ namespace ckernel
 {
 
 template <int t>
-inline void set_dest_fmt(uint fmt)
+inline void set_dest_fmt(std::uint32_t fmt)
 {
     // FWLOG1("Setting RISC-dest access format to %d", fmt);
     static_assert(t >= 0 and t < 3, "Thread must be 0, 1, or 2");
@@ -54,7 +56,7 @@ inline void set_dest_fmt(uint fmt)
     tensix_sync();
 }
 
-inline void set_dest_fmt(uint fmt, int t)
+inline void set_dest_fmt(std::uint32_t fmt, int t)
 {
     // FWLOG1("Setting RISC-dest access format to %d", fmt);
     if (t == 0)
@@ -311,7 +313,7 @@ inline void set_dest_enable_swizzling(int const t, bool const enable)
 
 struct fp16a
 {
-    uint16_t impl;
+    std::uint16_t impl;
 
     inline fp16a()
     {
@@ -354,15 +356,15 @@ struct fp16a
 
     inline operator float() const
     {
-        uint32_t sign = (impl & 0x8000) << 16;
+        std::uint32_t sign = (impl & 0x8000) << 16;
 
-        uint32_t exp_rebiased = ((impl & 0x7C00) >> 10) - 15 + 127;
+        std::uint32_t exp_rebiased = ((impl & 0x7C00) >> 10) - 15 + 127;
 
-        uint32_t exp = (exp_rebiased << 23) & 0x7F800000;
+        std::uint32_t exp = (exp_rebiased << 23) & 0x7F800000;
 
-        uint32_t man = (impl & 0x3FF) << 13;
+        std::uint32_t man = (impl & 0x3FF) << 13;
 
-        uint32_t ret = (impl == 0) ? 0 : (sign | exp | man); // Annoying corner case for 0 (TODO: check for -0, inf, and -inf)
+        std::uint32_t ret = (impl == 0) ? 0 : (sign | exp | man); // Annoying corner case for 0 (TODO: check for -0, inf, and -inf)
 
         float* sorry_gcc = reinterpret_cast<float*>(&ret);
         return *sorry_gcc;
@@ -378,19 +380,19 @@ struct fp16a
         return float(*const_cast<fp16a const*>(this));
     }
 
-    explicit inline operator uint32_t() const
+    explicit inline operator std::uint32_t() const
     {
-        return static_cast<uint32_t>(impl);
+        return static_cast<std::uint32_t>(impl);
     }
 
-    explicit inline operator uint32_t() volatile
+    explicit inline operator std::uint32_t() volatile
     {
-        return uint32_t(*const_cast<fp16a const*>(this));
+        return std::uint32_t(*const_cast<fp16a const*>(this));
     }
 
-    explicit inline operator uint32_t()
+    explicit inline operator std::uint32_t()
     {
-        return uint32_t(*const_cast<fp16a const*>(this));
+        return std::uint32_t(*const_cast<fp16a const*>(this));
     }
 
     inline fp16a operator+(fp16a volatile& other) volatile
@@ -399,15 +401,15 @@ struct fp16a
     }
 
     // 1 sign bit, 5 exponent bits (bias = 15), 10 mantissa bits
-    static uint16_t float_to_u16(float val)
+    static std::uint16_t float_to_u16(float val)
     {
         // Evil floating point bit level hacking (though less pithy due to the C++ compiler rules...)
-        uint32_t* sorry_gcc = reinterpret_cast<uint32_t*>(&val);
-        uint32_t val_bits   = *sorry_gcc;
+        std::uint32_t* sorry_gcc = reinterpret_cast<std::uint32_t*>(&val);
+        std::uint32_t val_bits   = *sorry_gcc;
 
-        uint16_t sign = static_cast<uint16_t>((val_bits >> 16) & 0x8000);
+        std::uint16_t sign = static_cast<std::uint16_t>((val_bits >> 16) & 0x8000);
 
-        uint32_t exp_rebiased = ((val_bits & 0x7F800000) >> 23) - 127 + 15; // Wraparound is okay here
+        std::uint32_t exp_rebiased = ((val_bits & 0x7F800000) >> 23) - 127 + 15; // Wraparound is okay here
 
         // Check for saturation
         if (exp_rebiased & (1 << 31))
@@ -419,9 +421,9 @@ struct fp16a
             exp_rebiased = 31;
         }
 
-        uint16_t exp = (static_cast<uint16_t>(exp_rebiased) << 10) & 0x7C00;
+        std::uint16_t exp = (static_cast<std::uint16_t>(exp_rebiased) << 10) & 0x7C00;
 
-        uint16_t man = static_cast<uint16_t>((val_bits >> 13) & 0x3FF);
+        std::uint16_t man = static_cast<std::uint16_t>((val_bits >> 13) & 0x3FF);
 
         return sign | exp | man;
     }
@@ -429,7 +431,7 @@ struct fp16a
 
 struct fp16b
 {
-    uint16_t impl;
+    std::uint16_t impl;
 
     fp16b()
     {
@@ -471,7 +473,7 @@ struct fp16b
     inline operator float() const
     {
         // FWEVENT("Converting to float (const)");
-        uint32_t ret = static_cast<uint32_t>(impl) << 16;
+        std::uint32_t ret = static_cast<std::uint32_t>(impl) << 16;
 
         float* sorry_gcc = reinterpret_cast<float*>(&ret);
         return *sorry_gcc;
@@ -489,22 +491,22 @@ struct fp16b
         return float(*const_cast<fp16b const*>(this));
     }
 
-    explicit inline operator uint32_t() const
+    explicit inline operator std::uint32_t() const
     {
         // FWEVENT("Converting to uint32_t");
-        return static_cast<uint32_t>(impl);
+        return static_cast<std::uint32_t>(impl);
     }
 
-    explicit inline operator uint32_t() volatile
+    explicit inline operator std::uint32_t() volatile
     {
         // FWEVENT("Converting to uint32_t");
-        return uint32_t(*const_cast<fp16b const*>(this));
+        return std::uint32_t(*const_cast<fp16b const*>(this));
     }
 
-    explicit inline operator uint32_t()
+    explicit inline operator std::uint32_t()
     {
         // FWEVENT("Converting to uint32_t");
-        return uint32_t(*const_cast<fp16b const*>(this));
+        return std::uint32_t(*const_cast<fp16b const*>(this));
     }
 
     inline fp16b operator+(fp16b volatile& other) volatile
@@ -513,12 +515,12 @@ struct fp16b
     }
 
     // 1 sign bit, 8 exponent bits (bias = 127), 7 mantissa bits
-    static inline uint16_t float_to_u16(float val)
+    static inline std::uint16_t float_to_u16(float val)
     {
-        uint32_t* sorry_gcc = reinterpret_cast<uint32_t*>(&val);
-        uint32_t val_bits   = *sorry_gcc;
+        std::uint32_t* sorry_gcc = reinterpret_cast<std::uint32_t*>(&val);
+        std::uint32_t val_bits   = *sorry_gcc;
 
-        return static_cast<uint16_t>(val_bits >> 16);
+        return static_cast<std::uint16_t>(val_bits >> 16);
     }
 };
 
@@ -527,7 +529,7 @@ inline float absf(float x)
     return x < 0.0f ? -x : x;
 }
 
-uint8_t fmt_to_dest_type(DataFormat fmt)
+std::uint8_t fmt_to_dest_type(DataFormat fmt)
 {
     switch (fmt)
     {
@@ -568,12 +570,12 @@ struct meta_from_dest_type
         static bool const is_32b    = _is_32b; \
     }
 
-mk_dest_meta_type(uint32_t, DataFormat::Int32, true);
-mk_dest_meta_type(int32_t, DataFormat::Int32, false);
-mk_dest_meta_type(uint16_t, DataFormat::Int16, false);
-mk_dest_meta_type(int16_t, DataFormat::Int16, false);
-mk_dest_meta_type(uint8_t, DataFormat::Int8, false);
-mk_dest_meta_type(int8_t, DataFormat::Int8, false);
+mk_dest_meta_type(std::uint32_t, DataFormat::Int32, true);
+mk_dest_meta_type(std::int32_t, DataFormat::Int32, false);
+mk_dest_meta_type(std::uint16_t, DataFormat::Int16, false);
+mk_dest_meta_type(std::int16_t, DataFormat::Int16, false);
+mk_dest_meta_type(std::uint8_t, DataFormat::Int8, false);
+mk_dest_meta_type(std::int8_t, DataFormat::Int8, false);
 mk_dest_meta_type(float, DataFormat::Float32, true);
 mk_dest_meta_type(fp16a, DataFormat::Float16, false);
 mk_dest_meta_type(fp16b, DataFormat::Float16_b, false);

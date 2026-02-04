@@ -10,9 +10,9 @@
 #include "llk_defs.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -44,7 +44,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
         params->num_faces_B,
         params->PARTIAL_FACE_A,
         params->PARTIAL_FACE_B);
-    for (uint32_t j = 0; j < params->KT_DIM; j++)
+    for (std::uint32_t j = 0; j < params->KT_DIM; j++)
     {
         _llk_unpack_AB_matmul_<>(
             L1_ADDRESS(buffer_A[0]),
@@ -83,7 +83,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<dest_sync>();
-    for (uint32_t j = 0; j < params->KT_DIM; j++)
+    for (std::uint32_t j = 0; j < params->KT_DIM; j++)
     {
         _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(params->DST_INDEX, params->CT_DIM, params->RT_DIM);
     }

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "lltt.h"
@@ -21,19 +23,19 @@ namespace sfpu
 // Face 0 (rows 0-15)  | Face 1 (rows 0-15)
 // Face 2 (rows 16-31) | Face 3 (rows 16-31)
 
-constexpr uint NUM_FACES     = 4;
-constexpr uint ROWS_PER_LOAD = 4;
+constexpr std::uint32_t NUM_FACES     = 4;
+constexpr std::uint32_t ROWS_PER_LOAD = 4;
 
 // Constants for averaging (division by 32)
-constexpr uint AVG_SHIFT_AMOUNT = 5;     // 2^5 = 32
-constexpr uint AVG_SHIFT_MASK   = 0xfff; // Mask for shift instruction encoding
+constexpr std::uint32_t AVG_SHIFT_AMOUNT = 5;     // 2^5 = 32
+constexpr std::uint32_t AVG_SHIFT_MASK   = 0xfff; // Mask for shift instruction encoding
 
 // FP16B representation of 1/32 = 0.03125
-constexpr uint FP16B_ONE_OVER_32_HIGH = 0x3D00;
-constexpr uint FP16B_ONE_OVER_32_LOW  = 0x0000;
+constexpr std::uint32_t FP16B_ONE_OVER_32_HIGH = 0x3D00;
+constexpr std::uint32_t FP16B_ONE_OVER_32_LOW  = 0x0000;
 
 // Constants for MAX reduction
-constexpr uint32_t ROWS_PER_TILE = 64;
+constexpr std::uint32_t ROWS_PER_TILE = 64;
 
 // ============================================================================
 // Helper Functions
@@ -59,7 +61,7 @@ inline void convert_to_sign_magnitude_x4_lregs()
  * @param column_offset Column offset for the current iteration, load all rows for even columns (0) or odd columns (2) of the face
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
-inline void load_face_data(uint face_addr, uint column_offset)
+inline void load_face_data(std::uint32_t face_addr, std::uint32_t column_offset)
 {
     TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, face_addr + column_offset);                     // rows 0-3
     TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, face_addr + column_offset + ROWS_PER_LOAD);     // rows 4-7
@@ -75,7 +77,7 @@ inline void load_face_data(uint face_addr, uint column_offset)
  * @param column_offset Column offset for the current iteration
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
-inline void load_face_data(uint upper_face_addr, uint lower_face_addr, uint column_offset)
+inline void load_face_data(std::uint32_t upper_face_addr, std::uint32_t lower_face_addr, std::uint32_t column_offset)
 {
     // Load upper face data (Face 0 or Face 1) into LREG0-3
     TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, upper_face_addr + column_offset);                     // rows 0-3
@@ -96,7 +98,7 @@ inline void load_face_data(uint upper_face_addr, uint lower_face_addr, uint colu
  * Process column sums for both upper and lower face using transpose and replay buffer.
  * @tparam replay_buffer_length The replay buffer index to use (6 for both int and float on Blackhole)
  */
-template <uint32_t replay_buffer_length>
+template <std::uint32_t replay_buffer_length>
 inline void sum_columns()
 {
     TTI_SFPTRANSP(0, 0, 0, 0);             // Transpose: LREG0-3 → lanes 0-3, LREG4-7 → lanes 0-3 (overlapping)
@@ -213,10 +215,10 @@ constexpr InstrModLoadStore get_instruction_mode()
  * @param num_cols The number of columns in the tensor block of multiple tiles
  * @note One tile is 64 rows in dest
  */
-inline void configure_addrmod_max_min(uint32_t num_cols)
+inline void configure_addrmod_max_min(std::uint32_t num_cols)
 {
     // Reduction done on first tile before looping through the rest, so we look at num_cols - 1 tile
-    uint32_t skip_rows = (num_cols - 1) * ROWS_PER_TILE;
+    std::uint32_t skip_rows = (num_cols - 1) * ROWS_PER_TILE;
 
     addr_mod_t {
         .srca = {.incr = 0},
@@ -235,7 +237,7 @@ inline void configure_addrmod_max_min(uint32_t num_cols)
     addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = static_cast<int16_t>(skip_rows)},
+        .dest = {.incr = static_cast<std::int16_t>(skip_rows)},
     }
         .set(ADDR_MOD_5);
 }
@@ -279,7 +281,7 @@ inline void init_reduce_max_min_int32()
  * @param num_cols The number of columns to process (typically 32 for a single tile, or multiple of 32 for block operations)
  */
 template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type>
-inline void init_reduce_max_min(uint32_t num_cols)
+inline void init_reduce_max_min(std::uint32_t num_cols)
 {
     // Initialize SFPU config and set swap direction before defining LOADMACRO sequences
     _init_sfpu_config_reg();
@@ -393,26 +395,26 @@ inline void init_reduce_sum_avg()
 template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, ReduceDim reduce_dim>
 inline void calculate_reduce_max_min_int32()
 {
-    constexpr auto INSTR_MOD_CAST    = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
-    constexpr uint ODD_COLUMNS       = 2;
-    constexpr uint COLUMN_OFFSETS[4] = {0, 2, 0, 2}; // even, odd, even, odd
-    constexpr uint FACE_ADDRS[2][4]  = {
+    constexpr auto INSTR_MOD_CAST             = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
+    constexpr std::uint32_t ODD_COLUMNS       = 2;
+    constexpr std::uint32_t COLUMN_OFFSETS[4] = {0, 2, 0, 2}; // even, odd, even, odd
+    constexpr std::uint32_t FACE_ADDRS[2][4]  = {
         {0, 0, 32, 32},  // j=0: Face 0 and Face 2
         {16, 16, 48, 48} // j=1: Face 1 and Face 3
     };
-    constexpr uint FINAL_REDUCE_ADDRS[2][2] = {
+    constexpr std::uint32_t FINAL_REDUCE_ADDRS[2][2] = {
         {0, 32}, // j=0: Face 0 and Face 2
         {16, 48} // j=1: Face 1 and Face 3
     };
 
-    for (uint j = 0; j < 2; j++)
+    for (std::uint32_t j = 0; j < 2; j++)
     {
-        uint top_face_addr    = FINAL_REDUCE_ADDRS[j][0]; // face 0 & 1 dst indices
-        uint bottom_face_addr = FINAL_REDUCE_ADDRS[j][1]; // face 2 & 3 dst indices
+        std::uint32_t top_face_addr    = FINAL_REDUCE_ADDRS[j][0]; // face 0 & 1 dst indices
+        std::uint32_t bottom_face_addr = FINAL_REDUCE_ADDRS[j][1]; // face 2 & 3 dst indices
 
         // After this loop executes vertically adjacent faces (f0 & f2 first iteration of outer loop, f1 & f3 second iteration) are processed and store max/min
         // values in top 4 rows of their faces
-        for (uint i = 0; i < NUM_FACES; i++)
+        for (std::uint32_t i = 0; i < NUM_FACES; i++)
         {
             load_face_data<INSTRUCTION_MODE>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
             convert_to_sign_magnitude_x4_lregs<INSTR_MOD_CAST>();
@@ -469,13 +471,13 @@ inline void calculate_reduce_max_min_int32()
  *                     For example, block_height=4 means reduce across 4 vertically stacked tiles (128 rows total).
  */
 template <PoolType pool_type, ReduceDim reduce_dim, InstrModLoadStore INSTRUCTION_MODE>
-inline void calculate_reduce_max_min(const uint32_t block_height)
+inline void calculate_reduce_max_min(const std::uint32_t block_height)
 {
     static_assert(reduce_dim == REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
     static_assert(pool_type == PoolType::MAX || pool_type == PoolType::MIN, "Only MAX and MIN pool types are supported for this function");
 
-    constexpr uint32_t replay_buffer_offset    = 9;
-    constexpr uint32_t replay_buffer_next_face = 10;
+    constexpr std::uint32_t replay_buffer_offset    = 9;
+    constexpr std::uint32_t replay_buffer_next_face = 10;
 
     // Initial loads: LREG4-7 will hold maximum values across F0 and F1
     TTI_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, 0);
@@ -494,7 +496,7 @@ inline void calculate_reduce_max_min(const uint32_t block_height)
     lltt::replay(0, replay_buffer_next_face + 1);
 
     // Remaining tiles
-    for (uint32_t i = 0; i < block_height - 1; i++)
+    for (std::uint32_t i = 0; i < block_height - 1; i++)
     {
         lltt::replay(0, replay_buffer_offset);
         lltt::replay(0, replay_buffer_offset);
@@ -554,13 +556,13 @@ inline void calculate_reduce_sum_avg()
 
     static_assert(is_integer_mode || is_float_mode, "INSTRUCTION_MODE must be one of: INT32, INT32_2S_COMP, LO16, DEFAULT");
 
-    constexpr uint UPPER_FACE_ADDRS[NUM_FACES] = {0, 0, 16, 16};   // Face 0, 0, 1, 1
-    constexpr uint LOWER_FACE_ADDRS[NUM_FACES] = {32, 32, 48, 48}; // Face 2, 2, 3, 3
-    constexpr uint COLUMN_OFFSETS[NUM_FACES]   = {0, 2, 0, 2};     // even, odd, even, odd
+    constexpr std::uint32_t UPPER_FACE_ADDRS[NUM_FACES] = {0, 0, 16, 16};   // Face 0, 0, 1, 1
+    constexpr std::uint32_t LOWER_FACE_ADDRS[NUM_FACES] = {32, 32, 48, 48}; // Face 2, 2, 3, 3
+    constexpr std::uint32_t COLUMN_OFFSETS[NUM_FACES]   = {0, 2, 0, 2};     // even, odd, even, odd
 
     // Optimized approach: Process 4 iterations to handle all column combinations
     // This reduces operations by processing complementary face pairs simultaneously, less load/store operations
-    for (uint i = 0; i < NUM_FACES; i++)
+    for (std::uint32_t i = 0; i < NUM_FACES; i++)
     {
         // Iteration mapping - Process vertically aligned faces (0+2, 1+3) to optimize column operations:
         // i=0: even columns, left half  (faces 0 + 2, columns 0,2,4,6,8,10,12,14)
@@ -573,9 +575,9 @@ inline void calculate_reduce_sum_avg()
         // Reduces load/store operations by accumulating all rows into one LREG per column group
         // Final result stored in top row of upper face (first row in dest) - no intermediate storage needed
 
-        const uint upper_face_addr = UPPER_FACE_ADDRS[i];
-        const uint lower_face_addr = LOWER_FACE_ADDRS[i];
-        const uint column_offset   = COLUMN_OFFSETS[i];
+        const std::uint32_t upper_face_addr = UPPER_FACE_ADDRS[i];
+        const std::uint32_t lower_face_addr = LOWER_FACE_ADDRS[i];
+        const std::uint32_t column_offset   = COLUMN_OFFSETS[i];
 
         load_face_data<INSTRUCTION_MODE>(upper_face_addr, lower_face_addr, column_offset);
 
@@ -627,7 +629,7 @@ inline void calculate_reduce_sum_avg()
  * @param block_ct_dim Block dimension (used for MAX/MIN reduction to specify number of columns, default is 1 for single tile)
  */
 template <PoolType pool_type, DataFormat format>
-inline void _init_reduce_(uint32_t block_ct_dim = 1)
+inline void _init_reduce_(std::uint32_t block_ct_dim = 1)
 {
     static_assert(is_supported_reduce_format(format), "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
@@ -670,7 +672,7 @@ inline void _init_reduce_(uint32_t block_ct_dim = 1)
  *       - MAX/MIN with Int32 format only supports block_rt_dim == 1 (single tile)
  */
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
-inline void _calculate_reduce_(uint32_t block_rt_dim = 1)
+inline void _calculate_reduce_(std::uint32_t block_rt_dim = 1)
 {
     static_assert(reduce_dim == REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
     static_assert(is_supported_reduce_format(format), "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");

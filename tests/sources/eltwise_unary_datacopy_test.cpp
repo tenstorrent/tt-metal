@@ -11,9 +11,9 @@
 #include "llk_defs.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -43,11 +43,11 @@ void run_kernel(const volatile struct RuntimeParams *params)
             formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, FACE_R_DIM, FACE_R_DIM, params->num_faces, params->num_faces);
         _llk_unpack_tilize_init_(formats.unpack_src, formats.unpack_dst, BLOCK_CT_DIM, FACE_R_DIM, false);
 
-        uint32_t read_offset = 0;
+        std::uint32_t read_offset = 0;
 
-        for (uint32_t i = 0; i < BLOCK_RT_DIM; i++)
+        for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
         {
-            for (uint32_t j = 0; j < BLOCK_CT_DIM; j++)
+            for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
             {
                 _llk_unpack_tilize_(L1_ADDRESS(buffer_A[read_offset]), j, formats.unpack_src, formats.unpack_dst, 0, FACE_R_DIM, 4, false);
             }

@@ -29,7 +29,7 @@ template <
     int MATH_FIDELITY_DESC         = 0,
     bool is_int_fpu_en             = false,
     bool enforce_fp32_accumulation = false>
-inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, const uint num_faces = 4)
+inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = false, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
@@ -276,8 +276,8 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
     {
-        const uint num_row_tiles = narrow_tile ? 2 : ((num_faces > 1) ? num_faces / 2 : 1);
-        for (uint row_tile = 0; row_tile < num_row_tiles; row_tile++)
+        const std::uint32_t num_row_tiles = narrow_tile ? 2 : ((num_faces > 1) ? num_faces / 2 : 1);
+        for (std::uint32_t row_tile = 0; row_tile < num_row_tiles; row_tile++)
         {
             // Just pool
             if constexpr (type == PoolType::MAX)
@@ -322,7 +322,7 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
     }
     else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
     {
-        for (uint face_num = 0; face_num < (num_faces - 1); face_num++)
+        for (std::uint32_t face_num = 0; face_num < (num_faces - 1); face_num++)
         {
             // Wait and pool
             if constexpr (type == PoolType::MAX)
@@ -461,7 +461,7 @@ inline void _llk_math_reduce_init_()
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
         // MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
         // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>((uint)DataFormat::Float32);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>((std::uint32_t)DataFormat::Float32);
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 

@@ -252,7 +252,7 @@ class UNPACKER_ENGINE_SEL(TemplateParameter):
     unpacker_engine_sel: UnpackerEngine = UnpackerEngine.UnpA
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr uint UNPACKER_ENGINE_SEL = p_unpacr::{self.unpacker_engine_sel.value};"
+        return f"constexpr std::uint32_t UNPACKER_ENGINE_SEL = p_unpacr::{self.unpacker_engine_sel.value};"
 
 
 @dataclass
@@ -294,10 +294,10 @@ class INPUT_DIMENSIONS(TemplateParameter):
         block_rt_dim = full_rt_dim if self.block_rt_dim is None else self.block_rt_dim
 
         lines: list[str] = [
-            f"constexpr uint32_t FULL_RT_DIM = {full_rt_dim};",
-            f"constexpr uint32_t FULL_CT_DIM = {full_ct_dim};",
-            f"constexpr uint32_t BLOCK_CT_DIM = {block_ct_dim};",  # RT + TP
-            f"constexpr uint32_t BLOCK_RT_DIM = {block_rt_dim};",  # RT + TP
+            f"constexpr std::uint32_t FULL_RT_DIM = {full_rt_dim};",
+            f"constexpr std::uint32_t FULL_CT_DIM = {full_ct_dim};",
+            f"constexpr std::uint32_t BLOCK_CT_DIM = {block_ct_dim};",  # RT + TP
+            f"constexpr std::uint32_t BLOCK_RT_DIM = {block_rt_dim};",  # RT + TP
         ]
         return "\n".join(lines)
 
@@ -449,18 +449,18 @@ class CRK_TILE_DIMM(RuntimeParameter):
 
     def covert_to_cpp(self) -> str:
         lines: list[str] = [
-            f"constexpr uint32_t RT_DIM = {self.r_dimm};",
-            f"constexpr uint32_t CT_DIM = {self.c_dimm};",
-            f"constexpr uint32_t KT_DIM = {self.k_dimm};",
+            f"constexpr std::uint32_t RT_DIM = {self.r_dimm};",
+            f"constexpr std::uint32_t CT_DIM = {self.c_dimm};",
+            f"constexpr std::uint32_t KT_DIM = {self.k_dimm};",
         ]
 
         return "\n".join(lines)
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         lines: list[str] = [
-            "uint32_t CT_DIM;",
-            "uint32_t RT_DIM;",
-            "uint32_t KT_DIM;",
+            "std::uint32_t CT_DIM;",
+            "std::uint32_t RT_DIM;",
+            "std::uint32_t KT_DIM;",
         ]
         return "\n".join(lines), "III"
 
@@ -576,7 +576,7 @@ class NUM_ROWS_TO_PACK(RuntimeParameter):
     num_rows_to_pack: int = 0
 
     def covert_to_cpp(self) -> str:
-        return f"constexpr uint32_t NUM_ROWS_TO_PACK = {self.num_rows_to_pack};"
+        return f"constexpr std::uint32_t NUM_ROWS_TO_PACK = {self.num_rows_to_pack};"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
-        return "uint32_t NUM_ROWS_TO_PACK;", "I"
+        return "std::uint32_t NUM_ROWS_TO_PACK;", "I"

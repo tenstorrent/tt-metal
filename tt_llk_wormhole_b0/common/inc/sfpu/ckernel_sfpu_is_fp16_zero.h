@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "sfpi.h"
 
 namespace ckernel
@@ -11,7 +13,7 @@ namespace ckernel
 namespace sfpu
 {
 
-sfpi_inline sfpi::vInt _sfpu_is_fp16_zero_(const sfpi::vFloat& v, uint exponent_size_8)
+sfpi_inline sfpi::vInt _sfpu_is_fp16_zero_(const sfpi::vFloat& v, std::uint32_t exponent_size_8)
 {
     if (exponent_size_8)
     {

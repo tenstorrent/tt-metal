@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_addrmod.h"
 #include "sfpi.h"
 
@@ -14,7 +16,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _mul_int_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
+inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     // This uses SFPLOADMACRO to achieve a throughput of 1, 2, or 3 cycles per
     // input row:
@@ -106,10 +108,10 @@ inline void _init_mul_int_()
 
     // Macro 0
     {
-        constexpr uint simple_bits = 0;
-        constexpr uint mad_bits    = 0x80 | 0x40 | (0 << 3) | 4;
-        constexpr uint round_bits  = 0;
-        constexpr uint store_bits  = 0x00 | 0x40 | (2 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0;
+        constexpr std::uint32_t mad_bits    = 0x80 | 0x40 | (0 << 3) | 4;
+        constexpr std::uint32_t round_bits  = 0;
+        constexpr std::uint32_t store_bits  = 0x00 | 0x40 | (2 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -118,10 +120,10 @@ inline void _init_mul_int_()
 
     // Macro 1:
     {
-        constexpr uint simple_bits = 0;
-        constexpr uint mad_bits    = 0x80 | 0x40 | (1 << 3) | 4;
-        constexpr uint round_bits  = 0;
-        constexpr uint store_bits  = 0x00 | 0x40 | (3 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0;
+        constexpr std::uint32_t mad_bits    = 0x80 | 0x40 | (1 << 3) | 4;
+        constexpr std::uint32_t round_bits  = 0;
+        constexpr std::uint32_t store_bits  = 0x00 | 0x40 | (3 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);

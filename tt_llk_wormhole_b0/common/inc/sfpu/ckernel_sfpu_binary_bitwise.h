@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <type_traits>
 
 #include "ckernel_addrmod.h"
@@ -16,7 +17,7 @@ namespace ckernel
 namespace sfpu
 {
 
-enum class BinaryBitwiseOp : uint8_t
+enum class BinaryBitwiseOp : std::uint8_t
 {
     AND = 0,
     OR  = 1,
@@ -24,14 +25,14 @@ enum class BinaryBitwiseOp : uint8_t
 };
 
 template <bool APPROXIMATION_MODE, BinaryBitwiseOp BITWISE_OP, InstrModLoadStore INSTRUCTION_MODE = INT32, int ITERATIONS = 8>
-inline void _calculate_sfpu_binary_bitwise_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
+inline void _calculate_sfpu_binary_bitwise_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     constexpr auto instruction_mode = static_cast<std::underlying_type_t<InstrModLoadStore>>(INSTRUCTION_MODE);
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
     {
         // size of each tile in Dest is 64 rows
-        constexpr uint dst_tile_size = 64;
+        constexpr std::uint32_t dst_tile_size = 64;
 
         TT_SFPLOAD(0, instruction_mode, 3, dst_index_in0 * dst_tile_size);
         TT_SFPLOAD(1, instruction_mode, 3, dst_index_in1 * dst_tile_size);

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_sfpu_exp.h"
 #include "sfpi.h"
 #include "sfpi_fp16.h"
@@ -14,9 +16,9 @@ namespace ckernel::sfpu
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_exp2_()
 {
-    const bool SCALE_EN                  = false; // Exp2 does not use scale.
-    const bool SKIP_POSITIVE_CHECK       = false; // Exp2 does not skip positive check.
-    const uint16_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B;
+    const bool SCALE_EN                       = false; // Exp2 does not use scale.
+    const bool SKIP_POSITIVE_CHECK            = false; // Exp2 does not skip positive check.
+    const std::uint16_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B;
 
     for (int d = 0; d < ITERATIONS; d++)
     {
@@ -33,8 +35,8 @@ inline void _calculate_exp2_()
 template <bool APPROXIMATION_MODE>
 inline void _init_exp2_()
 {
-    const uint32_t EXP_BASE_SCALE_FACTOR = 0x3F800000;
-    const bool FAST_APPROX               = false; // Exp2 does not use fast approximation.
+    const std::uint32_t EXP_BASE_SCALE_FACTOR = 0x3F800000;
+    const bool FAST_APPROX                    = false; // Exp2 does not use fast approximation.
     _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, EXP_BASE_SCALE_FACTOR>();
 }
 

@@ -138,8 +138,8 @@ inline void transpose_dest_configure_mop()
                 }
             });
 
-        uint macro0 = TT_OP_SFPNOP;
-        uint macro1 = TT_OP_SFPNOP;
+        std::uint32_t macro0 = TT_OP_SFPNOP;
+        std::uint32_t macro1 = TT_OP_SFPNOP;
 
         if (transpose_of_faces)
         {
@@ -179,10 +179,10 @@ inline void transpose_dest_configure_mop()
         }
 
         // A 32b face transpose consists of: (movd2b_hi, transpose, movb2d_hi_d2b_lo, transpose, movb2d_lo).
-        uint movd2b_hi        = lltt::replay_insn(16, 4);
-        uint movb2d_hi_d2b_lo = lltt::replay_insn(20, 8);
-        uint movb2d_lo        = lltt::replay_insn(28, 4);
-        uint transpose        = TT_OP_TRNSPSRCB;
+        std::uint32_t movd2b_hi        = lltt::replay_insn(16, 4);
+        std::uint32_t movb2d_hi_d2b_lo = lltt::replay_insn(20, 8);
+        std::uint32_t movb2d_lo        = lltt::replay_insn(28, 4);
+        std::uint32_t transpose        = TT_OP_TRNSPSRCB;
 
         // MOP config:
         // - zmask 0-bits: 32b 16x16 face transpose.
@@ -227,13 +227,13 @@ inline void transpose_dest_configure_mop()
         // Face 3: 4x MOVD2B, TRNSPSRCB, 4x MOVB2D, dst += 16 (EFGHIJKLM..)
         // Face 1: 2x MOVA2D (2x dst -= 16) (..NO)
 
-        uint EFGHIJKLM   = lltt::replay_insn(20, 9);
-        uint EFGHI       = lltt::replay_insn(20, 5);
-        uint ABCDEFG     = lltt::replay_insn(16, 7);
-        uint P           = TT_OP_MOVD2B(0, 28, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 12); // dst -= 16
-        uint IJKL        = lltt::replay_insn(24, 4);
-        uint Q           = TT_OP_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 12); // dst += 32
-        uint EFGHIJKLMNO = lltt::replay_insn(20, 11);
+        std::uint32_t EFGHIJKLM   = lltt::replay_insn(20, 9);
+        std::uint32_t EFGHI       = lltt::replay_insn(20, 5);
+        std::uint32_t ABCDEFG     = lltt::replay_insn(16, 7);
+        std::uint32_t P           = TT_OP_MOVD2B(0, 28, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 12); // dst -= 16
+        std::uint32_t IJKL        = lltt::replay_insn(24, 4);
+        std::uint32_t Q           = TT_OP_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_4_ROWS, 12); // dst += 32
+        std::uint32_t EFGHIJKLMNO = lltt::replay_insn(20, 11);
 
         // The following MOP config simply runs the above 7 instructions in order (when executed with zmask 0b10):
         ckernel_unpack_template tmp(true, true, EFGHIJKLM, EFGHI, ABCDEFG, P, /* skip A */ Q, /* B */ IJKL, /* skip B */ EFGHIJKLMNO);

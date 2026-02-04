@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "lltt.h"
@@ -29,7 +31,7 @@ namespace sfpu
  * @param tile_idx_dst The index of the result tile in the Dest register where the result will be stored.
  */
 template <DataFormat format>
-inline void _calculate_add_top_row_(const uint tile_idx_0 = 0, const uint tile_idx_1 = 0, const uint tile_idx_dst = 0)
+inline void _calculate_add_top_row_(const std::uint32_t tile_idx_0 = 0, const std::uint32_t tile_idx_1 = 0, const std::uint32_t tile_idx_dst = 0)
 {
     static_assert(
         format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::Float32,
@@ -40,14 +42,14 @@ inline void _calculate_add_top_row_(const uint tile_idx_0 = 0, const uint tile_i
                                                    : (format == DataFormat::UInt32) ? InstrModLoadStore::INT32_2S_COMP
                                                                                     : InstrModLoadStore::FP32;
 
-    constexpr uint REPLAY_BUFFER_INDEX = (format == DataFormat::Float32) ? 4 : 0;
-    constexpr uint REPLAY_BUFFER_COUNT = 4;
+    constexpr std::uint32_t REPLAY_BUFFER_INDEX = (format == DataFormat::Float32) ? 4 : 0;
+    constexpr std::uint32_t REPLAY_BUFFER_COUNT = 4;
 
     // size of each tile in Dest is 64 rows
-    constexpr uint dst_tile_size = 64;
-    const uint tile_offset_0     = tile_idx_0 * dst_tile_size;
-    const uint tile_offset_1     = tile_idx_1 * dst_tile_size;
-    const uint tile_offset_dst   = tile_idx_dst * dst_tile_size;
+    constexpr std::uint32_t dst_tile_size = 64;
+    const std::uint32_t tile_offset_0     = tile_idx_0 * dst_tile_size;
+    const std::uint32_t tile_offset_1     = tile_idx_1 * dst_tile_size;
+    const std::uint32_t tile_offset_dst   = tile_idx_dst * dst_tile_size;
 
     // Load upper row (Face 0 and Face 1) of Tile 0
     TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset_0);          // face 0, rows 0-3, even columns

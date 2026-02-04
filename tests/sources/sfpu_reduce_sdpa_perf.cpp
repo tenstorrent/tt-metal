@@ -15,9 +15,9 @@
 #include "profiler.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr int MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
@@ -77,7 +77,7 @@ using namespace ckernel::sfpu;
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
-    constexpr uint32_t block_height = BLOCK_RT_DIM;
+    constexpr std::uint32_t block_height = BLOCK_RT_DIM;
 
     {
         ZONE_SCOPED("INIT")
@@ -138,13 +138,13 @@ void run_kernel(const volatile struct RuntimeParams* params)
             {
                 for (int block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
                 {
-                    uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
+                    std::uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
 
                     // Wait for destination to be available
                     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
                     // Copy from srcA to dest
-                    for (uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                             block_start + block_tile, formats.math, formats.math);
@@ -154,7 +154,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
                     _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
 
                     // Call the SFPU SDPA reduce function
-                    constexpr uint32_t block_height = BLOCK_RT_DIM;
+                    constexpr std::uint32_t block_height = BLOCK_RT_DIM;
                     _calculate_reduce_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(block_height);
 
                     _llk_math_eltwise_unary_sfpu_done_();
@@ -206,9 +206,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
             {
                 for (int block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
                 {
-                    uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
+                    std::uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
 
-                    for (uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
@@ -222,10 +222,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
             {
                 for (int block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
                 {
-                    uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
+                    std::uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
 
                     _llk_packer_wait_for_math_done_();
-                    for (uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }

@@ -158,9 +158,9 @@ class FusedKernelGenerator:
             f'#include "operand.h"\n'
             f"{profiler_include}"
             f"\n"
-            f"uint32_t unp_cfg_context          = 0;\n"
-            f"uint32_t pack_sync_tile_dst_ptr   = 0;\n"
-            f"uint32_t math_sync_tile_dst_index = 0;\n"
+            f"std::uint32_t unp_cfg_context          = 0;\n"
+            f"std::uint32_t pack_sync_tile_dst_ptr   = 0;\n"
+            f"std::uint32_t math_sync_tile_dst_index = 0;\n"
             f"\n"
             f"#define UNUSED __attribute__((unused))\n"
             f"\n"

@@ -12,9 +12,9 @@
 #include "profiler.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -67,21 +67,21 @@ void run_kernel(const volatile struct RuntimeParams *params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+        for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
         {
-            for (uint32_t i = 0; i < BLOCK_RT_DIM; i++)
+            for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
             {
-                uint32_t read_offset = i * BLOCK_CT_DIM * TILE_R_DIM;
+                std::uint32_t read_offset = i * BLOCK_CT_DIM * TILE_R_DIM;
 
-                uint32_t packed_tiles    = 0;
-                uint32_t remaining_tiles = BLOCK_CT_DIM;
-                uint32_t dest_size       = is_fp32_dest_acc_en ? 4 : 8;
-                uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
-                uint32_t num_units       = dest_size / unit_dim;
+                std::uint32_t packed_tiles    = 0;
+                std::uint32_t remaining_tiles = BLOCK_CT_DIM;
+                std::uint32_t dest_size       = is_fp32_dest_acc_en ? 4 : 8;
+                std::uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
+                std::uint32_t num_units       = dest_size / unit_dim;
 
                 while (packed_tiles < BLOCK_CT_DIM)
                 {
-                    uint32_t tile_index = read_offset + packed_tiles;
+                    std::uint32_t tile_index = read_offset + packed_tiles;
                     if (remaining_tiles > 2 * dest_size)
                     {
                         _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_src, unit_dim, num_units, BLOCK_CT_DIM);
@@ -90,8 +90,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
                     }
                     else if (remaining_tiles > dest_size)
                     {
-                        uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
-                        num_units               = even_remainder / unit_dim;
+                        std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
+                        num_units                    = even_remainder / unit_dim;
                         _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_src, unit_dim, num_units, BLOCK_CT_DIM);
                         packed_tiles += even_remainder;
                         remaining_tiles -= even_remainder;
@@ -143,15 +143,15 @@ void run_kernel(const volatile struct RuntimeParams *params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+        for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
         {
-            for (uint32_t i = 0; i < BLOCK_RT_DIM; i++)
+            for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
             {
-                uint32_t packed_tiles    = 0;
-                uint32_t remaining_tiles = BLOCK_CT_DIM;
-                uint32_t dest_size       = is_fp32_dest_acc_en ? 4 : 8;
-                uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
-                uint32_t num_units       = dest_size / unit_dim;
+                std::uint32_t packed_tiles    = 0;
+                std::uint32_t remaining_tiles = BLOCK_CT_DIM;
+                std::uint32_t dest_size       = is_fp32_dest_acc_en ? 4 : 8;
+                std::uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
+                std::uint32_t num_units       = dest_size / unit_dim;
 
                 while (packed_tiles < BLOCK_CT_DIM)
                 {
@@ -165,8 +165,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
                     }
                     else if (remaining_tiles > dest_size)
                     {
-                        uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
-                        num_units               = even_remainder / unit_dim;
+                        std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
+                        num_units                    = even_remainder / unit_dim;
                         _llk_math_fast_tilize_block_(0, formats.math, unit_dim, num_units);
                         packed_tiles += even_remainder;
                         remaining_tiles -= even_remainder;
@@ -211,7 +211,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 void run_kernel(const volatile struct RuntimeParams *params)
 {
-    uint32_t use_32bit_dest = formats.unpack_dst == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Tf32);
+    std::uint32_t use_32bit_dest = formats.unpack_dst == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Tf32);
     {
         ZONE_SCOPED("INIT")
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
@@ -221,23 +221,23 @@ void run_kernel(const volatile struct RuntimeParams *params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+        for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
         {
-            for (uint32_t i = 0; i < BLOCK_RT_DIM; i++)
+            for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
             {
-                uint32_t write_offset = i * BLOCK_CT_DIM;
+                std::uint32_t write_offset = i * BLOCK_CT_DIM;
 
-                uint32_t packed_tiles    = 0;
-                uint32_t remaining_tiles = BLOCK_CT_DIM;
-                uint32_t dest_size       = is_fp32_dest_acc_en ? 4 : 8;
-                uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
-                uint32_t num_units       = dest_size / unit_dim;
+                std::uint32_t packed_tiles    = 0;
+                std::uint32_t remaining_tiles = BLOCK_CT_DIM;
+                std::uint32_t dest_size       = is_fp32_dest_acc_en ? 4 : 8;
+                std::uint32_t unit_dim        = BLOCK_CT_DIM == 1 ? 1 : 2;
+                std::uint32_t num_units       = dest_size / unit_dim;
 
                 while (packed_tiles < BLOCK_CT_DIM)
                 {
                     _llk_packer_wait_for_math_done_();
 
-                    uint32_t tile_index = write_offset + packed_tiles;
+                    std::uint32_t tile_index = write_offset + packed_tiles;
                     if (remaining_tiles > 2 * dest_size)
                     {
                         _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units);
@@ -246,8 +246,8 @@ void run_kernel(const volatile struct RuntimeParams *params)
                     }
                     else if (remaining_tiles > dest_size)
                     {
-                        uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
-                        num_units               = even_remainder / unit_dim;
+                        std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
+                        num_units                    = even_remainder / unit_dim;
                         _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units);
                         packed_tiles += even_remainder;
                         remaining_tiles -= even_remainder;

@@ -13,15 +13,15 @@
 #include "profiler.h"
 
 // Globals
-uint32_t unp_cfg_context          = 0;
-uint32_t pack_sync_tile_dst_ptr   = 0;
-uint32_t math_sync_tile_dst_index = 0;
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
 
 // Only modes supported are L1_TO_L1, PACK_ISOLATE and L1_CONGESTION
 static_assert(PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE, "Math isolation not supported for this benchmark");
 static_assert(PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE, "Unpack isolation not supported for this benchmark");
 
-static constexpr uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
+static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
 // Algorithm invariants
 static_assert(BLOCK_CT_DIM <= MAX_TILES_DEST, "Block must fit in Dest register");
@@ -53,7 +53,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
             return;
         }
 
-        for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+        for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
         {
             for (int i = 0; i < params->TILE_CNT; ++i)
             {
@@ -110,11 +110,11 @@ void run_kernel(const volatile struct RuntimeParams* params)
             }
 
             // FIXME: Currently have no way to mock math for unpack to dest
-            for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+            for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
             {
-                for (uint32_t block = 0; block < params->TILE_CNT / BLOCK_CT_DIM; block++)
+                for (std::uint32_t block = 0; block < params->TILE_CNT / BLOCK_CT_DIM; block++)
                 {
-                    for (uint32_t block_tile = 0; block_tile < BLOCK_CT_DIM; block_tile++)
+                    for (std::uint32_t block_tile = 0; block_tile < BLOCK_CT_DIM; block_tile++)
                     {
                         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                             block_tile, formats.math, formats.math);
@@ -124,12 +124,12 @@ void run_kernel(const volatile struct RuntimeParams* params)
             return;
         }
 
-        for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+        for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
         {
-            for (uint32_t block = 0; block < params->TILE_CNT / BLOCK_CT_DIM; block++)
+            for (std::uint32_t block = 0; block < params->TILE_CNT / BLOCK_CT_DIM; block++)
             {
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                for (uint32_t block_tile = 0; block_tile < BLOCK_CT_DIM; block_tile++)
+                for (std::uint32_t block_tile = 0; block_tile < BLOCK_CT_DIM; block_tile++)
                 {
                     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                         block_tile, formats.math, formats.math);
@@ -172,9 +172,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+            for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
             {
-                for (uint32_t tile = 0; tile < params->TILE_CNT; tile += BLOCK_CT_DIM)
+                for (std::uint32_t tile = 0; tile < params->TILE_CNT; tile += BLOCK_CT_DIM)
                 {
                     _llk_pack_untilize_<BLOCK_CT_DIM, FULL_CT_DIM>(PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, 4, 0);
                 }
@@ -183,9 +183,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
             return;
         }
 
-        for (uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+        for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
         {
-            for (uint32_t i = 0; i < params->TILE_CNT; i += BLOCK_CT_DIM)
+            for (std::uint32_t i = 0; i < params->TILE_CNT; i += BLOCK_CT_DIM)
             {
                 _llk_packer_wait_for_math_done_();
                 _llk_pack_untilize_<BLOCK_CT_DIM, FULL_CT_DIM>(PERF_ADDRESS(PERF_OUTPUT, i), formats.pack_dst, FACE_R_DIM, 4, 0);

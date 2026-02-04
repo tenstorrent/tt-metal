@@ -89,7 +89,7 @@ inline void reduce_max_row_configure_addrmod()
  * This function should NOT be used as a substitute for native reduce LLK MOP configuration.
  * Use the standard reduce MOP configuration with _llk_math_reduce_init_ for general-purpose reduction.
  */
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_mop_config_()
 {
     // Constraint on the outerloop and innerloop dim
@@ -162,17 +162,17 @@ inline void _llk_math_reduce_block_max_row_mop_config_()
         TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
     }
 
-    static constexpr uint outer_loop = block_ct_dim;
-    static constexpr uint inner_loop = 4;
+    static constexpr std::uint32_t outer_loop = block_ct_dim;
+    static constexpr std::uint32_t inner_loop = 4;
 
     // Reduce F0 and F1 column-wise, doesn't change DEST counter
-    static constexpr uint start_op = TT_OP_REPLAY(0, 2, 0, 0);
+    static constexpr std::uint32_t start_op = TT_OP_REPLAY(0, 2, 0, 0);
     // Increment DEST counter by 32 to point to F2 (DEST row 32)
-    static constexpr uint inner_loop_op = TT_OP_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    static constexpr std::uint32_t inner_loop_op = TT_OP_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
     // Reduce F2 and F3 column-wise, doesn't change DEST counter, but clears A valid bits at the end
-    static constexpr uint end_op_1 = TT_OP_REPLAY(0, 2, 0, 0);
+    static constexpr std::uint32_t end_op_1 = TT_OP_REPLAY(0, 2, 0, 0);
     // Clear A valid bit to get another operand tile (scaler face stays the same)
-    static constexpr uint end_op_2 = TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    static constexpr std::uint32_t end_op_2 = TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
 
     ckernel::ckernel_template mop_template(outer_loop, inner_loop, inner_loop_op);
     mop_template.set_start_op(start_op);
@@ -195,7 +195,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_()
  * Use the standard _llk_math_reduce_init_<PoolType::MAX, ReduceDim::REDUCE_ROW>() with multiple
  * _llk_math_reduce_() calls in a loop for general-purpose block reduction.
  */
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_init_()
 {
     if constexpr (is_fp32_dest_acc_en)
@@ -232,8 +232,8 @@ inline void _llk_math_reduce_block_max_row_uninit_()
  * Use the standard _llk_math_reduce_<PoolType::MAX, ReduceDim::REDUCE_ROW>() in a loop
  * for general-purpose block reduction across multiple tiles.
  */
-template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_(const uint dst_index)
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index)
 {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "lltt.h"
@@ -35,7 +37,7 @@ inline void sfpu_reduce_max_col_subblock_4x2_configure_addrmod()
 
 inline void sfpu_reduce_max_col_subblock_4x2_load_initial_values()
 {
-    constexpr uint16_t neg_inf_fp16b = 0xFF80;
+    constexpr std::uint16_t neg_inf_fp16b = 0xFF80;
 
     // F0 - Initialize with negative infinity
     TTI_SFPLOADI(p_sfpu::LREG4, InstrModLoadStore::FP16B, neg_inf_fp16b);
@@ -87,7 +89,7 @@ inline void _move_to_next_subblock_4x2_()
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
-inline void _calculate_reduce_max_col_subblock_4x2_(const uint32_t block_height /*, const uint32_t block_width*/)
+inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_height /*, const uint32_t block_width*/)
 {
     static_assert(reduce_dim == REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
     static_assert(pool_type == PoolType::MAX, "Only MAX pool type is currently supported");
@@ -98,7 +100,7 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const uint32_t block_height 
     sfpu_reduce_max_col_subblock_4x2_load_initial_values(); // LREGS 4-7 are initialized with negative infinity
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
-    for (uint32_t i = 0; i < block_height; i++)
+    for (std::uint32_t i = 0; i < block_height; i++)
     {
 #pragma GCC unroll 8
         for (int j = 0; j < 8; j++)
@@ -129,7 +131,7 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const uint32_t block_height 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPLOAD(8, InstrModLoadStore::FP16B, ADDR_MOD_2, 0); // dummy
 
-    for (uint32_t i = 0; i < block_height; i++)
+    for (std::uint32_t i = 0; i < block_height; i++)
     {
 #pragma GCC unroll 8
         for (int j = 0; j < 8; j++)
@@ -157,7 +159,7 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const uint32_t block_height 
 
 inline void _reduce_max_col_subblock_4x2_prologue_()
 {
-    constexpr uint16_t neg_inf_fp16b = 0xFF80;
+    constexpr std::uint16_t neg_inf_fp16b = 0xFF80;
 
     // F0 - Initialize with negative infinity
     TTI_SFPLOADI(p_sfpu::LREG0, InstrModLoadStore::FP16B, neg_inf_fp16b);

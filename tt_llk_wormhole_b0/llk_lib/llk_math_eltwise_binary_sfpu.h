@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <type_traits>
 
 #include "ckernel_globals.h"
@@ -48,7 +49,7 @@ inline void eltwise_binary_sfpu_configure_addrmod()
 inline void eltwise_binary_sfpu_configure_mop();
 
 template <DstSync Dst>
-inline void _llk_math_eltwise_binary_sfpu_start_(const uint dst_index)
+inline void _llk_math_eltwise_binary_sfpu_start_(const std::uint32_t dst_index)
 {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     math::set_addr_mod_base();

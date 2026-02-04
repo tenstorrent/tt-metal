@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <limits>
 
 #include "ckernel_sfpu_exp.h"
@@ -97,17 +98,17 @@ sfpi_inline sfpi::vFloat _calculate_sfpu_binary_power_(sfpi::vFloat base, sfpi::
 }
 
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8>
-inline void _calculate_sfpu_binary_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
+inline void _calculate_sfpu_binary_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
     {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-        constexpr uint dst_tile_size_sfpi = 32;
-        sfpi::vFloat in0                  = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1                  = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat result               = 0.0f;
+        constexpr std::uint32_t dst_tile_size_sfpi = 32;
+        sfpi::vFloat in0                           = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat in1                           = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vFloat result                        = 0.0f;
 
         if constexpr (BINOP == BinaryOp::ADD)
         {

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "sfpi.h"
 #include "sfpi_fp16.h"
 
@@ -13,10 +15,10 @@ namespace sfpu
 {
 
 template <bool HAS_BASE_SCALING>
-sfpi_inline void _calculate_log_body_(const uint log_base_scale_factor, const uint dst_idx = 0)
+sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor, const std::uint32_t dst_idx = 0)
 {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
     ////////////////////////////
     // Load From dest + "normalize to calculation range"
@@ -105,7 +107,7 @@ sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base)
 }
 
 template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS>
-inline void _calculate_log_(const int iterations, uint log_base_scale_factor)
+inline void _calculate_log_(const int iterations, std::uint32_t log_base_scale_factor)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)

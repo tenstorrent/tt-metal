@@ -29,18 +29,18 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, co
         LLK_ASSERT(num_faces == 4, "num_faces must be 4 when transpose_of_faces is true");
     }
 
-    static constexpr uint unpack_srca           = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr uint unpack_srcb           = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr uint unpack_srca_transpose = TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srca           = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srcb           = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srca_transpose = TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
-    const uint32_t outerloop = num_faces < 4 ? 1 : 2;
-    const uint32_t innerloop = num_faces < 2 ? 1 : 2;
+    const std::uint32_t outerloop = num_faces < 4 ? 1 : 2;
+    const std::uint32_t innerloop = num_faces < 2 ? 1 : 2;
 
-    const uint srca_op     = transpose_of_faces ? unpack_srca_transpose : unpack_srca;
-    const uint srca_end_op = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);
+    const std::uint32_t srca_op     = transpose_of_faces ? unpack_srca_transpose : unpack_srca;
+    const std::uint32_t srca_end_op = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);
 
     // Helper to set end op(s) based on transpose mode
-    auto set_end_op_with_transpose = [&](ckernel_template &tmp, uint primary_end_op)
+    auto set_end_op_with_transpose = [&](ckernel_template &tmp, std::uint32_t primary_end_op)
     {
         if (transpose_of_faces)
         {
@@ -54,7 +54,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, co
 
     if constexpr (BType == BroadcastType::COL)
     {
-        static constexpr uint unpack_srcb_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 2, 0b0001);
+        static constexpr std::uint32_t unpack_srcb_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 2, 0b0001);
 
         ckernel_template tmp(outerloop, innerloop, srca_op);
         tmp.set_start_op(unpack_srcb);
@@ -63,8 +63,8 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, co
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
-        static constexpr uint unpack_srcb_clear_z  = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);
-        static constexpr uint unpack_srcb_no_z_inc = TT_OP_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        static constexpr std::uint32_t unpack_srcb_clear_z  = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);
+        static constexpr std::uint32_t unpack_srcb_no_z_inc = TT_OP_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
         ckernel_template tmp(outerloop, innerloop, narrow_tile ? unpack_srcb_no_z_inc : unpack_srcb, srca_op);
         set_end_op_with_transpose(tmp, unpack_srcb_clear_z);
@@ -82,7 +82,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, co
     {
         if (transpose_of_faces)
         {
-            static constexpr uint srca_set_z = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);
+            static constexpr std::uint32_t srca_set_z = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);
             ckernel_template tmp(outerloop, innerloop, srca_op, unpack_srcb);
             tmp.set_end_op(srca_set_z);
             tmp.program();
@@ -144,7 +144,7 @@ inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t a
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
     // Program srcA and srcB base addresses
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // Wait for free context
     wait_for_next_context(2);
@@ -175,8 +175,8 @@ inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t a
 inline void _llk_unpack_bcastA_B_mop_config_()
 {
     // Setup address modifiers for unpacker instructions
-    constexpr uint8_t ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_0_CH0Z_0 = 0b00'00'00'00;
-    constexpr uint8_t ADDRMOD_CH1Y_1_CH1Z_0_CH0Y_0_CH0Z_0 = 0b01'00'00'00; // Increment CH1_Y by 1 Y_STRIDE
+    constexpr std::uint8_t ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_0_CH0Z_0 = 0b00'00'00'00;
+    constexpr std::uint8_t ADDRMOD_CH1Y_1_CH1Z_0_CH0Y_0_CH0Z_0 = 0b01'00'00'00; // Increment CH1_Y by 1 Y_STRIDE
 
     /*
 
@@ -217,7 +217,7 @@ inline void _llk_unpack_bcastA_B_init_()
     TTI_SETADCXX(p_setadc::UNP_B, TILE_R_DIM * TILE_C_DIM - 1, 0); // Directly set unpacker B counter to unpack whole tile
 
     // Setup address modifiers for unpacker instructions
-    constexpr uint8_t ADDRMOD_CH1Y_1_CH1Z_0_CH0Y_0_CH0Z_0 = 0b01'00'00'00; // Increment CH1_Y by 1 Y_STRIDE
+    constexpr std::uint8_t ADDRMOD_CH1Y_1_CH1Z_0_CH0Y_0_CH0Z_0 = 0b01'00'00'00; // Increment CH1_Y by 1 Y_STRIDE
 
     /*
 
@@ -270,13 +270,13 @@ inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t y_stride = FACE_R_D
     TT_SETADCXX(p_setadc::UNP_AB, face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
-inline void _llk_unpack_bcastA_B_(const std::uint32_t address_a, const std::uint32_t address_b, uint32_t srca_reuse_count = 4)
+inline void _llk_unpack_bcastA_B_(const std::uint32_t address_a, const std::uint32_t address_b, std::uint32_t srca_reuse_count = 4)
 {
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW)); // reset counters
     TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));  // Clear Y counter on src side
 
     // Program srcA and srcB base addresses
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // Wait for free context
     wait_for_next_context(2);
@@ -332,7 +332,7 @@ inline void _llk_unpack_bcastA_B_(const std::uint32_t address_a, const std::uint
 
     */
 
-    uint32_t unpack_mask = 0xFFFE;
+    std::uint32_t unpack_mask = 0xFFFE;
 
     ckernel_unpack_template::run(srca_reuse_count, unpack_mask);
 
