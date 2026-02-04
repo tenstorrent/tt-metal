@@ -715,10 +715,14 @@ class MLA1D(AbstractModule):
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, wkv_b2_out_shard_spec
         )
 
+        # Tiny tile for wkv_b2: 4x32 tiles for m=4 dimension
+        wkv_b2_output_tile = ttnn.Tile((wkv_b2_tile_h, tile_size))
+
         wkv_b2_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=wkv_b2_out_memory_config,
             program_config=wkv_b2_program_config,
+            output_tile=wkv_b2_output_tile,
         )
 
         # =====================================================================
@@ -1024,6 +1028,7 @@ class MLA1D(AbstractModule):
             "wq_kv_a_in0_memory_config": wq_kv_a_in0_memory_config,
             "wq_b_in0_memory_config": wq_b_in0_memory_config,
             "wo_in0_memory_config": wo_in0_memory_config,
+            "wkv_b2_in0_tile": wkv_b2_output_tile,  # 4x32 tiny tile for wkv_b2 in0
         }
 
     @classmethod
@@ -1719,6 +1724,12 @@ class MLA1D(AbstractModule):
         wkv_b2_in0_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, wkv_b2_in0_shard_spec
         )
+
+        # Retile in0 to 4x32 tiny tiles BEFORE sharding for wkv_b2 matmul
+        wkv_b2_in0_tile = cfg["wkv_b2_in0_tile"]
+        attn_out = ttnn.to_layout(attn_out, ttnn.TILE_LAYOUT, tile=wkv_b2_in0_tile)
+
+        # Now shard the retiled tensor
         attn_out = ttnn.to_memory_config(attn_out, memory_config=wkv_b2_in0_memory_config)
 
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_padded, bsz, v_head_dim]

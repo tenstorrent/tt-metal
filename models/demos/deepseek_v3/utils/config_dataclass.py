@@ -78,6 +78,7 @@ class LinearConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig | None = None
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
     program_config: ProgramConfig | None = None
+    output_tile: "tt.tt_metal.Tile | None" = None
 
 
 @dataclass
