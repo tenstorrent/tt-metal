@@ -92,7 +92,7 @@ def test_refiner_unet(
     "command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments",
     [
         (
-            "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet",
+            "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet -o timeout=600",
             191_651_771 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             "sdxl_unet",
             "sdxl_unet",
@@ -102,7 +102,7 @@ def test_refiner_unet(
             f"iterations={UNET_DEVICE_TEST_TOTAL_ITERATIONS}",
         ),
         (
-            "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet",
+            "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet -o timeout=600",
             280_283_912 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             "sdxl_refiner_unet",
             "sdxl_refiner_unet",
