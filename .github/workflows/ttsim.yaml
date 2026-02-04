@@ -272,11 +272,12 @@ jobs:
           echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
 
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
-        timeout-minutes: 30
+        timeout-minutes: 45
         run: |
           # Run pytest with parallel execution and skip list
           # Base command is expanded directly by GitHub Actions
-          ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}
+          # Override timeout to 600s (simulator is slower than hardware)
+          ${{ matrix.test-group.cmd }} -n 4 --timeout 600 ${{ steps.skip-list.outputs.skip_args }}
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
