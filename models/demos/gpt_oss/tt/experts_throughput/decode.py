@@ -343,14 +343,20 @@ def decode_forward(
     # With output_shard_dim=2, output has tokens sharded on dim -2:
     # Output shape: [num_experts_per_tok, 1, tokens_per_device, H]
     # (each token gets outputs from k experts stacked in first dimension)
-    combine_output = ttnn.all_to_all_combine(
-        expert_output,
-        dispatch_metadata,
-        expert_mapping_tensors,
-        **combine_config.as_dict(),
-    )
-    ttnn.deallocate(expert_output)
-    ttnn.deallocate(dispatch_metadata)
+    # Debug: bypass all_to_all_combine only.
+    disable_combine = True
+    if disable_combine:
+        combine_output = expert_output
+        ttnn.deallocate(dispatch_metadata)
+    else:
+        combine_output = ttnn.all_to_all_combine(
+            expert_output,
+            dispatch_metadata,
+            expert_mapping_tensors,
+            **combine_config.as_dict(),
+        )
+        ttnn.deallocate(expert_output)
+        ttnn.deallocate(dispatch_metadata)
 
     # ==========================================================================
     # STEP 8: APPLY ROUTING WEIGHTS AND REDUCE ACROSS EXPERTS
@@ -370,6 +376,21 @@ def decode_forward(
     topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 2, 0))
     topk_weights_reshaped = ttnn.to_layout(topk_weights_rm, ttnn.TILE_LAYOUT)
     ttnn.deallocate(topk_weights_rm)
+
+    target_k = min(topk_weights_reshaped.shape[0], post_combine.shape[0])
+    target_tokens = min(topk_weights_reshaped.shape[2], post_combine.shape[2])
+    if post_combine.shape[0] != target_k or post_combine.shape[2] != target_tokens:
+        post_combine = ttnn.slice(
+            post_combine,
+            [0, 0, 0, 0],
+            [target_k, 1, target_tokens, post_combine.shape[3]],
+        )
+    if topk_weights_reshaped.shape[0] != target_k or topk_weights_reshaped.shape[2] != target_tokens:
+        topk_weights_reshaped = ttnn.slice(
+            topk_weights_reshaped,
+            [0, 0, 0, 0],
+            [target_k, 1, target_tokens, 1],
+        )
 
     # Weighted sum: sum_k(expert_output_k * routing_weight_k)
     weighted_output = ttnn.mul(post_combine, topk_weights_reshaped, memory_config=memory_config)
