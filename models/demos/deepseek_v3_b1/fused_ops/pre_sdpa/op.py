@@ -1097,7 +1097,7 @@ class PreSDPA:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 in_cb_descriptor,
                 gamma_cb_descriptor,
