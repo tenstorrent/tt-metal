@@ -154,6 +154,7 @@ class MLA1D(AbstractModule):
                     (0, -1),
                     mesh_device,
                     wq_b_dram_memory_config,
+                    (0, 0, 0, 0),  # n=3072 already aligned (multiple of 384), no padding needed
                 ),
             },
             "wo": {
@@ -163,7 +164,7 @@ class MLA1D(AbstractModule):
                     (0, -1),
                     mesh_device,
                     wo_dram_memory_config,
-                    (0, 0, 0, 0),  # No padding needed
+                    (0, 0, 256, 0),  # Pad n from 896 to 1152 (multiple of 384)
                 ),
             },
         }
@@ -212,7 +213,7 @@ class MLA1D(AbstractModule):
                     (0, -2),  # Shard along input dim
                     mesh_device,
                     qkv_a_dram_memory_config,
-                    (0, 0, 0, 0),  # No padding needed
+                    (0, 0, 192, 0),  # Pad n from 2112 to 2304 (multiple of 384)
                 ),
             },
         }
@@ -284,7 +285,7 @@ class MLA1D(AbstractModule):
                     (0, -3),
                     mesh_device,
                     wkv_b1_dram_memory_config,
-                    (0, 0, 0, 0),  # No padding needed
+                    (0, 8, 0, 0),  # Pad batch from 16 to 24
                 ),
             },
             "wkv_b2": {
@@ -294,7 +295,7 @@ class MLA1D(AbstractModule):
                     (0, None),
                     mesh_device,
                     wkv_b2_dram_memory_config,
-                    (0, 0, 0, 0),  # No padding needed
+                    (0, 4, 0, 0),  # Pad batch from 128 to 132
                 ),
             },
         }
