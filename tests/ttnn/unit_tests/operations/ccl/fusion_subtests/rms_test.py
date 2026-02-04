@@ -879,18 +879,22 @@ def run_rms_fuse_impl_deepseek(
 
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0) for _ in range(num_iters)]
 
+    # Stats buffer must use single-core sharding so stats.padded_shape[-1] = num_devices * TILE_WIDTH.
+    # fused_rmsnorm_post_all_gather infers num_distributed_devices = stats.padded_shape[-1] / TILE_WIDTH;
+    # if we shard over input_shard_grid, padded_shape[-1] scales with num_cores and the kernel gets wrong
+    # num_devices, skewing RMS scaling and failing PCC on multi-device. Match run_rms_trace_deepseek.
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
             32,
         ),
-        core_grid=input_shard_grid,
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
     ag_shape = [1, 1, 32, num_devices]
-    stats_tensor = torch.zeros(ag_shape, dtype=torch.bfloat16)
+    stats_tensor = torch.ones(ag_shape, dtype=torch.bfloat16)
     tt_stats = ttnn.from_torch(
         stats_tensor,
         device=mesh_device,
