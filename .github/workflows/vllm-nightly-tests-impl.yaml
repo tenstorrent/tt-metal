@@ -71,7 +71,7 @@ jobs:
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
-              "name": "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output",
+              "name": "[BH-LB] Llama-3.1-8B-Instruct v0 single-step",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -79,7 +79,7 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x8",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"data_parallel\": 8, \"sample_on_device_mode\": \"decode_only\"}",
+              "override-tt-config": "{\"data_parallel\": 8, \"sample_on_device_mode\": \"all\"}",
               "multimodal": false,
               "structured-output": true,
               "additional-server-args": "--num_scheduler_steps 1",
