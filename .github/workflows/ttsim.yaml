@@ -256,11 +256,17 @@ jobs:
           SKIP_LIST_FILE=".github/ttsim-skip-list.yaml"
           ARCH="${{ matrix.arch.name }}"
 
-          # Get common skips + architecture-specific skips
-          SKIP_ARGS=$(yq -r "(.common // []) + (.${ARCH} // []) | .[]" "$SKIP_LIST_FILE" | \
-            while IFS= read -r path; do
-              [[ -n "$path" ]] && echo -n "--deselect=${path} "
-            done)
+          # Get common skips + architecture-specific skips using Python
+          SKIP_ARGS=$(python3 << EOF
+          import yaml
+          with open("$SKIP_LIST_FILE") as f:
+              data = yaml.safe_load(f)
+          common = data.get("common", []) or []
+          arch_specific = data.get("$ARCH", []) or []
+          for path in common + arch_specific:
+              print(f"--deselect={path}", end=" ")
+          EOF
+          )
 
           echo "[info] Loaded skip list for arch: $ARCH"
           echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
