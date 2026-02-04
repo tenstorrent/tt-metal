@@ -10,7 +10,7 @@ Usage:
 Options:
     --all-cores        Show all cores including ones with Go Message = DONE. By default, DONE cores are filtered out.
     --per-core         Show one row per core (no aggregation). By default, rows are aggregated by canonical
-                       callstack and Dev:Locs are range-compressed.
+                       callstack and show per-device logical-tensix grids.
 
 Description:
     Dumps callstacks for all devices in the system and for every supported risc processor.
@@ -18,7 +18,9 @@ Description:
     By default:
     - Filters out cores with DONE status (use --all-cores to include them)
     - Aggregates rows by canonical callstack (use --per-core for detailed per-core view)
-    - Shows compressed Dev:Loc ranges (e.g., "0-31:1-0..2")
+    - Shows per-device logical-tensix grids indicating which cores are running each callstack pattern:
+      * 'R' = this callstack pattern is active on that core
+      * '-' = core exists but this pattern is not running there
 
     Use --per-core to get the original one-row-per-core table with full details.
     Use -v/-vv to show more columns (affects per-core mode only).
@@ -62,14 +64,9 @@ class AggregatedCallstackRow:
     # Full formatted callstack (frames and/or error text)
     callstack: str = triage_field("Callstack")
 
-    # Number of cores that share this canonical callstack
-    num_callstacks: int = triage_field("#Callstacks")
-
-    # Distinct RISC names (e.g. "brisc,trisc0,trisc1")
-    risc_names: str = triage_field("RiscV")
-
-    # v3-compressed Dev:x-y list, rendered as comma-separated
-    devices_locs: list[str] = triage_field("Dev:Locs", collection_serializer(", "))
+    # Per-device logical-tensix grids showing which cores have this callstack pattern
+    # Each cell shows 5 RISC status chars: brisc, trisc0, trisc1, trisc2, ncrisc
+    device_maps: str = triage_field("Devices (R----=brisc, -R---=trisc0, --R--=trisc1, ---R-=trisc2, ----R=ncrisc)")
 
 
 def _canonical_frame_key(frame: CallstackEntry) -> tuple[str, str, int]:
@@ -95,81 +92,148 @@ def _canonical_callstack_key(kcwm: KernelCallstackWithMessage) -> tuple:
     return ("__EMPTY__",)
 
 
-def _compress_devices_locs_v3(dev_loc_keys: list[tuple[int, int, int]]) -> list[str]:
+def _build_device_grid_metadata(per_core_results) -> dict:
     """
-    Compress device:location pairs into range notation.
+    Build per-device tensix grid metadata from per-core results.
 
-    Args:
-        dev_loc_keys: list of (Dev, A, B) where A,B are noc0 coords.
+    Returns a dict mapping device_id to:
+      {
+        'device': Device object,
+        'tensix_logical': set of (lx, ly) tuples for all tensix cores,
+        'grid_dims': (max_lx, max_ly)
+      }
+    """
+    devices_seen = {}
+
+    # Collect unique devices from per_core_results
+    for check in per_core_results:
+        device = check.device_description.device
+        dev_id = device.id
+
+        if dev_id not in devices_seen:
+            # Get all tensix locations for this device
+            tensix_locs = device.get_block_locations("functional_workers")
+
+            # Convert to logical coords and track max values
+            logical_coords = set()
+            max_lx = -1
+            max_ly = -1
+
+            for loc in tensix_locs:
+                coords = loc.to("logical")
+                # Handle nested tuple structure if needed
+                if isinstance(coords[0], tuple):
+                    lx, ly = coords[0]
+                else:
+                    lx, ly = coords[0], coords[1]
+
+                # Ensure we have integers
+                lx = int(lx)
+                ly = int(ly)
+                logical_coords.add((lx, ly))
+
+                # Track max values as we go
+                if lx > max_lx:
+                    max_lx = lx
+                if ly > max_ly:
+                    max_ly = ly
+
+            if logical_coords:
+                devices_seen[dev_id] = {
+                    "device": device,
+                    "tensix_logical": logical_coords,
+                    "grid_dims": (max_lx, max_ly),
+                }
+
+    return devices_seen
+
+
+def _format_risc_status(active_riscs: set[str]) -> str:
+    """
+    Format RISC status as 5-character string: brisc, trisc0, trisc1, trisc2, ncrisc.
 
     Returns:
-        List of compressed strings like "18:1-3" or "0-31:1-0..2"
-
-    Steps:
-      1) Sort by (Dev, A, B).
-      2) For each (Dev, A), compress contiguous B's into B-start..B-end.
-      3) For each (A, B-start..B-end), if multiple contiguous Devs share
-         that exact (A,B-range), compress into DevStart-DevEnd:A-Bstart..Bend.
-      4) Return list of strings.
+        5-character string with 'R' for active RISCs and '-' for inactive ones
     """
-    if not dev_loc_keys:
-        return []
+    risc_order = ["brisc", "trisc0", "trisc1", "trisc2", "ncrisc"]
+    return "".join("R" if risc in active_riscs else "-" for risc in risc_order)
 
-    dev_loc_keys_sorted = sorted(dev_loc_keys)  # (Dev, A, B)
 
-    # Step 2: within Dev,A, merge B ranges
-    per_dev_a_ranges: dict[tuple[int, int], list[tuple[int, int]]] = {}
-    for dev, a, b in dev_loc_keys_sorted:
-        key = (dev, a)
-        ranges = per_dev_a_ranges.setdefault(key, [])
-        if not ranges:
-            ranges.append((b, b))
-        else:
-            start, end = ranges[-1]
-            if b == end + 1:
-                ranges[-1] = (start, b)
+def _format_device_grid(device_id, grid_dims, tensix_locs, active_core_riscs):
+    """
+    Format a device grid showing which tensix cores have a specific callstack pattern.
+
+    Args:
+        device_id: Device ID
+        grid_dims: (max_lx, max_ly) tuple
+        tensix_locs: set of all (lx, ly) tensix coordinates for this device
+        active_core_riscs: dict mapping (lx, ly) to set of active risc names
+
+    Returns:
+        Multi-line string with grid visualization
+    """
+    max_lx, max_ly = grid_dims
+
+    # Build header
+    lines = []
+    lines.append(f"=== Device {device_id} ===")
+
+    # Header row with X coordinates
+    header = "    "
+    for x in range(max_lx + 1):
+        header += f"{x:02d}     "
+    lines.append(header)
+
+    # Build each row
+    for y in range(max_ly + 1):
+        row = f"{y:02d}  "
+        for x in range(max_lx + 1):
+            if (x, y) in active_core_riscs:
+                # Show which RISCs are active on this core
+                cell = _format_risc_status(active_core_riscs[(x, y)])
+            elif (x, y) in tensix_locs:
+                # Core exists but no RISCs with this pattern
+                cell = "-----"
             else:
-                ranges.append((b, b))
+                # Not a tensix core at all
+                cell = "     "
 
-    # Step 3: group by (A, Bstart, Bend) to merge device ranges
-    by_range: dict[tuple[int, int, int], list[int]] = defaultdict(list)
-    for (dev, a), ranges in per_dev_a_ranges.items():
-        for b_start, b_end in ranges:
-            by_range[(a, b_start, b_end)].append(dev)
+            row += cell
+            if x < max_lx:
+                row += "  "  # Two spaces between columns
+        lines.append(row)
 
-    compressed: list[str] = []
-    for (a, b_start, b_end), devs in sorted(by_range.items()):
-        devs_sorted = sorted(devs)
+    return "\n".join(lines)
 
-        run_start = devs_sorted[0]
-        prev = run_start
-        for d in devs_sorted[1:]:
-            if d == prev + 1:
-                prev = d
-            else:
-                # flush previous dev run
-                if run_start == prev:
-                    dev_str = f"{run_start}"
-                else:
-                    dev_str = f"{run_start}-{prev}"
-                if b_start == b_end:
-                    compressed.append(f"{dev_str}:{a}-{b_start}")
-                else:
-                    compressed.append(f"{dev_str}:{a}-{b_start}..{b_end}")
-                run_start = d
-                prev = d
 
-        # flush final dev run
-        if run_start == prev:
-            dev_str = f"{run_start}"
-        else:
-            dev_str = f"{run_start}-{prev}"
-        if b_start == b_end:
-            compressed.append(f"{dev_str}:{a}-{b_start}")
-        else:
-            compressed.append(f"{dev_str}:{a}-{b_start}..{b_end}")
+def _build_device_maps_string(dev_logical_keys, device_metadata):
+    """
+    Build a multi-line string with per-device grids showing active cores.
 
-    return compressed
+    Args:
+        dev_logical_keys: list of (dev_id, lx, ly, risc_name) tuples
+        device_metadata: dict from device_id to metadata (from _build_device_grid_metadata)
+
+    Returns:
+        Multi-line string with one grid per device
+    """
+    # Group by device and core, tracking which RISCs are active
+    per_device_core_riscs = defaultdict(lambda: defaultdict(set))
+    for dev_id, lx, ly, risc_name in dev_logical_keys:
+        per_device_core_riscs[dev_id][(lx, ly)].add(risc_name)
+
+    # Build grids for each device
+    grids = []
+    for dev_id in sorted(per_device_core_riscs.keys()):
+        if dev_id not in device_metadata:
+            continue
+
+        meta = device_metadata[dev_id]
+        grid_str = _format_device_grid(dev_id, meta["grid_dims"], meta["tensix_logical"], per_device_core_riscs[dev_id])
+        grids.append(grid_str)
+        grids.append("")  # Empty line after each device
+
+    return "\n".join(grids)
 
 
 def _aggregate_callstacks_v3(per_core_results) -> list[AggregatedCallstackRow]:
@@ -180,6 +244,9 @@ def _aggregate_callstacks_v3(per_core_results) -> list[AggregatedCallstackRow]:
     """
     if not per_core_results:
         return []
+
+    # Build device grid metadata
+    device_metadata = _build_device_grid_metadata(per_core_results)
 
     groups: dict[tuple, dict] = {}
 
@@ -197,38 +264,42 @@ def _aggregate_callstacks_v3(per_core_results) -> list[AggregatedCallstackRow]:
             groups[key] = {
                 "kcwm": kcwm,
                 "kernel_name": kernel_name,
-                "count": 0,
-                "risc_names": set(),
-                "dev_loc_keys": [],
+                "dev_logical_keys": [],  # (dev_id, lx, ly, risc_name)
             }
 
         g = groups[key]
-        g["count"] += 1
-        g["risc_names"].add(check.risc_name)
 
         dev_id = check.device_description.device.id
-        x, y = check.location.to("noc0")
-        g["dev_loc_keys"].append((dev_id, x, y))
+        coords = check.location.to("logical")
+        # Handle nested tuple structure if needed
+        if isinstance(coords[0], tuple):
+            lx, ly = coords[0]
+        else:
+            lx, ly = coords[0], coords[1]
+
+        # Ensure we have integers
+        lx = int(lx)
+        ly = int(ly)
+        g["dev_logical_keys"].append((dev_id, lx, ly, check.risc_name))
 
     rows: list[AggregatedCallstackRow] = []
     for g in groups.values():
         kcwm = g["kcwm"]
         formatted_callstack = format_callstack_with_message(kcwm)
-        risc_names_str = ",".join(sorted(g["risc_names"]))
-        compressed_locs = _compress_devices_locs_v3(g["dev_loc_keys"])
+
+        # Build device maps
+        device_maps = _build_device_maps_string(g["dev_logical_keys"], device_metadata)
 
         rows.append(
             AggregatedCallstackRow(
                 kernel_name=g["kernel_name"],
                 callstack=formatted_callstack,
-                num_callstacks=g["count"],
-                risc_names=risc_names_str,
-                devices_locs=compressed_locs,
+                device_maps=device_maps,
             )
         )
 
-    # Sort by descending count, then risc_names, then callstack
-    rows.sort(key=lambda r: (-r.num_callstacks, r.risc_names, r.callstack))
+    # Sort by descending count (number of risc instances), then callstack
+    rows.sort(key=lambda r: (-len(r.device_maps), r.callstack))
     return rows
 
 
