@@ -253,22 +253,16 @@ jobs:
       - name: Build skip list arguments
         id: skip-list
         run: |
-          set -euo pipefail
-          SKIP_LIST_FILE=".github/ttsim-skip-list.txt"
-          SKIP_ARGS=""
+          SKIP_LIST_FILE=".github/ttsim-skip-list.yaml"
+          ARCH="${{ matrix.arch.name }}"
 
-          if [[ -f "$SKIP_LIST_FILE" ]]; then
-            echo "[info] Loading skip list from: $SKIP_LIST_FILE"
-            while IFS= read -r line; do
-              # Skip empty lines and comments
-              [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-              SKIP_ARGS="${SKIP_ARGS} --deselect=${line}"
-            done < "$SKIP_LIST_FILE"
-            echo "[info] Skip list loaded"
-          else
-            echo "[warning] Skip list file not found: $SKIP_LIST_FILE"
-          fi
+          # Get common skips + architecture-specific skips
+          SKIP_ARGS=$(yq -r "(.common // []) + (.${ARCH} // []) | .[]" "$SKIP_LIST_FILE" | \
+            while IFS= read -r path; do
+              [[ -n "$path" ]] && echo -n "--deselect=${path} "
+            done)
 
+          echo "[info] Loaded skip list for arch: $ARCH"
           echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
 
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
