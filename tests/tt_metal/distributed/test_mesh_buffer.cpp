@@ -1049,6 +1049,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
         .bottom_up = false};
 
     uint32_t buf_size = test_config.num_pages() * test_config.page_size();
+    fmt::println(stderr, "num pages: {}, page size: {}, buf size: {}", test_config.num_pages(), test_config.page_size(), buf_size);
     ReplicatedBufferConfig global_buffer_config{.size = buf_size};
 
     auto buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
@@ -1077,23 +1078,20 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
     std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
     tt_metal::experimental::HostBufferSetPinnedMemory(host_buffer, pinned_shared);
     
-    for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
-        for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
-            log_info(tt::LogTest, "Testing writing from pinned memory to sharded buffer at coord ({}, {})", logical_y, logical_x);
-            MeshCoordinate coord(logical_y, logical_x);
-            
-            // Write using pinned memory
-            auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
-            std::function<HostBuffer()> produce_buffer = [&host_buffer]() { return host_buffer; };
-            distributed_host_buffer.emplace_shard(coord, produce_buffer);
-            mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/true);
-            
-            // Read back and verify
-            std::vector<uint32_t> dst_vec = {};
-            ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);
-            ASSERT_EQ(dst_vec.size(), src->size());
-            EXPECT_TRUE(std::equal(dst_vec.begin(), dst_vec.end(), src->begin()));
-        }
+    for (auto coord : coord_range) {
+        log_info(tt::LogTest, "Testing writing from pinned memory to sharded buffer at coord {}", coord);
+        
+        // Write using pinned memory
+        auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+        std::function<HostBuffer()> produce_buffer = [&host_buffer]() { return host_buffer; };
+        distributed_host_buffer.emplace_shard(coord, produce_buffer);
+        mesh_device_->mesh_command_queue().enqueue_write(buf, distributed_host_buffer, /*blocking=*/true);
+        
+        // Read back and verify
+        std::vector<uint32_t> dst_vec = {};
+        ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);
+        ASSERT_EQ(dst_vec.size(), src->size());
+        EXPECT_TRUE(std::equal(dst_vec.begin(), dst_vec.end(), src->begin()));
     }
 }
 
