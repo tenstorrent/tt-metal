@@ -19,33 +19,38 @@ echo "Docker tag: $DOCKER_TAG"
 # Are we on main branch
 ON_MAIN=$(git branch --show-current | grep -q main && echo "true" || echo "false")
 
+export DOCKER_BUILDKIT=1
+
+# Ensure a buildx builder exists and is active
+docker buildx create --use --name tt-builder >/dev/null 2>&1 || docker buildx use tt-builder
+docker buildx inspect --bootstrap >/dev/null
+
 build_and_push() {
     local image_name=$1
     local dockerfile=$2
     local on_main=$3
     local from_image=$4
 
-
     if docker manifest inspect $image_name:$DOCKER_TAG > /dev/null; then
         echo "Image $image_name:$DOCKER_TAG already exists"
-    else
-        echo "Building image $image_name:$DOCKER_TAG"
-        docker build \
-            --build-arg FROM_TAG=$DOCKER_TAG \
-            ${from_image:+--build-arg FROM_IMAGE=$from_image} \
-            -t $image_name:$DOCKER_TAG \
-            -t $image_name:latest \
-            -f $dockerfile .
-
-        echo "Pushing image $image_name:$DOCKER_TAG"
-        docker push $image_name:$DOCKER_TAG
+        return
     fi
 
-    # If we are on main branch also push the latest tag
+    echo "Building and pushing image $image_name:$DOCKER_TAG"
+
     if [ "$on_main" = "true" ]; then
-        docker manifest create $image_name:latest --amend $image_name:$DOCKER_TAG
-        docker manifest push $image_name:latest
+        tags="-t $image_name:$DOCKER_TAG -t $image_name:latest"
+    else
+        tags="-t $image_name:$DOCKER_TAG"
     fi
+
+    docker buildx build \
+        --push \
+        --output type=image,compression=zstd,oci-mediatypes=true \
+        --build-arg FROM_TAG=$DOCKER_TAG \
+        ${from_image:+--build-arg FROM_IMAGE=$from_image} \
+        $tags \
+        -f $dockerfile .
 }
 
 build_and_push $BASE_IMAGE_NAME .github/Dockerfile.base $ON_MAIN
