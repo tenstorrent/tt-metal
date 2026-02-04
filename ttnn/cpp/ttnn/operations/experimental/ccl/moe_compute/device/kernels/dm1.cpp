@@ -14,6 +14,8 @@ void kernel_main() {
 
     // For synchronization with tilize cores
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
+    constexpr uint32_t matmul_chunk_ready_semaphore_id =
+        get_named_compile_time_arg_val("matmul_chunk_ready_semaphore_id");
     constexpr uint32_t matmul_chunk_available_semaphore_id =
         get_named_compile_time_arg_val("matmul_chunk_available_semaphore_id");
     constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
@@ -38,16 +40,16 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_2;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_4;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_5;
-    constexpr auto cb_r2c_rdy = tt::CBIndex::c_6;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_0;
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_md = tt::CBIndex::c_5;
 
     // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_2;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_0;
+    constexpr auto cb_r2c_w2 = tt::CBIndex::c_1;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -114,22 +116,37 @@ void kernel_main() {
 
     // Receive number of tokens per expert from the tilize cores
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
-    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
-    uint32_t* num_tokens_per_expert = reinterpret_cast<uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
+
+    // Signal to the compute core that num_tokens_per_expert has arrived.
+    // We also use this CB to transfer (from the writer to compute) 2 semaphore addresses:
+    // - 0: address of semaphore used to send metadata (number of tokens per expert)
+    // - 1: address of semaphore used to notify matmuls cores that tilized chunks have arrived
+    volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_w2c_md));
+    cb_w2c_md_write_ptr[0] = get_semaphore(metadata_ready_semaphore_id);
+    cb_w2c_md_write_ptr[1] = get_semaphore(matmul_chunk_ready_semaphore_id);
+    cb_reserve_back(cb_w2c_md, 2);
+    cb_push_back(cb_w2c_md, 2);
+
+    // Precompute NUM_CHUNKS_PER_EXPERT
+    // NOTE: hardcoded to 2 experts
+    volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
+    uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
+    uint32_t NUM_CHUNKS_PER_EXPERT[num_experts] = {
+        ((encoded_metadata_value & 0x1FF) + tokens_per_chunk - 1) / tokens_per_chunk,
+        (((encoded_metadata_value >> 9) & 0x1FF) + tokens_per_chunk - 1) / tokens_per_chunk};
 
     // Tilize core we signal to that tilize cores can send another chunk of tiles
     uint64_t matmul_chunk_available_semaphore_noc_addr = get_noc_addr(
         tilize_drain_core_noc_x, tilize_drain_core_noc_y, get_semaphore(matmul_chunk_available_semaphore_id));
 
-    // Let compute know the address to wait on
-    // TODO
-
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_expert_tokens = num_tokens_per_expert[expert_id];
-        uint32_t num_expert_chunks = (num_expert_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
+        uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Wait for compute core to tell us that all mm01 data is ready
             cb_wait_front(cb_c2w_rdy, 1);

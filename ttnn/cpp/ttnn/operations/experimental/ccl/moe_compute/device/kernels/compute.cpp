@@ -16,6 +16,15 @@
 #include "llk_math_eltwise_binary_sfpu_binop.h"
 #endif
 
+FORCE_INLINE
+void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+    WAYPOINT("NSMW");
+    do {
+        invalidate_l1_cache();
+    } while ((*sem_addr) < val);
+    WAYPOINT("NSMD");
+}
+
 void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -38,16 +47,16 @@ void kernel_main() {
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_2;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_3;
-    constexpr auto cb_w2c_rdy = tt::CBIndex::c_4;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_5;
-    constexpr auto cb_r2c_rdy = tt::CBIndex::c_6;
+    constexpr auto cb_s2c_in = tt::CBIndex::c_0;
+    constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
+    constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_md = tt::CBIndex::c_5;
 
     // CB Aliases
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
-    constexpr auto cb_r2c_w2 = tt::CBIndex::c_2;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_0;
+    constexpr auto cb_r2c_w2 = tt::CBIndex::c_1;
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
@@ -111,29 +120,52 @@ void kernel_main() {
     // Initialize SFPU for SILU and eltwise multiply
     PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
 
-    // Receive number of tokens per expert from the tilize cores, wait for signal from reader
-    cb_wait_front(cb_r2c_rdy, 1);
-    cb_pop_front(cb_r2c_rdy, 1);
-    uint32_t* num_tokens_per_expert = reinterpret_cast<uint32_t*>(get_tile_address(per_expert_total_tokens_cb_id, 0));
+    //-------------------------------------------------------------------------
+    // Init synchronization with tilize cores
+    //-------------------------------------------------------------------------
 
-    // Wait for DM1 to tell us the address
-    // TODO
+    // Receive num_tokens_per_expert from the tilize cores, wait for signal from writer that the data has arrived
+    // We also use this CB to transfer (from the writer to compute) 2 semaphore addresses:
+    // - 0: address of semaphore used to send metadata (number of tokens per expert)
+    // - 1: address of semaphore used to notify matmuls cores that tilized chunks have arrived
+    cb_wait_front(cb_w2c_md, 2);
+    cb_pop_front(cb_w2c_md, 2);
+    volatile tt_l1_ptr uint32_t* cb_w2c_md_read_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_w2c_md, 0));
 
-    // This decides half of the buffer will have the valid data sent by tilize cores
-    bool use_second_half_buffer = false;
+    // Precompute NUM_CHUNKS_PER_EXPERT
+    // NOTE: hardcoded to 2 experts
+    volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_read_ptr[0]);
+    uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
+    uint32_t NUM_CHUNKS_PER_EXPERT[num_experts] = {
+        ((encoded_metadata_value & 0x1FF) + tokens_per_chunk - 1) / tokens_per_chunk,
+        (((encoded_metadata_value >> 9) & 0x1FF) + tokens_per_chunk - 1) / tokens_per_chunk};
+
+    // Value we wait on that indicates the next chunk of tiles have arrived from the tilize cores
+    uint32_t matmul_chunk_ready_semaphore_wait_value = 1;
+    uint32_t matmul_chunk_ready_semaphore_addr = cb_w2c_md_read_ptr[1];
 
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
+
+    // This decides which half of the buffer will have the valid data sent by tilize cores
+    bool use_second_half_buffer = false;
+
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
-        uint32_t num_expert_tokens = num_tokens_per_expert[expert_id];
-        uint32_t num_expert_chunks = (num_expert_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
+        uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
             //---------------------------------------------------------------------
-            // Wait for the next chunk of tiles to arrive from the tilize cores
-            // TODO
+
+            // Wait for next chunk of tiles to arrive from the tilize cores
+            // Min to allow tilize cores to send increment for second expert
+            // while first expert still being processed
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
+                matmul_chunk_ready_semaphore_wait_value++);
 
             for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
                 uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
