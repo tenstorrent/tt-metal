@@ -588,6 +588,174 @@ Tensor tensor_from_numpy_custom_dtype(
     return impl.template operator()<bfloat16>(new_type.value_or(DataType::BFLOAT16));
 }
 
+// ============================================================================
+// to_numpy helper functions
+// ============================================================================
+
+// Get ml_dtypes.bfloat16 dtype (cached, returns None if not available)
+nb::object get_ml_dtypes_bfloat16_dtype() {
+    static nb::object ml_dtypes_bfloat16_dtype = []() -> nb::object {
+        try {
+            nb::object ml_dtypes = nb::module_::import_("ml_dtypes");
+            nb::object bfloat16_dtype = ml_dtypes.attr("bfloat16");
+            return bfloat16_dtype;
+        } catch (...) {
+            return nb::none();
+        }
+    }();
+    return ml_dtypes_bfloat16_dtype;
+}
+
+// Check if datatype is supported for to_numpy conversion
+bool is_supported_datatype_for_to_numpy(DataType dtype) {
+    switch (dtype) {
+        case DataType::INT32:
+        case DataType::UINT32:
+        case DataType::FLOAT32:
+        case DataType::BFLOAT16: return true;
+        default: return false;
+    }
+}
+
+// Create numpy tensor from data with optional type conversion
+template <typename NumpyType>
+nb::object make_numpy_tensor_from_data(const auto& tensor_data, const TensorSpec& tensor_spec) {
+    const Shape& tensor_shape = tensor_spec.logical_shape();
+    const auto tensor_shape_rank = tensor_shape.rank();
+
+    std::vector<size_t> numpy_shape(tensor_shape_rank);
+    std::copy(tensor_shape.cbegin(), tensor_shape.cend(), numpy_shape.begin());
+
+    // For bfloat16, use ml_dtypes.bfloat16 dtype if available
+    if constexpr (std::is_same_v<NumpyType, bfloat16>) {
+        nb::object ml_dtypes_bfloat16_dtype = get_ml_dtypes_bfloat16_dtype();
+        if (!ml_dtypes_bfloat16_dtype.is_none()) {
+            const size_t num_elements = tensor_data.size();
+            auto* numpy_data = new bfloat16[num_elements];
+            const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<bfloat16*>(p); });
+
+            using TensorDataType = typename std::decay_t<decltype(tensor_data)>::value_type;
+            if constexpr (std::is_same_v<TensorDataType, bfloat16>) {
+                std::memcpy(numpy_data, tensor_data.data(), num_elements * sizeof(bfloat16));
+            } else {
+                std::copy(tensor_data.begin(), tensor_data.end(), numpy_data);
+            }
+
+            nb::object array = nb::cast(nb::ndarray<nb::numpy, uint16_t>(
+                reinterpret_cast<uint16_t*>(numpy_data), tensor_shape_rank, numpy_shape.data(), owner));
+            return array.attr("view")(ml_dtypes_bfloat16_dtype);
+        } else {
+            TT_THROW("ml_dtypes package required for bfloat16 NumPy arrays (try pip install ml_dtypes)");
+        }
+    }
+
+    const size_t num_elements = tensor_data.size();
+    auto* numpy_data = new NumpyType[num_elements];
+    const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<NumpyType*>(p); });
+
+    using TensorDataType = typename std::decay_t<decltype(tensor_data)>::value_type;
+    if constexpr (std::is_same_v<TensorDataType, NumpyType>) {
+        std::memcpy(numpy_data, tensor_data.data(), num_elements * sizeof(NumpyType));
+    } else {
+        std::copy(tensor_data.begin(), tensor_data.end(), numpy_data);
+    }
+
+    return nb::cast(nb::ndarray<nb::numpy>(
+        numpy_data, tensor_shape_rank, numpy_shape.data(), owner, nullptr, nb::dtype<NumpyType>()));
+}
+
+// Dispatch type conversion for to_numpy
+template <typename Impl>
+nb::object dispatch_to_numpy_conversion(DataType from_type, DataType to_type, const Impl& impl, const Tensor& tensor) {
+    if (!is_supported_datatype_for_to_numpy(to_type)) {
+        TT_THROW("Unsupported target dtype for to_numpy: {}", to_type);
+    }
+
+    switch (from_type) {
+        case DataType::INT32:
+            switch (to_type) {
+                case DataType::INT32: return impl.template operator()<int32_t, int32_t>(tensor);
+                case DataType::UINT32: return impl.template operator()<int32_t, uint32_t>(tensor);
+                case DataType::FLOAT32: return impl.template operator()<int32_t, float>(tensor);
+                case DataType::BFLOAT16: return impl.template operator()<int32_t, bfloat16>(tensor);
+                default: break;
+            }
+            break;
+        case DataType::UINT32:
+            switch (to_type) {
+                case DataType::INT32: return impl.template operator()<uint32_t, int32_t>(tensor);
+                case DataType::UINT32: return impl.template operator()<uint32_t, uint32_t>(tensor);
+                case DataType::FLOAT32: return impl.template operator()<uint32_t, float>(tensor);
+                case DataType::BFLOAT16: return impl.template operator()<uint32_t, bfloat16>(tensor);
+                default: break;
+            }
+            break;
+        case DataType::FLOAT32:
+            switch (to_type) {
+                case DataType::INT32: return impl.template operator()<float, int32_t>(tensor);
+                case DataType::UINT32: return impl.template operator()<float, uint32_t>(tensor);
+                case DataType::FLOAT32: return impl.template operator()<float, float>(tensor);
+                case DataType::BFLOAT16: return impl.template operator()<float, bfloat16>(tensor);
+                default: break;
+            }
+            break;
+        case DataType::BFLOAT16:
+            switch (to_type) {
+                case DataType::INT32: return impl.template operator()<bfloat16, int32_t>(tensor);
+                case DataType::UINT32: return impl.template operator()<bfloat16, uint32_t>(tensor);
+                case DataType::FLOAT32: return impl.template operator()<bfloat16, float>(tensor);
+                case DataType::BFLOAT16: return impl.template operator()<bfloat16, bfloat16>(tensor);
+                default: break;
+            }
+            break;
+        default: break;
+    }
+    TT_THROW("Unsupported source dtype for to_numpy: {}", from_type);
+}
+
+// Convert tensor to numpy with optional dtype conversion
+nb::object tensor_to_numpy_impl(
+    const Tensor& tensor, std::optional<DataType> target_dtype, const ttnn::distributed::MeshToTensor* mesh_composer) {
+    const auto impl = [mesh_composer]<typename MetalType, typename NumpyType>(const Tensor& t) -> nb::object {
+        // If on device, move to CPU first
+        Tensor cpu_tensor = t;
+        if (std::holds_alternative<DeviceStorage>(t.storage())) {
+            cpu_tensor = t.cpu();
+        }
+
+        // If mesh_composer provided, compose distributed tensor shards
+        if (mesh_composer != nullptr) {
+            auto composed_result = mesh_composer->compose<MetalType>(cpu_tensor);
+            auto& vec = std::get<0>(composed_result);
+            auto& shape = std::get<1>(composed_result);
+            auto composed_spec = TensorSpec(shape, cpu_tensor.tensor_spec().tensor_layout());
+            return make_numpy_tensor_from_data<NumpyType>(vec, composed_spec);
+        }
+
+        // Convert to row major if needed
+        auto buffer = convert_to_row_major_host_buffer(cpu_tensor, /*padded_output=*/false);
+
+        // Get data as span and create numpy tensor
+        const auto data_span = buffer.buffer.view_as<const MetalType>();
+        const auto& spec = cpu_tensor.tensor_spec();
+
+        // Need to create a temporary TensorSpec with the logical shape for make_numpy_tensor_from_data
+        const Shape logical_shape(std::vector<uint32_t>(buffer.shape.begin(), buffer.shape.end()));
+        static const MemoryConfig mem_config{};
+        const PageConfig page_config(Layout::ROW_MAJOR);
+        TensorLayout tensor_layout(spec.data_type(), page_config, mem_config);
+        TensorSpec output_spec(logical_shape, tensor_layout);
+
+        return make_numpy_tensor_from_data<NumpyType>(data_span, output_spec);
+    };
+
+    const auto& tensor_spec = tensor.tensor_spec();
+    const auto tensor_type = tensor_spec.data_type();
+    const auto target_type = target_dtype.value_or(tensor_type);
+
+    return dispatch_to_numpy_conversion(tensor_type, target_type, impl, tensor);
+}
+
 }  // namespace
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
@@ -796,7 +964,7 @@ void pytensor_module(nb::module_& mod) {
                     std::nullopt,
                     pad_value));
             },
-            nb::keep_alive<1, 7>(),  // 1,6?
+            nb::keep_alive<1, 6>(),  // keep device alive while tensor is alive
             nb::arg("data"),
             nb::arg("shape"),
             nb::arg("data_type"),
@@ -937,18 +1105,25 @@ void pytensor_module(nb::module_& mod) {
             "from_numpy",
             [](nb::ndarray<nb::numpy> numpy_tensor,
                std::optional<Layout> layout,
-               std::optional<DataType> dtype) -> Tensor {
+               std::optional<DataType> dtype,
+               MeshDevice* device) -> Tensor {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
-                return tensor_from_numpy(numpy_tensor, layout.value_or(Layout::ROW_MAJOR), dtype);
+                Tensor tensor = tensor_from_numpy(numpy_tensor, layout.value_or(Layout::ROW_MAJOR), dtype);
+                if (device != nullptr) {
+                    tensor = tensor.to_device(device);
+                }
+                return tensor;
             },
             nb::arg("numpy_tensor"),
             nb::arg("layout") = nb::none(),
             nb::arg("dtype") = nb::none(),
+            nb::arg("device") = nullptr,
+            nb::keep_alive<0, 4>(),
             R"doc(
-            Create a TT Tensor from a numpy tensor on host.
+            Create a TT Tensor from a numpy tensor.
 
             This is the recommended way to create a tensor from numpy arrays.
-            The tensor will be created on the host. Use `.to()` to move it to a device.
+            The tensor can be optionally placed directly on a device.
 
             +---------------+-------------------------------------+
             | Argument      | Description                         |
@@ -959,6 +1134,8 @@ void pytensor_module(nb::module_& mod) {
             +---------------+-------------------------------------+
             | dtype         | Target data type (optional)         |
             +---------------+-------------------------------------+
+            | device        | Target device (optional)            |
+            +---------------+-------------------------------------+
 
             Example:
 
@@ -967,31 +1144,41 @@ void pytensor_module(nb::module_& mod) {
                 import numpy as np
                 import ttnn
 
-                # Create tensor from numpy
+                # Create tensor from numpy on host
                 np_data = np.array([[1, 2], [3, 4]], dtype=np.float32)
                 tt_tensor = ttnn.Tensor.from_numpy(np_data)
 
                 # With explicit layout and dtype
                 tt_tensor = ttnn.Tensor.from_numpy(np_data, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
-                # Move to device
+                # Create directly on device
                 device = ttnn.open_device(0)
-                tt_tensor = tt_tensor.to(device)
+                tt_tensor = ttnn.Tensor.from_numpy(np_data, device=device)
         )doc")
         .def_static(
             "from_numpy",
-            [](nb::object numpy_tensor_obj, std::optional<Layout> layout, std::optional<DataType> dtype) -> Tensor {
+            [](nb::object numpy_tensor_obj,
+               std::optional<Layout> layout,
+               std::optional<DataType> dtype,
+               MeshDevice* device) -> Tensor {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
-                return tensor_from_numpy_custom_dtype(numpy_tensor_obj, layout.value_or(Layout::ROW_MAJOR), dtype);
+                Tensor tensor =
+                    tensor_from_numpy_custom_dtype(numpy_tensor_obj, layout.value_or(Layout::ROW_MAJOR), dtype);
+                if (device != nullptr) {
+                    tensor = tensor.to_device(device);
+                }
+                return tensor;
             },
             nb::arg("numpy_tensor"),
             nb::arg("layout") = nb::none(),
             nb::arg("dtype") = nb::none(),
+            nb::arg("device") = nullptr,
+            nb::keep_alive<0, 4>(),
             R"doc(
             Create a TT Tensor from a numpy tensor with custom dtype (like ml_dtypes.bfloat16).
 
             This overload handles custom dtypes that are not natively supported by nanobind,
-            such as ml_dtypes.bfloat16.
+            such as ml_dtypes.bfloat16. The tensor can be optionally placed directly on a device.
 
             Example:
 
@@ -1004,6 +1191,10 @@ void pytensor_module(nb::module_& mod) {
                 # Create tensor from ml_dtypes.bfloat16 array
                 np_data = np.array([[1, 2], [3, 4]], dtype=ml_dtypes.bfloat16)
                 tt_tensor = ttnn.Tensor.from_numpy(np_data)
+
+                # Create directly on device
+                device = ttnn.open_device(0)
+                tt_tensor = ttnn.Tensor.from_numpy(np_data, device=device)
         )doc")
         .def_prop_ro("spec", [](const Tensor& self) { return self.tensor_spec(); })
         .def_prop_ro("shape", [](const Tensor& self) { return self.logical_shape(); })
@@ -1053,8 +1244,7 @@ void pytensor_module(nb::module_& mod) {
             "extract_shard",
             [](const Tensor& self, CoreCoord core) { return self.extract_shard(core); },
             nb::arg("core").noconvert(),
-            nb::keep_alive<0, 2>(),  // orig
-            // nb::keep_alive<0, 1>(), // does this work?
+            nb::keep_alive<0, 2>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
@@ -1077,8 +1267,7 @@ void pytensor_module(nb::module_& mod) {
             "extract_shard",
             [](const Tensor& self, const uint32_t& core_id) { return self.extract_shard(core_id); },
             nb::arg("core_id").noconvert(),
-            nb::keep_alive<0, 2>(),  // orig
-            // nb::keep_alive<0, 1>(),
+            nb::keep_alive<0, 2>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
@@ -1551,23 +1740,41 @@ void pytensor_module(nb::module_& mod) {
         )doc")
         .def(
             "to_numpy",
-            [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> nb::ndarray<nb::numpy> {
+            [](const Tensor& self,
+               std::optional<DataType> dtype,
+               const ttnn::distributed::MeshToTensor* mesh_composer) -> nb::object {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
-
-                auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
-                                            : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
-                return convert_tt_tensor_to_framework_tensor<nb::numpy>(buffer);
+                return tensor_to_numpy_impl(self, dtype, mesh_composer);
             },
             nb::rv_policy::take_ownership,
+            nb::arg("dtype") = nb::none(),
             nb::arg("mesh_composer") = nullptr,
             R"doc(
             Convert tensor to numpy tensor.
 
-            The tensor must be on host when calling this function.
+            If the tensor is on a device, it will be automatically moved to host first.
+
+            Args:
+                dtype: Optional target numpy dtype. If provided, converts the tensor data to
+                    the specified type. Supported values: ttnn.int32, ttnn.uint32, ttnn.float32,
+                    ttnn.bfloat16. When converting to bfloat16, requires ml_dtypes package.
+                mesh_composer: Optional mesh composer for distributed tensors.
+
+            Returns:
+                numpy.ndarray: The tensor data as a numpy array. For bfloat16 dtype,
+                returns an array with ml_dtypes.bfloat16 dtype.
 
             .. code-block:: python
 
-                data = tt_tensor.cpu().to_numpy() # move TT Tensor to host and convert it to numpy tensor
+                # From host tensor
+                data = tt_tensor.to_numpy()
+
+                # From device tensor (automatically moved to host)
+                data = device_tensor.to_numpy()
+
+                # With dtype conversion
+                data_f32 = tt_tensor.to_numpy(dtype=ttnn.float32)
+                data_bf16 = tt_tensor.to_numpy(dtype=ttnn.bfloat16)
 
         )doc")
         .def(
