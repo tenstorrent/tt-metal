@@ -105,6 +105,43 @@ void sdpa_single_core(
                              .set_page_size(qkt_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_qkt_config);
 
+    const uint32_t identity_scalar_cb_index = CBIndex::c_5;
+    auto c_identity_scalar_config = CircularBufferConfig(single_tile_size, {{identity_scalar_cb_index, cb_data_format}})
+                                        .set_page_size(tt::CBIndex::c_5, single_tile_size);
+    CreateCircularBuffer(program, core, c_identity_scalar_config);
+
+    // cb_prev_max
+    auto cb_prev_max_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_28, cb_data_format}})
+                                  .set_page_size(tt::CBIndex::c_27, single_tile_size);
+    CreateCircularBuffer(program, core, cb_prev_max_config);
+
+    // cb_cur_max
+    auto cb_cur_max_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_27, cb_data_format}})
+                                 .set_page_size(tt::CBIndex::c_28, single_tile_size);
+    CreateCircularBuffer(program, core, cb_cur_max_config);
+
+    // cb_prev_sum
+    auto cb_prev_sum_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_30, cb_data_format}})
+                                  .set_page_size(tt::CBIndex::c_29, single_tile_size);
+    CreateCircularBuffer(program, core, cb_prev_sum_config);
+
+    // cb_cur_sum
+    auto cb_curr_sum_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_29, cb_data_format}})
+                                  .set_page_size(tt::CBIndex::c_30, single_tile_size);
+    CreateCircularBuffer(program, core, cb_curr_sum_config);
+
+    // Determine granularity for statistics computation
+    const uint32_t dst_size = 8;
+    const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
+    const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
+    TT_FATAL(
+        sub_exp_granularity == (1 << log2_sub_exp_granularity),
+        "sub_exp_granularity must be a power of 2. Got {}.",
+        sub_exp_granularity);
+
+    std::map<std::string, std::string> defines;
+    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
+    defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
     // Create the data movement kernels and the compute kernel
     std::vector<uint32_t> reader_compile_time_args = {
         Sq_chunk_t,
@@ -121,14 +158,20 @@ void sdpa_single_core(
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
+            .compile_args = reader_compile_time_args,
+            .defines = defines});
+
+    class bfloat16 bfloat_identity_scalar(1.0f);
+    uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
+
+    union {
+        float f;
+        uint32_t u;
+    } scale_union{};
+    scale_union.f = 1.0f / std::sqrt(static_cast<float>(head_dim_t * TILE_WIDTH));
 
     std::vector<uint32_t> writer_compile_time_args = {
-        Sq_chunk_t,
-        Sk_chunk_t,
-        head_dim_t,
-        num_iter,
-    };
+        Sq_chunk_t, Sk_chunk_t, head_dim_t, num_iter, packed_identity_scalar};
     TensorAccessorArgs(*out_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
@@ -137,19 +180,16 @@ void sdpa_single_core(
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+            .compile_args = writer_compile_time_args,
+            .defines = defines});
 
-    std::vector<uint32_t> compute_compile_time_args = {
-        Sq_chunk_t,
-        Sk_chunk_t,
-        head_dim_t,
-        num_iter,
-    };
+    std::vector<uint32_t> compute_compile_time_args = {Sq_chunk_t, Sk_chunk_t, head_dim_t, num_iter, scale_union.u};
     tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "sdpa_single_core/kernels/compute/sdpa.cpp",
         core,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_compile_time_args});
+        tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity, .compile_args = compute_compile_time_args, .defines = defines});
 
     // Set kernel arguments
     uint32_t q_addr = q_dram_buffer->address();
