@@ -556,9 +556,9 @@ class MLA1D(AbstractModule):
         qkv_a_num_out_cores = 8
 
         # Program config for qkv_a
-        qkv_a_in0_block_w = qkv_a_k // qkv_a_num_in0_cores // tile_size  # 896 // 7 // 32 = 4
+        qkv_a_in0_block_w = 4  # 896 // 7 // 32 = 4
         qkv_a_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        qkv_a_per_core_N = qkv_a_n_padded // qkv_a_num_out_cores // tile_size  # 2304 // 8 // 32 = 9
+        qkv_a_per_core_N = 9  # 2304 // 8 // 32 = 9
 
         qkv_a_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=qkv_a_in0_block_w,
@@ -601,9 +601,9 @@ class MLA1D(AbstractModule):
         wq_b_num_out_cores = 16
 
         # Program config for wq_b
-        wq_b_in0_block_w = wq_b_k // wq_b_num_in0_cores // tile_size  # 1536 // 16 // 32 = 3
+        wq_b_in0_block_w = 3  # 1536 // 16 // 32 = 3
         wq_b_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        wq_b_per_core_N = wq_b_n_padded // wq_b_num_out_cores // tile_size  # 3072 // 16 // 32 = 6
+        wq_b_per_core_N = 6  # 3072 // 16 // 32 = 6
 
         wq_b_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=wq_b_in0_block_w,
@@ -644,9 +644,9 @@ class MLA1D(AbstractModule):
         wkv_b1_n = kv_lora_rank  # 512
 
         # Program config for wkv_b1 (batched DRAM sharded)
-        wkv_b1_in0_block_w = wkv_b1_k // tile_size  # 128 // 32 = 4
+        wkv_b1_in0_block_w = 4  # 128 // 32 = 4
         wkv_b1_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        wkv_b1_per_core_N = wkv_b1_n // tile_size  # 512 // 32 = 16
+        wkv_b1_per_core_N = 16  # 512 // 32 = 16
 
         wkv_b1_program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
             in0_block_w=wkv_b1_in0_block_w,
@@ -690,9 +690,9 @@ class MLA1D(AbstractModule):
         wkv_b2_tile_h = 4  # Tiny tile for wkv_b2
 
         # Program config for wkv_b2 (batched DRAM sharded)
-        wkv_b2_in0_block_w = wkv_b2_k // tile_size  # 512 // 32 = 16
+        wkv_b2_in0_block_w = 16  # 512 // 32 = 16
         wkv_b2_per_core_M = 1  # m // tile_h = 4 // 4 = 1
-        wkv_b2_per_core_N = wkv_b2_n // tile_size  # 128 // 32 = 4
+        wkv_b2_per_core_N = 4  # 128 // 32 = 4
 
         wkv_b2_program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
             in0_block_w=wkv_b2_in0_block_w,
@@ -734,9 +734,9 @@ class MLA1D(AbstractModule):
         wo_num_out_cores = 6
 
         # Program config for wo
-        wo_in0_block_w = wo_k // wo_num_in0_cores // tile_size  # 16384 // 8 // 32 = 64
+        wo_in0_block_w = 64  # 16384 // 8 // 32 = 64
         wo_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        wo_per_core_N = wo_n_padded // wo_num_out_cores // tile_size  # 1152 // 6 // 32 = 6
+        wo_per_core_N = 6  # 1152 // 6 // 32 = 6
 
         wo_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=wo_in0_block_w // 2,
