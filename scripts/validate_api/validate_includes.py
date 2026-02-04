@@ -14,6 +14,7 @@ from common import find_cpp_sources
 SKIP_FILES = {
     "fabric_edm_packet_header.hpp",
     "dev_msgs.h",
+    "dataflow_buffer.hpp",
 }
 
 

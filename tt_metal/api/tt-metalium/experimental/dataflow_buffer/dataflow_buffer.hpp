@@ -15,12 +15,12 @@
 #include <tt-metalium/core_coord.hpp>
 // #include <tt-metalium/program.hpp>
 
-#include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
+#include <tt_metal/hw/inc/internal/dataflow_buffer_interface.h>
 
 namespace tt::tt_metal {
 class Program;
 struct KernelGroup;
-}
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::experimental::dfb {
 
