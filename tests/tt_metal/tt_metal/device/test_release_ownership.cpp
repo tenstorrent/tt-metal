@@ -71,7 +71,9 @@ TEST(TensixReleaseOwnership, ReleaseOwnershipWithSubprocess) {
 
     if (pid == -1) {
         FAIL() << "Failed to fork subprocess";
-    } else if (pid == 0) {
+    }
+
+    if (pid == 0) {
         // Child process
         const char* args[] = {test_clean_init_path.c_str(), nullptr};
         execv(test_clean_init_path.c_str(), const_cast<char* const*>(args));
@@ -79,23 +81,23 @@ TEST(TensixReleaseOwnership, ReleaseOwnershipWithSubprocess) {
         // If execv returns, it failed
         log_error(tt::LogTest, "Failed to execute subprocess: {}", strerror(errno));
         _exit(1);
+    }
+
+    // Parent process - wait for child to complete
+    int status;
+    pid_t result = waitpid(pid, &status, 0);
+
+    ASSERT_EQ(result, pid) << "waitpid failed";
+
+    if (WIFEXITED(status)) {
+        int exit_code = WEXITSTATUS(status);
+        log_info(tt::LogTest, "Subprocess exited with code: {}", exit_code);
+        ASSERT_EQ(exit_code, 0) << "Subprocess failed with exit code: " << exit_code;
+    } else if (WIFSIGNALED(status)) {
+        int signal = WTERMSIG(status);
+        FAIL() << "Subprocess terminated by signal: " << signal;
     } else {
-        // Parent process - wait for child to complete
-        int status;
-        pid_t result = waitpid(pid, &status, 0);
-
-        ASSERT_EQ(result, pid) << "waitpid failed";
-
-        if (WIFEXITED(status)) {
-            int exit_code = WEXITSTATUS(status);
-            log_info(tt::LogTest, "Subprocess exited with code: {}", exit_code);
-            ASSERT_EQ(exit_code, 0) << "Subprocess failed with exit code: " << exit_code;
-        } else if (WIFSIGNALED(status)) {
-            int signal = WTERMSIG(status);
-            FAIL() << "Subprocess terminated by signal: " << signal;
-        } else {
-            FAIL() << "Subprocess terminated abnormally";
-        }
+        FAIL() << "Subprocess terminated abnormally";
     }
 
     log_info(tt::LogTest, "Subprocess completed successfully, verifying parent can still open device");
