@@ -45,22 +45,42 @@ void kernel_main() {
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
     constexpr bool use_attention_sink = get_compile_time_arg_val(29) == 1;
 
-    const uint32_t core_id = get_arg_val<uint32_t>(0);
-    const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
-    const uint32_t local_batch_end = get_arg_val<uint32_t>(2);
-    const uint32_t local_nh_start = get_arg_val<uint32_t>(3);
-    const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
-    const uint32_t local_q_start = get_arg_val<uint32_t>(5);
-    const uint32_t local_q_end = get_arg_val<uint32_t>(6);
-    // const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
-    const uint32_t num_phases = get_arg_val<uint32_t>(7);
-    const uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(8);
-    uint32_t chunked_q_chunk_offset_phase_2 = 0;
-    if (num_phases == 2) {
-        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(9);
+    uint32_t argidx = 0;
+    const uint32_t core_id = get_arg_val<uint32_t>(argidx++);
+
+    uint32_t global_q_start = 0;
+    uint32_t global_q_count = 0;
+    uint32_t local_batch_start, local_batch_end, local_nh_start, local_nh_end, local_q_start, local_q_end;
+
+    if constexpr (!is_causal) {
+        // Non-causal: read global indices (2 args)
+        global_q_start = get_arg_val<uint32_t>(argidx++);
+        global_q_count = get_arg_val<uint32_t>(argidx++);
+        // Set loops to run once for non-causal
+        local_batch_start = 0;
+        local_batch_end = 1;
+        local_nh_start = 0;
+        local_nh_end = 1;
+        local_q_start = 0;
+        local_q_end = 0;  // Not used
+    } else {
+        // Causal: read hierarchical ranges (6 args)
+        local_batch_start = get_arg_val<uint32_t>(argidx++);
+        local_batch_end = get_arg_val<uint32_t>(argidx++);
+        local_nh_start = get_arg_val<uint32_t>(argidx++);
+        local_nh_end = get_arg_val<uint32_t>(argidx++);
+        local_q_start = get_arg_val<uint32_t>(argidx++);
+        local_q_end = get_arg_val<uint32_t>(argidx++);
     }
 
-    const uint32_t q_chunks_per_core = local_q_end - local_q_start;
+    const uint32_t num_phases = get_arg_val<uint32_t>(argidx++);
+    const uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(argidx++);
+    uint32_t chunked_q_chunk_offset_phase_2 = 0;
+    if (num_phases == 2) {
+        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
+    }
+
+    const uint32_t q_chunks_per_core = is_causal ? (local_q_end - local_q_start) : global_q_count;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -96,59 +116,115 @@ void kernel_main() {
             chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
         }
 
-        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                sdpa_standard<
-                    cb_qk_im,
-                    cb_identity_scale_in,
-                    cb_attention_sink,
-                    Sq_chunk_t,
-                    Sk_chunk_t,
-                    DHt,
-                    vDHt,
-                    use_attention_sink,
-                    is_causal,
-                    use_provided_mask,
-                    use_padded_mask,
-                    is_chunked,
-                    scale_fp32,
-                    sliding_window_size>(
-                    Skt,
-                    qk_in0_block_w,
-                    qk_subblock_w,
-                    qk_subblock_h,
-                    qk_in0_num_subblocks,
-                    qk_in1_num_subblocks,
-                    qk_num_blocks,
-                    out_in0_block_w,
-                    out_subblock_w,
-                    out_subblock_h,
-                    out_in0_num_subblocks,
-                    out_in1_num_subblocks,
-                    out_num_blocks,
-                    0,                  // iter_q_start
-                    q_chunks_per_core,  // iter_q_end
-                    q_num_chunks,
-                    local_q_start,
-                    chunked_q_chunk_offset,
-                    k_num_chunks,
-                    q_chunk_tiles,
-                    k_chunk_tiles,
-                    qk_chunk_tiles,
-                    out_chunk_tiles,
-                    cb_q_in,
-                    cb_k_in,
-                    cb_v_in,
-                    cb_mask_in,
-                    cb_col_identity,
-                    cb_out_im_A,
-                    cb_out_im_B,
-                    cb_max_A,
-                    cb_max_B,
-                    cb_sum_A,
-                    cb_sum_B,
-                    cb_exp_max_diff,
-                    cb_out);
+        if constexpr (!is_causal) {
+            // Non-causal: single call to sdpa_standard (loops run once: 0 to 1)
+            sdpa_standard<
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_attention_sink,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                DHt,
+                vDHt,
+                use_attention_sink,
+                is_causal,
+                use_provided_mask,
+                use_padded_mask,
+                is_chunked,
+                scale_fp32,
+                sliding_window_size>(
+                Skt,
+                qk_in0_block_w,
+                qk_subblock_w,
+                qk_subblock_h,
+                qk_in0_num_subblocks,
+                qk_in1_num_subblocks,
+                qk_num_blocks,
+                out_in0_block_w,
+                out_subblock_w,
+                out_subblock_h,
+                out_in0_num_subblocks,
+                out_in1_num_subblocks,
+                out_num_blocks,
+                0,                  // iter_q_start
+                q_chunks_per_core,  // iter_q_end
+                q_num_chunks,
+                local_q_start,
+                chunked_q_chunk_offset,
+                k_num_chunks,
+                q_chunk_tiles,
+                k_chunk_tiles,
+                qk_chunk_tiles,
+                out_chunk_tiles,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                cb_mask_in,
+                cb_col_identity,
+                cb_out_im_A,
+                cb_out_im_B,
+                cb_max_A,
+                cb_max_B,
+                cb_sum_A,
+                cb_sum_B,
+                cb_exp_max_diff,
+                cb_out);
+        } else {
+            // Causal: nested loops over batch and head
+            for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+                for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                    sdpa_standard<
+                        cb_qk_im,
+                        cb_identity_scale_in,
+                        cb_attention_sink,
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        DHt,
+                        vDHt,
+                        use_attention_sink,
+                        is_causal,
+                        use_provided_mask,
+                        use_padded_mask,
+                        is_chunked,
+                        scale_fp32,
+                        sliding_window_size>(
+                        Skt,
+                        qk_in0_block_w,
+                        qk_subblock_w,
+                        qk_subblock_h,
+                        qk_in0_num_subblocks,
+                        qk_in1_num_subblocks,
+                        qk_num_blocks,
+                        out_in0_block_w,
+                        out_subblock_w,
+                        out_subblock_h,
+                        out_in0_num_subblocks,
+                        out_in1_num_subblocks,
+                        out_num_blocks,
+                        0,                  // iter_q_start
+                        q_chunks_per_core,  // iter_q_end
+                        q_num_chunks,
+                        local_q_start,
+                        chunked_q_chunk_offset,
+                        k_num_chunks,
+                        q_chunk_tiles,
+                        k_chunk_tiles,
+                        qk_chunk_tiles,
+                        out_chunk_tiles,
+                        cb_q_in,
+                        cb_k_in,
+                        cb_v_in,
+                        cb_mask_in,
+                        cb_col_identity,
+                        cb_out_im_A,
+                        cb_out_im_B,
+                        cb_max_A,
+                        cb_max_B,
+                        cb_sum_A,
+                        cb_sum_B,
+                        cb_exp_max_diff,
+                        cb_out);
+                }
             }
         }
     }

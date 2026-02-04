@@ -224,30 +224,60 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
     // Parallelization scheme
-    // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
-    uint32_t batch_parallel_factor = std::min(B, num_cores);
-    uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NQH);
-    uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
+    uint32_t total_q_chunks = 0;
+    uint32_t max_q_chunks_per_core = 0;
+    uint32_t batch_parallel_factor, nh_parallel_factor, q_parallel_factor;
+    uint32_t batch_per_core, nh_per_core, q_per_core;
+    uint32_t q_buffer_factor;
 
-    TT_FATAL(
-        batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores,
-        "Parallelism must not exceed number of cores. Got {}, expected at most {}.",
-        batch_parallel_factor * nh_parallel_factor * q_parallel_factor,
-        num_cores);
+    if (!is_causal) {
+        // Global Q chunk partitioning for non-causal
+        total_q_chunks = B * NQH * q_num_chunks;
+        max_q_chunks_per_core = (num_cores == 0) ? 0 : ((total_q_chunks + num_cores - 1) / num_cores);
+        q_buffer_factor = (max_q_chunks_per_core > 1) ? 2 : 1;
 
-    log_debug(tt::LogOp, "Parallelization scheme:");
-    log_debug(tt::LogOp, "batch_parallel_factor: {}", batch_parallel_factor);
-    log_debug(tt::LogOp, "nh_parallel_factor: {}", nh_parallel_factor);
-    log_debug(tt::LogOp, "q_parallel_factor: {}", q_parallel_factor);
+        log_debug(tt::LogOp, "Global Q partitioning (non-causal):");
+        log_debug(tt::LogOp, "total_q_chunks: {}", total_q_chunks);
+        log_debug(tt::LogOp, "max_q_chunks_per_core: {}", max_q_chunks_per_core);
 
-    // Ceiling divide to allow for non-perfect divisions
-    const uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
-    const uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
-    const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
+        // For chain construction, we still need valid parallel factors
+        // Use hierarchical calculation for chain topology building
+        batch_parallel_factor = std::min(B, num_cores);
+        nh_parallel_factor = std::min(num_cores / std::max(1u, batch_parallel_factor), NQH);
+        q_parallel_factor =
+            std::min(num_cores / std::max(1u, batch_parallel_factor * nh_parallel_factor), q_num_chunks);
+        batch_per_core = (B + std::max(1u, batch_parallel_factor) - 1) / std::max(1u, batch_parallel_factor);
+        nh_per_core = (NQH + std::max(1u, nh_parallel_factor) - 1) / std::max(1u, nh_parallel_factor);
+        q_per_core = (q_num_chunks + std::max(1u, q_parallel_factor) - 1) / std::max(1u, q_parallel_factor);
+    } else {
+        // Hierarchical parallelization for causal
+        batch_parallel_factor = std::min(B, num_cores);
+        nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NQH);
+        q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
 
-    const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
+        TT_FATAL(
+            batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores,
+            "Parallelism must not exceed number of cores. Got {}, expected at most {}.",
+            batch_parallel_factor * nh_parallel_factor * q_parallel_factor,
+            num_cores);
 
-    log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
+        log_debug(tt::LogOp, "Parallelization scheme (causal):");
+        log_debug(tt::LogOp, "batch_parallel_factor: {}", batch_parallel_factor);
+        log_debug(tt::LogOp, "nh_parallel_factor: {}", nh_parallel_factor);
+        log_debug(tt::LogOp, "q_parallel_factor: {}", q_parallel_factor);
+
+        batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
+        nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
+        q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
+
+        q_buffer_factor = (q_per_core > 1) ? 2 : 1;
+
+        log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
+
+        // Not used in causal
+        total_q_chunks = 0;
+        max_q_chunks_per_core = 0;
+    }
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
@@ -912,35 +942,58 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        // log_debug(tt::LogOp, "core: {} getting runtime args for idx {i}", core, i);
-        uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-        uint32_t local_batch_end = local_batch_start + batch_per_core;
-        uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-        uint32_t local_nh_end = local_nh_start + nh_per_core;
-        uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
-        uint32_t local_q_end = local_q_start + q_per_core;
+        uint32_t local_batch_start, local_batch_end, local_nh_start, local_nh_end, local_q_start, local_q_end;
+        uint32_t global_q_start = 0;
+        uint32_t global_q_count = 0;
 
-        // clamp all to max values for non-even partitioning
-        local_batch_start = std::min(local_batch_start, B);
-        local_batch_end = std::min(local_batch_end, B);
-        local_nh_start = std::min(local_nh_start, NQH);
-        local_nh_end = std::min(local_nh_end, NQH);
-        local_q_start = std::min(local_q_start, q_num_chunks);
-        local_q_end = std::min(local_q_end, q_num_chunks);
+        if (!is_causal) {
+            // Global Q chunk partitioning for non-causal
+            const uint32_t base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
+            const uint32_t extra_chunks = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
 
-        // log the above
-        log_debug(tt::LogOp, "core: {}", i);
-        log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
-        log_debug(tt::LogOp, "local_batch_start: {}", local_batch_start);
-        log_debug(tt::LogOp, "local_batch_end: {}", local_batch_end);
-        log_debug(tt::LogOp, "local_nh_start: {}", local_nh_start);
-        log_debug(tt::LogOp, "local_nh_end: {}", local_nh_end);
-        log_debug(tt::LogOp, "local_q_start: {}", local_q_start);
-        log_debug(tt::LogOp, "local_q_end: {}", local_q_end);
+            global_q_start = i * base_chunks_per_core + std::min(i, extra_chunks);
+            global_q_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
+
+            if (global_q_start >= total_q_chunks) {
+                global_q_count = 0;
+            } else if (global_q_count > total_q_chunks - global_q_start) {
+                global_q_count = total_q_chunks - global_q_start;
+            }
+
+            log_debug(tt::LogOp, "core: {} global_q_start: {} global_q_count: {}", i, global_q_start, global_q_count);
+        } else {
+            // Hierarchical parallelization for causal
+            local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
+            local_batch_end = local_batch_start + batch_per_core;
+            local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
+            local_nh_end = local_nh_start + nh_per_core;
+            local_q_start = (i % q_parallel_factor) * q_per_core;
+            local_q_end = local_q_start + q_per_core;
+
+            // Clamp to max values
+            local_batch_start = std::min(local_batch_start, B);
+            local_batch_end = std::min(local_batch_end, B);
+            local_nh_start = std::min(local_nh_start, NQH);
+            local_nh_end = std::min(local_nh_end, NQH);
+            local_q_start = std::min(local_q_start, q_num_chunks);
+            local_q_end = std::min(local_q_end, q_num_chunks);
+
+            log_debug(
+                tt::LogOp,
+                "core: {} batch:[{}:{}] head:[{}:{}] q:[{}:{}]",
+                i,
+                local_batch_start,
+                local_batch_end,
+                local_nh_start,
+                local_nh_end,
+                local_q_start,
+                local_q_end);
+        }
 
         // Get chain info for this core
         const auto& chain = core_chain_info[i];
 
+        // Build reader args conditionally
         std::vector<uint32_t> reader_args = {
             q_addr,
             k_addr,
@@ -948,19 +1001,26 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             mask_addr,
             is_chunked ? page_table.value().buffer()->address() : 0,
             attention_sink_addr,
-            i,
-            local_batch_start,
-            local_batch_end,
-            local_nh_start,
-            local_nh_end,
-            local_q_start,
-            local_q_end,
-            num_phases,
-            chunked_q_chunk_offset,
-            read_offset  // read_offset
+            i  // core_id
         };
 
-        // Add chain metadata for non-causal case
+        if (!is_causal) {
+            reader_args.push_back(global_q_start);
+            reader_args.push_back(global_q_count);
+        } else {
+            reader_args.push_back(local_batch_start);
+            reader_args.push_back(local_batch_end);
+            reader_args.push_back(local_nh_start);
+            reader_args.push_back(local_nh_end);
+            reader_args.push_back(local_q_start);
+            reader_args.push_back(local_q_end);
+        }
+
+        reader_args.push_back(num_phases);
+        reader_args.push_back(chunked_q_chunk_offset);
+        reader_args.push_back(read_offset);
+
+        // Add chain metadata for non-causal
         if (!is_causal) {
             reader_args.push_back(static_cast<uint32_t>(chain.participates));
             reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
@@ -977,34 +1037,43 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         }
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
-        SetRuntimeArgs(
-            program,
-            writer_kernels_id,
-            core,
-            {out_addr,
-             i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
-             num_phases,
-             chunked_q_chunk_offset,
-             write_offset});  // write_offset
-        SetRuntimeArgs(
-            program,
-            compute_kernels_id,
-            core,
-            {i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
-             num_phases,
-             chunked_q_chunk_offset});
+
+        // Build writer args conditionally
+        std::vector<uint32_t> writer_args = {out_addr, i};
+        if (!is_causal) {
+            writer_args.push_back(global_q_start);
+            writer_args.push_back(global_q_count);
+        } else {
+            writer_args.push_back(local_batch_start);
+            writer_args.push_back(local_batch_end);
+            writer_args.push_back(local_nh_start);
+            writer_args.push_back(local_nh_end);
+            writer_args.push_back(local_q_start);
+            writer_args.push_back(local_q_end);
+        }
+        writer_args.push_back(num_phases);
+        writer_args.push_back(chunked_q_chunk_offset);
+        writer_args.push_back(write_offset);
+
+        SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
+
+        // Build compute args conditionally
+        std::vector<uint32_t> compute_args = {i};
+        if (!is_causal) {
+            compute_args.push_back(global_q_start);
+            compute_args.push_back(global_q_count);
+        } else {
+            compute_args.push_back(local_batch_start);
+            compute_args.push_back(local_batch_end);
+            compute_args.push_back(local_nh_start);
+            compute_args.push_back(local_nh_end);
+            compute_args.push_back(local_q_start);
+            compute_args.push_back(local_q_end);
+        }
+        compute_args.push_back(num_phases);
+        compute_args.push_back(chunked_q_chunk_offset);
+
+        SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
 
     return cached_program_t{

@@ -33,23 +33,37 @@ void kernel_main() {
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
-    const uint32_t local_batch_start = get_arg_val<uint32_t>(2);
-    const uint32_t local_batch_end = get_arg_val<uint32_t>(3);
-    const uint32_t local_nh_start = get_arg_val<uint32_t>(4);
-    const uint32_t local_nh_end = get_arg_val<uint32_t>(5);
-    const uint32_t local_q_start = get_arg_val<uint32_t>(6);
-    const uint32_t local_q_end = get_arg_val<uint32_t>(7);
-    const uint32_t num_phases = get_arg_val<uint32_t>(8);
-    const uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(9);
-    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(10);
+
+    uint32_t global_q_start = 0;
+    uint32_t global_q_count = 0;
+    uint32_t local_batch_start, local_batch_end, local_nh_start, local_nh_end, local_q_start, local_q_end;
+    uint32_t argidx;
+
+    if constexpr (!is_causal) {
+        global_q_start = get_arg_val<uint32_t>(2);
+        global_q_count = get_arg_val<uint32_t>(3);
+        argidx = 4;  // Continue from arg 4
+    } else {
+        local_batch_start = get_arg_val<uint32_t>(2);
+        local_batch_end = get_arg_val<uint32_t>(3);
+        local_nh_start = get_arg_val<uint32_t>(4);
+        local_nh_end = get_arg_val<uint32_t>(5);
+        local_q_start = get_arg_val<uint32_t>(6);
+        local_q_end = get_arg_val<uint32_t>(7);
+        argidx = 8;  // Continue from arg 8
+    }
+
+    const uint32_t num_phases = get_arg_val<uint32_t>(argidx++);
+    const uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(argidx++);
+    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(argidx++);
     uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
     uint32_t write_offset_phase_2 = 0;
     if (num_phases == 2) {
-        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(11);
-        write_offset_phase_2 = get_arg_val<uint32_t>(12);
+        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(argidx++);
+        write_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
     }
 
-    const uint32_t q_chunks_per_core = local_q_end - local_q_start;
+    const uint32_t q_chunks_per_core = is_causal ? (local_q_end - local_q_start) : global_q_count;
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -81,48 +95,88 @@ void kernel_main() {
             chunk_start_t_in_q_chunks = chunk_start_t_in_q_chunks_phase_2;
             write_offset = write_offset_phase_2;
         }
-        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-            const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
-            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                    uint32_t q_chunk;
+
+        if constexpr (!is_causal) {
+            // Single flat loop for non-causal
+            for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_start + global_q_count;
+                 ++global_q_chunk) {
+                const uint32_t nb = global_q_chunk / (NQH * q_num_chunks);
+                const uint32_t nq = (global_q_chunk % (NQH * q_num_chunks)) / q_num_chunks;
+                const uint32_t q_chunk = global_q_chunk % q_num_chunks;
+
+                // Generate mask if needed
+                if constexpr (!use_provided_mask) {
+                    generate_mask<is_causal, is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
+                        Sq_chunk_t, Sk_chunk_t, q_chunk, chunk_start_t_in_q_chunks, true, false, unpadded_Sk, 0);
+                }
+
+                // Write output using decoded nb, nq
+                const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
+                const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
+                const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
+                uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+                write_block(
+                    out_writer,
+                    cb_out,
+                    out_chunk_tiles,
+                    out_row_tile_count,
+                    vDHt,
+                    out_tile_id,
+                    tile_bytes,
+                    barrier_threshold);
+            }
+        } else {
+            // Causal: Keep existing nested loops EXACTLY as they are
+            for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+                const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
+                for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                    for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
+                        uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
-                    uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-                    if (q_iter < q_chunk_div_2) {  // bottom half
-                        q_chunk = local_q_start + q_iter;
-                    } else {
-                        uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                        q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-                    }
+                        uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
+                        if (q_iter < q_chunk_div_2) {  // bottom half
+                            q_chunk = local_q_start + q_iter;
+                        } else {
+                            uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
+                            q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
+                        }
 #else
-                    q_chunk = local_q_start + q_iter;
+                        q_chunk = local_q_start + q_iter;
 #endif
 
-                    // Generate mask only when user didn't provide one
-                    // When use_provided_mask, reader handles mask reading (and padding if needed)
-                    if constexpr (!use_provided_mask) {
-                        generate_mask<is_causal, is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
-                            Sq_chunk_t, Sk_chunk_t, q_chunk, chunk_start_t_in_q_chunks, true, false, unpadded_Sk, 0);
-                    }
+                        // Generate mask only when user didn't provide one
+                        // When use_provided_mask, reader handles mask reading (and padding if needed)
+                        if constexpr (!use_provided_mask) {
+                            generate_mask<is_causal, is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
+                                Sq_chunk_t,
+                                Sk_chunk_t,
+                                q_chunk,
+                                chunk_start_t_in_q_chunks,
+                                true,
+                                false,
+                                unpadded_Sk,
+                                0);
+                        }
 
-                    // Wait for compute to deliver output chunk
-                    /*
-                      Determine how many rows of OUT will be written. Both start and end rows are
-                      capped by valid_Sqt, since Sq padding is independent of Sk padding.
-                    */
-                    const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
-                    const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
-                    const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
-                    uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
-                    write_block(
-                        out_writer,
-                        cb_out,
-                        out_chunk_tiles,
-                        out_row_tile_count,
-                        vDHt,
-                        out_tile_id,
-                        tile_bytes,
-                        barrier_threshold);
+                        // Wait for compute to deliver output chunk
+                        /*
+                          Determine how many rows of OUT will be written. Both start and end rows are
+                          capped by valid_Sqt, since Sq padding is independent of Sk padding.
+                        */
+                        const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
+                        const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
+                        const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
+                        uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+                        write_block(
+                            out_writer,
+                            cb_out,
+                            out_chunk_tiles,
+                            out_row_tile_count,
+                            vDHt,
+                            out_tile_id,
+                            tile_bytes,
+                            barrier_threshold);
+                    }
                 }
             }
         }
