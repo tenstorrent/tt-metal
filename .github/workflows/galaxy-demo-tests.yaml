@@ -80,4 +80,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.model || 'all' }}
       topology: topology-6u
-      mlperf-read-only: ${{ inputs.mlperf-read-only }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
