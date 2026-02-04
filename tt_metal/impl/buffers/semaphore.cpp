@@ -30,7 +30,7 @@ bool Semaphore::initialized_on_logical_core(const CoreCoord& logical_core) const
 }
 
 uint32_t Semaphore::offset() const {
-    uint32_t offset = MetalContext::instance().hal().get_alignment(HalMemType::L1) * id_;
+    uint32_t offset = get_hal().get_alignment(HalMemType::L1) * id_;
     return offset;
 }
 

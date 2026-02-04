@@ -35,12 +35,12 @@ class ControlPlaneFixture : public ::testing::Test {
            }
            // reserve max available planes
            uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
-           tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+           tt::tt_metal::get_cluster().configure_ethernet_cores_for_fabric_routers(
                tt::tt_fabric::FabricConfig::FABRIC_2D, num_routing_planes);
        }
 
        void TearDown() override {
-           tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+           tt::tt_metal::get_cluster().configure_ethernet_cores_for_fabric_routers(
                tt::tt_fabric::FabricConfig::DISABLED);
        }
 };
@@ -92,7 +92,7 @@ public:
         tt::tt_fabric::FabricReliabilityMode reliability_mode =
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         // Query runtime options for an env-parsed override
-        auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
+        auto reliability_mode_override = tt::tt_metal::get_rtoptions().get_reliability_mode();
         if (reliability_mode_override.has_value()) {
             reliability_mode = reliability_mode_override.value();
         }
@@ -108,8 +108,7 @@ public:
         }
         tt::tt_fabric::SetFabricConfig(
             fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::get_rtoptions().get_dispatch_core_config();
         devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
             ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config, {}, DEFAULT_WORKER_L1_SIZE);
         for (auto& [id, device] : devices_map_) {
@@ -203,8 +202,7 @@ private:
 
 protected:
     static void SetUpTestSuite() {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
-            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        if (tt::tt_metal::get_cluster().is_ubb_galaxy() || tt::tt_metal::get_cluster().is_galaxy_cluster()) {
             should_skip_ = true;
             return;
         }
@@ -255,9 +253,8 @@ protected:
     static void SetUpTestSuite() {
         // Check specifically for Wormhole Galaxy
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        bool is_wormhole_galaxy = (arch_ == tt::ARCH::WORMHOLE_B0) &&
-                                  (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
-                                   tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster());
+        bool is_wormhole_galaxy = (arch_ == tt::ARCH::WORMHOLE_B0) && (tt::tt_metal::get_cluster().is_ubb_galaxy() ||
+                                                                       tt::tt_metal::get_cluster().is_galaxy_cluster());
 
         if (is_wormhole_galaxy) {
             should_skip_ = true;
@@ -332,7 +329,7 @@ protected:
     inline static bool should_skip_ = false;
 
     static void SetUpTestSuite() {
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& cluster = tt::tt_metal::get_cluster();
         if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::GALAXY ||
             tt::tt_metal::GetNumAvailableDevices() < 32) {
             should_skip_ = true;
@@ -340,8 +337,7 @@ protected:
         }
 
         std::filesystem::path mesh_graph_desc_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-            kMeshGraphDescriptorRelativePath;
+            std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) / kMeshGraphDescriptorRelativePath;
         TT_FATAL(
             std::filesystem::exists(mesh_graph_desc_path),
             "Galaxy1x32Fabric1DFixture requires mesh graph descriptor {} but it was not found",
@@ -371,7 +367,7 @@ class T3kCustomMeshGraphFabric2DFixture
     : public CustomMeshGraphFabric2DFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {
     void SetUp() override {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        if (tt::tt_metal::get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
             GTEST_SKIP();
         }
     }

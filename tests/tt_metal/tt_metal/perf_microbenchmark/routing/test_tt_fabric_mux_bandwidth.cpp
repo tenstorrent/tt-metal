@@ -375,7 +375,7 @@ int main(int argc, char** argv) {
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         1 /* num_command_queues */,
-        tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+        tt::tt_metal::get_rtoptions().get_dispatch_core_config());
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device = mesh_device_map.at(0 /* chip_id */);
     // need device handle to do L1 read/writes
@@ -402,7 +402,7 @@ int main(int argc, char** argv) {
     auto core_range_virtual_start =
         mesh_device->worker_core_from_logical_core(worker_logical_cores[worker_cores_offset]);
     auto core_range_virtual_end = mesh_device->worker_core_from_logical_core(worker_logical_cores.back());
-    uint32_t mcast_encoding = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+    uint32_t mcast_encoding = tt::tt_metal::get_hal().noc_multicast_encoding(
         core_range_virtual_start.x, core_range_virtual_start.y, core_range_virtual_end.x, core_range_virtual_end.y);
     uint32_t num_mcast_dests = worker_logical_cores.size() - grid_size.y;
 
@@ -448,8 +448,8 @@ int main(int argc, char** argv) {
     // keep the receiver noc xy encoding same for all workers, wont matter since we are not committing any
     // packets into receiver's L1
     CoreCoord default_receiver_virtual_core = mesh_device->worker_core_from_logical_core(worker_logical_cores.back());
-    uint32_t default_receiver_noc_xy_encoding = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
-        default_receiver_virtual_core.x, default_receiver_virtual_core.y);
+    uint32_t default_receiver_noc_xy_encoding =
+        tt::tt_metal::get_hal().noc_xy_encoding(default_receiver_virtual_core.x, default_receiver_virtual_core.y);
 
     auto full_size_channel_worker_offset = worker_cores_offset;
     for (auto i = 0; i < test_params.num_full_size_channels; i++) {

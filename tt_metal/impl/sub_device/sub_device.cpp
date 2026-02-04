@@ -34,7 +34,7 @@ SubDeviceImpl::SubDeviceImpl(std::array<CoreRangeSet, NumHalProgrammableCoreType
 }
 
 void SubDeviceImpl::validate() const {
-    auto num_core_types = MetalContext::instance().hal().get_programmable_core_type_count();
+    auto num_core_types = get_hal().get_programmable_core_type_count();
     for (uint32_t i = num_core_types; i < NumHalProgrammableCoreTypes; ++i) {
         TT_FATAL(
             this->cores_[i].empty(),

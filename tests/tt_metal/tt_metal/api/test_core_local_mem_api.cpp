@@ -38,9 +38,9 @@ void RunTest(tt::tt_metal::distributed::MeshDevice* mesh_device) {
 
     auto& mc = tt::tt_metal::MetalContext::instance();
 
-    uint32_t unreserved_addr = mc.hal().get_dev_addr(
+    uint32_t unreserved_addr = tt::tt_metal::get_hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
-    uint32_t alignment = mc.hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t alignment = tt::tt_metal::get_hal().get_alignment(tt::tt_metal::HalMemType::L1);
 
     // Ensure no regressions with the new API
     uint32_t cycles_addr = unreserved_addr + 0;

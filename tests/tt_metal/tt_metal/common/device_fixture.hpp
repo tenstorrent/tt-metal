@@ -34,7 +34,7 @@ protected:
             this->num_devices_ = 2;
         }
         std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+        for (ChipId id : tt::tt_metal::get_cluster().all_chip_ids()) {
             ids.push_back(id);
         }
         this->create_devices(ids);
@@ -62,8 +62,7 @@ protected:
     }
 
     void create_devices(const std::vector<ChipId>& device_ids) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::get_rtoptions().get_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             device_ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
         devices_.clear();
@@ -124,11 +123,10 @@ protected:
 
     void create_devices() {
         std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+        for (ChipId id : tt::tt_metal::get_cluster().mmio_chip_ids()) {
             ids.push_back(id);
         }
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::get_rtoptions().get_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
         devices_.clear();

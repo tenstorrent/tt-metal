@@ -78,7 +78,7 @@ TEST_F(MeshDeviceSingleCardFixture, DISABLED_StressNocMcast) {
     CoreCoord tl_core = dev->worker_core_from_logical_core({tlx, tly});
 
     CoreCoord mcast_end = dev->worker_core_from_logical_core(workers_logical.end_coord);
-    bool virtualization_enabled = tt::tt_metal::MetalContext::instance().hal().is_coordinate_virtualization_enabled();
+    bool virtualization_enabled = tt::tt_metal::get_hal().is_coordinate_virtualization_enabled();
     uint32_t num_dests = workers_logical.size();
     CoreCoord virtual_offset = virtualization_enabled
                                    ? dev->worker_core_from_logical_core({0, 0})

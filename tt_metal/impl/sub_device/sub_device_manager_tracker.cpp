@@ -82,7 +82,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
 
 void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch(),
+        tt::tt_metal::get_rtoptions().get_fast_dispatch(),
         "Using sub device managers is unsupported with slow dispatch");
     if (active_sub_device_manager_->id() == sub_device_manager_id) {
         return;

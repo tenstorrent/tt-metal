@@ -242,7 +242,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
 
     // Write input to master L1 buffer
     detail::WriteToDeviceL1(device, test_config.mst_core_coord, mst_l1_base_address, packed_input);
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    get_cluster().l1_barrier(device->id());
 
     // LAUNCH THE PROGRAM
     auto mesh_workload = distributed::MeshWorkload();

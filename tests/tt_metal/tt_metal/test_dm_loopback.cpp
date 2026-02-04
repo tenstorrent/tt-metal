@@ -48,7 +48,7 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
     std::vector<uint32_t> signal = {0};
     tt_metal::detail::WriteToDeviceL1(dev, core, signal_address, signal);
     tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_address, value);
-    MetalContext::instance().get_cluster().dram_barrier(dev->id());
+    get_cluster().dram_barrier(dev->id());
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;

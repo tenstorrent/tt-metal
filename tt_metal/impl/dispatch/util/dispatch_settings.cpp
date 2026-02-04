@@ -82,7 +82,7 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
         .dispatch_size(512_KB)
         .dispatch_s_buffer_size(32_KB)
 
-        .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
+        .with_alignment(get_hal().get_alignment(HalMemType::L1))
 
         .build();
 }
@@ -101,7 +101,7 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, 
         .dispatch_size(128_KB)
         .dispatch_s_buffer_size(32_KB)
 
-        .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
+        .with_alignment(get_hal().get_alignment(HalMemType::L1))
 
         .build();
 }

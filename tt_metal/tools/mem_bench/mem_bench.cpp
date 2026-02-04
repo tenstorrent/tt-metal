@@ -39,7 +39,7 @@ void read_inc_data_from_cores(const Context& ctx, IDevice* device, const CoreRan
     auto dev_cycles = read_cores(device, cores, ctx.device_address.cycles);
     auto dev_bytes_read = read_cores(device, cores, ctx.device_address.rd_bytes);
     auto dev_bytes_written = read_cores(device, cores, ctx.device_address.wr_bytes);
-    auto dev_clk = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id()) * 1e6;  // Hz
+    auto dev_clk = tt::tt_metal::get_cluster().get_device_aiclk(device->id()) * 1e6;  // Hz
 
     double total_cycles = std::reduce(dev_cycles.begin(), dev_cycles.end(), 0ULL);
 

@@ -363,7 +363,7 @@ protected:
         BaseTestFixture::SetUp();
         dram_base_ = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
         num_banks_ = device_->allocator_impl()->get_num_banks(BufferType::DRAM);
-        l1_alignment_ = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        l1_alignment_ = tt::tt_metal::get_hal().get_alignment(HalMemType::L1);
         packed_write_max_unicast_sub_cmds_ =
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
 
@@ -485,7 +485,7 @@ private:
         }
 
         // Ensure DRAM writes are visible to device
-        MetalContext::instance().get_cluster().dram_barrier(device_->id());
+        get_cluster().dram_barrier(device_->id());
 
         // 4. Reserve and Write exec_buff command
         DeviceCommandCalculator exec_buf_calc;
@@ -1028,7 +1028,7 @@ protected:
         if (mesh_device_->num_devices() < 2) {
             GTEST_SKIP() << "Skipping RelayLinearHTest: need MMIO+remote pair in mesh";
         }
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& cluster = tt::tt_metal::get_cluster();
 
         // Identify the MMIO device in the mesh
         for (auto* dev : mesh_device_->get_devices()) {
@@ -1210,7 +1210,7 @@ protected:
         const uint32_t data_size_words = data_size_bytes / sizeof(uint32_t);
         const uint32_t offset_words = offset_bytes / sizeof(uint32_t);
         DeviceDataUpdater::update_read(worker_core, device_data, worker_core, bank_id, offset_words, data_size_words);
-        device_data.pad(worker_core, bank_id, MetalContext::instance().hal().get_alignment(HalMemType::L1));
+        device_data.pad(worker_core, bank_id, get_hal().get_alignment(HalMemType::L1));
 
         // Build command (dispatcher linear write (dest) + relay linear read (src))
         HostMemDeviceCommand cmd = CommandBuilder::build_prefetch_relay_linear_read<flush_prefetch_, inline_data_>(
@@ -1226,7 +1226,7 @@ protected:
         const CoreRange& worker_range,
         uint32_t noc_xy,
         uint32_t& remaining_bytes) {
-        const uint32_t dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
+        const uint32_t dram_alignment = get_hal().get_alignment(HalMemType::DRAM);
 
         // Get max pages
         uint32_t max_page_size = std::min(big_chunk_ ? MAX_PAGE_SIZE : 4096, remaining_bytes);
@@ -1637,7 +1637,7 @@ public:
         const uint32_t words = length / sizeof(uint32_t);
         const uint32_t offset_words = offset_from_current / sizeof(uint32_t);
         DeviceDataUpdater::update_read(worker, device_data_, worker, bank_id, offset_words, words);
-        device_data_.pad(worker, bank_id, MetalContext::instance().hal().get_alignment(HalMemType::L1));
+        device_data_.pad(worker, bank_id, get_hal().get_alignment(HalMemType::L1));
 
         // Barrier/stall to avoid RAW hazards
         HostMemDeviceCommand stall_cmd = CommandBuilder::build_dispatch_prefetch_stall();
@@ -1796,8 +1796,8 @@ TEST_P(PrefetcherHostTextFixture, HostTest) {
     uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     CoreCoord phys_worker_core = device_->worker_core_from_logical_core(first_worker);
     // Write data into L1 for prefetcher to read it later
-    MetalContext::instance().get_cluster().write_core(device_->id(), phys_worker_core, data, l1_base);
-    MetalContext::instance().get_cluster().l1_barrier(device_->id());
+    get_cluster().write_core(device_->id(), phys_worker_core, data, l1_base);
+    get_cluster().l1_barrier(device_->id());
 
     // Get completion queue buffer pointer
     void* completion_queue_buffer = mgr_->get_completion_queue_ptr(fdcq_->id());
@@ -1842,7 +1842,7 @@ TEST_P(PrefetcherPackedReadTestFixture, PackedReadTest) {
     const CoreRange worker_range = {first_worker, last_worker};
 
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
-    const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
+    const auto dram_alignment = get_hal().get_alignment(HalMemType::DRAM);
 
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
@@ -1870,7 +1870,7 @@ TEST_P(PrefetcherRingbufferReadTestFixture, RingbufferReadTest) {
     const CoreRange worker_range = {first_worker, last_worker};
 
     const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
-    const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
+    const auto dram_alignment = get_hal().get_alignment(HalMemType::DRAM);
 
     Common::DeviceData device_data(
         device_, worker_range, l1_base, dram_base_, nullptr, false, dram_data_size_words, cfg_);
@@ -2014,7 +2014,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
     const CoreRange worker_range = {first_worker, last_worker};
 
     const uint32_t l1_base = remote_device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
-    const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
+    const auto dram_alignment = get_hal().get_alignment(HalMemType::DRAM);
 
     // Source: DRAM on MMIO Device - prepopulate with test data
     auto mmio_dram_base = mmio_device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
@@ -2038,7 +2038,7 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
         for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
             tt::tt_metal::detail::WriteToDeviceDRAMChannel(remote_device_, bank_id, remote_dram_base, dirty_data);
         }
-        MetalContext::instance().get_cluster().dram_barrier(remote_device_->id());
+        get_cluster().dram_barrier(remote_device_->id());
     }
     Common::DeviceData device_data(
         remote_device_, worker_range, l1_base, remote_dram_base, nullptr, true, 0 /* don't prepopulate */, cfg_);
@@ -2089,7 +2089,7 @@ TEST_P(PrefetcherPackedReadTestFixture, SmokeTest) {
 
     // Section 3: packed read
     constexpr uint32_t log_packed_read_page_size = 10;
-    const uint32_t dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
+    const uint32_t dram_alignment = get_hal().get_alignment(HalMemType::DRAM);
     const uint32_t length_to_read = tt::align(2080, dram_alignment);
     const uint32_t length_to_read_sdb = tt::align(DEFAULT_SCRATCH_DB_SIZE / 8, dram_alignment);
     // Create and pass PrefetcherPackedReadTestFixture::build_sub_cmds callable

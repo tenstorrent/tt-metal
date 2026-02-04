@@ -78,10 +78,10 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
 
     ASSERT_TRUE(num_devices > 0);
     vector<ChipId> ids;
-    for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+    for (ChipId id : tt::tt_metal::get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::get_rtoptions().get_dispatch_core_config();
     auto devices = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
     for (auto& [id, device] : devices) {
@@ -97,10 +97,10 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     }
     ASSERT_TRUE(num_devices > 0);
     vector<ChipId> ids;
-    for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+    for (ChipId id : tt::tt_metal::get_cluster().mmio_chip_ids()) {
         ids.push_back(id);
     }
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::get_rtoptions().get_dispatch_core_config();
     auto devices = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
     for (auto& [id, device] : devices) {

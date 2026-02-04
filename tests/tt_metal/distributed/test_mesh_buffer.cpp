@@ -227,7 +227,7 @@ TEST_F(MeshBufferTest2x4, Deallocation) {
 TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
     // Repeated device init takes very long on TG. Lower the number of iterations.
     int iterations = 100;
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+    if (tt::tt_metal::get_cluster().is_galaxy_cluster()) {
         iterations = 10;
     }
 
@@ -248,7 +248,7 @@ TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
 TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
     // Repeated device init takes very long on TG. Lower the number of iterations.
     int iterations = 100;
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+    if (tt::tt_metal::get_cluster().is_galaxy_cluster()) {
         iterations = 10;
     }
 
@@ -855,7 +855,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
     ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
     auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
 
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     constexpr int device_read_align{64};
     ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
         << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
@@ -912,7 +912,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage
     ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
     auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
 
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     constexpr int device_read_align{64};
     ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
         << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
@@ -969,7 +969,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
     ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
     auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
 
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     constexpr int device_read_align{64};
     ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
         << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)

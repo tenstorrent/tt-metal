@@ -22,7 +22,7 @@ namespace {
 inspector::Data* get_inspector_data() { return tt::tt_metal::MetalContext::instance().get_inspector_data(); }
 }  // namespace
 
-bool Inspector::is_enabled() { return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_enabled(); }
+bool Inspector::is_enabled() { return tt::tt_metal::get_rtoptions().get_inspector_enabled(); }
 
 std::unique_ptr<inspector::Data> Inspector::initialize() {
     if (!is_enabled()) {

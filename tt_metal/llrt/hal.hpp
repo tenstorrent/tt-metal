@@ -767,16 +767,16 @@ struct std::hash<tt::tt_metal::HalProcessorIdentifier> {
     std::size_t operator()(const tt::tt_metal::HalProcessorIdentifier&) const;
 };
 
-#define HAL_MEM_L1_BASE                                          \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
+#define HAL_MEM_L1_BASE                     \
+    ::tt::tt_metal::get_hal().get_dev_addr( \
         ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_L1_SIZE                                          \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
+#define HAL_MEM_L1_SIZE                     \
+    ::tt::tt_metal::get_hal().get_dev_size( \
         ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
 
-#define HAL_MEM_ETH_BASE                                         \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
+#define HAL_MEM_ETH_BASE                    \
+    ::tt::tt_metal::get_hal().get_dev_addr( \
         ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_ETH_SIZE                                         \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
+#define HAL_MEM_ETH_SIZE                    \
+    ::tt::tt_metal::get_hal().get_dev_size( \
         ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)

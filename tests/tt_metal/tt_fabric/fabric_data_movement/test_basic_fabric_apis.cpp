@@ -87,7 +87,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
 
     std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
     std::vector<std::shared_ptr<tt_metal::distributed::MeshBuffer>> result_buffers(NUM_DEVICES);
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
         const auto& src_device = devices[src_idx];
@@ -198,7 +198,7 @@ void RunSetUnicastRouteTest(
 
     std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
     std::vector<uint32_t> result_addrs(NUM_DEVICES);  // Store fixed addresses for each device
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     // Get mesh shape to determine if it's 2D fabric
     auto src_fabric_node_id =
@@ -216,8 +216,8 @@ void RunSetUnicastRouteTest(
     // 0x100000 (1MB) is safe on Tensix L1
     uint32_t FABRIC_TEST_BUFFER_BASE_ADDR = 0x100000;
     if (core_type == HalProgrammableCoreType::IDLE_ETH) {
-        FABRIC_TEST_BUFFER_BASE_ADDR = tt_metal::MetalContext::instance().hal().get_dev_addr(
-            HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
+        FABRIC_TEST_BUFFER_BASE_ADDR =
+            tt_metal::get_hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
@@ -341,7 +341,7 @@ std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> GenerateAllValid
         return combinations;
     }
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     auto src_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(devices[0]->get_devices()[0]->id());
     auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
@@ -1632,7 +1632,7 @@ TEST_P(T3kCustomMeshGraphFabric2DFixture, TestUnicastRaw) {
 }
 
 TEST_F(Fabric2DFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
+    if (tt::tt_metal::get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
         GTEST_SKIP() << "Test not applicable for TG cluster type";
     }
     RunGetNextHopRouterDirectionTest(this, false);
@@ -1855,14 +1855,14 @@ TEST_F(NightlyFabric2DFixture, TestLineMcastN3HopsE3HopsW4Hops) {
 }
 
 TEST_F(Fabric1DFixture, TestSetUnicastRoute) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+    if (tt::tt_metal::get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         GTEST_SKIP() << "Test applicable only on T3K";
     }
     RunSetUnicastRouteTest(this, false);
 }
 
 TEST_F(Fabric1DFixture, TestSetUnicastRouteIdleEth) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+    if (tt::tt_metal::get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         GTEST_SKIP() << "Test applicable only on T3K";
     }
     RunSetUnicastRouteTest(this, false, HalProgrammableCoreType::IDLE_ETH);
@@ -1872,7 +1872,7 @@ TEST_F(Fabric1DFixture, TestSetUnicastRouteIdleEth) {
 TEST_F(Fabric2DFixture, TestSetUnicastRoute) { RunSetUnicastRouteTest(this, false); }
 
 TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+    if (tt::tt_metal::get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         GTEST_SKIP() << "Test applicable only on T3K";
     }
     RunSetUnicastRouteTest(this, false, HalProgrammableCoreType::IDLE_ETH);

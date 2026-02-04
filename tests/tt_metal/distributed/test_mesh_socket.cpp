@@ -89,7 +89,7 @@ void verify_socket_configs(
     const CoreCoord& sender_virtual_coord,
     const CoreCoord& recv_virtual_coord,
     uint32_t socket_fifo_size) {
-    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    auto l1_alignment = get_hal().get_alignment(HalMemType::L1);
     // Sender md checks
     EXPECT_EQ(sender_page.md.write_ptr, recv_socket.get_data_buffer()->address());
     EXPECT_EQ(sender_page.md.bytes_sent, 0);
@@ -588,7 +588,7 @@ void test_single_connection_multi_device_socket(
 
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     // Used to setup fabric connections
     const uint32_t sender_physical_device_id = md0->impl().get_device(MeshCoordinate(0, 0))->id();
@@ -757,7 +757,7 @@ void test_single_connection_multi_device_socket_with_workers(
     auto worker_virtual_coord = md1->worker_core_from_logical_core(worker_logical_coord);
     auto output_virtual_coord = md1->worker_core_from_logical_core(output_logical_coord);
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
@@ -923,7 +923,7 @@ std::shared_ptr<Program> create_sender_program(
     ChipId sender_physical_device_id,
     ChipId recv_physical_device_id,
     uint32_t sender_link_idx) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
 
     // Used to setup fabric connections
     const auto sender_fabric_node_id =
@@ -979,7 +979,7 @@ std::shared_ptr<Program> create_split_reduce_program(
     auto in1_cb_index = tt::CBIndex::c_4;
 
     // Used to setup fabric connections
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
     const auto sender0_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender0_physical_device_id);
@@ -1122,7 +1122,7 @@ std::shared_ptr<Program> create_reduce_program(
     uint32_t recv_link_idx) {
     auto out_cb_index = tt::CBIndex::c_2;
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     // Used to setup fabric connections
     const auto sender0_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender0_physical_device_id);
@@ -1206,7 +1206,7 @@ std::shared_ptr<Program> create_recv_program(
     ChipId recv_physical_device_id,
     uint32_t recv_link_idx) {
     // Used to setup fabric connections
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const auto sender_fabric_node_id =
         control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id);
     const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
@@ -1620,7 +1620,7 @@ void run_multi_sender_single_recv(FixtureT* fixture, bool split_reducer) {
             ++idx;
             return MeshCoordinate(x, y);
         });
-        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        auto& control_plane = tt::tt_metal::get_control_plane();
         while (true) {
             link_indices.clear();
             std::shuffle(coordinates.begin(), coordinates.end(), std::mt19937(std::random_device()()));
@@ -1699,7 +1699,7 @@ void run_multi_connection_multi_device_data_copy(FixtureT* fixture) {
 
 // Sanity test with a single connection
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto current_device_id = md0->impl().get_device(MeshCoordinate(0, 0))->id();
     auto current_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(current_device_id);
@@ -1731,7 +1731,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
     const auto& recv_config = recv_config_readback[0];
 
     // Parse single sender page (page index 0)
-    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    auto l1_alignment = get_hal().get_alignment(HalMemType::L1);
     // Single connection => max_num_downstreams = 1
     ParsedSenderPage sender_page =
         parse_sender_page(sender_config_bytes.data(), l1_alignment, /*max_num_downstreams*/ 1);
@@ -1750,7 +1750,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
 
 // Test multiple connections
 TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto current_device_id = md0->impl().get_device(MeshCoordinate(0, 0))->id();
     auto current_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(current_device_id);
@@ -1801,7 +1801,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
         recv_socket.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
 
     const uint32_t max_num_downstreams = 1;
-    const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const auto l1_alignment = get_hal().get_alignment(HalMemType::L1);
     for (const auto& connection : socket_connections) {
         const auto& sender = connection.sender_core;
         const auto& recv = connection.receiver_core;
@@ -1829,7 +1829,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
 
 // Test random connections across multiple devices
 TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
     std::unordered_map<MeshCoordinate, ChipId> sender_device_coord_to_id;
@@ -1907,7 +1907,7 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
 
     const uint32_t max_num_downstreams = 1;
     const uint32_t sender_page_size = send_socket_l1.get_config_buffer()->page_size();
-    const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const auto l1_alignment = get_hal().get_alignment(HalMemType::L1);
     for (const auto& connection : socket_connections) {
         const auto& sender_core = connection.sender_core;
         const auto& recv_core = connection.receiver_core;

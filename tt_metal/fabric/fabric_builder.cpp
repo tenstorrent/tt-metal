@@ -20,20 +20,17 @@ FabricBuilder::FabricBuilder(
     program_(program),
     fabric_context_(fabric_context),
     builder_context_(fabric_context.get_builder_context()),
-    local_node_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-        device->id())),
+    local_node_(tt::tt_metal::get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id())),
     wrap_around_mesh_(fabric_context_.is_wrap_around_mesh(local_node_.mesh_id)) {
     // Determine if this device has tunneling dispatch
-    auto mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
-    auto tunnels_from_mmio =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
+    auto mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device_->id());
+    auto tunnels_from_mmio = tt::tt_metal::get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
     TT_ASSERT(!tunnels_from_mmio.empty());
     device_has_dispatch_tunnel_ = (tunnels_from_mmio.size() - 1) > 0;
 }
 
 void FabricBuilder::discover_channels() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
 
     auto is_dispatch_link = [&](chan_id_t eth_chan, uint32_t dispatch_link_idx) {
@@ -177,7 +174,7 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
 
 void FabricBuilder::connect_routers() {
     const auto topology = fabric_context_.get_fabric_topology();
-    const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
+    const bool is_galaxy = tt::tt_metal::get_cluster().is_ubb_galaxy();
 
     // If NeighborExchange topology is used, message forwarding is not supported, and thus there is no need to connect
     // routers on the same device together

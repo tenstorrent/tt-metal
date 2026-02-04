@@ -73,7 +73,7 @@ EnqueueTerminateCommand::EnqueueTerminateCommand(
 void EnqueueTerminateCommand::process() {
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE
-    uint32_t cmd_sequence_sizeB = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    uint32_t cmd_sequence_sizeB = get_hal().get_alignment(HalMemType::HOST);
 
     // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
@@ -100,7 +100,7 @@ void EnqueueTerminateCommand::process() {
 }
 
 bool EventQuery(const std::shared_ptr<Event>& event) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (!tt::tt_metal::get_rtoptions().get_fast_dispatch()) {
         // Slow dispatch always returns true to avoid infinite blocking. Unclear if this is safe for all situations.
         return true;
     }

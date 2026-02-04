@@ -47,15 +47,14 @@ PrefetchKernel::PrefetchKernel(
     auto& core_manager = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager();  // Not thread safe
     static_config_.is_h_variant = h_variant;
     static_config_.is_d_variant = d_variant;
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device_id);
 
     DispatchWorkerType type = PREFETCH;
     if (h_variant && d_variant) {
         this->logical_core_ = core_manager.prefetcher_core(device_id, channel, cq_id);
         type = PREFETCH_HD;
     } else if (h_variant) {
-        channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id);
+        channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(servicing_device_id);
         this->logical_core_ = core_manager.prefetcher_core(servicing_device_id, channel, cq_id);
         type = PREFETCH_H;
     } else if (d_variant) {
@@ -69,8 +68,7 @@ PrefetchKernel::PrefetchKernel(
 }
 
 void PrefetchKernel::GenerateStaticConfigs() {
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
     const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     auto l1_size = my_dispatch_constants.get_prefetcher_l1_size();
@@ -82,8 +80,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
-        bool is_mock =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+        bool is_mock = tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = is_mock ? 0x10000 : device_->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
@@ -139,8 +136,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_s_cb_log_page_size = DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
     } else if (static_config_.is_h_variant.value()) {
         // PREFETCH_H services a remote chip, and so has a different channel
-        channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id_);
+        channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
@@ -196,7 +192,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.cmddat_q_size = my_dispatch_constants.prefetch_d_buffer_size();
 
-        uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+        uint32_t pcie_alignment = get_hal().get_alignment(HalMemType::HOST);
         static_config_.scratch_db_base = (my_dispatch_constants.dispatch_buffer_base() +
                                           my_dispatch_constants.prefetch_d_buffer_size() + pcie_alignment - 1) &
                                          (~(pcie_alignment - 1));
@@ -246,7 +242,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
     if (!is_hd()) {
         create_edm_connection_sems(edm_connection_attributes_);
-        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        const auto& fabric_context = tt::tt_metal::get_control_plane().get_fabric_context();
         static_config_.is_2d_fabric = fabric_context.is_2D_routing_enabled();
     } else {
         static_config_.is_2d_fabric = false;
@@ -538,8 +534,8 @@ void PrefetchKernel::CreateKernel() {
         true,
         // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
         // respect code space
-        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-            (not tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline()),
+        tt::tt_metal::get_rtoptions().get_watcher_enabled() &&
+            (not tt::tt_metal::get_rtoptions().get_watcher_noinline()),
         optimization_level);
 }
 
@@ -547,8 +543,7 @@ void PrefetchKernel::ConfigureCore() {
     // Only H-type prefetchers need L1 configuration
     if (static_config_.is_h_variant.value()) {
         // Initialize the FetchQ
-        uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+        uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device_->id());
         const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();

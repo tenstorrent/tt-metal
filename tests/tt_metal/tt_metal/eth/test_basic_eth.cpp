@@ -110,8 +110,7 @@ bool reader_kernel_no_send(
 
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        device->id(), eth_noc_xy, all_zeros, eth_l1_byte_address);
+    tt::tt_metal::get_cluster().write_core(device->id(), eth_noc_xy, all_zeros, eth_l1_byte_address);
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -127,8 +126,7 @@ bool reader_kernel_no_send(
     workload.add_program(device_range, std::move(program));
     fixture->RunProgram(mesh_device, workload);
 
-    auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
+    auto readback_vec = tt::tt_metal::get_cluster().read_core(device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
     pass &= (readback_vec == inputs);
     if (not pass) {
         std::cout << "Mismatch at Core: " << eth_noc_xy.str() << std::endl;
@@ -181,8 +179,7 @@ bool writer_kernel_no_receive(
     ////////////////////////////////////////////////////////////////////////////
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        device->id(), eth_noc_xy, inputs, eth_l1_byte_address);
+    tt::tt_metal::get_cluster().write_core(device->id(), eth_noc_xy, inputs, eth_l1_byte_address);
 
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
@@ -294,20 +291,18 @@ bool noc_reader_and_writer_kernels(
     distributed::WriteShard(cq, reader_dram_buffer, reader_inputs, zero_coord);
 
     auto writer_inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        device->id(), eth_noc_xy, writer_inputs, eth_src_l1_address);
+    tt::tt_metal::get_cluster().write_core(device->id(), eth_noc_xy, writer_inputs, eth_src_l1_address);
 
     // Clear expected values at output locations
     std::vector<uint32_t> all_zeros(byte_size / sizeof(uint32_t), 0);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        device->id(), eth_noc_xy, all_zeros, eth_dst_l1_address);
+    tt::tt_metal::get_cluster().write_core(device->id(), eth_noc_xy, all_zeros, eth_dst_l1_address);
     distributed::WriteShard(cq, writer_dram_buffer, all_zeros, zero_coord);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
-    auto eth_readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device->id(), eth_noc_xy, eth_dst_l1_address, byte_size);
+    auto eth_readback_vec =
+        tt::tt_metal::get_cluster().read_core(device->id(), eth_noc_xy, eth_dst_l1_address, byte_size);
     pass &= (eth_readback_vec == reader_inputs);
     if (not pass) {
         log_info(
@@ -332,10 +327,9 @@ namespace tt::tt_metal {
 
 TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-    const auto erisc_count =
-        tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    const size_t src_eth_l1_byte_address =
+        tt::tt_metal::get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const auto erisc_count = tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->get_devices()[0];
@@ -374,10 +368,9 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
         GTEST_SKIP() << "See GH Issue #18384";
     }
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-    const auto erisc_count =
-        tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    const size_t src_eth_l1_byte_address =
+        tt::tt_metal::get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const auto erisc_count = tt::tt_metal::get_hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->get_devices()[0];
@@ -409,8 +402,8 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocReadNoSend) {
     auto* const device_0 = mesh_device_0->get_devices()[0];
     auto* const device_1 = mesh_device_1->get_devices()[0];
 
-    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address =
+        tt::tt_metal::get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& eth_core : device_0->get_ethernet_sockets(device_1->id())) {
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
@@ -454,8 +447,8 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocWriteNoReceive) {
     auto* const device_0 = mesh_device_0->get_devices()[0];
     auto* const device_1 = mesh_device_1->get_devices()[0];
 
-    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address =
+        tt::tt_metal::get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& eth_core : device_0->get_ethernet_sockets(device_1->id())) {
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
@@ -508,8 +501,7 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc0) {
     auto* const device = mesh_device->get_devices()[0];
 
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    uint32_t eth_l1_address =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    uint32_t eth_l1_address = get_hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     tt_metal::EthernetConfig noc0_ethernet_config{
         .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_0};
     tt_metal::EthernetConfig noc1_ethernet_config{
@@ -552,8 +544,7 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc1) {
     auto* const device = mesh_device->get_devices()[0];
 
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    uint32_t eth_l1_address =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    uint32_t eth_l1_address = get_hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     tt_metal::EthernetConfig noc0_ethernet_config{
         .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_1};
     tt_metal::EthernetConfig noc1_ethernet_config{
@@ -598,7 +589,7 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t read_write_size_bytes = WORD_SIZE * 2048;
     uint32_t reader_dst_address =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+        get_hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     uint32_t writer_src_address = reader_dst_address + read_write_size_bytes;
     tt_metal::EthernetConfig erisc0_ethernet_config{
         .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_0};

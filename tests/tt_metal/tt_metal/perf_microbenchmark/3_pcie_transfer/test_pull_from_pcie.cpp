@@ -247,15 +247,11 @@ int main(int argc, char** argv) {
         CoreCoord logical_core(0, 0);
         CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
 
-        ChipId mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+        ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device_id);
         TT_FATAL(device_id == mmio_device_id, "This test can only be run on MMIO device!");
-        uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-        void* host_hugepage_start =
-            (void*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
-        uint32_t hugepage_size =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(mmio_device_id, channel);
+        uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device_id);
+        void* host_hugepage_start = (void*)tt::tt_metal::get_cluster().host_dma_address(0, mmio_device_id, channel);
+        uint32_t hugepage_size = tt::tt_metal::get_cluster().get_host_channel_size(mmio_device_id, channel);
         uint32_t host_write_ptr = 0;
 
         uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
@@ -398,7 +394,7 @@ int main(int argc, char** argv) {
                 if (simulate_write_ptr_update) {
                     uint32_t num_write_ptr_updates = write_size_bytes / (32 * 1024);
                     for (int i = 0; i < num_write_ptr_updates; i++) {
-                        tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
+                        tt::tt_metal::get_cluster().write_reg(
                             &val_to_write, tt_cxy_pair(device->get_devices()[0]->id(), physical_core), reg_addr);
                         reg_addr += sizeof(uint32_t);
                         num_reg_writes = (reg_addr - prefetch_q_base) / sizeof(uint32_t);
@@ -410,7 +406,7 @@ int main(int argc, char** argv) {
 
                 if (write_ptr_readback_interval > 0 and num_reg_writes == write_ptr_readback_interval) {
                     std::vector<std::uint32_t> read_hex_vec(1, 0);
-                    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                    tt::tt_metal::get_cluster().read_core(
                         read_hex_vec.data(),
                         sizeof(uint32_t),
                         tt_cxy_pair(device->get_devices()[0]->id(), physical_core),

@@ -269,8 +269,7 @@ AnalysisResults parse_duration(
     for (auto& [_, result] : results_per_program_execution_uid) {
         if (result != PROGRAM_INVALID_SINGLE_ANALYSIS_RESULT) {
             TT_ASSERT(result.start_timestamp <= result.end_timestamp);
-            const int chip_frequency_mhz =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
+            const int chip_frequency_mhz = tt::tt_metal::get_cluster().get_device_aiclk(device_id);
             result.duration = static_cast<uint64_t>(
                 std::round((result.end_timestamp - result.start_timestamp) * 1000.0 / chip_frequency_mhz));
         }
@@ -295,7 +294,7 @@ getMetaDataForPrograms(const std::vector<std::reference_wrapper<const tracy::TTD
         const experimental::ProgramExecutionUID program_execution_uid = {
             marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
         if (!program_execution_uid_to_meta_data.contains(program_execution_uid)) {
-            const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            const Cluster& cluster = tt::tt_metal::get_cluster();
             const umd::ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
             const ARCH device_arch = cluster_desc->get_arch(marker.chip_id);
 

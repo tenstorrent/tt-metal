@@ -51,7 +51,7 @@ void issue_record_event_commands(
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = event_id;
 
-    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t l1_alignment = get_hal().get_alignment(HalMemType::L1);
     const uint32_t num_worker_counters = sub_device_ids.size();
     const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
 
@@ -177,7 +177,7 @@ void read_events_from_completion_queue(
     SystemMemoryManager& sysmem_manager) {
     // For mock devices, the sysmem_manager is a stubbed singleton
     // Mock cluster.read_sysmem returns zeros, so validate that and handle gracefully
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
         return;
     }
@@ -185,7 +185,7 @@ void read_events_from_completion_queue(
     uint32_t read_ptr = sysmem_manager.get_completion_queue_read_ptr(cq_id);
     thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
         (sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE) / sizeof(uint32_t));
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+    tt::tt_metal::get_cluster().read_sysmem(
         dispatch_cmd_and_event.data(),
         sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE,
         read_ptr,

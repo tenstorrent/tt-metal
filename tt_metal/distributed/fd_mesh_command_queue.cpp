@@ -110,7 +110,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     cq_shared_state_(cq_shared_state),
     dispatch_core_type_(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
     reader_thread_pool_(reader_thread_pool),
-    prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
+    prefetcher_dram_aligned_block_size_(get_hal().get_alignment(HalMemType::DRAM)),
     prefetcher_cache_sizeB_(MetalContext::instance().dispatch_mem_map(this->dispatch_core_type_).ringbuffer_size()),
     prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
     prefetcher_cache_manager_size_(
@@ -131,8 +131,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
     // Mock devices don't have actual completion queues, skip validation
-    bool is_mock =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    bool is_mock = tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
     if (in_use_ && !thread_exception_state_.load(std::memory_order_acquire)) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
@@ -192,7 +191,7 @@ void FDMeshCommandQueue::populate_read_descriptor_queue() {
 }
 
 void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         this->dispatch_core_ = CoreCoord{0, 0};
         return;
     }
@@ -215,7 +214,7 @@ CoreCoord FDMeshCommandQueue::virtual_program_dispatch_core() const { return thi
 CoreType FDMeshCommandQueue::dispatch_core_type() const { return this->dispatch_core_type_; }
 
 void FDMeshCommandQueue::clear_expected_num_workers_completed() {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
@@ -494,7 +493,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     ZoneScoped;
     auto lock = lock_api_function_();
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
@@ -533,7 +532,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
 void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish_nolock");
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
@@ -565,8 +564,8 @@ void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids)
     this->finish_nolock(sub_device_ids);
 
     // Barrier across all hosts of the mesh
-    auto distributed_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(
-        mesh_device_->get_view().mesh_id());
+    auto distributed_context =
+        tt::tt_metal::get_control_plane().get_distributed_context(mesh_device_->get_view().mesh_id());
     distributed_context->barrier();
 }
 
@@ -577,7 +576,7 @@ void FDMeshCommandQueue::write_shard_to_device(
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     std::shared_ptr<experimental::PinnedMemory> pinned_memory) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
     if (!mesh_device_->impl().is_local(device_coord)) {
@@ -708,7 +707,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
     const std::optional<MeshCoordinateRange>& device_range) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         // Return a dummy event for mock devices
         return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
     }
@@ -793,7 +792,7 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 }
 
 void FDMeshCommandQueue::read_completion_queue() {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
@@ -858,10 +857,8 @@ MultiProducerSingleConsumerQueue<CompletionReaderVariant>& FDMeshCommandQueue::g
 void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor) {
     auto reader_lambda = [this](IDevice* device, uint32_t num_reads) {
         auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
-        ChipId mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
-        uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+        ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device->id());
+        uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device->id());
 
         for (int i = 0; i < num_reads; i++) {
             buffer_dispatch::copy_completion_queue_data_into_user_space(
@@ -898,10 +895,8 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
     auto& device_range = read_event_descriptor.device_range;
     for_each_local(mesh_device_, device_range, [&](const auto& coord) {
         auto device = mesh_device_->impl().get_device(coord);
-        ChipId mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
-        uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+        ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device->id());
+        uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device->id());
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
 
         event_dispatch::read_events_from_completion_queue(
@@ -919,10 +914,8 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
         return;
     }
     IDevice* device = mesh_device_->impl().get_device(read_l1_data_descriptor.device_coord);
-    const ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
-    const uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+    const ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device->id());
+    const uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device->id());
     device_dispatch::read_core_data_from_completion_queue(
         read_l1_data_descriptor.single_core_descriptor,
         mmio_device_id,
@@ -1022,7 +1015,7 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
+    if (tt::tt_metal::get_rtoptions().get_profiler_enabled()) {
         // Host Memory Intensive Path (when profiler is enabled): The launch messages across devices are unique, since
         // the host_assigned_field in the launch_msg contains the physical device id (required by the performance
         // profiler). Hence the trace per device must be uniquely captured.
@@ -1201,7 +1194,7 @@ SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {
 
 void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
     ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device) {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
+    if (tt::tt_metal::get_rtoptions().get_profiler_enabled()) {
         for (auto& [is_multicast, original_launch_msg, launch_msg] : program_cmd_seq.launch_messages) {
             launch_msg.kernel_config().host_assigned_id() =
                 tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());

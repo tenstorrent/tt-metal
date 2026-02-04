@@ -11,8 +11,7 @@
 
 #if defined(TRACY_ENABLE)
 
-#define TracyTTMetalTraceTrackingEnabled() \
-    tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_tracking()
+#define TracyTTMetalTraceTrackingEnabled() tt::tt_metal::get_rtoptions().get_profiler_trace_tracking()
 
 #define TracyTTMetalBeginMeshTrace(device_ids, trace_id)                                                            \
     if (tt::tt_metal::getDeviceProfilerState()) {                                                                   \

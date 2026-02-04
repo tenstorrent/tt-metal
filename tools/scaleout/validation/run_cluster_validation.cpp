@@ -66,7 +66,7 @@ std::filesystem::path generate_output_dir() {
     std::stringstream ss;
     ss << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
     std::string dir_name = ss.str();
-    const auto& rt_options = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& rt_options = tt::tt_metal::get_rtoptions();
     std::filesystem::path output_dir_path = rt_options.get_root_dir() + "cluster_validation_logs/" + dir_name;
     std::filesystem::create_directories(output_dir_path);
     return output_dir_path;
@@ -286,7 +286,11 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     auto& context = tt::tt_metal::MetalContext::instance();
     const auto& driver = context.get_cluster().get_driver();
     auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        driver, context.get_distributed_context_ptr(), &context.hal(), context.rtoptions(), run_discovery);
+        driver,
+        context.get_distributed_context_ptr(),
+        &tt::tt_metal::get_hal(),
+        tt::tt_metal::get_rtoptions(),
+        run_discovery);
     log_output_rank0("Physical Discovery Complete");
     log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
     return physical_system_descriptor;
@@ -373,7 +377,7 @@ int main(int argc, char* argv[]) {
 
     bool links_reset = false;
     // Ethernet Link Retraining through SW is currently only supported for Wormhole
-    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    bool link_retrain_supported = tt::tt_metal::get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
     constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;

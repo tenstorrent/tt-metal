@@ -127,7 +127,7 @@ uint32_t finalize_dfbs(
         return base_offset;
     }
 
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
 
     dfb_offset = base_offset;
     dfb_size = 0;

@@ -416,8 +416,7 @@ bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer, uint32_t 
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
     const HalMemType buffer_mem_type = buffer.memory_type();
     const uint32_t partial_page_size = tt::align(
-        DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH,
-        MetalContext::instance().hal().get_common_alignment_with_pcie(buffer_mem_type));
+        DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH, get_hal().get_common_alignment_with_pcie(buffer_mem_type));
     return partial_page_size;
 }
 
@@ -444,7 +443,7 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
 void update_offset_on_issue_wait_cmd(uint32_t& byte_offset, bool issue_wait, uint32_t num_sub_devices) {
     if (issue_wait) {
         // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        byte_offset += (MetalContext::instance().hal().get_alignment(HalMemType::HOST) * num_sub_devices);
+        byte_offset += (get_hal().get_alignment(HalMemType::HOST) * num_sub_devices);
     }
 }
 
@@ -724,7 +723,7 @@ void write_interleaved_buffer_to_device(
     bool use_pinned_memory = dispatch_params.use_pinned_transfer;
 
     // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
-    uint32_t byte_offset_in_cq = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    uint32_t byte_offset_in_cq = tt::tt_metal::get_hal().get_alignment(HalMemType::HOST);
 
     dispatch_params.calculate_issue_wait();
     update_offset_on_issue_wait_cmd(byte_offset_in_cq, dispatch_params.issue_wait, sub_device_ids.size());
@@ -819,7 +818,7 @@ void write_to_device_buffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory) {
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
 
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
@@ -979,11 +978,11 @@ void issue_read_buffer_dispatch_command_sequence(
     }
 
     // Mock devices don't have real hardware to read from, skip actual dispatch
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
 
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
@@ -1224,7 +1223,7 @@ void copy_completion_queue_data_into_user_space(
             void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
             if (page_size == padded_page_size) {
                 uint32_t data_bytes_xfered = bytes_xfered - offset_in_completion_q_data;
-                tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+                tt::tt_metal::get_cluster().read_sysmem(
                     contiguous_dst,
                     data_bytes_xfered,
                     completion_q_read_ptr + offset_in_completion_q_data,
@@ -1273,7 +1272,7 @@ void copy_completion_queue_data_into_user_space(
                         num_bytes_to_copy = page_size;
                     }
 
-                    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+                    tt::tt_metal::get_cluster().read_sysmem(
                         (char*)(uint64_t(contiguous_dst) + dst_offset_bytes),
                         num_bytes_to_copy,
                         completion_q_read_ptr + src_offset_bytes,
@@ -1346,7 +1345,7 @@ void copy_completion_queue_data_into_user_space(
                     }
                 }
 
-                tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+                tt::tt_metal::get_cluster().read_sysmem(
                     (char*)(uint64_t(dst) + dst_offset_bytes),
                     num_bytes_to_copy,
                     completion_q_read_ptr + src_offset_bytes,

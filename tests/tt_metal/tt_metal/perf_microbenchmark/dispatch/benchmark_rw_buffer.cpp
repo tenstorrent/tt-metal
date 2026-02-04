@@ -124,7 +124,7 @@ static void BM_write_pinned_memory(benchmark::State& state, const std::shared_pt
         mesh_device.get());
 
     // Allocate destination host buffer with 16-byte alignment
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     constexpr int device_read_align{64};
     TT_ASSERT(
         device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0,
@@ -239,7 +239,7 @@ int main(int argc, char** argv) {
     benchmark::Initialize(&argc, argv);
     // no need to initialize for bandwidth measurement, saves test initialization time
     std::vector<ElementType> host_buffer_max(max_transfer_size / ElementSize);
-    auto available_device_ids = MetalContext::instance().get_cluster().all_chip_ids();
+    auto available_device_ids = get_cluster().all_chip_ids();
 
     TT_FATAL(available_device_ids.contains(0), "Device 0 not available");
     std::vector<ChipId> device_ids = {0};

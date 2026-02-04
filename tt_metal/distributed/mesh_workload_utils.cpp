@@ -34,7 +34,7 @@ void write_go_signal(
     bool send_mcast,
     bool send_unicasts,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     DeviceCommandCalculator calculator;
     if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {

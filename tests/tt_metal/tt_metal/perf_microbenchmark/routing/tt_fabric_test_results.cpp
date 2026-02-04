@@ -158,8 +158,7 @@ BandwidthResultsManager::BandwidthResultsManager() = default;
 void BandwidthResultsManager::initialize_bandwidth_csv_file(bool telemetry_enabled) {
     telemetry_enabled_ = telemetry_enabled;
 
-    std::filesystem::path tt_metal_home =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+    std::filesystem::path tt_metal_home = std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir());
     std::filesystem::path bandwidth_results_path = tt_metal_home / std::string(OUTPUT_DIR);
 
     if (!std::filesystem::exists(bandwidth_results_path)) {
@@ -260,9 +259,8 @@ void BandwidthResultsManager::load_golden_csv() {
     golden_csv_entries_.clear();
 
     std::string golden_filename = get_golden_csv_filename();
-    std::filesystem::path golden_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden" / golden_filename;
+    std::filesystem::path golden_path = std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) /
+                                        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden" / golden_filename;
 
     if (!std::filesystem::exists(golden_path)) {
         log_warning(tt::LogTest, "Golden CSV file not found: {}", golden_path.string());
@@ -337,7 +335,7 @@ void BandwidthResultsManager::load_golden_csv() {
 
 std::string BandwidthResultsManager::get_golden_csv_filename() {
     auto arch_name = tt::tt_metal::hal::get_arch_name();
-    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    auto cluster_type = tt::tt_metal::get_cluster().get_cluster_type();
 
     // Convert cluster type enum to lowercase string
     std::string cluster_name = std::string(enchantum::to_string(cluster_type));
@@ -368,8 +366,7 @@ void BandwidthResultsManager::validate_against_golden() {
 }
 
 void BandwidthResultsManager::setup_ci_artifacts() {
-    std::filesystem::path tt_metal_home =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+    std::filesystem::path tt_metal_home = std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir());
     std::filesystem::path ci_artifacts_path = tt_metal_home / std::string(CI_ARTIFACTS_DIR);
 
     if (!std::filesystem::exists(ci_artifacts_path)) {
@@ -447,8 +444,7 @@ void BandwidthResultsManager::set_comparison_statistics_csv_file_path() {
     auto arch_name = tt::tt_metal::hal::get_arch_name();
     comparison_statistics_oss << "bandwidth_comparison_statistics_" << arch_name << ".csv";
     std::filesystem::path output_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        std::string(OUTPUT_DIR);
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) / std::string(OUTPUT_DIR);
     comparison_statistics_csv_file_path_ = output_path / comparison_statistics_oss.str();
 }
 
@@ -576,7 +572,7 @@ void BandwidthResultsManager::write_bandwidth_summary_csv_to_file(
 
 void BandwidthResultsManager::populate_upload_metadata_fields() {
     auto arch_name = tt::tt_metal::hal::get_arch_name();
-    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    auto cluster_type = tt::tt_metal::get_cluster().get_cluster_type();
     std::string machine_type = std::string(enchantum::to_string(cluster_type));
     std::transform(machine_type.begin(), machine_type.end(), machine_type.begin(), ::tolower);
 
@@ -603,8 +599,7 @@ void BandwidthResultsManager::generate_bandwidth_summary_csv() {
     summary_oss << "bandwidth_summary_results_" << arch_name << ".csv";
 
     std::filesystem::path output_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        std::string(OUTPUT_DIR);
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) / std::string(OUTPUT_DIR);
     csv_summary_file_path_ = output_path / summary_oss.str();
 
     write_bandwidth_summary_csv_to_file(csv_summary_file_path_, false);
@@ -616,8 +611,7 @@ void BandwidthResultsManager::generate_bandwidth_summary_upload_csv() {
     upload_oss << "bandwidth_summary_results_" << arch_name << "_upload.csv";
 
     std::filesystem::path output_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        std::string(OUTPUT_DIR);
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) / std::string(OUTPUT_DIR);
     csv_summary_upload_file_path_ = output_path / upload_oss.str();
 
     populate_upload_metadata_fields();
@@ -659,8 +653,7 @@ void BandwidthResultsManager::populate_comparison_tolerance_and_status(
 std::ofstream BandwidthResultsManager::init_diff_csv_file(
     std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type) {
     std::filesystem::path output_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        std::string(OUTPUT_DIR);
+        std::filesystem::path(tt::tt_metal::get_rtoptions().get_root_dir()) / std::string(OUTPUT_DIR);
     std::ostringstream diff_oss;
     auto arch_name = tt::tt_metal::hal::get_arch_name();
     diff_oss << test_type << "_diff_" << arch_name << ".csv";

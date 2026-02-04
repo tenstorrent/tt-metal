@@ -170,7 +170,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllFro
 
     for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
         detail::WriteToDeviceL1(device, sub_logical_core, sub_l1_base_address, packed_input);
-        MetalContext::instance().get_cluster().l1_barrier(device->id());
+        get_cluster().l1_barrier(device->id());
     }
 
     // LAUNCH PROGRAM - Use mesh workload approach

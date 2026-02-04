@@ -267,20 +267,16 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
 TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
     std::unordered_map<ChipId, std::set<ChipId>> mmio_device_to_device_group;
     for (unsigned int dev_id = 0; dev_id < num_devices_; dev_id++) {
-        ChipId assoc_mmio_dev_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id);
+        ChipId assoc_mmio_dev_id = tt::tt_metal::get_cluster().get_associated_mmio_device(dev_id);
         std::set<ChipId>& device_ids = mmio_device_to_device_group[assoc_mmio_dev_id];
         device_ids.insert(dev_id);
     }
 
     for (const auto& [mmio_dev_id, device_group] : mmio_device_to_device_group) {
-        EXPECT_EQ(
-            tt::tt_metal::MetalContext::instance().get_cluster().get_num_host_channels(mmio_dev_id),
-            device_group.size());
+        EXPECT_EQ(tt::tt_metal::get_cluster().get_num_host_channels(mmio_dev_id), device_group.size());
         std::unordered_set<uint16_t> channels;
         for (const ChipId& device_id : device_group) {
-            channels.insert(
-                tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id));
+            channels.insert(tt::tt_metal::get_cluster().get_assigned_channel_for_device(device_id));
         }
         EXPECT_EQ(channels.size(), device_group.size());
     }
@@ -301,17 +297,17 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     EXPECT_TRUE(device->is_mmio_capable());
     CoreCoord logical_core(0, 0);
 
-    uint32_t base_l1_src_address = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1) +
-                                   MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t base_l1_src_address =
+        mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1) + get_hal().get_alignment(HalMemType::L1);
     // This is a slow dispatch test dispatch core type is needed to query DispatchMemMap
     uint32_t base_pcie_dst_address =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
-        MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        get_hal().get_alignment(HalMemType::L1);
 
     uint32_t size_bytes = 2048 * 128;
     std::vector<uint32_t> src = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));
-    EXPECT_EQ(MetalContext::instance().hal().get_alignment(HalMemType::L1), 16);
-    uint32_t num_16b_writes = size_bytes / MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    EXPECT_EQ(get_hal().get_alignment(HalMemType::L1), 16);
+    uint32_t num_16b_writes = size_bytes / get_hal().get_alignment(HalMemType::L1);
 
     tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
 
@@ -327,12 +323,9 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> result(size_bytes / sizeof(uint32_t));
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-        result.data(), size_bytes, base_pcie_dst_address, mmio_device_id, channel);
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device->id());
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device->id());
+    tt::tt_metal::get_cluster().read_sysmem(result.data(), size_bytes, base_pcie_dst_address, mmio_device_id, channel);
 
     EXPECT_EQ(src, result);
 }
@@ -496,14 +489,14 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
 
     CoreCoord logical_core(0, 0);
 
-    uint32_t base_l1_src_address = device->allocator()->get_base_allocator_addr(HalMemType::L1) +
-                                   MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t base_l1_src_address =
+        device->allocator()->get_base_allocator_addr(HalMemType::L1) + get_hal().get_alignment(HalMemType::L1);
 
     uint32_t size_bytes = 2048 * 128;
     std::vector<uint32_t> src =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));
-    EXPECT_EQ(MetalContext::instance().hal().get_alignment(HalMemType::L1), 16);
-    uint32_t num_16b_writes = size_bytes / MetalContext::instance().hal().get_write_alignment(HalMemType::HOST);
+    EXPECT_EQ(get_hal().get_alignment(HalMemType::L1), 16);
+    uint32_t num_16b_writes = size_bytes / get_hal().get_write_alignment(HalMemType::HOST);
 
     // Allocate and pin host memory
     auto aligned_buf = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(size_bytes / sizeof(uint32_t), 0);
@@ -516,10 +509,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
         host_buffer_view,
         true  // map_to_noc
     );
-    ASSERT_EQ(
-        reinterpret_cast<uintptr_t>(aligned_buf->data()) %
-            MetalContext::instance().hal().get_write_alignment(HalMemType::HOST),
-        0);
+    ASSERT_EQ(reinterpret_cast<uintptr_t>(aligned_buf->data()) % get_hal().get_write_alignment(HalMemType::HOST), 0);
 
     // Write source data to L1
     tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);

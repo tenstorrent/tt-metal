@@ -17,7 +17,7 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::create(
     FabricNodeId local_node,
     const RouterLocation& location) {
     // Query fabric context to determine router type
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_context = tt::tt_metal::get_control_plane().get_fabric_context();
     bool is_switch_mesh = fabric_context.is_switch_mesh(local_node.mesh_id);
 
     if (is_switch_mesh) {

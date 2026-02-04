@@ -290,17 +290,15 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
     // Clear out command queue
     {
-        uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(local_device->id());
-        ChipId mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(local_device->id());
+        uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(local_device->id());
+        ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(local_device->id());
         uint32_t cq_size = local_device->sysmem_manager().get_cq_size();
         uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
             CommandQueueHostAddrType::UNRESERVED);
 
         std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
 
-        tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
+        tt::tt_metal::get_cluster().write_sysmem(
             cq_zeros.data(),
             (cq_size - cq_start),
             get_absolute_cq_offset(channel, 0, cq_size) + cq_start,
@@ -319,7 +317,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     } else {
         log_info(tt::LogTest, "Writing with: WriteToBuffer (equivalent to SDMeshCommandQueue enqueue_write_shards)");
         tt::tt_metal::detail::WriteToBuffer(*shard_view, src);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(local_device->id());
+        tt::tt_metal::get_cluster().l1_barrier(local_device->id());
     }
 
     // Validate written results are correct per core

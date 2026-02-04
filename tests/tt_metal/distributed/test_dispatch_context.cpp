@@ -27,7 +27,7 @@ namespace tt::tt_metal::distributed::test {
 
 TEST(DispatchContext, TestWritesAndWorkloads) {
     // Test using DispatchContext to turn FD on and off during runtime.
-    const auto& rt_options = MetalContext::instance().rtoptions();
+    const auto& rt_options = tt::tt_metal::get_rtoptions();
     if (rt_options.get_fast_dispatch()) {
         GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
     }

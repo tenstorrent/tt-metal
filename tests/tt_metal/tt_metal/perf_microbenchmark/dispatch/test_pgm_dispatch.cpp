@@ -681,7 +681,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
 
     log_test_configuration(info);
 
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
+    tt::tt_metal::get_rtoptions().set_kernels_nullified(true);
 
     bool pass = true;
     std::shared_ptr<MeshDevice> mesh_device;
@@ -749,7 +749,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         log_fatal(tt::LogTest, "{}", e.what());
     }
 
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
+    tt::tt_metal::get_rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

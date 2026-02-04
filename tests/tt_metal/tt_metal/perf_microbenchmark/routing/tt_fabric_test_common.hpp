@@ -143,8 +143,7 @@ public:
     }
 
     MeshCoordinateRange get_host_local_device_coordinates() const {
-        return tt::tt_metal::MetalContext::instance().get_control_plane().get_coord_range(
-            local_mesh_id_, MeshScope::LOCAL);
+        return tt::tt_metal::get_control_plane().get_coord_range(local_mesh_id_, MeshScope::LOCAL);
     }
 
     bool open_devices(const TestFabricSetup& fabric_setup) {
@@ -156,7 +155,7 @@ public:
         // fabric_setup.fabric_reliability_mode
         tt::tt_fabric::FabricReliabilityMode reliability_mode =
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-        auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
+        auto reliability_mode_override = tt::tt_metal::get_rtoptions().get_reliability_mode();
         if (reliability_mode_override.has_value()) {
             reliability_mode = reliability_mode_override.value();
         } else if (fabric_setup.fabric_reliability_mode.has_value()) {
@@ -180,8 +179,8 @@ public:
         }
 
         // Use the new ControlPlane validation API - always skip on mismatch
-        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& control_plane = tt::tt_metal::get_control_plane();
+        const auto& cluster = tt::tt_metal::get_cluster();
         try {
             if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::GALAXY &&
                 !control_plane.is_fabric_config_valid(new_fabric_config)) {
@@ -255,28 +254,27 @@ public:
     // IDeviceInfoProvider methods
     // ======================================================================================
     FabricNodeId get_fabric_node_id(const ChipId physical_chip_id) const override {
-        return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-            physical_chip_id);
+        return tt::tt_metal::get_control_plane().get_fabric_node_id_from_physical_chip_id(physical_chip_id);
     }
 
     FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const override {
-        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::get_control_plane().get_mesh_graph();
         return FabricNodeId(local_mesh_id_, mesh_graph.coordinate_to_chip(local_mesh_id_, device_coord));
     }
 
     FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const override {
-        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::get_control_plane().get_mesh_graph();
         return FabricNodeId(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, device_coord));
     }
 
     MeshCoordinate get_device_coord(const FabricNodeId& node_id) const override {
-        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::get_control_plane().get_mesh_graph();
         return mesh_graph.chip_to_coordinate(node_id.mesh_id, node_id.chip_id);
     }
 
     uint32_t get_worker_noc_encoding(const CoreCoord logical_core) const override {
         const auto virtual_core = mesh_device_->worker_core_from_logical_core(logical_core);
-        return tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_core.x, virtual_core.y);
+        return tt_metal::get_hal().noc_xy_encoding(virtual_core.x, virtual_core.y);
     }
 
     CoreCoord get_virtual_core_from_logical_core(CoreCoord logical_core) const override {
@@ -311,7 +309,7 @@ public:
     };
 
     uint32_t get_l1_unreserved_base() const override {
-        return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        return tt::tt_metal::get_hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
     }
 
@@ -327,7 +325,7 @@ public:
     }
 
     bool is_2D_routing_enabled() const override {
-        return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
+        return tt::tt_metal::get_control_plane().get_fabric_context().is_2D_routing_enabled();
     }
 
     uint32_t get_device_frequency_mhz(const FabricNodeId& device_id) const override {
@@ -343,13 +341,13 @@ public:
     }
 
     bool is_multi_mesh() const override {
-        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::get_control_plane().get_mesh_graph();
         return mesh_graph.get_mesh_ids().size() > 1;
     }
 
     std::unordered_map<MeshId, std::unordered_set<MeshId>> get_mesh_adjacency_map() const override {
         std::unordered_map<MeshId, std::unordered_set<MeshId>> mesh_adjacency_map;
-        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& control_plane = tt::tt_metal::get_control_plane();
         const auto& global_nodes = get_global_node_ids();
         const std::vector<RoutingDirection> directions = {
             RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
@@ -854,9 +852,7 @@ public:
             for (const auto& src_node : device_ids) {
                 for (const auto& direction : directions) {
                     // Check if neighbor exists in this direction
-                    const auto& neighbors =
-                        tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(
-                            src_node, direction);
+                    const auto& neighbors = tt::tt_metal::get_control_plane().get_chip_neighbors(src_node, direction);
 
                     if (!neighbors.empty()) {
                         // Get the first (and should be only) neighbor mesh
@@ -1158,14 +1154,13 @@ public:
     Topology get_topology() const { return topology_; }
 
     bool wrap_around_mesh(FabricNodeId node) const override {
-        return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_wrap_around_mesh(
-            node.mesh_id);
+        return tt::tt_metal::get_control_plane().get_fabric_context().is_wrap_around_mesh(node.mesh_id);
     }
 
     RoutingDirection get_forwarding_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const override {
-        auto forwarding_direction = tt::tt_metal::MetalContext::instance().get_control_plane().get_forwarding_direction(
-            src_node_id, dst_node_id);
+        auto forwarding_direction =
+            tt::tt_metal::get_control_plane().get_forwarding_direction(src_node_id, dst_node_id);
         TT_FATAL(
             forwarding_direction.has_value(), "No forwarding direction found for {} -> {}", src_node_id, dst_node_id);
         return forwarding_direction.value();
@@ -1225,8 +1220,7 @@ public:
         // if no neighbor is found.
         std::optional<FabricNodeId> neighbor_node_id = std::nullopt;
 
-        const auto& neighbors =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(src_node_id, direction);
+        const auto& neighbors = tt::tt_metal::get_control_plane().get_chip_neighbors(src_node_id, direction);
 
         // If more than 1 mesh is returned, throw an error.
         TT_FATAL(
@@ -1515,8 +1509,8 @@ public:
 
     bool validate_num_links_supported(uint32_t num_links) const override {
         // Validate that num_links doesn't exceed available routing planes for any row/column
-        const auto num_pci_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
-        const auto num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
+        const auto num_pci_devices = tt::tt_metal::get_cluster().number_of_pci_devices();
+        const auto num_devices = tt::tt_metal::get_cluster().number_of_devices();
 
         std::vector<FabricNodeId> devices = get_local_node_ids();
         for (const auto& device : devices) {
@@ -1722,7 +1716,7 @@ private:
         TT_FATAL(mesh_id_str != nullptr, "TT_MESH_ID environment variable must be set");
         const auto local_mesh_id = MeshId{std::stoi(mesh_id_str)};
         const auto& eth_coord_mapping = physical_mesh_config.eth_coord_mapping;
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& cluster = tt::tt_metal::get_cluster();
 
         // ethernet coordinate chip mapping, which should be migrated away from
         std::map<FabricNodeId, ChipId> chip_to_eth_coord_mapping;
@@ -1740,15 +1734,14 @@ private:
             physical_mesh_config.mesh_descriptor_path, chip_to_eth_coord_mapping);
 
         // ensure user specified matches what control plane sees
-        const auto user_mesh_id =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_user_physical_mesh_ids()[0];
+        const auto user_mesh_id = tt::tt_metal::get_control_plane().get_user_physical_mesh_ids()[0];
         TT_FATAL(
             *user_mesh_id == *local_mesh_id,
             "Local mesh id {} does not not match user mesh id {}",
             *user_mesh_id,
             *local_mesh_id);
 
-        local_host_rank_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding();
+        local_host_rank_ = tt::tt_metal::get_control_plane().get_local_host_rank_id_binding();
     }
 
     void open_devices_internal(
@@ -1775,11 +1768,10 @@ private:
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
         // first need to re-init contorl plane so that it checks out the latest fabric config.
         tt::tt_metal::MetalContext::instance().initialize_control_plane();
-        local_host_rank_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding();
+        local_host_rank_ = tt::tt_metal::get_control_plane().get_local_host_rank_id_binding();
 
         // Initialize mesh and device info that was deferred from init()
-        const auto user_meshes =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_user_physical_mesh_ids();
+        const auto user_meshes = tt::tt_metal::get_control_plane().get_user_physical_mesh_ids();
         TT_FATAL(
             user_meshes.size() == 1,
             "Only expected a single user mesh for a single host, but got: {}",
@@ -1788,10 +1780,9 @@ private:
         local_mesh_id_ = user_meshes[0];
 
         available_mesh_ids_.insert(local_mesh_id_);
-        mesh_shape_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(
-            local_mesh_id_, MeshScope::GLOBAL);
+        mesh_shape_ = tt::tt_metal::get_control_plane().get_physical_mesh_shape(local_mesh_id_, MeshScope::GLOBAL);
 
-        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::get_control_plane().get_mesh_graph();
 
         for (auto mesh_id : mesh_graph.get_mesh_ids()) {
             if (mesh_id == local_mesh_id_) {  // Populate all nodes available locally. Note the use of host rank to
@@ -1807,9 +1798,7 @@ private:
 
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(mesh_shape_));
         // Now fabric context should be initialized, safe to query wrap_around_mesh
-        wrap_around_mesh_ =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_wrap_around_mesh(
-                user_meshes[0]);
+        wrap_around_mesh_ = tt::tt_metal::get_control_plane().get_fabric_context().is_wrap_around_mesh(user_meshes[0]);
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
 
         current_fabric_config_ = fabric_config;

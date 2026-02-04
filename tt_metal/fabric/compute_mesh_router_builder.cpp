@@ -43,16 +43,16 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const RouterLocation& location,
     std::shared_ptr<ConnectionRegistry> connection_registry) {
     // Get fabric context and config
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_context = tt::tt_metal::get_control_plane().get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
     const auto topology = fabric_context.get_fabric_topology();
 
     // Convert RoutingDirection to eth_chan_directions
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     auto eth_direction = control_plane.routing_direction_to_eth_direction(location.direction);
 
     // Get SOC descriptor for eth core lookup
-    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    const auto& soc_desc = tt::tt_metal::get_cluster().get_soc_desc(device->id());
     auto eth_logical_core = soc_desc.get_eth_core_for_channel(location.eth_chan, CoordSystem::LOGICAL);
 
     // Determine tensix config
@@ -155,8 +155,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc));
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
-        tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+    if (tt::tt_metal::get_cluster().arch() == tt::ARCH::BLACKHOLE &&
+        tt::tt_metal::get_rtoptions().get_enable_2_erisc_mode()) {
         // Enable updates at a fixed interval for link stability and link status updates
         constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 32;
         edm_builder->set_firmware_context_switch_interval(k_BlackholeFabricRouterContextSwitchInterval);
@@ -353,7 +353,7 @@ std::vector<std::optional<size_t>> ComputeMeshRouterBuilder::get_variant_to_rout
 }
 
 void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder) {
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_context = tt::tt_metal::get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
     TT_FATAL(is_2D_routing, "connect_to_local_tensix_builder requires 2D routing");
 
@@ -385,7 +385,7 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
     // This function does NOT iterate through targets - it connects to the single downstream_router passed in
     uint32_t num_vcs = channel_mapping_.get_num_virtual_channels();
 
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_context = tt::tt_metal::get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
@@ -609,7 +609,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         // FABRIC_2D_VC1_SERVICED: Set when router actively services VC1 traffic
         // - Intra-mesh routers service VC1 when full_mesh mode is enabled
         // - Inter-mesh routers service VC1 when pass_through mode is enabled
-        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        const auto& fabric_context = tt::tt_metal::get_control_plane().get_fabric_context();
         const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
 
         // VC1 is serviced when:
@@ -631,9 +631,9 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     }
 
     // Get SOC descriptor for eth core lookup
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::get_control_plane();
     const auto device_id = control_plane.get_physical_chip_id_from_fabric_node_id(local_node_);
-    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const auto& soc_desc = tt::tt_metal::get_cluster().get_soc_desc(device_id);
     const auto eth_chan = location_.eth_chan;
     auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
@@ -657,9 +657,8 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 
         // Determine processor
         auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
-        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
-            tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode() &&
-            num_enabled_risc_cores == 1) {
+        if (tt::tt_metal::get_cluster().arch() == tt::ARCH::BLACKHOLE &&
+            tt::tt_metal::get_rtoptions().get_enable_2_erisc_mode() && num_enabled_risc_cores == 1) {
             // Force fabric to run on erisc1 due to stack usage exceeded with MUX on erisc0
             proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
         }

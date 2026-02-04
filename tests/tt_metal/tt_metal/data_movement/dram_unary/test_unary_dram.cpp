@@ -129,7 +129,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
 
     // Write Input to DRAM
     detail::WriteToDeviceDRAMChannel(device, test_config.dram_channel, input_dram_address, packed_input);
-    MetalContext::instance().get_cluster().dram_barrier(device->id());
+    get_cluster().dram_barrier(device->id());
 
     // LAUNCH PROGRAM - Use mesh workload approach
     auto mesh_workload = distributed::MeshWorkload();

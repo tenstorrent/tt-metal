@@ -39,19 +39,17 @@
 using namespace tt::tt_metal;
 using std::string;
 
-#define NOC_MCAST_ADDR_START_X(addr) (MetalContext::instance().hal().get_noc_mcast_addr_start_x(addr))
-#define NOC_MCAST_ADDR_START_Y(addr) (MetalContext::instance().hal().get_noc_mcast_addr_start_y(addr))
-#define NOC_MCAST_ADDR_END_X(addr) (MetalContext::instance().hal().get_noc_mcast_addr_end_x(addr))
-#define NOC_MCAST_ADDR_END_Y(addr) (MetalContext::instance().hal().get_noc_mcast_addr_end_y(addr))
-#define NOC_UNICAST_ADDR_X(addr) (MetalContext::instance().hal().get_noc_ucast_addr_x(addr))
-#define NOC_UNICAST_ADDR_Y(addr) (MetalContext::instance().hal().get_noc_ucast_addr_y(addr))
-#define NOC_LOCAL_ADDR(addr) (MetalContext::instance().hal().get_noc_local_addr(addr))
-#define NOC_OVERLAY_START_ADDR (MetalContext::instance().hal().get_noc_overlay_start_addr())
-#define NOC_STREAM_REG_SPACE_SIZE (MetalContext::instance().hal().get_noc_stream_reg_space_size())
-#define STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX \
-    (MetalContext::instance().hal().get_noc_stream_remote_dest_buf_size_reg_index())
-#define STREAM_REMOTE_DEST_BUF_START_REG_INDEX \
-    (MetalContext::instance().hal().get_noc_stream_remote_dest_buf_start_reg_index())
+#define NOC_MCAST_ADDR_START_X(addr) (get_hal().get_noc_mcast_addr_start_x(addr))
+#define NOC_MCAST_ADDR_START_Y(addr) (get_hal().get_noc_mcast_addr_start_y(addr))
+#define NOC_MCAST_ADDR_END_X(addr) (get_hal().get_noc_mcast_addr_end_x(addr))
+#define NOC_MCAST_ADDR_END_Y(addr) (get_hal().get_noc_mcast_addr_end_y(addr))
+#define NOC_UNICAST_ADDR_X(addr) (get_hal().get_noc_ucast_addr_x(addr))
+#define NOC_UNICAST_ADDR_Y(addr) (get_hal().get_noc_ucast_addr_y(addr))
+#define NOC_LOCAL_ADDR(addr) (get_hal().get_noc_local_addr(addr))
+#define NOC_OVERLAY_START_ADDR (get_hal().get_noc_overlay_start_addr())
+#define NOC_STREAM_REG_SPACE_SIZE (get_hal().get_noc_stream_reg_space_size())
+#define STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX (get_hal().get_noc_stream_remote_dest_buf_size_reg_index())
+#define STREAM_REMOTE_DEST_BUF_START_REG_INDEX (get_hal().get_noc_stream_remote_dest_buf_start_reg_index())
 
 namespace {  // Helper functions
 
@@ -100,14 +98,14 @@ const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor
 
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
 tt::CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& virtual_coord) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
+    if (tt::tt_metal::get_cluster().is_worker_core(virtual_coord, device_id)) {
         return tt::CoreType::WORKER;
     }
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
+    if (tt::tt_metal::get_cluster().is_ethernet_core(virtual_coord, device_id)) {
         return tt::CoreType::ETH;
     }
 
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::get_cluster().get_soc_desc(device_id);
 
     const std::vector<tt::umd::CoreCoord>& translated_dram_cores =
         soc_desc.get_cores(tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED);
@@ -126,10 +124,10 @@ tt::CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& 
 
 // Helper function to convert noc coord -> virtual coord. TODO: Remove this once we fix code types.
 CoreCoord virtual_noc_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
+    if (tt::tt_metal::get_cluster().arch() == tt::ARCH::BLACKHOLE) {
         return coord;
     }
-    auto grid_size = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).grid_size;
+    auto grid_size = tt::tt_metal::get_cluster().get_soc_desc(device_id).grid_size;
     if (coord.x >= grid_size.x || coord.y >= grid_size.y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
@@ -137,10 +135,9 @@ CoreCoord virtual_noc_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCo
     // the system this coordinate belongs to.
     // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
     CoreCoord physical_coord = {
-        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
-        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
-        device_id, physical_coord);
+        get_hal().noc_coordinate(noc_index, grid_size.x, coord.x),
+        get_hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
+    return tt::tt_metal::get_cluster().get_virtual_coordinate_from_physical_coordinates(device_id, physical_coord);
 }
 
 // Helper function to get string rep of noc target.
@@ -303,19 +300,16 @@ public:
 WatcherDeviceReader::WatcherDeviceReader(FILE* f, ChipId device_id, const std::vector<string>& kernel_names) :
     f(f), device_id(device_id), kernel_names(kernel_names) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
-    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 &&
-        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+    if (tt::tt_metal::get_cluster().arch() == ARCH::WORMHOLE_B0 &&
+        tt::tt_metal::get_rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
-        for (const CoreCoord& eth_core :
-             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
-            CoreCoord virtual_core =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                    device_id, eth_core, CoreType::ETH);
-            read_data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        for (const CoreCoord& eth_core : tt::tt_metal::get_control_plane().get_active_ethernet_cores(device_id)) {
+            CoreCoord virtual_core = tt::tt_metal::get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                device_id, eth_core, CoreType::ETH);
+            read_data = tt::tt_metal::get_cluster().read_core(
                 device_id,
                 virtual_core,
-                MetalContext::instance().hal().get_dev_addr(
-                    HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
+                get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
                 sizeof(uint32_t));
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
@@ -324,19 +318,16 @@ WatcherDeviceReader::WatcherDeviceReader(FILE* f, ChipId device_id, const std::v
 
 WatcherDeviceReader::~WatcherDeviceReader() {
     // On close, read out eth link retraining register so that we can see if retraining has occurred.
-    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 &&
-        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+    if (tt::tt_metal::get_cluster().arch() == ARCH::WORMHOLE_B0 &&
+        tt::tt_metal::get_rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
-        for (const CoreCoord& eth_core :
-             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
-            CoreCoord virtual_core =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                    device_id, eth_core, CoreType::ETH);
-            read_data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        for (const CoreCoord& eth_core : tt::tt_metal::get_control_plane().get_active_ethernet_cores(device_id)) {
+            CoreCoord virtual_core = tt::tt_metal::get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                device_id, eth_core, CoreType::ETH);
+            read_data = tt::tt_metal::get_cluster().read_core(
                 device_id,
                 virtual_core,
-                MetalContext::instance().hal().get_dev_addr(
-                    HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
+                get_hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
                 sizeof(uint32_t));
             uint32_t num_events = read_data[0] - logical_core_to_eth_link_retraining_count[eth_core];
             if (num_events > 0) {
@@ -375,8 +366,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     DumpData dump_data;
 
     // Dump worker cores
-    CoreCoord grid_size =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    CoreCoord grid_size = tt::tt_metal::get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord coord = {x, y};
@@ -385,12 +375,10 @@ void WatcherDeviceReader::Dump(FILE* file) {
     }
 
     // Dump eth cores
-    for (const CoreCoord& eth_core :
-         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
+    for (const CoreCoord& eth_core : tt::tt_metal::get_control_plane().get_active_ethernet_cores(device_id)) {
         Core::Create(eth_core, HalProgrammableCoreType::ACTIVE_ETH, *this, dump_data).Dump();
     }
-    for (const CoreCoord& eth_core :
-         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
+    for (const CoreCoord& eth_core : tt::tt_metal::get_control_plane().get_inactive_ethernet_cores(device_id)) {
         Core::Create(eth_core, HalProgrammableCoreType::IDLE_ETH, *this, dump_data).Dump();
     }
 
@@ -398,7 +386,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
     }
 
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
     // Print stack usage report for this device/dump
     if (!dump_data.highest_stack_usage.empty()) {
         fprintf(f, "Stack usage summary:");
@@ -456,7 +444,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
         log_info(tt::LogMetal, "{}Press ENTER to unpause core(s) and continue...", paused_cores_str);
-        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_auto_unpause()) {
+        if (!tt::tt_metal::get_rtoptions().get_watcher_auto_unpause()) {
             while (std::cin.get() != '\n') {
                 ;
             }
@@ -472,10 +460,10 @@ void WatcherDeviceReader::Dump(FILE* file) {
                 dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::pause_status);
 
             // Clear only the one flag that we saved, in case another one was raised on device
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            tt::tt_metal::get_cluster().read_core(
                 pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
             pause_data.view().flags()[processor_index] = 0;
-            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            tt::tt_metal::get_cluster().write_core(
                 pause_data.data(), pause_data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
         }
     }
@@ -487,12 +475,11 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     HalProgrammableCoreType programmable_core_type,
     const WatcherDeviceReader& reader,
     DumpData& dump_data) {
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
-    const auto& hal = MetalContext::instance().hal();
+    const auto& rtoptions = tt_metal::get_rtoptions();
+    const auto& hal = get_hal();
     CoreType core_type = hal.get_core_type(hal.get_programmable_core_type_index(programmable_core_type));
-    auto virtual_coord =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            reader.device_id, logical_coord, core_type);
+    auto virtual_coord = tt::tt_metal::get_cluster().get_virtual_coordinate_from_logical_coordinates(
+        reader.device_id, logical_coord, core_type);
 
     // Print device id, core coords (logical)
     string core_type_str;
@@ -510,16 +497,14 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         virtual_coord.x,
         virtual_coord.y);
     if (rtoptions.get_watcher_phys_coords()) {
-        CoreCoord phys_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_physical_coordinate_from_logical_coordinates(
-                reader.device_id, logical_coord, core_type, true);
+        CoreCoord phys_core = tt::tt_metal::get_cluster().get_physical_coordinate_from_logical_coordinates(
+            reader.device_id, logical_coord, core_type, true);
         core_coord_str += fmt::format(" phys(x={:2},y={:2})", phys_core.x, phys_core.y);
     }
     auto core_str = fmt::format("Device {} {} {}", reader.device_id, core_type_str, core_coord_str);
     fprintf(reader.f, "%s: ", core_str.c_str());
 
-    uint64_t mailbox_addr =
-        MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
+    uint64_t mailbox_addr = get_hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
 
     auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
     uint32_t mailbox_read_size =
@@ -528,7 +513,7 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     // Watcher only reads the mailbox up to the end of the watcher struct.
     // Should be ok if we never access past that.
     std::vector<std::byte> l1_read_buf(mailbox_read_size);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+    tt::tt_metal::get_cluster().read_core(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
     return Core(
         virtual_coord,
@@ -541,7 +526,7 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
 }
 
 void WatcherDeviceReader::Core::Dump() const {
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = tt_metal::get_rtoptions();
     bool is_eth_core =
         (programmable_core_type_ == HalProgrammableCoreType::ACTIVE_ETH ||
          programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH);
@@ -571,7 +556,7 @@ void WatcherDeviceReader::Core::Dump() const {
             DumpL1Status();
         }
         if (!rtoptions.watcher_noc_sanitize_disabled()) {
-            const auto NUM_NOCS_ = tt::tt_metal::MetalContext::instance().hal().get_num_nocs();
+            const auto NUM_NOCS_ = tt::tt_metal::get_hal().get_num_nocs();
             for (uint32_t noc = 0; noc < NUM_NOCS_; noc++) {
                 DumpNocSanitizeStatus(noc);
             }
@@ -599,7 +584,7 @@ void WatcherDeviceReader::Core::Dump() const {
 
     auto kernel_config = launch_msg_.kernel_config();
     fprintf(reader_.f, "k_ids:");
-    auto num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type_);
+    auto num_processors = get_hal().get_num_risc_processors(programmable_core_type_);
     for (size_t i = 0; i < num_processors; i++) {
         const char* separator = (i > 0) ? "|" : "";
         fprintf(reader_.f, "%s%3d", separator, kernel_config.watcher_kernel_ids()[i]);
@@ -631,13 +616,10 @@ void WatcherDeviceReader::Core::Dump() const {
 void WatcherDeviceReader::Core::DumpL1Status() const {
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        reader_.device_id, virtual_coord_, HAL_MEM_L1_BASE, sizeof(uint32_t));
+    data = tt::tt_metal::get_cluster().read_core(reader_.device_id, virtual_coord_, HAL_MEM_L1_BASE, sizeof(uint32_t));
     TT_ASSERT(programmable_core_type_ == HalProgrammableCoreType::TENSIX);
-    uint32_t core_type_idx =
-        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    auto fw_launch_value =
-        MetalContext::instance().hal().get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr_value;
+    uint32_t core_type_idx = get_hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    auto fw_launch_value = get_hal().get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr_value;
     if (data[0] != fw_launch_value) {
         LogRunningKernels();
         TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", virtual_coord_.str(), data[0]);
@@ -815,7 +797,7 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
 
 void WatcherDeviceReader::Core::DumpPauseStatus() const {
     auto pause_status = mbox_data_.watcher().pause_status();
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
     // Just record which cores are paused, printing handled at the end.
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     for (uint32_t processor_index = 0; processor_index < num_processors; processor_index++) {
@@ -932,7 +914,7 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
 
 void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     auto subordinate_sync = mbox_data_.subordinate_sync();
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
     fprintf(reader_.f, "rmsg:");
     if (launch_msg_.kernel_config().mode() == dev_msgs::DISPATCH_MODE_DEV) {
         fprintf(reader_.f, "D");
@@ -985,7 +967,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
         symbols = "BNT";
     } else {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
+        if (tt::tt_metal::get_cluster().arch() == ARCH::BLACKHOLE) {
             symbols = "EE";
         } else {
             symbols = "E";
@@ -1005,13 +987,13 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
         fprintf(reader_.f, "smsg:");
         // TODO once we have triscs running on Quasar, just loop over all RISC cores
         DumpRunState(subordinate_sync.map()[0]);
-        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+        if (tt::tt_metal::get_cluster().arch() != ARCH::QUASAR) {
             DumpRunState(subordinate_sync.map()[1]);
             DumpRunState(subordinate_sync.map()[2]);
             DumpRunState(subordinate_sync.map()[3]);
         }
         fprintf(reader_.f, " ");
-    } else if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
+    } else if (tt::tt_metal::get_cluster().arch() == ARCH::BLACKHOLE) {
         fprintf(reader_.f, "smsg:");
         DumpRunState(subordinate_sync.map()[0]);
         fprintf(reader_.f, " ");
@@ -1048,7 +1030,7 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
 }
 
 void WatcherDeviceReader::Core::DumpSyncRegs() const {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
 
     if (!hal.has_stream_registers()) {
         return;
@@ -1063,13 +1045,11 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
         uint32_t base = NOC_OVERLAY_START_ADDR + ((operand_start_stream + operand) * NOC_STREAM_REG_SPACE_SIZE);
 
         uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
-        data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
+        data = tt::tt_metal::get_cluster().read_core(reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
         uint32_t rcvd = data[0];
 
         uint32_t ackd_addr = base + (STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t));
-        data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
+        data = tt::tt_metal::get_cluster().read_core(reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
         uint32_t ackd = data[0];
 
         if (rcvd != ackd) {
@@ -1080,7 +1060,7 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
 
 void WatcherDeviceReader::Core::DumpStackUsage() const {
     auto stack_usage_mbox = mbox_data_.watcher().stack_usage();
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = get_hal();
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     for (uint32_t processor_index = 0; processor_index < num_processors; processor_index++) {
         const auto& usage = stack_usage_mbox.cpu()[processor_index];
@@ -1098,7 +1078,7 @@ void WatcherDeviceReader::Core::DumpStackUsage() const {
 }
 
 void WatcherDeviceReader::Core::ValidateKernelIDs() const {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     for (size_t i = 0; i < num_processors; i++) {
         uint16_t watcher_kernel_id = launch_msg_.kernel_config().watcher_kernel_ids()[i];
@@ -1116,7 +1096,7 @@ void WatcherDeviceReader::Core::ValidateKernelIDs() const {
 }
 
 void WatcherDeviceReader::Core::LogRunningKernels() const {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     log_info(tt::LogMetal, "While running kernels:");
     for (size_t i = 0; i < num_processors; i++) {

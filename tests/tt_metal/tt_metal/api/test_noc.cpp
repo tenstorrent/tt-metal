@@ -48,10 +48,9 @@ uint32_t ReadRegFromDevice(
     const CoreCoord& logical_core,
     uint32_t address,
     uint32_t& regval) {
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->get_devices()[0]->id());
+    tt::tt_metal::get_cluster().l1_barrier(device->get_devices()[0]->id());
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_reg(
-        &regval, tt_cxy_pair(device->get_devices()[0]->id(), worker_core), address);
+    tt::tt_metal::get_cluster().read_reg(&regval, tt_cxy_pair(device->get_devices()[0]->id(), worker_core), address);
     return regval;
 }
 
@@ -67,8 +66,8 @@ void read_translation_table(
     CoreCoord logical_node,
     std::vector<unsigned int>& x_remap,
     std::vector<unsigned int>& y_remap) {
-    auto x_reg_addrs_full = tt::tt_metal::MetalContext::instance().hal().get_noc_x_id_translate_table();
-    auto y_reg_addrs_full = tt::tt_metal::MetalContext::instance().hal().get_noc_y_id_translate_table();
+    auto x_reg_addrs_full = tt::tt_metal::get_hal().get_noc_x_id_translate_table();
+    auto y_reg_addrs_full = tt::tt_metal::get_hal().get_noc_y_id_translate_table();
     std::vector<uint32_t> x_reg_addrs = {
         x_reg_addrs_full[0], x_reg_addrs_full[1], x_reg_addrs_full[2], x_reg_addrs_full[3]};
     x_remap.clear();
@@ -97,8 +96,8 @@ void read_translation_table(
 TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     std::shared_ptr<distributed::MeshDevice> mesh_device;
-    ChipId id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    ChipId id = *tt::tt_metal::get_cluster().all_chip_ids().begin();
+    const auto& dispatch_core_config = tt::tt_metal::get_rtoptions().get_dispatch_core_config();
     mesh_device = distributed::MeshDevice::create_unit_mesh(
         id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 
@@ -137,12 +136,12 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
 
 TEST(NOC, TensixVerifyNocNodeIDs) {
     std::shared_ptr<distributed::MeshDevice> mesh_device;
-    const unsigned int device_id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const unsigned int device_id = *tt::tt_metal::get_cluster().all_chip_ids().begin();
+    const auto& dispatch_core_config = tt::tt_metal::get_rtoptions().get_dispatch_core_config();
     mesh_device = distributed::MeshDevice::create_unit_mesh(
         device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 
-    uint32_t MY_NOC_ENCODING_REG = tt::tt_metal::MetalContext::instance().hal().get_noc_encoding_reg();
+    uint32_t MY_NOC_ENCODING_REG = tt::tt_metal::get_hal().get_noc_encoding_reg();
 
     // Ping all the Noc Nodes
     auto logical_grid_size = mesh_device->logical_grid_size();
@@ -155,8 +154,8 @@ TEST(NOC, TensixVerifyNocNodeIDs) {
             ASSERT_NE(
                 node_id_regval, unit_tests::basic::test_noc::init_value);  // Need to make sure we read in valid reg
             // Check it matches software translated xy
-            uint32_t node_id_mask = tt::tt_metal::MetalContext::instance().hal().get_noc_node_id_mask();
-            uint32_t node_id_bits = tt::tt_metal::MetalContext::instance().hal().get_noc_addr_node_id_bits();
+            uint32_t node_id_mask = tt::tt_metal::get_hal().get_noc_node_id_mask();
+            uint32_t node_id_bits = tt::tt_metal::get_hal().get_noc_addr_node_id_bits();
             uint32_t my_x = node_id_regval & node_id_mask;
             uint32_t my_y = (node_id_regval >> node_id_bits) & node_id_mask;
             EXPECT_EQ(my_x, worker_core.x);
@@ -171,8 +170,8 @@ TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
         GTEST_SKIP();
     }
     std::shared_ptr<distributed::MeshDevice> mesh_device;
-    ChipId id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    ChipId id = *tt::tt_metal::get_cluster().all_chip_ids().begin();
+    const auto& dispatch_core_config = tt::tt_metal::get_rtoptions().get_dispatch_core_config();
     mesh_device = distributed::MeshDevice::create_unit_mesh(
         id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 
@@ -382,8 +381,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDedicatedNoc) {
         distributed::MeshWorkload workload;
         auto* device = mesh_device->get_devices()[0];
         uint32_t first_receiver_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-        uint32_t second_receiver_addr =
-            first_receiver_addr + MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        uint32_t second_receiver_addr = first_receiver_addr + get_hal().get_alignment(HalMemType::L1);
         std::vector<uint32_t> readback(32 / sizeof(uint32_t), 0);
         tt_metal::detail::WriteToDeviceL1(device, receiver_core, first_receiver_addr, readback);
 
@@ -486,7 +484,7 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
     uint32_t value_to_write = 39;
     uint32_t num_writes_per_risc = 2;
     uint32_t num_writes_total = num_writes_per_risc * 2;
-    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t l1_alignment = get_hal().get_alignment(HalMemType::L1);
 
     for (const std::shared_ptr<distributed::MeshDevice>& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
@@ -595,8 +593,7 @@ void run_local_noc_stream_reg_inc(
             config);
     } else {
         core_type = CoreType::ETH;
-        unreserved_base_addr =
-            MetalContext::instance().hal().get_dev_addr(hal_programmable_core_type, HalL1MemAddrType::UNRESERVED);
+        unreserved_base_addr = get_hal().get_dev_addr(hal_programmable_core_type, HalL1MemAddrType::UNRESERVED);
         tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
         if (hal_programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             config.eth_mode = Eth::SENDER;

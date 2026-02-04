@@ -147,8 +147,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto* device : mesh_device_->get_devices()) {
-            MetalContext::instance().get_cluster().write_core(
-                device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
+            get_cluster().write_core(device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();
         for (std::size_t logical_x = 0; logical_x < output_buf->device()->num_cols(); logical_x++) {

@@ -43,7 +43,7 @@ static void eth_direct_send_multi_txq_rxq(
     tt_metal::Program sender_program = tt_metal::Program();
 
     constexpr size_t PAYLOAD_SIZE = 32;
-    const size_t unreserved_l1_start = tt::tt_metal::MetalContext::instance().hal().get_dev_size(
+    const size_t unreserved_l1_start = tt::tt_metal::get_hal().get_dev_size(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto ethernet_config = tt_metal::EthernetConfig{.compile_args = {data_txq_id, ack_txq_id, PAYLOAD_SIZE}};
     eth_test_common::set_arch_specific_eth_config(ethernet_config);

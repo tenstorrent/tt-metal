@@ -180,7 +180,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllToA
     // Generate random input data for each master core
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
         detail::WriteToDeviceL1(device, mst_logical_core, mst_l1_base_address, packed_input);
-        MetalContext::instance().get_cluster().l1_barrier(device->id());
+        get_cluster().l1_barrier(device->id());
     }
 
     // LAUNCH PROGRAM - Use mesh workload approach

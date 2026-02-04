@@ -133,7 +133,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     for (size_t i = 0; i < total_subordinate_cores; i++) {
         detail::WriteToDeviceL1(device, sub_core_list[i], l1_base_address, packed_input);
     }
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    get_cluster().l1_barrier(device->id());
 
     // LAUNCH PROGRAM - Use mesh workload approach
     auto mesh_workload = distributed::MeshWorkload();

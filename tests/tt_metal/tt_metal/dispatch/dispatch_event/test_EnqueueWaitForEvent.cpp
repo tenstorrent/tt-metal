@@ -264,7 +264,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 // ordered via events. Do many loops, occasionally increasing size of buffers (page size, num pages).
 // Ensure read back data is correct, data is different for each write.
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQs) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
+    if (tt::tt_metal::get_cluster().arch() == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
     }
 
@@ -343,7 +343,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 // Read to Bufffer via CQ1. Ping-Pongs between Writes and Reads to same buffer. Use events to synchronze read after
 // write and write after read before checking correct data read at the end after all cmds finished on device.
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsPingPong) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
+    if (tt::tt_metal::get_cluster().arch() == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
     }
 

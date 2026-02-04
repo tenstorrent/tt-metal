@@ -668,7 +668,7 @@ int main(int argc, char** argv) {
         TT_FATAL(cb_num_blocks >= num_blocks, "Global CB must contain more (or equal) blocks than a single layer");
 
         if (use_device_profiler) {
-            bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
+            bool device_profiler = tt::tt_metal::get_rtoptions().get_profiler_enabled();
             TT_FATAL(
                 device_profiler,
                 "Before running the program, do one of the following in a shell: "

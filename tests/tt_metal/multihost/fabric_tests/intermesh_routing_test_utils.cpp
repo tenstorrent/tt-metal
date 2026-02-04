@@ -70,7 +70,7 @@ std::shared_ptr<tt_metal::Program> create_receiver_program(
 
 void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distributed::multihost::Rank recv_host_rank) {
     // The following code runs on the sender host
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     constexpr uint32_t num_packets = 100;
@@ -120,7 +120,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
 
     CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
     auto receiver_noc_encoding =
-        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+        tt::tt_metal::get_hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // test parameters
     auto worker_mem_map = generate_worker_mem_map(sender_device);
@@ -194,7 +194,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
 
 void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed::multihost::Rank sender_host_rank) {
     // The following code runs on the receiver host
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     constexpr uint32_t num_packets = 100;
     const auto& fabric_context = control_plane.get_fabric_context();
@@ -288,7 +288,7 @@ void run_mcast_sender_step(
     const std::vector<FabricNodeId>& mcast_group_node_ids,
     uint32_t recv_rank) {
     // The following code runs on the sender host
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     constexpr uint32_t num_packets = 100;
@@ -323,7 +323,7 @@ void run_mcast_sender_step(
 
     CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
     auto receiver_noc_encoding =
-        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+        tt::tt_metal::get_hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     auto worker_mem_map = generate_worker_mem_map(sender_device);
     uint32_t target_address = worker_mem_map.target_address;
@@ -405,7 +405,7 @@ void run_mcast_recv_step(
     const std::vector<FabricNodeId>& mcast_group_node_ids,
     uint32_t sender_rank) {
     // The following code runs on the receiver host
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::get_control_plane();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     constexpr uint32_t num_packets = 100;
 
@@ -532,7 +532,7 @@ void InterMeshLineMcast(
 
 std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
     const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords, uint32_t local_mesh_id) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = tt::tt_metal::get_cluster();
     std::map<FabricNodeId, ChipId> physical_chip_ids_mapping;
     for (std::uint32_t mesh_id = 0; mesh_id < mesh_graph_eth_coords.size(); mesh_id++) {
         if (mesh_id == local_mesh_id) {

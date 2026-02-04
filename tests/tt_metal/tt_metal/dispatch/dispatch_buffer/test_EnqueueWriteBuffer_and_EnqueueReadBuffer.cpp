@@ -292,16 +292,14 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     const TestBufferConfig& config) {
     auto* device = mesh_device->get_devices()[0];
     // Clear out command queue
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device->id());
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device->id());
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     uint32_t cq_start =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     auto device_coord = distributed::MeshCoordinate(0, 0);
     std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
+    tt::tt_metal::get_cluster().write_sysmem(
         cq_zeros.data(),
         (cq_size - cq_start),
         get_absolute_cq_offset(channel, 0, cq_size) + cq_start,
@@ -347,9 +345,9 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             } else {
                 WriteToUnitMeshBuffer(mesh_device, config, src, bufa, config.sharding_args);
                 if (config.buftype == BufferType::DRAM) {
-                    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
+                    tt::tt_metal::get_cluster().dram_barrier(device->id());
                 } else {
-                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+                    tt::tt_metal::get_cluster().l1_barrier(device->id());
                 }
             }
 
@@ -491,9 +489,9 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 } else {
                     local_test_functions::WriteToUnitMeshBuffer(mesh_device, test_config, src, buf, std::nullopt);
                     if (buftype == BufferType::DRAM) {
-                        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
+                        tt::tt_metal::get_cluster().dram_barrier(device->id());
                     } else {
-                        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+                        tt::tt_metal::get_cluster().l1_barrier(device->id());
                     }
                 }
 
@@ -1484,9 +1482,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestIssueMultipleReadWriteComma
     auto mesh_device = this->device_;
     auto* device = mesh_device->get_devices()[0];
     uint32_t page_size = 2048;
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
-    uint32_t command_queue_size =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(device->id(), channel);
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(device->id());
+    uint32_t command_queue_size = tt::tt_metal::get_cluster().get_host_channel_size(device->id(), channel);
     uint32_t num_pages = command_queue_size / page_size;
 
     TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
@@ -2167,7 +2164,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
         // This test hangs on Blackhole A0 when using static VCs through static TLBs and there are large number of
         // reads/writes issued
         //  workaround is to use dynamic VC (implemented in UMD)
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        if (tt::tt_metal::get_cluster().is_galaxy_cluster()) {
             test_params = {
                 {"cores",
                  {{1, 1},

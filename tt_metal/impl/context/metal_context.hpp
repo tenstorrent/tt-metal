@@ -52,11 +52,14 @@ public:
     MetalContext(MetalContext&& other) noexcept = delete;
     static MetalContext& instance();
 
-    Cluster& get_cluster();
-    llrt::RunTimeOptions& rtoptions();
-    const Cluster& get_cluster() const;
-    const llrt::RunTimeOptions& rtoptions() const;
-    const Hal& hal() const;
+    [[deprecated("Use tt::tt_metal::get_cluster() instead")]] Cluster& get_cluster();
+    [[deprecated("Use tt::tt_metal::get_cluster() instead")]] const Cluster& get_cluster() const;
+
+    [[deprecated("Use tt::tt_metal::get_rtoptions() instead")]] llrt::RunTimeOptions& rtoptions();
+    [[deprecated("Use tt::tt_metal::get_rtoptions() instead")]] const llrt::RunTimeOptions& rtoptions() const;
+
+    [[deprecated("Use tt::tt_metal::get_hal() instead")]] const Hal& hal() const;
+
     dispatch_core_manager& get_dispatch_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
@@ -98,7 +101,7 @@ public:
 
     // Control plane accessors
     void initialize_control_plane();
-    tt::tt_fabric::ControlPlane& get_control_plane();
+    [[deprecated("Use tt::tt_metal::get_control_plane() instead")]] tt::tt_fabric::ControlPlane& get_control_plane();
     void set_custom_fabric_topology(
         const std::string& mesh_graph_desc_file,
         const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
@@ -261,5 +264,19 @@ private:
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
     tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
 };
+
+// Returns the cluster instance.
+inline tt::Cluster& get_cluster() { return tt::tt_metal::MetalContext::instance().get_cluster(); }
+
+// Returns the HAL for querying hardware properties.
+inline const tt::tt_metal::Hal& get_hal() { return tt::tt_metal::MetalContext::instance().hal(); }
+
+// Returns the parsed runtime options.
+inline llrt::RunTimeOptions& get_rtoptions() { return tt::tt_metal::MetalContext::instance().rtoptions(); }
+
+// Returns the Fabric control plane.
+inline tt::tt_fabric::ControlPlane& get_control_plane() {
+    return tt::tt_metal::MetalContext::instance().get_control_plane();
+}
 
 }  // namespace tt::tt_metal

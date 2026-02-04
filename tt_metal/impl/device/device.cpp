@@ -60,11 +60,11 @@
 namespace tt::tt_metal {
 
 uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
-    return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
+    return get_hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
 }
 
 uint64_t IDevice::get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
-    return MetalContext::instance().hal().get_dev_size(this->get_programmable_core_type(virtual_core), addr_type);
+    return get_hal().get_dev_size(this->get_programmable_core_type(virtual_core), addr_type);
 }
 
 void IDevice::set_program_cache_misses_allowed(bool allowed) {
@@ -90,8 +90,7 @@ Device::Device(
 }
 
 std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
-    return tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(
-        this->id_, skip_reserved_tunnel_cores);
+    return tt::tt_metal::get_control_plane().get_active_ethernet_cores(this->id_, skip_reserved_tunnel_cores);
 }
 
 bool Device::is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores) const {
@@ -100,12 +99,11 @@ bool Device::is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_
 }
 
 std::unordered_set<CoreCoord> Device::get_inactive_ethernet_cores() const {
-    return tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
+    return tt::tt_metal::get_control_plane().get_inactive_ethernet_cores(this->id_);
 }
 
 bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
-    auto inactive_ethernet_cores =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
+    auto inactive_ethernet_cores = tt::tt_metal::get_control_plane().get_inactive_ethernet_cores(this->id_);
     return inactive_ethernet_cores.contains(logical_core);
 }
 
@@ -114,16 +112,15 @@ uint32_t Device::num_virtual_eth_cores(SubDeviceId sub_device_id) {
 }
 
 std::tuple<ChipId, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
-        std::make_tuple(this->id_, eth_core));
+    return tt::tt_metal::get_cluster().get_connected_ethernet_core(std::make_tuple(this->id_, eth_core));
 }
 
 std::vector<CoreCoord> Device::get_ethernet_sockets(ChipId connected_chip_id) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_sockets(this->id_, connected_chip_id);
+    return tt::tt_metal::get_cluster().get_ethernet_sockets(this->id_, connected_chip_id);
 }
 
 bool Device::is_mmio_capable() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->id_) == this->id_;
+    return tt::tt_metal::get_cluster().get_associated_mmio_device(this->id_) == this->id_;
 }
 
 CoreRangeSet Device::worker_cores(HalProgrammableCoreType /*core_type*/, SubDeviceId /*sub_device_id*/) const {
@@ -142,7 +139,7 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     size_t worker_l1_unreserved_start,
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::get_cluster().get_soc_desc(this->id_);
     auto config = L1BankingAllocator::generate_config(
         this->id(),
         this->num_hw_cqs(),
@@ -164,7 +161,7 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
 // cores
 void Device::configure_command_queue_programs() {
     ChipId device_id = this->id();
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(device_id);
 
     std::vector<uint32_t> zero = {0x0};  // Reset state in case L1 Clear is disabled.
     std::vector<uint32_t> pointers;
@@ -176,10 +173,8 @@ void Device::configure_command_queue_programs() {
 
     // Reset host-side command queue pointers for all channels controlled by this mmio device
     if (this->is_mmio_capable()) {
-        for (ChipId serviced_device_id :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(device_id)) {
-            uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-                serviced_device_id);
+        for (ChipId serviced_device_id : tt::tt_metal::get_cluster().get_devices_controlled_by_mmio_device(device_id)) {
+            uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(serviced_device_id);
             uint32_t host_issue_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
                 CommandQueueHostAddrType::ISSUE_Q_RD);
             uint32_t host_issue_q_wr_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
@@ -208,7 +203,7 @@ void Device::configure_command_queue_programs() {
                      get_absolute_cq_offset(channel, cq_id, cq_size)) >>
                     4;
 
-                tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
+                tt::tt_metal::get_cluster().write_sysmem(
                     pointers.data(),
                     pointers.size() * sizeof(uint32_t),
                     get_absolute_cq_offset(channel, cq_id, cq_size),
@@ -224,7 +219,7 @@ void Device::configure_command_queue_programs() {
     // Run the cq program
     command_queue_program.impl().finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
+    tt::tt_metal::get_cluster().l1_barrier(this->id());
 }
 
 void Device::init_command_queue_host() {
@@ -232,7 +227,7 @@ void Device::init_command_queue_host() {
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
 
     // For mock devices, skip HWCommandQueue creation (they don't need real command queues)
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
 
@@ -251,32 +246,28 @@ void Device::init_command_queue_device() {
     // Write 0 to all workers launch message read pointer. Need to do this since dispatch cores are written new on each
     // Device init. TODO: remove this once dispatch init moves to one-shot.
     auto reset_launch_message_rd_ptr = [&](const CoreCoord& logical_core, const CoreType& core_type) {
-        CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            id_, logical_core, core_type);
+        CoreCoord virtual_core =
+            get_cluster().get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
-        uint64_t launch_msg_buffer_read_ptr_addr = MetalContext::instance().hal().get_dev_addr(
-            programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+        uint64_t launch_msg_buffer_read_ptr_addr =
+            get_hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
         uint32_t zero = 0;
-        MetalContext::instance().get_cluster().write_core(
+        get_cluster().write_core(
             &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), launch_msg_buffer_read_ptr_addr);
     };
     auto reset_go_message_index = [&](const CoreCoord& logical_core, const CoreType& core_type) {
-        CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            id_, logical_core, core_type);
+        CoreCoord virtual_core =
+            get_cluster().get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
-        uint32_t go_message_addr =
-            MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
+        uint32_t go_message_addr = get_hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
         uint32_t zero = 0;
-        MetalContext::instance().get_cluster().write_core(
-            &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(id_);
-        uint32_t go_message_index_addr =
-            MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
-        MetalContext::instance().get_cluster().write_core(
-            &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
+        get_cluster().write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
+        tt::tt_metal::get_cluster().l1_barrier(id_);
+        uint32_t go_message_index_addr = get_hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+        get_cluster().write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+    if (tt::tt_metal::get_rtoptions().get_watcher_enabled()) {
         watcher_lock = MetalContext::instance().watcher_server()->get_lock();
     }
     for (uint32_t y = 0; y < logical_grid_size().y; y++) {
@@ -303,7 +294,7 @@ void Device::init_command_queue_device() {
     }
 
     std::vector<std::vector<CoreCoord>> logical_cores = command_queue_program.impl().logical_cores();
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_dispatch_cores = logical_cores[index];
         CoreType core_type = hal.get_core_type(index);
@@ -367,9 +358,9 @@ void Device::configure_fabric() {
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox have all landed
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
+    tt::tt_metal::get_cluster().l1_barrier(this->id());
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->impl().logical_cores();
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
@@ -413,9 +404,9 @@ bool Device::initialize(
         num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS,
         "num_hw_cqs can be between 1 and {}",
         dispatch_core_manager::MAX_NUM_HW_CQS);
-    using_fast_dispatch_ = MetalContext::instance().rtoptions().get_fast_dispatch();
+    using_fast_dispatch_ = tt::tt_metal::get_rtoptions().get_fast_dispatch();
     num_hw_cqs_ = num_hw_cqs;
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::get_hal();
     if (worker_l1_size == 0) {
         worker_l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     }
@@ -476,30 +467,20 @@ Device::~Device() {
     }
 }
 
-tt::ARCH Device::arch() const { return tt::tt_metal::MetalContext::instance().get_cluster().arch(); }
+tt::ARCH Device::arch() const { return tt::tt_metal::get_cluster().arch(); }
 
-int Device::num_dram_channels() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_num_dram_views();
-}
+int Device::num_dram_channels() const { return tt::tt_metal::get_cluster().get_soc_desc(id_).get_num_dram_views(); }
 
-uint32_t Device::l1_size_per_core() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).worker_l1_size;
-}
-uint32_t Device::dram_size_per_channel() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).dram_view_size;
-}
+uint32_t Device::l1_size_per_core() const { return tt::tt_metal::get_cluster().get_soc_desc(id_).worker_l1_size; }
+uint32_t Device::dram_size_per_channel() const { return tt::tt_metal::get_cluster().get_soc_desc(id_).dram_view_size; }
 
-CoreCoord Device::grid_size() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).grid_size;
-}
+CoreCoord Device::grid_size() const { return tt::tt_metal::get_cluster().get_soc_desc(id_).grid_size; }
 
 CoreCoord Device::logical_grid_size() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_grid_size(CoreType::TENSIX);
+    return tt::tt_metal::get_cluster().get_soc_desc(id_).get_grid_size(CoreType::TENSIX);
 }
 
-CoreCoord Device::dram_grid_size() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_dram_grid_size();
-}
+CoreCoord Device::dram_grid_size() const { return tt::tt_metal::get_cluster().get_soc_desc(id_).get_dram_grid_size(); }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
@@ -516,13 +497,13 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
     coord = this->virtual_core_from_physical_core(coord);
     // Derive virtual coord in noc_index space.
     CoreCoord virtual_coord = {
-        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.x, coord.x),
-        MetalContext::instance().hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
+        get_hal().noc_coordinate(noc_index, grid_size.x, coord.x),
+        get_hal().noc_coordinate(noc_index, grid_size.y, coord.y)};
     return virtual_coord;
 }
 
 CoreCoord Device::physical_worker_core_from_logical_core(const CoreCoord& logical_core) const {
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::get_cluster().get_soc_desc(this->id_);
     return soc_desc.get_physical_tensix_core_from_logical(logical_core);
 }
 
@@ -544,13 +525,12 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
 }
 
 CoreCoord Device::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+    return tt::tt_metal::get_cluster().get_virtual_coordinate_from_logical_coordinates(
         this->id_, logical_coord, core_type);
 }
 
 CoreCoord Device::virtual_core_from_physical_core(const CoreCoord& physical_coord) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
-        this->id_, physical_coord);
+    return tt::tt_metal::get_cluster().get_virtual_coordinate_from_physical_coordinates(this->id_, physical_coord);
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord& logical_core) const {
@@ -562,13 +542,12 @@ CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord& logical_core)
 }
 
 CoreCoord Device::logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
-        this->id(), ethernet_core);
+    return tt::tt_metal::get_cluster().get_logical_ethernet_core_from_virtual(this->id(), ethernet_core);
 }
 
 uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
     auto virtual_noc_coord = this->virtual_noc0_coordinate(noc_index, core);
-    return tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_noc_coord.x, virtual_noc_coord.y);
+    return tt::tt_metal::get_hal().noc_xy_encoding(virtual_noc_coord.x, virtual_noc_coord.y);
 }
 
 uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
@@ -577,10 +556,10 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
-        return tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+        return tt::tt_metal::get_hal().noc_multicast_encoding(
             virtual_noc_start.x, virtual_noc_start.y, virtual_noc_end.x, virtual_noc_end.y);
     }
-    return tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+    return tt::tt_metal::get_hal().noc_multicast_encoding(
         virtual_noc_end.x, virtual_noc_end.y, virtual_noc_start.x, virtual_noc_start.y);
 }
 
@@ -610,18 +589,16 @@ CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel, NOC noc) co
 }
 
 CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_logical_core_for_dram_view(
-        dram_channel);
+    return tt::tt_metal::get_cluster().get_soc_desc(id_).get_logical_core_for_dram_view(dram_channel);
 }
 
 uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_dram_channel_from_logical_core(
-        logical_core);
+    return tt::tt_metal::get_cluster().get_soc_desc(id_).get_dram_channel_from_logical_core(logical_core);
 }
 
 uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
-    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
-    uint32_t num_nocs = MetalContext::instance().hal().get_num_nocs();
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::get_cluster().get_soc_desc(this->id_);
+    uint32_t num_nocs = get_hal().get_num_nocs();
     for (uint32_t noc = 0; noc < num_nocs; noc++) {
         for (uint32_t channel = 0; channel < this->num_dram_channels(); ++channel) {
             if (soc_desc.get_preferred_worker_core_for_dram_view(channel, noc) == virtual_core) {
@@ -771,9 +748,9 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         // Get physical coordinates of DRAM Controller NOC end-points
         uint32_t num_dram_banks = this->num_dram_channels();
 
-        const auto& hal = MetalContext::instance().hal();
+        const auto& hal = get_hal();
         bool noc_translation_enabled = true;
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        if (tt::tt_metal::get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
             noc_translation_enabled = tt::tt_metal::MetalContext::instance()
                                           .get_cluster()
                                           .get_cluster_desc()
@@ -782,8 +759,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         }
         bool dram_is_virtualized =
             noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
-        const metal_SocDescriptor& soc_d =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
+        const metal_SocDescriptor& soc_d = tt::tt_metal::get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;
         for (int i = 0; i < num_dram_banks; ++i) {
             auto dram_core = this->dram_core_from_dram_channel(i, noc);
@@ -816,8 +792,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         auto physical_worker_cores = get_optimal_dram_to_physical_worker_assignment(
             this->arch(), dram_phy_coords, full_grid_size_x, full_grid_size_y, worker_phy_x, worker_phy_y);
 
-        const metal_SocDescriptor& soc_desc =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+        const metal_SocDescriptor& soc_desc = tt::tt_metal::get_cluster().get_soc_desc(this->id_);
         // Convert to physical worker coordinates to logical. This gets returned to the user.
         for (auto physical_worker_core : physical_worker_cores) {
             tt::umd::CoreCoord logical_coord_translated =
@@ -835,7 +810,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
 }
 
 HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_core) const {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_)) {
+    if (!tt::tt_metal::get_cluster().is_ethernet_core(virtual_core, this->id_)) {
         return HalProgrammableCoreType::TENSIX;
     }
 
@@ -849,8 +824,8 @@ HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_cor
 }
 
 HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_) &&
-        !tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_core, this->id_)) {
+    if (!tt::tt_metal::get_cluster().is_ethernet_core(virtual_core, this->id_) &&
+        !tt::tt_metal::get_cluster().is_worker_core(virtual_core, this->id_)) {
         return HalMemType::DRAM;
     }
     return HalMemType::L1;

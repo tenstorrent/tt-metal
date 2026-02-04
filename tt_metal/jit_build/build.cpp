@@ -91,7 +91,7 @@ void JitBuildEnv::init(
     uint32_t max_cbs,
     const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = tt_metal::get_rtoptions();
     this->root_ = rtoptions.get_root_dir();
     this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
 
@@ -250,7 +250,7 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_GATHERING ";
     }
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
+    if (tt::tt_metal::get_cluster().is_base_routing_fw_enabled()) {
         this->defines_ += "-DROUTING_FW_ENABLED ";
     }
 
@@ -332,7 +332,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
 
     HalJitBuildQueryInterface::Params params{
         this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_};
-    const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
+    const auto& jit_build_query = tt_metal::get_hal().get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
     // Includes
@@ -409,7 +409,7 @@ void JitBuildState::compile_one(
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
+    if (tt::tt_metal::get_rtoptions().get_build_map_enabled()) {
         cmd += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
 
@@ -465,11 +465,11 @@ void JitBuildState::compile_one(
     cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, src, temp_d_path.string());
     cmd += defines;
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
+    if (tt::tt_metal::get_rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
     }
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() && settings) {
+    if (tt::tt_metal::get_rtoptions().get_watcher_enabled() && settings) {
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
@@ -486,7 +486,7 @@ void JitBuildState::compile_one(
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
-    return MetalContext::instance().rtoptions().get_force_jit_compile() || !fs::exists(out_dir + obj) ||
+    return get_rtoptions().get_force_jit_compile() || !fs::exists(out_dir + obj) ||
            !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
@@ -508,7 +508,7 @@ size_t JitBuildState::compile(
 
     sync_build_steps(events);
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+    if (tt::tt_metal::get_rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
     return events.size();
@@ -522,7 +522,7 @@ bool JitBuildState::need_link(const string& out_dir) const {
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
-    lflags += tt_metal::MetalContext::instance().hal().get_jit_build_query().linker_flags(
+    lflags += tt_metal::get_hal().get_jit_build_query().linker_flags(
         {.is_fw = this->is_fw_,
          .core_type = this->core_type_,
          .processor_class = this->processor_class_,
@@ -532,7 +532,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
         // Emit relocations, so we can relocate the resulting binary
         lflags += "-Wl,--emit-relocs ";
     }
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
+    if (tt::tt_metal::get_rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
         lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
@@ -559,7 +559,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     std::string elf_name = out_dir + this->target_name_ + ".elf";
     jit_build::utils::FileRenamer elf_file(elf_name);
     cmd += "-o " + elf_file.path();
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
+    if (tt::tt_metal::get_rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
     jit_build::utils::FileRenamer log_file(elf_name + ".log");
@@ -598,7 +598,7 @@ void JitBuildState::weaken(const string& out_dir) const {
 }
 
 std::string JitBuildState::weakened_firmware_name() const {
-    const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
+    const auto& jit_build_query = tt_metal::get_hal().get_jit_build_query();
     const std::string weakened_firmware_target_name = jit_build_query.weakened_firmware_target_name(
         {this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_});
     std::string_view name = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
@@ -680,7 +680,7 @@ void JitBuildState::link_to_processor(
         TT_ASSERT(fs::exists(obj_path));
         link_objs += obj_path + " ";
     }
-    for (const auto& obj : tt_metal::MetalContext::instance().hal().get_jit_build_query().link_objs(
+    for (const auto& obj : tt_metal::get_hal().get_jit_build_query().link_objs(
              {.is_fw = processor_build_state.is_fw_,
               .core_type = processor_build_state.core_type_,
               .processor_class = processor_build_state.processor_class_,

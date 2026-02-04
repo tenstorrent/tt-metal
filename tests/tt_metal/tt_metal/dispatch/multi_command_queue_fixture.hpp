@@ -29,7 +29,7 @@ protected:
             GTEST_SKIP();
         }
 
-        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
+        this->num_cqs_ = tt::tt_metal::get_rtoptions().get_num_hw_cqs();
         if (this->num_cqs_ != 2) {
             log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
@@ -40,10 +40,9 @@ protected:
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         // Check to deal with TG systems
-        const ChipId device_id =
-            (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster())
-                ? *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin()
-                : *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        const ChipId device_id = (enable_remote_chip or tt::tt_metal::get_cluster().is_galaxy_cluster())
+                                     ? *tt::tt_metal::get_cluster().user_exposed_chip_ids().begin()
+                                     : *tt::tt_metal::get_cluster().mmio_chip_ids().begin();
         this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE);
     }
 
@@ -73,8 +72,7 @@ protected:
     }
 
     void create_device(const ChipId device_id, const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::get_rtoptions().get_dispatch_core_config();
         std::vector<ChipId> chip_id = {device_id};
 
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
@@ -102,7 +100,7 @@ protected:
             GTEST_SKIP();
         }
 
-        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
+        this->num_cqs_ = tt::tt_metal::get_rtoptions().get_num_hw_cqs();
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         init_max_cbs();
@@ -123,23 +121,21 @@ protected:
             GTEST_SKIP();
         }
 
-        auto num_cqs = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
+        auto num_cqs = tt::tt_metal::get_rtoptions().get_num_hw_cqs();
         if (num_cqs != 2) {
             log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
 
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        const auto& dispatch_core_config = tt::tt_metal::get_rtoptions().get_dispatch_core_config();
+        const ChipId mmio_device_id = *tt::tt_metal::get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         // Check to deal with TG systems
-        if (enable_remote_chip or
-            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB or
-            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-            for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+        if (enable_remote_chip or tt::tt_metal::get_cluster().get_board_type(0) == BoardType::UBB or
+            tt::tt_metal::get_cluster().is_galaxy_cluster()) {
+            for (ChipId id : tt::tt_metal::get_cluster().user_exposed_chip_ids()) {
                 chip_ids.push_back(id);
             }
         } else {

@@ -26,12 +26,12 @@ uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_siz
 template <bool addr_16B>
 uint32_t get_cq_issue_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
     uint32_t recv;
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(chip_id);
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t channel_offset = (channel >> 2) * tt::tt_metal::DispatchSettings::MAX_DEV_CHANNEL_SIZE;
     uint32_t issue_q_rd_ptr =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+    tt::tt_metal::get_cluster().read_sysmem(
         &recv,
         sizeof(uint32_t),
         issue_q_rd_ptr + channel_offset + get_relative_cq_offset(cq_id, cq_size),
@@ -49,11 +49,11 @@ template uint32_t get_cq_issue_rd_ptr<false>(ChipId chip_id, uint8_t cq_id, uint
 template <bool addr_16B>
 uint32_t get_cq_issue_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
     uint32_t recv;
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(chip_id);
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t issue_q_wr_ptr =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+    tt::tt_metal::get_cluster().read_sysmem(
         &recv, sizeof(uint32_t), issue_q_wr_ptr + get_relative_cq_offset(cq_id, cq_size), mmio_device_id, channel);
     if constexpr (!addr_16B) {
         return recv << 4;
@@ -67,12 +67,12 @@ template uint32_t get_cq_issue_wr_ptr<false>(ChipId chip_id, uint8_t cq_id, uint
 template <bool addr_16B>
 uint32_t get_cq_completion_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
     uint32_t recv;
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(chip_id);
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t channel_offset = (channel >> 2) * tt::tt_metal::DispatchSettings::MAX_DEV_CHANNEL_SIZE;
     uint32_t completion_q_wr_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
         CommandQueueHostAddrType::COMPLETION_Q_WR);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+    tt::tt_metal::get_cluster().read_sysmem(
         &recv,
         sizeof(uint32_t),
         completion_q_wr_ptr + channel_offset + get_relative_cq_offset(cq_id, cq_size),
@@ -90,11 +90,11 @@ template uint32_t get_cq_completion_wr_ptr<false>(ChipId chip_id, uint8_t cq_id,
 template <bool addr_16B>
 inline uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
     uint32_t recv;
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+    ChipId mmio_device_id = tt::tt_metal::get_cluster().get_associated_mmio_device(chip_id);
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
         CommandQueueHostAddrType::COMPLETION_Q_RD);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+    tt::tt_metal::get_cluster().read_sysmem(
         &recv, sizeof(uint32_t), completion_q_rd_ptr + get_relative_cq_offset(cq_id, cq_size), mmio_device_id, channel);
     if constexpr (!addr_16B) {
         return recv << 4;
@@ -111,7 +111,7 @@ uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id) {
     // Get the dispatcher core for this command queue
     // For remote chips: read from DISPATCH_D (on the remote chip where work actually happens)
     // For local chips: read from DISPATCH_HD (combined dispatcher on local chip)
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+    uint16_t channel = tt::tt_metal::get_cluster().get_assigned_channel_for_device(chip_id);
     auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
 
     const tt_cxy_pair& dispatcher_core_logical =
@@ -129,10 +129,9 @@ uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id) {
     // read_core expects TRANSLATED (virtual) coordinates
     // dispatcher_core_manager stores logical coordinates, so convert LOGICAL -> TRANSLATED (virtual)
     tt_cxy_pair dispatcher_core_virtual =
-        MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            dispatcher_core_logical, dispatch_core_type);
+        get_cluster().get_virtual_coordinate_from_logical_coordinates(dispatcher_core_logical, dispatch_core_type);
 
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+    tt::tt_metal::get_cluster().read_core(
         &progress, sizeof(uint32_t), dispatcher_core_virtual, dev_dispatch_progress_ptr);
 
     return progress;
