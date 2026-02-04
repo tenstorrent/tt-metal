@@ -116,7 +116,7 @@ def golden_rotate(
         angle=float(angle),
         interpolation=torch_interp,
         center=center,
-        fill=[fill] if fill != 0.0 else None,
+        fill=fill,
     )
 
     # Convert back to NHWC and original dtype
