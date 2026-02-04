@@ -44,7 +44,7 @@ struct Matmul {
     struct WriterCTArgs {};
 
     // Compute CTArgs (TRISC): out_w (output width in tiles)
-    template <uint32_t out_w_, bool transpose_>
+    template <uint32_t out_w_, bool transpose_ = false>
     struct ComputeCTArgs {
         static constexpr uint32_t out_w = out_w_;
         static constexpr bool transpose = transpose_;

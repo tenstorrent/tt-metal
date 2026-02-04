@@ -168,14 +168,13 @@ def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose):
 
     # Run matmul operation
     logger.info("Running matmul operation...")
-    for i in range(100):
-        ttnn_result = MatmulSingleCore.op(
-            ttnn_a,
-            ttnn_b,
-            ttnn_output,
-            fp32_dest_acc_en=False,
-            transpose=transpose,
-        )
+    ttnn_result = MatmulSingleCore.op(
+        ttnn_a,
+        ttnn_b,
+        ttnn_output,
+        fp32_dest_acc_en=False,
+        transpose=transpose,
+    )
 
     # Convert back to torch for comparison
     output_torch = ttnn.to_torch(ttnn_result)
