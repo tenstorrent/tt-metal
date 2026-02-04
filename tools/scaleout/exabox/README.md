@@ -134,8 +134,8 @@ The current BH Exabox has two different cluster topologies (both with 4 Galaxies
 The mesh shape affects how workloads are distributed across chips. Choose the script matching your cluster topology:
 
 ```bash
-./tools/scaleout/exabox/run_fabric_tests_8x16.sh <hosts> <docker-image>
-./tools/scaleout/exabox/run_fabric_tests_4x32.sh <hosts> <docker-image>
+./tools/scaleout/exabox/run_fabric_tests.sh --hosts <hosts> --image <docker-image> --config 4x32
+./tools/scaleout/exabox/run_fabric_tests.sh --hosts <hosts> --image <docker-image> --config 8x16
 ```
 
 **Note:** These topology-specific scripts will eventually be replaced with a unified cluster-level descriptor approach.
@@ -213,8 +213,8 @@ A missing cable or bad port/connection will show up as a **consistently missing 
 | `recover_*.sh` | Quick reset + 5 traffic iterations |
 | `run_validation.sh` | Full 50-loop validation |
 | `run_dispatch_tests.sh` | Chip stability stress tests |
-| `run_fabric_tests_*.sh` | Fabric connectivity tests |
-| `analyze_validation_results.py` | Parse validation logs (summary, recommendations, plots) |
+| `run_fabric_tests.sh` | Fabric connectivity tests |
+| `analyze_validation_results.py` | Parse validation logs |
 | `mpi-docker` | MPI+Docker wrapper (`--help` for usage) |
 
 ## Config Files
