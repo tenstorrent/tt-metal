@@ -29,7 +29,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
 
         // Unpack SrcB (in0/inA)
         TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
-        TTI_UNPACR_COMMON(SrcB, 0b00110001, 1);
+        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1);
 
         // Signal context done
         t6_semaphore_get(semaphore::UNPACK_SYNC);
@@ -44,7 +44,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim) {
 
             // Unpack SrcB (in0/inA)
             TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
-            TTI_UNPACR_COMMON(SrcB, 0b00110001, 1);
+            TTI_UNPACR_COMMON(SrcB, 0b00110100, 1);
 
             // Signal context done
             t6_semaphore_get(semaphore::UNPACK_SYNC);
@@ -170,20 +170,17 @@ inline void _llk_unpack_AB_custom_mm_(
         }
     };
 
+    wait_for_next_context(1);
+    reset_config_context();
+
+    cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
+
     // We can issue mop only once for up to 256 kt_dim
     TT_MOP(0, (kt_dim / 2) - 1, 0);
 
     // Need update SrcB base address for each superloop over 128 kt_dim
     // I guess its due to some counters being overflowed
     for (std::uint32_t i = 0; i < full_superloops; i++) {
-        // Wait for all contexts to be free
-        wait_for_next_context(1);
-        reset_config_context();
-
-        // Configure SrcB base address, once per superblock as we use counters for SrcB
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
-        address_b += superloop_increment;
-
         if (ct_dim == 1) {
             k_loop(128);
         } else {
@@ -192,13 +189,6 @@ inline void _llk_unpack_AB_custom_mm_(
     }
 
     if (remaining_kt != 0) {
-        // Wait for all contexts to be free
-        wait_for_next_context(1);
-        reset_config_context();
-
-        // Configure SrcB base address, once per superblock as we use counters for SrcB
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
-
         if (ct_dim == 1) {
             k_loop(remaining_kt);
         } else {

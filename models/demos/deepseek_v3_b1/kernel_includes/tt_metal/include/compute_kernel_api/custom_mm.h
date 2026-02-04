@@ -25,6 +25,7 @@ ALWI void custom_mm_block_init(
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
+
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init<false, false>(out_cb_id)));

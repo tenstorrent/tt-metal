@@ -169,7 +169,8 @@ struct Matmul {
                 uint64_t kernel_runtime = (end - start);
                 UNPACK(
                     (DPRINT << "version " << version_str << " " << get_operand_face_r_dim(args.in0) << " "
-                            << args.k_num_tiles << " " << out_w << " " << kernel_runtime << ENDL()));
+                            << args.k_num_tiles << " " << out_w << " " << (int)transpose << " "
+                            << unpack_src_format[args.in1] << " " << kernel_runtime << ENDL()));
 
                 tile_regs_commit();
 
