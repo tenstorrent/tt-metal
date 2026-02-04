@@ -51,55 +51,53 @@ ExpPrecision get_exp_precision(DataFormat data_format) {
     return (is_exp_b_format(data_format) ? ExpPrecision::B : ExpPrecision::A);
 }
 
-DataFormat check_consistent_format_across_buffers(DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
+DataFormat check_consistent_format_across_buffers(std::span<const DataFormat> data_format) {
     DataFormat last_valid_format = DataFormat::Invalid;
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    for (const auto& format : data_format) {
         // Special case where Float32 can pair with any exponent precision, skip checking
-        if ((data_format[i] == DataFormat::Float32) || (data_format[i] == DataFormat::RawUInt32) ||
-            (data_format[i] == DataFormat::UInt32) || (data_format[i] == DataFormat::RawUInt16) ||
-            (data_format[i] == DataFormat::RawUInt8) || (data_format[i] == DataFormat::UInt16) ||
-            (data_format[i] == DataFormat::UInt8) || (data_format[i] == DataFormat::Int32)) {
+        if ((format == DataFormat::Float32) || (format == DataFormat::RawUInt32) || (format == DataFormat::UInt32) ||
+            (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8) || (format == DataFormat::UInt16) ||
+            (format == DataFormat::UInt8) || (format == DataFormat::Int32)) {
             continue;
         }
 
-        if (data_format[i] != DataFormat::Invalid) {
-            TT_FATAL(ALL_VALID_FORMATS.contains(data_format[i]), "Format = {} not supported", data_format[i]);
+        if (format != DataFormat::Invalid) {
+            TT_FATAL(ALL_VALID_FORMATS.contains(format), "Format = {} not supported", format);
 
             if (last_valid_format != DataFormat::Invalid) {
                 TT_FATAL(
-                    is_exp_b_format(data_format[i]) == is_exp_b_format(last_valid_format),
+                    is_exp_b_format(format) == is_exp_b_format(last_valid_format),
                     "All input data-formats must have the same exponent format.");
                 // dump_data_formats(data_format);
-                last_valid_format = data_format[i];
+                last_valid_format = format;
 
             } else {
-                last_valid_format = data_format[i];
+                last_valid_format = format;
             }
         }
     }
     return last_valid_format;
 }
 
-DataFormat check_valid_formats_in_out_data_formats(DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
+DataFormat check_valid_formats_in_out_data_formats(std::span<const DataFormat> data_format) {
     DataFormat last_valid_format = DataFormat::Invalid;
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-        if (data_format[i] != DataFormat::Invalid) {
-            TT_FATAL(ALL_VALID_FORMATS.contains(data_format[i]), "Format = {} not supported", data_format[i]);
-            last_valid_format = data_format[i];
+    for (const auto& format : data_format) {
+        if (format != DataFormat::Invalid) {
+            TT_FATAL(ALL_VALID_FORMATS.contains(format), "Format = {} not supported", format);
+            last_valid_format = format;
         }
     }
     return last_valid_format;
 }
 
-ExpPrecision get_data_exp_precision(DataFormat data_formats[NUM_CIRCULAR_BUFFERS]) {
+ExpPrecision get_data_exp_precision(std::span<const DataFormat> data_formats) {
     DataFormat last_valid_format = check_consistent_format_across_buffers(data_formats);
     return get_exp_precision(last_valid_format);
 }
 
-std::vector<DataFormat> get_unpack_src_formats(DataFormat data_formats[NUM_CIRCULAR_BUFFERS]) {
+std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_formats) {
     std::vector<DataFormat> unpack_src_format;
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-        DataFormat src_format = data_formats[i];
+    for (auto src_format : data_formats) {
         if (src_format == DataFormat::RawUInt32 || src_format == DataFormat::RawUInt16 ||
             src_format == DataFormat::RawUInt8) {
             switch (src_format) {
@@ -131,9 +129,9 @@ DataFormat get_single_unpack_dst_format(
     return dst_format;
 }
 
-bool is_all_fp32_formats(const DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-        if (data_format[i] != DataFormat::Invalid && data_format[i] != DataFormat::Float32) {
+bool is_all_fp32_formats(std::span<const DataFormat> data_format) {
+    for (const auto& format : data_format) {
+        if (format != DataFormat::Invalid && format != DataFormat::Float32) {
             return false;
         }
     }
@@ -141,19 +139,24 @@ bool is_all_fp32_formats(const DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
 }
 
 std::vector<DataFormat> get_unpack_dst_formats(
-    DataFormat buf_formats[NUM_CIRCULAR_BUFFERS],
+    std::span<const DataFormat> buf_formats,
     DataFormat unpack_conditional_dst_format,
     bool /*fp32_dest_acc_en*/,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
     bool int_fpu_en) {
     if (!unpack_to_dest_mode.empty()) {
         TT_FATAL(
-            unpack_to_dest_mode.size() == NUM_CIRCULAR_BUFFERS, "unpack_to_dest_mode vector must have 32 elements");
+            // Allow size >= buf_formats.size() to support host-side allocations sized for
+            // maximum CB count across all architectures. buf_formats.size() is arch-specific.
+            // We only access the first buf_formats.size() elements
+            unpack_to_dest_mode.size() >= buf_formats.size(),
+            "unpack_to_dest_mode vector must have {} elements",
+            buf_formats.size());
     }
 
     std::vector<DataFormat> unpack_dst_format;
 
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    for (size_t i = 0; i < buf_formats.size(); i++) {
         DataFormat src_format = buf_formats[i];
         if (src_format == DataFormat::RawUInt32 || src_format == DataFormat::RawUInt16 ||
             src_format == DataFormat::RawUInt8) {
@@ -166,7 +169,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
         } else if (int_fpu_en) {
             unpack_dst_format.push_back(src_format);
         } else {
-            if (buf_formats[i] == DataFormat::Float32 && !unpack_to_dest_mode.empty() &&
+            if (src_format == DataFormat::Float32 && !unpack_to_dest_mode.empty() &&
                 unpack_to_dest_mode[i] != UnpackToDestMode::Default) {
                 unpack_dst_format.push_back(
                     get_single_unpack_dst_format(src_format, DataFormat::Invalid, DataFormat::Float32));
@@ -306,7 +309,7 @@ DataFormat get_single_pack_src_format(
 }
 
 std::vector<DataFormat> get_pack_src_formats(
-    DataFormat data_formats[NUM_CIRCULAR_BUFFERS],
+    std::span<const DataFormat> data_formats,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
@@ -314,19 +317,18 @@ std::vector<DataFormat> get_pack_src_formats(
     tt::ARCH arch) {
     std::vector<DataFormat> pack_src_formats;
     DataFormat pack_src_format;
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    for (auto src_format : data_formats) {
         pack_src_format = get_single_pack_src_format(
-            data_formats[i], unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, int_fpu_en, arch);
+            src_format, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, int_fpu_en, arch);
         pack_src_formats.push_back(pack_src_format);
     }
 
     return pack_src_formats;
 }
 
-std::vector<DataFormat> get_pack_dst_formats(DataFormat buf_formats[NUM_CIRCULAR_BUFFERS]) {
+std::vector<DataFormat> get_pack_dst_formats(std::span<const DataFormat> buf_formats) {
     std::vector<DataFormat> pack_dst_format;
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-        DataFormat dst_format = buf_formats[i];
+    for (auto dst_format : buf_formats) {
         if (dst_format == DataFormat::RawUInt32 || dst_format == DataFormat::RawUInt16 ||
             dst_format == DataFormat::RawUInt8) {
             switch (dst_format) {

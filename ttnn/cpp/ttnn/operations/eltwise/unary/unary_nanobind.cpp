@@ -1497,13 +1497,13 @@ void bind_unary_composite_int_with_default(
         {5}
 
         .. math::
-            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|)
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \mathrm{{{2}}})
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float): {3}. Defaults to `{4}`.
+            {2} (int, optional): {3}. Defaults to `{4}`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -1517,10 +1517,8 @@ void bind_unary_composite_int_with_default(
 
                * - Dtypes
                  - Layouts
-                 - Ranks
                * - {6}
                  - TILE
-                 - 2, 3, 4
 
             {7}
         )doc",
@@ -2495,7 +2493,14 @@ void py_module(nb::module_& mod) {
         "diagonal",
         "diagonal value",
         0,
-        R"doc(Performs tril function on :attr:`input_tensor`, :attr:`diagonal`.)doc",
+        R"doc(
+        Returns the lower triangular part of :attr:`input_tensor` by zeroing out elements above the specified :attr:`diagonal`.
+        Elements on and below the given :attr:`diagonal` are preserved, while elements above it are set to zero.
+
+        - ``diagonal = 0`` selects the main diagonal (keeps elements on and below the main diagonal)
+        - ``diagonal > 0`` selects a diagonal above the main diagonal (keeps more elements)
+        - ``diagonal < 0`` selects a diagonal below the main diagonal (keeps fewer elements)
+        )doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite_int_with_default(
         mod,
@@ -2503,7 +2508,14 @@ void py_module(nb::module_& mod) {
         "diagonal",
         "diagonal value",
         0,
-        R"doc(Performs triu function on :attr:`input_tensor`, :attr:`diagonal`.)doc",
+        R"doc(
+        Returns the upper triangular part of :attr:`input_tensor` by zeroing out elements below the specified :attr:`diagonal`.
+        Elements on and above the given :attr:`diagonal` are preserved, while elements below it are set to zero.
+
+        - ``diagonal = 0`` selects the main diagonal (keeps elements on and above the main diagonal)
+        - ``diagonal > 0`` selects a diagonal above the main diagonal (keeps fewer elements)
+        - ``diagonal < 0`` selects a diagonal below the main diagonal (keeps more elements)
+        )doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_int_parameter(
         mod,

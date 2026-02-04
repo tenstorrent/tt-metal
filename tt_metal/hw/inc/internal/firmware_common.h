@@ -12,6 +12,7 @@
 #include "api/compile_time_args.h"
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
+#include "hostdev/rta_constants.h"
 #include "hostdev/dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "api/debug/dprint.h"
@@ -128,6 +129,37 @@ uint32_t firmware_config_init(
                                         launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset);
     crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
                                          launch_msg_address->kernel_config.rta_offset[processor_index].crta_offset);
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+#ifdef ARCH_QUASAR
+    extern thread_local uint32_t rta_count;
+    extern thread_local uint32_t crta_count;
+#else
+    extern uint32_t rta_count;
+    extern uint32_t crta_count;
+#endif
+    // Initialize RTA count from L1 memory
+    // Set to 0 if: 1. offset is sentinel (no args set)
+    //              2. memory contains known garbage pattern 0xBEEF#### (uninitialized slot)
+    if (launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
+        ((rta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
+        rta_count = 0;
+    } else {
+        rta_count = rta_l1_base[0];
+        rta_l1_base += 1;  // Skip count word
+    }
+
+    // Initialize CRTA count from L1 memory
+    // Set to 0 if: 1. offset is sentinel (no common args set)
+    //              2. memory contains known garbage pattern 0xBEEF#### (unicast mode, kernel has no CRTAs)
+    if (launch_msg_address->kernel_config.rta_offset[processor_index].crta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
+        ((crta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
+        crta_count = 0;
+    } else {
+        crta_count = crta_l1_base[0];
+        crta_l1_base += 1;  // Skip count word
+    }
+#endif
 
     return kernel_config_base[core_type_index];
 }

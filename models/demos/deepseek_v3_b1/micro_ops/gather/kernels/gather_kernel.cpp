@@ -15,7 +15,7 @@ struct Core {
     static constexpr bool is_receiver_core = get_named_compile_time_arg_val("is_receiver_core") == 1;
 };
 
-KERNEL_ENTRY {
+void kernel_main() {
     using Gather = deepseek_b1_ops::Gather;
 
 // ============================================================================
@@ -34,7 +34,7 @@ KERNEL_ENTRY {
     }
 
     // Get receiver data address from runtime arg (dst CB doesn't exist on sender cores)
-    uint32_t receiver_data_addr = get_arg_val<uint32_t>(0);
+    uint32_t receiver_data_addr = get_common_arg_val<uint32_t>(0);
 
     // Gather sender args (from compile-time args, passed to op as runtime args)
     Gather::SenderArgs gather_args{
@@ -81,4 +81,3 @@ KERNEL_ENTRY {
     Gather::Op<Core::is_sender_core, Core::is_receiver_core, true> gather;
     gather(gather_args);
 }
-KERNEL_END

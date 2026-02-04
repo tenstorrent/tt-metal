@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_reduce_api.h"
@@ -30,7 +31,8 @@ namespace ckernel {
  * | Function   | ocb    | Output circular buffer identifier             | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
+ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
     UNPACK((llk_unpack_tilize_init(icb, block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           A2D,
@@ -70,7 +72,9 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t block,
     uint32_t ocb,
     uint32_t num_faces = 4,
-    uint32_t face_r_dim = 16) {
+    uint32_t face_r_dim = 16,
+    uint32_t call_line = __builtin_LINE()) {
+    state_configure(icb0, icb1_scaler, ocb, call_line);
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
@@ -79,7 +83,7 @@ ALWI void tilizeA_B_reduce_init(
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
 
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>(ocb)));
 }
@@ -236,10 +240,11 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 #endif
 }
 
-ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 #ifdef ARCH_BLACKHOLE
     // Blackhole fallback
-    tilize_init(icb, full_dim, ocb);
+    tilize_init(icb, full_dim, ocb, call_line);
 #else
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
     MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));

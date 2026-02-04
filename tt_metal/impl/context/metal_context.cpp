@@ -211,6 +211,7 @@ void MetalContext::initialize(
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
         std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
     // Initialize debug servers. Attaching individual devices done below
+    rtoptions_.resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     if (rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         TT_FATAL(!rtoptions_.get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
         rtoptions_.set_disable_dma_ops(true);  // DMA is not thread-safe
@@ -219,6 +220,14 @@ void MetalContext::initialize(
     watcher_server_ =
         std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
     noc_debug_state_ = std::make_unique<NOCDebugState>();
+
+    if (rtoptions_.get_experimental_noc_debug_dump_enabled()) {
+        TT_FATAL(
+            !rtoptions_.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint),
+            "Both DPRINT and NOC debug dump cannot be enabled at the same time.");
+        TT_FATAL(
+            !rtoptions_.get_watcher_enabled(), "Both Watcher and NOC debug dump cannot be enabled at the same time.");
+    }
 
     if (rtoptions_.get_profiler_enabled()) {
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
@@ -303,7 +312,7 @@ void MetalContext::initialize(
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        cluster_->set_internal_routing_info_for_ethernet_cores(true);
+        cluster_->set_internal_routing_info_for_ethernet_cores(get_control_plane(), true);
     }
 
     // Initialize debug tools, reset cores, init FW
@@ -368,7 +377,7 @@ void MetalContext::teardown() {
 
     // Set internal routing to false to exit active ethernet FW & go back to base FW
     if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
-        cluster_->set_internal_routing_info_for_ethernet_cores(false);
+        cluster_->set_internal_routing_info_for_ethernet_cores(get_control_plane(), false);
     }
 
     if (data_collector_) {
@@ -430,6 +439,66 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
+// Switch from mock mode to real hardware (requires all devices to be closed).
+//
+// This function is needed because MetalContext is a singleton with process lifetime, but mock mode
+// configuration can be changed at runtime. The sequence of events is:
+// 1. User calls API to enable mock device
+// 2. MetalContext initialized in mock mode
+// 3. User runs in mock mode
+// 4. User calls API to disable mock device
+// 5. Without this function, MetalContext would remain stuck in mock mode because the cluster/HAL
+//    objects were already initialized with mock configuration.
+//
+// This function won't be needed when MetalContext has explicit lifetime management.
+void MetalContext::reinitialize_for_real_hardware() {
+    std::lock_guard<std::mutex> lock(reinitialization_mutex_);
+
+    // Check if device_manager_ is initialized (MetalContext must be fully constructed)
+    TT_FATAL(device_manager_ != nullptr, "Cannot reinitialize MetalContext before it is fully initialized");
+
+    // Check if any devices are actually active (not just if MetalContext was initialized)
+    // Note: initialized_ flag doesn't get reset until process exit, so we check active devices instead
+    auto active_devices = device_manager_->get_all_active_devices();
+    TT_FATAL(
+        active_devices.empty(),
+        "Cannot switch to real hardware while {} device(s) are active. Close all devices first by calling "
+        "MeshDevice::close() or letting the device go out of scope.",
+        active_devices.size());
+
+    log_info(tt::LogMetal, "Reinitializing MetalContext for real hardware (switching from mock mode)");
+
+    rtoptions_.clear_mock_cluster_desc();
+    teardown_base_objects();
+    initialize_base_objects();
+
+    // Clear and reinitialize device-specific maps: they contain data computed from the old cluster_/hal_ objects and
+    // must be cleared after switching to the new cluster configuration.
+    dram_bank_offset_map_.clear();
+    l1_bank_offset_map_.clear();
+    dram_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.clear();
+    worker_logical_col_to_virtual_col_.clear();
+    worker_logical_row_to_virtual_row_.clear();
+
+    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
+    for (ChipId device_id : cluster_->all_chip_ids()) {
+        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
+        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
+    }
+
+    log_info(tt::LogMetal, "MetalContext reinitialized with real hardware");
+}
+
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
     distributed_context_.reset();
@@ -439,19 +508,7 @@ void MetalContext::teardown_base_objects() {
     hal_.reset();
 }
 
-MetalContext::MetalContext() {
-    // Check if mock mode was configured via API (before env vars take effect)
-    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
-        rtoptions_.set_mock_cluster_desc(*mock_cluster_desc);
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-    }
-
-    // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
-    // to initialize the control plane.
-    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
-        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
-    }
-
+void MetalContext::initialize_base_objects() {
     const bool is_base_routing_fw_enabled =
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     const auto platform_arch = get_platform_architecture(rtoptions_);
@@ -477,6 +534,22 @@ MetalContext::MetalContext() {
         teardown_base_objects();
         initialize_objects();
     }
+}
+
+MetalContext::MetalContext() {
+    // Check if mock mode was configured via API (before env vars take effect)
+    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
+        rtoptions_.set_mock_cluster_desc(*mock_cluster_desc);
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
+    }
+
+    // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
+    // to initialize the control plane.
+    if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
+        custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
+    }
+
+    initialize_base_objects();
 
     // Initialize some container members to allow threadsafe operations on them later
     dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());

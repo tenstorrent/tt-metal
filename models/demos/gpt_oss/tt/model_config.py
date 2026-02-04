@@ -39,6 +39,13 @@ class ModelArgs:
         self.mesh_device = mesh_device
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
+        if self.max_batch_size > 32:
+            assert (
+                self.max_batch_size % self.mesh_device.shape[0] == 0
+            ), "max_batch_size must be divisible by the number of device rows"
+            self.max_local_batch_size = self.max_batch_size // self.mesh_device.shape[0]
+        else:
+            self.max_local_batch_size = self.max_batch_size
         self.max_seq_len = max_seq_len
         if optimizations is not None:
             logger.warning("GPT-OSS doesn't support any performance optimizations - ignoring optimizations argument")
@@ -101,7 +108,7 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
-        self.capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
+        self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
