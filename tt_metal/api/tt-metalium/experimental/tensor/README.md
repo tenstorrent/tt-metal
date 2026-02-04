@@ -15,7 +15,7 @@ This folder
 
 ## namespace
 
-Headers in this folder are not in the experimental folder as this staging area is meant to be short lived,
+Headers in this folder are not in the experimental namespace as this staging area is meant to be short lived,
 most of the concepts hosted are well tested, production code already.
 
 ## Header Mapping
