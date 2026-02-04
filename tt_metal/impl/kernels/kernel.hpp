@@ -71,8 +71,12 @@ struct KernelSource {
 
 class Kernel : public JitBuildSettings {
 public:
-    using Config =
-        std::variant<DataMovementConfig, EthernetConfig, ComputeConfig, experimental::quasar::QuasarDataMovementConfig>;
+    using Config = std::variant<
+        DataMovementConfig,
+        EthernetConfig,
+        ComputeConfig,
+        experimental::quasar::QuasarDataMovementConfig,
+        experimental::quasar::QuasarComputeConfig>;
 
     ~Kernel() override = default;
 
@@ -320,11 +324,26 @@ private:
 };
 
 namespace experimental::quasar {
-enum class QuasarComputeCore : uint8_t {
-    COMPUTE_0 = 0,
-    COMPUTE_1 = 1,
-    COMPUTE_2 = 2,
-    COMPUTE_3 = 3,
+
+static constexpr uint32_t NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE = 4;
+
+enum class QuasarComputeProcessor : uint8_t {
+    NEO_0_COMPUTE_0 = 0,
+    NEO_0_COMPUTE_1 = 1,
+    NEO_0_COMPUTE_2 = 2,
+    NEO_0_COMPUTE_3 = 3,
+    NEO_1_COMPUTE_0 = 4,
+    NEO_1_COMPUTE_1 = 5,
+    NEO_1_COMPUTE_2 = 6,
+    NEO_1_COMPUTE_3 = 7,
+    NEO_2_COMPUTE_0 = 8,
+    NEO_2_COMPUTE_1 = 9,
+    NEO_2_COMPUTE_2 = 10,
+    NEO_2_COMPUTE_3 = 11,
+    NEO_3_COMPUTE_0 = 12,
+    NEO_3_COMPUTE_1 = 13,
+    NEO_3_COMPUTE_2 = 14,
+    NEO_3_COMPUTE_3 = 15
 };
 
 class QuasarDataMovementKernel : public Kernel {
@@ -333,7 +352,7 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
-        const std::set<DataMovementProcessor>& dm_cores) :
+        const std::set<DataMovementProcessor>& dm_processors) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -343,15 +362,15 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config),
-        dm_cores_(dm_cores.begin(), dm_cores.end()) {
+        dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
             "QuasarDataMovementKernel is only supported on Quasar");
         TT_FATAL(
-            config.num_processors_per_cluster == dm_cores.size(),
-            "Number of processors per cluster specified in config must match number of DM cores per cluster that have "
+            config.num_threads_per_cluster == dm_processors.size(),
+            "Number of DM cores per cluster specified in config must match number of DM cores per cluster that have "
             "been reserved");
-        TT_FATAL(std::is_sorted(dm_cores_.begin(), dm_cores_.end()), "DM cores must be ordered");
+        TT_FATAL(std::is_sorted(dm_processors_.begin(), dm_processors_.end()), "DM cores must be ordered");
     }
 
     ~QuasarDataMovementKernel() override = default;
@@ -375,7 +394,7 @@ public:
 
 private:
     const QuasarDataMovementConfig config_;
-    const std::vector<DataMovementProcessor> dm_cores_;
+    const std::vector<DataMovementProcessor> dm_processors_;
 
     uint8_t expected_num_binaries() const override;
 
@@ -388,7 +407,7 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const QuasarComputeConfig& config,
-        const std::set<QuasarComputeCore>& compute_cores) :
+        const std::set<QuasarComputeProcessor>& compute_processors) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -398,16 +417,45 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config),
-        compute_cores_(compute_cores.begin(), compute_cores.end()) {
+        compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
             "QuasarComputeKernel is only supported on Quasar");
         TT_FATAL(
-            config.num_processors_per_cluster == compute_cores.size(),
-            "Number of processors per cluster specified in config must match number of compute cores per cluster that "
-            "have "
-            "been reserved");
+            config.num_threads_per_cluster * NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE == compute_processors.size(),
+            "Number of Tensix engines per cluster specified in config multiplied by the number of compute processors "
+            "per Tensix engine must match number of compute cores per cluster that have been reserved");
+        TT_FATAL(
+            std::is_sorted(compute_processors_.begin(), compute_processors_.end()), "Compute cores must be ordered");
     }
+
+    ~QuasarComputeKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+    void set_build_options(JitBuildOptions& build_options) const override;
+
+private:
+    const QuasarComputeConfig config_;
+    const std::vector<QuasarComputeProcessor> compute_processors_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
 }  // namespace experimental::quasar
 
 }  // namespace tt::tt_metal

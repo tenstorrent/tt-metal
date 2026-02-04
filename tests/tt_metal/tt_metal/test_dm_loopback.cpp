@@ -62,7 +62,7 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
             core,
-            experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1}));
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1}));
     }
 
     std::vector<KernelHandle> dm_l1_to_dram_kernels;
@@ -72,7 +72,7 @@ TEST_F(MeshDeviceSingleCardFixture, DmLoopback) {
             program,
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
             core,
-            experimental::quasar::QuasarDataMovementConfig{.num_processors_per_cluster = 1}));
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1}));
     }
 
     for (uint32_t i = 0; i < 4; i++) {

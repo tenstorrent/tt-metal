@@ -1562,19 +1562,13 @@ void UpdateDynamicCircularBufferAddress(
 
 namespace quasar {
 
-std::set<DataMovementProcessor> GetDataMovementProcessorsPerClusterQuasar(
+template <typename ProcessorClassType>
+std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
     Program& program, const CoreRangeSet& core_ranges, uint32_t num_processors_per_cluster) {
-    TT_FATAL(
-        core_ranges.num_cores() == 1,
-        "Currently, data movement kernels can only be created on a single cluster in Quasar.");
+    TT_FATAL(core_ranges.num_cores() == 1, "Currently, kernels can only be created on a single cluster in Quasar.");
 
-    TT_FATAL(
-        1 <= num_processors_per_cluster && num_processors_per_cluster <= QUASAR_NUM_DM_CORES_PER_CLUSTER,
-        "Requested number of data movement processors per cluster must be between 1 and {} (inclusive)",
-        QUASAR_NUM_DM_CORES_PER_CLUSTER);
-
-    std::set<DataMovementProcessor> dm_cores(
-        enchantum::values<DataMovementProcessor>.begin(), enchantum::values<DataMovementProcessor>.end());
+    std::set<ProcessorClassType> processors(
+        enchantum::values<ProcessorClassType>.begin(), enchantum::values<ProcessorClassType>.end());
     const auto& hal = MetalContext::instance().hal();
     for (const auto& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -1584,15 +1578,28 @@ std::set<DataMovementProcessor> GetDataMovementProcessorsPerClusterQuasar(
                 if (kernel_group != nullptr) {
                     for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
                         const auto kernel = program.impl().get_kernel(kernel_id);
-                        if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
+                        if (std::is_same_v<ProcessorClassType, DataMovementProcessor> &&
+                            kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
                             const QuasarDataMovementConfig config =
                                 std::get<QuasarDataMovementConfig>(kernel->config());
-                            const uint32_t num_processors_in_use = config.num_processors_per_cluster;
+                            const uint32_t num_processors_in_use = config.num_threads_per_cluster;
                             const uint32_t start_processor_type = kernel->get_kernel_processor_type(0);
                             for (uint32_t i = start_processor_type; i < start_processor_type + num_processors_in_use;
                                  i++) {
-                                TT_ASSERT(dm_cores.contains(static_cast<DataMovementProcessor>(i)));
-                                dm_cores.erase(static_cast<DataMovementProcessor>(i));
+                                TT_ASSERT(processors.contains(static_cast<ProcessorClassType>(i)));
+                                processors.erase(static_cast<ProcessorClassType>(i));
+                            }
+                        } else if (
+                            std::is_same_v<ProcessorClassType, QuasarComputeProcessor> &&
+                            kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+                            const QuasarComputeConfig config = std::get<QuasarComputeConfig>(kernel->config());
+                            const uint32_t num_processors_in_use =
+                                config.num_threads_per_cluster * NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
+                            const uint32_t start_processor_type = kernel->get_kernel_processor_type(0);
+                            for (uint32_t i = start_processor_type; i < start_processor_type + num_processors_in_use;
+                                 i++) {
+                                TT_ASSERT(processors.contains(static_cast<ProcessorClassType>(i)));
+                                processors.erase(static_cast<ProcessorClassType>(i));
                             }
                         }
                     }
@@ -1601,17 +1608,31 @@ std::set<DataMovementProcessor> GetDataMovementProcessorsPerClusterQuasar(
         }
     }
 
-    while (dm_cores.size() > num_processors_per_cluster) {
-        dm_cores.erase(std::prev(dm_cores.end()));
+    while (processors.size() > num_processors_per_cluster) {
+        processors.erase(std::prev(processors.end()));
     }
 
-    TT_FATAL(
-        dm_cores.size() == num_processors_per_cluster,
-        "Unable to reserve {} data movement processors per cluster as only {} processors per cluster are available.",
-        num_processors_per_cluster,
-        dm_cores.size());
+    if (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
+        TT_FATAL(
+            processors.size() == num_processors_per_cluster,
+            "Unable to reserve {} data movement processors per cluster as only {} data movement processors per cluster "
+            "are available.",
+            num_processors_per_cluster,
+            processors.size());
+    } else if (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
+        TT_FATAL(
+            processors.size() % NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE == 0,
+            "Number of compute processors reserved per cluster must be a multiple of {}.",
+            NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+        TT_FATAL(
+            processors.size() == num_processors_per_cluster,
+            "Unable to reserve {} compute processors per cluster as only {} compute processors per cluster are "
+            "available.",
+            num_processors_per_cluster,
+            processors.size());
+    }
 
-    return dm_cores;
+    return processors;
 }
 
 KernelHandle CreateQuasarDataMovementKernel(
@@ -1619,10 +1640,14 @@ KernelHandle CreateQuasarDataMovementKernel(
     const KernelSource& kernel_src,
     const CoreRangeSet& core_ranges,
     const QuasarDataMovementConfig& config) {
-    const std::set<DataMovementProcessor> dm_cores =
-        GetDataMovementProcessorsPerClusterQuasar(program, core_ranges, config.num_processors_per_cluster);
+    TT_FATAL(
+        1 <= config.num_threads_per_cluster && config.num_threads_per_cluster <= QUASAR_NUM_DM_CORES_PER_CLUSTER,
+        "Requested number of data movement cores per cluster must be between 1 and {} (inclusive)",
+        QUASAR_NUM_DM_CORES_PER_CLUSTER);
+    const std::set<DataMovementProcessor> dm_processors =
+        GetProcessorsPerClusterQuasar<DataMovementProcessor>(program, core_ranges, config.num_threads_per_cluster);
     std::shared_ptr<Kernel> kernel =
-        std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_cores);
+        std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_processors);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -1634,6 +1659,31 @@ KernelHandle CreateKernel(
     const CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     return CreateQuasarDataMovementKernel(
         program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
+}
+
+KernelHandle CreateQuasarComputeKernel(
+    Program& program,
+    const KernelSource& kernel_src,
+    const CoreRangeSet& core_ranges,
+    const QuasarComputeConfig& config) {
+    TT_FATAL(
+        1 <= config.num_threads_per_cluster && config.num_threads_per_cluster <= QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
+        "Requested number of Tensix engines per cluster must be between 1 and {} (inclusive)",
+        QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER);
+    const std::set<QuasarComputeProcessor> compute_processors = GetProcessorsPerClusterQuasar<QuasarComputeProcessor>(
+        program, core_ranges, config.num_threads_per_cluster * NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+    std::shared_ptr<Kernel> kernel =
+        std::make_shared<QuasarComputeKernel>(kernel_src, core_ranges, config, compute_processors);
+    return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+}
+
+KernelHandle CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const QuasarComputeConfig& config) {
+    const CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    return CreateQuasarComputeKernel(program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
 }
 
 }  // namespace quasar
