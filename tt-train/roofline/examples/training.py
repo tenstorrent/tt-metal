@@ -11,7 +11,7 @@ and full training iteration including optimizer step.
 
 Supported Models:
     GPT Models:  nanogpt-char, nanogpt-bpe, gpt2-small, gpt2-medium, gpt2-large
-    Llama Models: nanollama, tinyllama
+    Llama Models: nanollama, tinyllama, llama-1b, llama-8b, llama-70b, llama-405b
 
 Run from tt-train directory:
     # GPT models
@@ -22,6 +22,10 @@ Run from tt-train directory:
     # Llama models
     python3 -m roofline.examples.nanogpt --model tinyllama -b 1 -s 2048
     python3 -m roofline.examples.nanogpt --model nanollama -b 64 -s 256
+    python3 -m roofline.examples.nanogpt --model llama-1b -b 1 -s 4096
+    python3 -m roofline.examples.nanogpt --model llama-8b -b 1 -s 8192
+    python3 -m roofline.examples.nanogpt --model llama-70b -b 1 -s 2048
+    python3 -m roofline.examples.nanogpt --model llama-405b -b 1 -s 1024
 
     # List all available models
     python3 -m roofline.examples.nanogpt --list
@@ -130,7 +134,8 @@ MODEL_PRESETS: Dict[str, dict] = {
     "tinyllama": {
         "model_type": ModelType.LLAMA,
         "vocab_size": 32000,
-        "max_sequence_length": 2048,
+        # "max_sequence_length": 2048,
+        "max_sequence_length": 131072,
         "embedding_dim": 2048,
         "num_heads": 32,
         "num_groups": 4,
@@ -152,6 +157,58 @@ MODEL_PRESETS: Dict[str, dict] = {
         "theta": 10000.0,
         "weight_tying": False,
         "description": "TinyLlama 1.1B (char tokenizer, 0.96B params)",
+    },
+    "llama-1b": {
+        "model_type": ModelType.LLAMA,
+        "vocab_size": 128256,
+        "max_sequence_length": 131072,
+        "embedding_dim": 2048,
+        "num_heads": 32,
+        "num_groups": 8,  # GQA with 8 KV heads (32/8 = 4 queries per KV)
+        "num_blocks": 16,
+        "dropout": 0.0,
+        "theta": 500000.0,
+        "weight_tying": False,
+        "description": "Llama 3.2 1B (128K context)",
+    },
+    "llama-8b": {
+        "model_type": ModelType.LLAMA,
+        "vocab_size": 128256,
+        "max_sequence_length": 131072,
+        "embedding_dim": 4096,
+        "num_heads": 32,
+        "num_groups": 8,  # GQA with 8 KV heads (32/8 = 4 queries per KV)
+        "num_blocks": 32,
+        "dropout": 0.0,
+        "theta": 500000.0,
+        "weight_tying": False,
+        "description": "Llama 3.1 8B (128K context)",
+    },
+    "llama-70b": {
+        "model_type": ModelType.LLAMA,
+        "vocab_size": 128256,
+        "max_sequence_length": 131072,
+        "embedding_dim": 8192,
+        "num_heads": 64,
+        "num_groups": 8,  # GQA with 8 KV heads (64/8 = 8 queries per KV)
+        "num_blocks": 80,
+        "dropout": 0.0,
+        "theta": 500000.0,
+        "weight_tying": False,
+        "description": "Llama 3.1 70B (128K context)",
+    },
+    "llama-405b": {
+        "model_type": ModelType.LLAMA,
+        "vocab_size": 128256,
+        "max_sequence_length": 131072,
+        "embedding_dim": 16384,
+        "num_heads": 128,
+        "num_groups": 8,  # GQA with 16 KV heads (128/16 = 8 queries per KV, using 8 groups for consistency)
+        "num_blocks": 126,
+        "dropout": 0.0,
+        "theta": 500000.0,
+        "weight_tying": False,
+        "description": "Llama 3.1 405B (128K context)",
     },
 }
 
