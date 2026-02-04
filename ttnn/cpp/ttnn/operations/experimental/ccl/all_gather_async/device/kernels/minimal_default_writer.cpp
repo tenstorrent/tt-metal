@@ -15,7 +15,6 @@
 #include <cstdint>
 #include <utility>
 #include "tt_metal/fabric/hw/inc/linear/api.h"
-#include <tools/profiler/kernel_profiler.hpp>
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -312,11 +311,9 @@ void kernel_main() {
     uint32_t num_channels_processed_in_current_batch = 0;
     uint32_t chunk_count = 0;
     {
-        DeviceZoneScopedN("writer writing local slice");
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             chunk_count = 0;
             while (tiles_read < tiles_to_read) {
-                DeviceZoneScopedN("writer handle tiles from current packet");
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                 uint32_t tiles_to_put_in_current_packet =
                     std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
@@ -341,9 +338,7 @@ void kernel_main() {
 
                 if (direction == 1) {
                     {
-                        DeviceZoneScopedN("writer backward fabric push")
-
-                            if constexpr (num_targets_backward_direction) {
+                        if constexpr (num_targets_backward_direction) {
                             if (tiles_to_put_in_current_packet > 1) {
                                 fabric_unicast_noc_scatter_write_with_state<
                                     UnicastScatterWriteUpdateMask::DstAddrs |
@@ -365,16 +360,14 @@ void kernel_main() {
                         }
                     }
                     {
-                        DeviceZoneScopedN("writer backward local push") for (uint32_t i = 0;
-                                                                             i < tiles_to_put_in_current_packet;
-                                                                             i++) {
+                        for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
                             noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
                         }
                         noc_async_write_barrier();
                     }
                 } else {
                     {
-                        DeviceZoneScopedN("writer forward fabric push") if constexpr (num_targets_forward_direction) {
+                        if constexpr (num_targets_forward_direction) {
                             if (tiles_to_put_in_current_packet > 1) {
                                 fabric_unicast_noc_scatter_write_with_state<
                                     UnicastScatterWriteUpdateMask::DstAddrs |
@@ -480,7 +473,6 @@ void kernel_main() {
     }
 
     while (slice_writes < writes_expected) {
-        DeviceZoneScopedN("writer writing split slice");
         // Direction == backward
         // Did I get something from my left to send to my right?
         // In the linear case, I expect num_targets_backward_direction slices from the left, and check if I have a
@@ -559,7 +551,6 @@ void kernel_main() {
             chunk_count = 0;
 
             while (tiles_read < tiles_to_read) {
-                DeviceZoneScopedN("writer handle tiles from current packet");
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                 uint32_t tiles_to_put_in_current_packet =
                     std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
@@ -580,7 +571,7 @@ void kernel_main() {
                 }
 
                 {
-                    DeviceZoneScopedN("writer fabric push") if (tiles_to_put_in_current_packet > 1) {
+                    if (tiles_to_put_in_current_packet > 1) {
                         fabric_unicast_noc_scatter_write_with_state<
                             UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
                             UnicastScatterWriteUpdateMask::PayloadSize>(
@@ -589,8 +580,7 @@ void kernel_main() {
                             l1_read_addr,
                             NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
                             page_size * tiles_to_put_in_current_packet);
-                    }
-                    else {
+                    } else {
                         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             mux_connection_handle,
                             pkt_unicast_hdr,
@@ -643,7 +633,7 @@ void kernel_main() {
         slice_writes++;
     }
     {
-        DeviceZoneScopedN("writer write barrier") noc_async_write_barrier();
+        noc_async_write_barrier();
         noc_async_atomic_barrier();
     }
 

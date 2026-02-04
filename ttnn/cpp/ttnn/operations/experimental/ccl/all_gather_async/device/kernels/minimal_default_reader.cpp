@@ -8,7 +8,6 @@
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include <cstdint>
 #include <utility>
-#include <tools/profiler/kernel_profiler.hpp>
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -113,10 +112,8 @@ void kernel_main() {
     uint32_t tiles_to_read = input_tile_id_end;
     uint32_t output_tile_id_start = 0;
     {
-        DeviceZoneScopedN("reader reading local slice");
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             while (tiles_read < tiles_to_read) {
-                DeviceZoneScopedN("reader reading tiles");
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                 uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
@@ -284,8 +281,6 @@ void kernel_main() {
 
             uint32_t num_channels_processed_in_current_batch = 0;
             {
-                DeviceZoneScopedN("reader reading split slice");
-
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
                     chunk_count = 0;
                     while (tiles_read < tiles_to_read) {
