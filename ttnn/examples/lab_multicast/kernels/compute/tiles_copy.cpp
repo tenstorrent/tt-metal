@@ -18,8 +18,8 @@
 void kernel_main() {
     uint32_t n_tiles = get_compile_time_arg_val(0);
 
-    constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;    // Input from inbound kernel
-    constexpr tt::CBIndex cb_out0 = tt::CBIndex::c_16;  // Output to outbound kernel
+    constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;    // Input from mcast_receiver kernel
+    constexpr tt::CBIndex cb_out0 = tt::CBIndex::c_16;  // Output to write_tiles kernel
 
     // Destination register index for tile operations
     constexpr uint32_t dst_reg_idx = 0;
@@ -29,7 +29,7 @@ void kernel_main() {
     copy_tile_init(cb_in0);
 
     for (uint32_t tile_idx = 0; tile_idx < n_tiles; tile_idx++) {
-        // Wait for a tile to be available in the input CB (from inbound kernel)
+        // Wait for a tile to be available in the input CB (from mcast_receiver kernel)
         cb_wait_front(cb_in0, 1);
 
         // Acquire destination register for tile operations

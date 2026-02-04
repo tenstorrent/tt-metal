@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-// Outbound kernel: writes received tiles back to DRAM for verification.
+// Writer kernel: writes processed tiles back to DRAM.
 // This kernel runs on receiver cores (e.g., logical cores 1,0 through 3,0).
 // Each receiver writes its complete copy of the tensor to a separate section of the output buffer.
 void kernel_main() {
