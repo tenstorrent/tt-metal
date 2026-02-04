@@ -1241,6 +1241,19 @@ eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDire
     return dir;
 }
 
+RoutingDirection ControlPlane::eth_direction_to_routing_direction(eth_chan_directions direction) const {
+    RoutingDirection dir;
+    switch (direction) {
+        case eth_chan_directions::NORTH: dir = RoutingDirection::N; break;
+        case eth_chan_directions::SOUTH: dir = RoutingDirection::S; break;
+        case eth_chan_directions::EAST: dir = RoutingDirection::E; break;
+        case eth_chan_directions::WEST: dir = RoutingDirection::W; break;
+        case eth_chan_directions::Z: dir = RoutingDirection::Z; break;
+        default: TT_FATAL(false, "Invalid Ethernet Direction");
+    }
+    return dir;
+}
+
 std::set<std::pair<chan_id_t, eth_chan_directions>> ControlPlane::get_active_fabric_eth_channels(
     FabricNodeId fabric_node_id) const {
     std::set<std::pair<chan_id_t, eth_chan_directions>> active_fabric_eth_channels;
