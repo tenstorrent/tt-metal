@@ -4,6 +4,8 @@
 
 #include "tt_profiler.hpp"
 
+#include <cstdlib>
+
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 
@@ -55,7 +57,9 @@ void TTProfiler::disable() {
 }
 
 TTProfiler::TTProfiler() : m_enabled(false) {
-    if (is_tracy_enabled) {
+    const char* env_value = std::getenv("TT_METAL_DEVICE_PROFILER");
+    bool runtime_profiler_enabled = env_value != nullptr && std::string(env_value) == "1";
+    if (is_tracy_enabled && runtime_profiler_enabled) {
         enable();
 
         tt::tt_metal::detail::ProfilerSync(tt::tt_metal::ProfilerSyncState::INIT);
@@ -63,7 +67,7 @@ TTProfiler::TTProfiler() : m_enabled(false) {
 }
 
 TTProfiler::~TTProfiler() {
-    if (is_tracy_enabled) {
+    if (is_enabled()) {
         tt::tt_metal::detail::ProfilerSync(tt::tt_metal::ProfilerSyncState::CLOSE_DEVICE);
     }
 }
