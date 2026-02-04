@@ -215,19 +215,17 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     uint32_t num_tile_rows = NC * Ht;
 
-    CoreRangeSet all_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(device);
-    uint32_t num_cores = all_cores.num_cores();
+    CoreRangeSet requested_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(device);
 
-    // Distribute tile rows evenly across cores
-    uint32_t num_tile_rows_per_core_group_1 = (num_tile_rows + num_cores - 1) / num_cores;
-    uint32_t num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_1;
-    // When using fewer cores, some might get one less row
-    uint32_t remainder = num_tile_rows % num_cores;
-    if (remainder > 0) {
-        num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_1 - 1;
-    }
-    CoreRangeSet core_group_1 = all_cores;
-    CoreRangeSet core_group_2 = CoreRangeSet();
+    // Use split_work_to_cores to properly distribute tile rows across available cores
+    auto
+        [num_cores,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_tile_rows_per_core_group_1,
+         num_tile_rows_per_core_group_2] = split_work_to_cores(requested_cores, num_tile_rows, true /* row_wise */);
+
     // Compute bounding box for grid_size
     auto bbox = all_cores.bounding_box();
     CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
@@ -438,11 +436,10 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     writer_runtime_args.reserve(num_cores);
     compute_runtime_args.reserve(num_cores);
 
-    // Get list of cores to iterate over
-    auto core_coords = corerange_to_cores(all_cores, num_cores, true);
-
+    // Iterate over active cores
+    auto all_core_coords = corerange_to_cores(all_cores, num_cores, true);
     for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = core_coords[i];
+        CoreCoord core = all_core_coords[i];
 
         uint32_t num_tile_rows_per_core = 0;
         if (core_group_1.contains(core)) {
