@@ -100,7 +100,17 @@ jobs:
     outputs:
       do-full-scan: ${{ steps.compute-outputs.outputs.do-full-scan }}
       do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
+      merge-base: ${{ steps.compute-outputs.outputs.merge-base }}
     steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory ${{ github.workspace }}
+
       - id: find-changes
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
@@ -122,10 +132,17 @@ jobs:
             do_scan="false"
           fi
 
+          merge_base=""
+          if [[ "$do_full_scan" != "true" ]]; then
+            merge_base=$(git merge-base ${{ github.ref_name }} origin/main)
+            echo "Merge base between ${{ github.ref_name }} and main: $merge_base"
+          fi
+
           echo "Do a scan: $do_scan"
           echo "Do a full scan: $do_full_scan"
           echo "do-full-scan=$do_full_scan" >> "$GITHUB_OUTPUT"
           echo "do-scan=$do_scan" >> "$GITHUB_OUTPUT"
+          echo "merge-base=$merge_base" >> "$GITHUB_OUTPUT"
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
@@ -138,162 +155,91 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
 
-  clang-tidy:
-    name: 🤖 Clang Tidy
+  # Full scan: single job that analyzes everything
+  clang-tidy-full:
+    name: 🤖 Clang Tidy (Full)
     needs: [ build-docker-image, determine-scan-type ]
-    # Use always() so this job runs even when build-docker-image is skipped
-    # (pre-built tags provided)
     if: >-
       ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' }}
-    timeout-minutes: 240
-    runs-on: tt-ubuntu-2204-xlarge-stable
-    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
-    container:
-      image: >-
-        harbor.ci.tenstorrent.net/${{
-          inputs.ci-build-docker-image ||
-          needs.build-docker-image.outputs.ci-build-tag ||
-          'docker-image-unresolved!'}}
-      env:
-        CCACHE_REMOTE_ONLY: "true"
-        CCACHE_TEMPDIR: /tmp/ccache
-      volumes:
-        - ${{ github.workspace }}:/work
-        # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache
-      # Group 1457 is for the shared ccache drive
-      # tmpfs is for efficiency
-      options: >
-        --group-add 1457
-        --tmpfs /tmp
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: Check Redis credentials
-        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
-        # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
-        run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
-            exit 1
-          fi
-          # Conditionally set this here so that it remains unset on forks,
-          # otherwise it resolves an invalid URL and the job fails
-          REDIS_USER="${{ vars.REDIS_USER }}"
-          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
-          REDIS_HOST="${{ vars.REDIS_HOST }}"
-          REDIS_PORT="${{ vars.REDIS_PORT }}"
-          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
-          CCACHE_PARTS=(
-            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
-            "@${REDIS_HOST}:${REDIS_PORT}"
-            "|read-only=${REDIS_READONLY}"
-          )
-          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
-          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+          needs.determine-scan-type.outputs.do-scan == 'true' &&
+          needs.determine-scan-type.outputs.do-full-scan == 'true' }}
+    uses: ./.github/workflows/clang-tidy-reusable.yaml
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
+      ci-build-docker-image: >-
+        ${{ inputs.ci-build-docker-image ||
+            needs.build-docker-image.outputs.ci-build-tag ||
+            'docker-image-unresolved!' }}
+      do-full-scan: 'true'
+      merge-base: ''
+      prereq-targets: ''
+      scan-targets: ''
 
-      - name: Create ccache tmpdir
-        run: |
-          mkdir -p /tmp/ccache
+  # Incremental scan: parallel jobs for different targets
+  clang-tidy-incremental-tt-metal:
+    name: 🤖 Clang Tidy (Metalium)
+    needs: [ build-docker-image, determine-scan-type ]
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          needs.determine-scan-type.outputs.do-scan == 'true' &&
+          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    uses: ./.github/workflows/clang-tidy-reusable.yaml
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
+      ci-build-docker-image: >-
+        ${{ inputs.ci-build-docker-image ||
+            needs.build-docker-image.outputs.ci-build-tag ||
+            'docker-image-unresolved!' }}
+      do-full-scan: 'false'
+      merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
+      prereq-targets: ''
+      scan-targets: 'tt_metal'
 
-      - name: Check out repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          clean: true
+  clang-tidy-incremental-ttnn:
+    name: 🤖 Clang Tidy (TTNN)
+    needs: [ build-docker-image, determine-scan-type ]
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          needs.determine-scan-type.outputs.do-scan == 'true' &&
+          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    uses: ./.github/workflows/clang-tidy-reusable.yaml
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
+      ci-build-docker-image: >-
+        ${{ inputs.ci-build-docker-image ||
+            needs.build-docker-image.outputs.ci-build-tag ||
+            'docker-image-unresolved!' }}
+      do-full-scan: 'false'
+      merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
+      prereq-targets: 'tt_metal'
+      scan-targets: 'ttnn'
 
-      - name: Configure git safe.directory
-        run: git config --global --add safe.directory /work
-
-      - name: Determine merge base
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        run: |
-          echo "Current branch: ${{ github.ref_name }}"
-          MERGE_BASE=$(git merge-base ${{ github.ref_name }} origin/main)
-          echo "Merge base between ${{ github.ref_name }} and main: $MERGE_BASE"
-          echo "MERGE_BASE=$MERGE_BASE" >> $GITHUB_ENV
-
-      - name: Check out baseline
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.MERGE_BASE }}
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          clean: true
-
-      - name: Create shim
-        run: |
-          # Suppress clang-tidy to first get an up-to-date build tree
-          ln -sf /usr/bin/true ./clang-tidy-shim
-
-      - name: 🔧 CMake configure
-        run: |
-          CLANG_TIDY_CMD="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
-          cmake --preset clang-tidy \
-            -DCMAKE_CXX_CLANG_TIDY="$CLANG_TIDY_CMD" \
-            -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
-
-      - name: Prepare baseline ccache summary
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        run: |
-          # Zero out the stats so we can see how we did this build
-          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-          ccache -z
-
-      - name: 🛠️ Baseline Build
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        timeout-minutes: 60
-        run: |
-          cmake --build --preset clang-tidy
-
-      - name: Publish Ccache summary
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        run: |
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          clean: false
-
-      - name: Restore shim
-        run: |
-          # Restore shim to legit clang-tidy
-          # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
-          ln -sf $(which clang-tidy-20) ./clang-tidy-shim
-
-      - name: Prepare ccache summary
-        run: |
-          # Zero out the stats so we can see how we did this build
-          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-          ccache -z
-
-      - name: 🔍 Analyze code with clang-tidy
-        timeout-minutes: 120
-        run: |
-          cmake --build --preset clang-tidy
-
-      - name: Publish Ccache summary
-        run: |
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+  clang-tidy-incremental-catchall:
+    name: 🤖 Clang Tidy (catchall)
+    needs: [ build-docker-image, determine-scan-type ]
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          needs.determine-scan-type.outputs.do-scan == 'true' &&
+          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    uses: ./.github/workflows/clang-tidy-reusable.yaml
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
+      ci-build-docker-image: >-
+        ${{ inputs.ci-build-docker-image ||
+            needs.build-docker-image.outputs.ci-build-tag ||
+            'docker-image-unresolved!' }}
+      do-full-scan: 'false'
+      merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
+      prereq-targets: 'tt_metal ttnn'
+      scan-targets: ''
 
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
