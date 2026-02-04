@@ -18,10 +18,10 @@ from models.demos.deepseek_v3_b1.fused_ops.kv_cache_branch.op import KVCacheBran
 
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [True])
-def test_kv_cache_branch(device, epsilon, use_fp32):
+@pytest.mark.parametrize("position_id", [0, 1, 5, 7])
+def test_kv_cache_branch(device, epsilon, use_fp32, position_id):
     """Test TTNN KV cache branch fused operation"""
 
-    position_id = 0
     max_seq_len = 8192
     batch = 1
 
@@ -34,7 +34,7 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
     rope_num_heads = 1
 
     # Create input PyTorch tensors
-    torch.manual_seed(0)
+    torch.manual_seed(position_id)
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
     torch_W_dkv_rope = torch.randn(W_dkv_rope_shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn((1, 512), dtype=torch.bfloat16)
@@ -241,13 +241,48 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=output_mem_config,
+        tile=output_tile,
+    )
+
+    # KV Cache tensor in DRAM (interleaved)
+    # Shape: [max_seq_len, kv_dim] where kv_dim = 512 (nope) + 64 (rope) = 576
+    dram_grid_size = device.dram_grid_size()
+    kv_cache_seq_len = (
+        dram_grid_size.x * dram_grid_size.y
+    )  # For simplicity, just test up to number of DRAM banks, with one shard per bank
+    assert (
+        position_id < kv_cache_seq_len
+    ), f"Position ID {position_id} must be less than KV cache sequence length {kv_cache_seq_len}"
+    kv_cache_dim = 576  # 512 (nope) + 64 (rope)
+    kv_cache_shape = (1, 1, kv_cache_seq_len, kv_cache_dim)
+    torch_kv_cache = torch.zeros(kv_cache_shape, dtype=torch.bfloat16)
+    # Get device DRAM grid size
+    kv_cache_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
+        ),
+        [1, kv_cache_dim],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    kv_cache_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, kv_cache_shard_spec
+    )
+    # Create tensor with DRAM sharded memory config
+    ttnn_kv_cache = ttnn.from_torch(
+        torch_kv_cache,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=kv_cache_mem_config,
         tile=tile,
     )
+
+    logger.info(f"Created KV cache tensor in DRAM with shape {kv_cache_shape}")
 
     logger.info(f"Created tensors sharded on single core with shard shape {output_shard_shape}")
     logger.info(f"Done creating TT tensors.")
     logger.info("Running KV cache branch operation...")
-    ttnn_result = KVCacheBranch.op(
+    _ = KVCacheBranch.op(
         ttnn_input,
         ttnn_W_dkv_rope,
         ttnn_gamma,
@@ -255,13 +290,9 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
         tt_sin,
         tt_trans_replicated,
         ttnn_output,
+        ttnn_kv_cache,
+        kv_cache_write_index=position_id,  # Which sequence position to write to
     )
-
-    # Convert back to torch for verification
-    output_torch = ttnn.to_torch(ttnn_result)
-
-    expected_shape = (1, 512)
-    assert output_torch.shape == expected_shape, f"Expected shape {expected_shape}, got {output_torch.shape}"
 
     logger.info("Running KV cache branch golden reference...")
     # Compute reference output using PyTorch
@@ -275,15 +306,17 @@ def test_kv_cache_branch(device, epsilon, use_fp32):
         epsilon=epsilon,
     )
 
-    torch_expected = torch_expected[:, :512]
-    max_diff = torch.max(torch.abs(output_torch - torch_expected)).item()
-    mean_diff = torch.mean(torch.abs(output_torch - torch_expected)).item()
+    # Read back from kv cache tensor in DRAM to check PCC
+    torch_kv_cache = ttnn.to_torch(ttnn_kv_cache)
+    compare_kv_cache = torch_kv_cache[:, :, position_id, :]
+    max_diff = torch.max(torch.abs(torch_expected - compare_kv_cache)).item()
+    mean_diff = torch.mean(torch.abs(torch_expected - compare_kv_cache)).item()
     logger.info(f"Max absolute difference: {max_diff}")
     logger.info(f"Mean absolute difference: {mean_diff}")
 
     from models.common.utility_functions import comp_pcc
 
-    passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)
+    passing, pcc_message = comp_pcc(compare_kv_cache, torch_expected, 0.98)
     logger.info(pcc_message)
     assert passing, pcc_message
 
