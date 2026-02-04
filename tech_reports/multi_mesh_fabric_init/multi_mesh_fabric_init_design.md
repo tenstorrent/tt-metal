@@ -116,14 +116,20 @@ tt-run \
 
 ### 3.2 Flow Diagram
 
-![Current Flow Diagram](diagram1_current_flow.png)
+![Current Flow Diagram](./diagram1_current_flow.png)
 
 ### 3.3 Explanation
-1.  **Allocation:** User requests nodes via SLURM (`salloc` or `srun`).
-2.  **Configuration:** User creates a `rank_bindings.yaml` that maps MPI ranks to specific `mesh_id`s and sets `TT_VISIBLE_DEVICES`.
-3.  **Execution:** User runs `tt-run`.
-    *   `tt-run --rank-binding rank_bindings.yaml ./build/test/tt_metal/my_app`
-4.  **Initialization:** `tt-run` launches processes. Each process initializes the Metal backend. Rank bindings determine the pipeline.
+1.  **Allocation (Step 1):** User requests nodes via SLURM (`salloc`). SLURM allocates nodes and returns them to the user.
+2.  **Configuration (Step 2):** User manually creates all configuration files:
+    *   `rank_bindings.yaml` - maps MPI ranks to `mesh_id`s and `TT_VISIBLE_DEVICES`
+    *   `mesh_graph_descriptor.textproto` - defines the logical topology
+    *   `rankfile.txt` - specifies MPI rank to host mappings
+    *   `TT_VISIBLE_DEVICES` - environment variable defining visible devices
+3.  **Execution (Step 3):** User executes `tt-run`, supplying all configuration files:
+    *   `tt-run --rank-binding rank_bindings.yaml --rankfile rankfile.txt ./build/test/tt_metal/my_app`
+4.  **Launch (Step 4):** `tt-run` launches multiple MPI processes (one per rank).
+5.  **Discovery and Mapping (Step 5):** Each MPI process initializes its Control Plane instance. The Control Planes perform discovery and mapping of the fabric topology. Control Planes communicate with each other to coordinate.
+6.  **Fabric Init and Execution (Step 6):** Each Control Plane programs its corresponding TT Device. Control Planes communicate bidirectionally, and TT Devices communicate with each other. There is no global validation - each Control Plane operates independently based on the manually provided rank bindings.
 
 ---
 
@@ -212,17 +218,124 @@ tt-run \
   ./bh_blitz_decode
 ```
 
-### 5.2 Flow Diagram
+### 5.2 Physical Groupings File (Phase 1 Use)
 
-![Phase 1 Flow Diagram](diagram2_phase1_flow.png)
+FM consumes a Physical Groupings file, which defines the hierarchical structure of physical resources (meshes, pods, superpods, clusters) in the cluster. This file is provided by the cluster administrator and is used by FM to understand which subsets of ASICs can be used as candidate physical meshes for a given logical mesh in the MGD.
 
-### 5.3 Explanation
-1.  **FM Initialization:** FM runs as a persistent daemon and discovers the whole cluster's physical graph.
-2.  **Allocation Request:** User submits a job with a Mesh Graph Descriptor (MGD).
-3.  **Topology Resolution:** SLURM plugin queries FM. FM uses the **Topology Mapper** (from PR 36174) to find a valid placement for the MGD.
-4.  **Binding Generation:** FM returns the allocation. This allocation is used to auto-generate a `rank_bindings.yaml` (removing manual error).
-5.  **Execution:** `tt-run` is invoked with the generated bindings.
-6.  **Runtime:** Metal initializes. The Control Plane uses the MGD and bindings. It performs validation using the PR 36174 mapper logic locally, while inter-mesh connections are dictated by the valid rank bindings provided by FM.
+The groupings file is conceptually structured as follows:
+
+```yaml
+# physical_groupings.yaml (conceptual)
+# Base layer group definitions: always in terms of ASIC IDs.
+
+asic_groups:
+  # Arbitrary group IDs; names are opaque labels, not tied to hosts or meshes.
+  - id: 0
+    asic_ids: [10001, 10002, 10003, 10004, 10005, 10006, 10007, 10008]
+  - id: 1
+    asic_ids: [10101, 10102, 10103, 10104, 10105, 10106, 10107, 10108]
+  - id: 2
+    asic_ids: [10201, 10202, 10203, 10204, 10205, 10206, 10207, 10208]
+  - id: 3
+    asic_ids: [10301, 10302, 10303, 10304, 10305, 10306, 10307, 10308]
+
+# Higher levels reference lower levels only by group IDs; the labels here are descriptive only.
+
+mesh_groups:
+  - id: 10
+    # This mesh is composed of asic_group 0
+    group_ids: [0]
+  - id: 11
+    # This mesh is composed of asic_group 1
+    group_ids: [1]
+
+pod_groups:
+  - id: 20
+    group_ids: [10, 11]
+
+superpod_groups:
+  - id: 30
+    group_ids: [20]
+
+cluster_groups:
+  - id: 40
+    group_ids: [30]
+```
+
+This is complementary to the Physical System Descriptor (PSD):
+
+*   **PSD**: Flat graph of all ASICs + links.
+*   **Groupings**: Allowed carve‑outs (meshes/pods/superpods/clusters) over that flat graph.
+
+FM uses both to build the PhysicalMultiMeshGraph consumed by the multi‑mesh solver. In Phase 1, FM treats the groupings file as the source of truth for:
+
+*   Which subsets of ASICs can be used as candidate physical meshes for a given logical mesh in the MGD.
+*   How those meshes can be composed into pods and superpods that match higher-level graph_descriptors.
+*   Which placement constraints must be enforced (e.g., avoid splitting dual-chip boards or hosts unless explicitly allowed) when solving multi-mesh mappings.
+*   Narrowing the search space for the topology solver so multi-mesh mapping only considers physically valid groupings.
+
+The groupings file is provided by SLURM (or the cluster administrator) to FM at startup or during placement queries.
+
+### 5.3 Flow Diagram
+
+![Phase 1 Flow Diagram](./diagram2_phase1_flow.png)
+
+### 5.4 Explanation
+1.  **Create MGD (Step 1):**
+    *   User creates the `mesh_graph_descriptor.textproto` file
+    *   File defines the logical topology (mesh descriptors, graph descriptors, top-level instance)
+
+2.  **Allocation Request (Step 2):**
+    *   User submits job to SLURM with MGD (`salloc w/ MGD`)
+    *   MGD file is provided to SLURM scheduler
+    *   Physical Groupings file (`physical_groupings.yaml`) is passed to SLURM scheduler
+
+3.  **Physical Groupings File:**
+    *   Cluster-wide configuration file (managed by cluster administrator)
+    *   Defines hierarchical structure: meshes, pods, superpods, clusters
+    *   Specifies which subsets of ASICs can be used as candidate physical meshes
+    *   FM loads this file at startup
+    *   Used together with Physical System Descriptor (PSD) to build PhysicalMultiMeshGraph
+    *   Constrains placement decisions
+
+4.  **Query and Parse (Step 3):**
+    *   SLURM queries Fabric Manager for placement
+    *   SLURM provides MGD to Fabric Manager
+    *   Fabric Manager parses MGD for mapping
+    *   Fabric Manager uses Physical Groupings file to understand physical cluster hierarchy
+    *   Fabric Manager uses Topology Mapper (from PR 36174) to solve topology
+    *   Topology Mapper uses groupings information to find valid placement
+
+5.  **Generate Configuration (Step 4):**
+    *   Fabric Manager auto-generates `generated_rank_bindings.yaml`
+        *   Maps MPI ranks to physical resources
+    *   Fabric Manager auto-generates `rankfile.txt`
+        *   Maps MPI rank to host mappings
+    *   Allocation details returned to SLURM
+    *   SLURM notifies user of allocation
+
+6.  **Execution (Step 5):**
+    *   User executes `tt-run` command
+    *   Supplies generated `generated_rank_bindings.yaml` file
+    *   Supplies generated `rankfile.txt` file
+    *   Supplies MGD path
+    *   Example: `tt-run --rank-binding generated_rank_bindings.yaml --rankfile rankfile.txt ./app`
+
+7.  **Launch (Step 6):**
+    *   `tt-run` launches multiple MPI processes
+    *   One MPI process per rank
+
+8.  **Discovery and Mapping (Step 7):**
+    *   Each MPI process initializes its Control Plane instance
+    *   Control Planes perform discovery and mapping
+    *   Uses MGD and generated bindings
+    *   Control Planes communicate bidirectionally with each other
+
+9.  **Fabric Init and Execution (Step 8):**
+    *   Each Control Plane programs its corresponding TT Device
+    *   Control Planes communicate bidirectionally with each other
+    *   TT Devices communicate with each other
+    *   Control Plane performs local validation using PR 36174 mapper logic
 
 ---
 
@@ -247,35 +360,81 @@ No rank bindings file is needed.
 tt-run --fabric-manager ./bh_blitz_decode
 ```
 
-### 6.2 Flow Diagram
+### 6.2 Physical Groupings File (Phase 2 Use)
 
-![Phase 2 Flow Diagram](diagram3_phase2_flow.png)
+In Phase 2, FM continues to use the Physical Groupings file as described in Phase 1 (Section 5.2). The groupings file remains the source of truth for understanding the physical cluster hierarchy and constraining placement decisions.
 
-### 6.3 Explanation
+FM maintains the global Physical System Descriptor (PSD) and PhysicalMultiMeshGraph for the entire cluster, which are built from both the flat PSD and the hierarchical groupings file. When FM receives a placement query from SLURM, it:
 
-#### 1. Allocation & Placement (SLURM + Topology Mapper)
-The user initiates the job using SLURM.
-```bash
-# Request resources for the topology
-srun --partition galaxy --comment="mgd=my_graph.proto" --nodes=4 ...
-```
-SLURM consults the Fabric Manager. The FM uses the **Topology Mapper** to find a valid placement for the requested MGD on the physical cluster. **Note:** The user does not create any rank binding files; the configuration is implicit.
+*   Loads the Physical Groupings file (if not already loaded) to understand the cluster structure.
+*   Uses the groupings to build the PhysicalMultiMeshGraph that represents valid physical meshes, pods, superpods, and clusters.
+*   Applies the multi-mesh solver to map the logical MGD onto these physical groupings.
+*   Ensures that placement decisions respect the constraints defined in the groupings file (e.g., not splitting dual-chip boards unless explicitly allowed).
 
-#### 2. Fabric Initialization (Fabric Manager)
-Once the allocation is determined, but *before* the user's application runs, the Fabric Manager takes control.
-*   **Binding Generation:** FM internally generates the rank bindings and determines the correct `TT_VISIBLE_DEVICES` for each rank based on the topology mapping.
-*   **Device Programming:** FM initializes the fabric on the allocated chips. It compiles and uploads router binaries and configures routing tables. This step may utilize a "Control Plane" process running via MPI "under the hood" to handle the low-level device interactions.
-*   **Readiness:** The fabric is now fully configured and ready for traffic.
+The groupings file is a cluster-wide configuration file that exists independently (typically managed by the cluster administrator), similar to Phase 1. FM loads this file at startup and uses it for all placement queries.
 
-#### 3. Execution (User Application)
-The user launches the application.
-```bash
-tt-run --fabric-manager ./bh_blitz_decode
-```
+### 6.3 Flow Diagram
 
-When the application starts, it seamlessly picks up the configuration from Step 2:
-1.  **Context Init:** The Control Plane (CP) inside the user app connects to FM using the session ID.
-2.  **Handshake:** CP sends its **MPI Rank** to FM.
-3.  **Resolution:** FM returns the pre-calculated device mapping (ASIC IDs) from Step 2.
-4.  **Visibility:** The CP internally configures `TT_VISIBLE_DEVICES` (or equivalent) so the process only sees its assigned devices.
-5.  **Proceed:** Since the fabric was initialized in Step 2, the CP simply verifies the state and the application proceeds.
+![Phase 2 Flow Diagram](./diagram3_phase2_flow.png)
+
+### 6.4 Explanation
+
+#### 1. Create MGD (Step 1)
+*   User creates the `mesh_graph_descriptor.textproto` file
+*   File defines the logical topology (mesh descriptors, graph descriptors, top-level instance)
+
+#### 2. Allocation Request (Step 2)
+*   User submits job to SLURM with MGD (`srun w/ MGD`)
+*   MGD file is provided to SLURM scheduler
+*   Physical Groupings file (`physical_groupings.yaml`) is passed to SLURM scheduler
+
+#### 3. Physical Groupings File
+*   Cluster-wide configuration file (managed by cluster administrator)
+*   Defines hierarchical structure: meshes, pods, superpods, clusters
+*   Specifies which subsets of ASICs can be used as candidate physical meshes
+*   FM loads this file at startup
+*   Used together with Physical System Descriptor (PSD) to build PhysicalMultiMeshGraph
+*   Constrains placement decisions
+
+#### 4. Query and Parse (Step 3)
+*   SLURM queries Fabric Manager for placement
+*   SLURM provides MGD to Fabric Manager
+*   Fabric Manager parses MGD for mapping
+*   Fabric Manager uses Physical Groupings file to understand physical cluster hierarchy
+*   Fabric Manager uses Topology Mapper to solve topology
+*   Topology Mapper uses groupings information to find valid placement
+
+#### 5. Discovery and Telemetry (Step 4)
+*   Fabric Manager communicates bidirectionally with multiple Fabric Agents via gRPC
+*   Communication enables discovery of physical fabric topology
+*   Communication enables collection of telemetry data from each agent
+*   Fabric Manager coordinates discovery and telemetry collection across all agents
+
+#### 6. Fabric Init (Step 5)
+*   Each Fabric Agent performs fabric initialization on its corresponding TT Device (Unified Kernel)
+*   Programming routing tables
+*   Configuring the unified kernel
+*   Preparing the device for execution
+*   Devices are now ready for use
+
+#### 7. Execution (Step 6)
+*   User executes `tt-run` command
+*   No rank bindings file needed
+*   Example: `tt-run --fabric-manager ./bh_blitz_decode`
+
+#### 8. Handshake (Step 7)
+*   `tt-run` performs bidirectional handshake with Fabric Manager
+*   Obtains session configuration
+*   Obtains device mappings
+
+#### 9. Launch MPI Processes (Step 8)
+*   `tt-run` launches multiple MPI processes
+*   One MPI process per rank
+*   Each MPI process will run directly on its assigned device
+
+#### 10. Execution (Step 9)
+*   Each MPI process executes on its corresponding TT Device
+*   TT Devices communicate bidirectionally with each other
+*   Fabric was fully initialized in Steps 4-5
+*   MPI processes can immediately begin execution
+*   No additional Control Plane initialization needed

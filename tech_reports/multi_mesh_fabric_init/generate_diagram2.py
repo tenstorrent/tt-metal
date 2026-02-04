@@ -23,6 +23,7 @@ with dot.subgraph(name="cluster_FM_System") as fm_sys:
     dot.edge("FM", "Topo", label="Map MGD", style="solid", color="#0066CC")
     dot.edge("Topo", "FM", label="Allocation", style="solid", color="#0066CC")
 
+dot.node("Groupings", "physical_groupings.yaml", shape="note", style="filled", fillcolor="#FFB6C1", fontsize="10")
 dot.node(
     "MGD_Input", "mesh_graph_descriptor.textproto", shape="note", style="filled", fillcolor="#FFB6C1", fontsize="10"
 )
@@ -57,9 +58,10 @@ with dot.subgraph() as r1:
     r1.attr(rank="same")
     r1.node("User")
 
-# Rank 2: MGD
+# Rank 2: Groupings and MGD (Groupings on left)
 with dot.subgraph() as r2:
     r2.attr(rank="same")
+    r2.node("Groupings")
     r2.node("MGD_Input")
 
 # Rank 3: SLURM
@@ -105,7 +107,8 @@ with dot.subgraph() as r9:
     r9.node("Device3")
 
 # --- Vertical Alignment (Invisible) ---
-dot.edge("User", "MGD_Input", style="invis")
+dot.edge("User", "Groupings", style="invis")
+dot.edge("Groupings", "MGD_Input", style="invis")
 dot.edge("MGD_Input", "SLURM", style="invis")
 dot.edge("SLURM", "FM", style="invis")
 dot.edge("FM", "GenRankBindings", style="invis")
@@ -115,6 +118,7 @@ dot.edge("MPI1", "CP1", style="invis")
 dot.edge("CP1", "Device1", style="invis")
 
 # Keep multiple instances aligned
+dot.edge("Groupings", "MGD_Input", style="invis")
 dot.edge("MPI1", "MPI2", style="invis")
 dot.edge("MPI2", "MPI3", style="invis")
 dot.edge("CP1", "CP2", style="invis")
@@ -128,8 +132,10 @@ dot.edge("Device2", "Device3", style="invis")
 dot.edge("User", "MGD_Input", label="1. Create", style="dashed")
 dot.edge("User", "SLURM", label="2. salloc w/ MGD")
 dot.edge("MGD_Input", "SLURM", label="Receive", style="dashed", constraint="false")
+dot.edge("Groupings", "SLURM", label="Pass", style="dashed", constraint="false")
 dot.edge("SLURM", "FM", label="3. Query")
 dot.edge("MGD_Input", "FM", label="Parse for mapping", constraint="false")
+dot.edge("Groupings", "FM", label="Grouping info", style="dashed", constraint="false")
 dot.edge("FM", "GenRankBindings", label="4. Generate")
 dot.edge("FM", "Rankfile", label="Generate")
 dot.edge("FM", "SLURM", label="Return", style="dashed", constraint="false")

@@ -12,6 +12,7 @@ dot.attr("edge", fontsize="10", fontname="Arial")
 # --- Nodes ---
 
 dot.node("User", "User", shape="ellipse", style="filled", fillcolor="#FFE5B4", width="1.5")
+dot.node("Groupings", "physical_groupings.yaml", shape="note", style="filled", fillcolor="#FFB6C1", fontsize="10")
 dot.node(
     "MGD_Input", "mesh_graph_descriptor.textproto", shape="note", style="filled", fillcolor="#FFB6C1", fontsize="10"
 )
@@ -57,9 +58,10 @@ with dot.subgraph() as r1:
     r1.attr(rank="same")
     r1.node("User")
 
-# Rank 2: MGD
+# Rank 2: Groupings and MGD (Groupings on left)
 with dot.subgraph() as r2:
     r2.attr(rank="same")
+    r2.node("Groupings")
     r2.node("MGD_Input")
 
 # Rank 3: SLURM
@@ -99,8 +101,9 @@ with dot.subgraph() as r8:
     r8.node("Device3")
 
 # --- Vertical Alignment (Invisible) ---
-# Main column: User -> MGD -> SLURM -> FM -> Agents -> Devices
-dot.edge("User", "MGD_Input", style="invis")
+# Main column: User -> Groupings -> MGD -> SLURM -> FM -> Agents -> Devices
+dot.edge("User", "Groupings", style="invis")
+dot.edge("Groupings", "MGD_Input", style="invis")
 dot.edge("MGD_Input", "SLURM", style="invis")
 dot.edge("SLURM", "FM", style="invis")
 dot.edge("FM", "Agent2", style="invis")  # Center agent
@@ -110,6 +113,7 @@ dot.edge("Agent2", "Device2", style="invis")  # Center device
 dot.edge("TTRun", "MPI2", style="invis")  # tt-run above center MPI (maintains vertical spacing)
 
 # Horizontal alignment within groups
+dot.edge("Groupings", "MGD_Input", style="invis")
 dot.edge("Agent1", "Agent2", style="invis")
 dot.edge("Agent2", "Agent3", style="invis")
 dot.edge("MPI1", "MPI2", style="invis")
@@ -126,8 +130,10 @@ dot.edge("Agent3", "TTRun", style="invis")  # Separate left and right columns
 dot.edge("User", "MGD_Input", label="1. Create", style="dashed")
 dot.edge("User", "SLURM", label="2. srun w/ MGD")
 dot.edge("MGD_Input", "SLURM", label="Receive", style="dashed", constraint="false")
+dot.edge("Groupings", "SLURM", label="Pass", style="dashed", constraint="false")
 dot.edge("SLURM", "FM", label="3. Query")
 dot.edge("MGD_Input", "FM", label="Parse for mapping", constraint="false")
+dot.edge("Groupings", "FM", label="Grouping info", style="dashed", constraint="false")
 
 # FM bidirectional gRPC communication with all Fabric Agents
 dot.edge("FM", "Agent1", label="4. gRPC", dir="both", color="#006400", penwidth="2.0")
