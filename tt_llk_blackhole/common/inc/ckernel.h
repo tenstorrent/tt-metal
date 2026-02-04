@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ckernel_common_ops.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "internal/risc_attribs.h"
