@@ -54,7 +54,6 @@
 //      e^x * 1/∑e^x
 // 2: Loop till we have parsed all of WT
 //clang-format on
-namespace NAMESPACE {
 void apply_fused_scale_mask(
     uint32_t cb_in, uint32_t cb_fused_scale_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
 void apply_fused_attn_mask(
@@ -70,7 +69,7 @@ void reduce_cb(
     bool use_prev_reduce,
     uint32_t cb_length_t);
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
-void MAIN {
+void kernel_main() {
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
     const uint32_t Ht = get_arg_val<uint32_t>(1);
     const uint32_t Wt = get_arg_val<uint32_t>(2);
@@ -507,5 +506,3 @@ void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb
         tile_regs_release();
     }
 }
-
-}  // namespace NAMESPACE
