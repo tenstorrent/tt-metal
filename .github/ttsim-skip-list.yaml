@@ -84,8 +84,8 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/pool/test_rotate.py
 
-  # Conv tests (timeout)
-  - "tests/ttnn/unit_tests/operations/conv/test_conv1d.py::test_conv1d_mamba[output_layout=Layout.TILE-math_fidelity=MathFidelity.LoFi-output_dtype=DataType.BFLOAT8_B-activations_dtype=DataType.BFLOAT16-weights_dtype=DataType.BFLOAT8_B-batch_size=1-output_channels=5120-input_channels=5120-input_length=1024-kernel_size=4-stride=1-padding=3-groups=5120-use_1d_systolic_array=True-config_override=None-device_params={'l1_small_size': 16384}]"
+  # Conv tests (timeout on specific tests)
+  - tests/ttnn/unit_tests/operations/conv/test_conv1d.py
 
   # Matmul tests
   - tests/ttnn/unit_tests/operations/matmul/test_addmm.py
