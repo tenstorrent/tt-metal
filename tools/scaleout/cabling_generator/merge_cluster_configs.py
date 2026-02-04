@@ -13,11 +13,14 @@ Usage:
         --deployment1 <path> \
         [--deployment2 <path>] \
         --output-dir <path> \
-        [--temp-dir <path>]
+        [--temp-dir <path>] \
+        [--build-dir <name>]
 
   deployment1 is required (first cluster: cabling + deployment).
   deployment2 is optional; if omitted, the merged deployment is deployment1 only
   (use when merging with a cabling-only second cluster).
+  build-dir optionally specifies which build directory to use (e.g., build_Release,
+  build_Debug). If not specified, searches common build directories automatically.
 
 Generates in output-dir:
     - merged_fsd.textproto
