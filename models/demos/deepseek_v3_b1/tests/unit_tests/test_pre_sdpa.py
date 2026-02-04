@@ -48,7 +48,7 @@ def create_fabric_router_config(max_payload_size):
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,  # 4MB for trace buffer
+            "trace_region_size": 573440,
         }
     ],
     indirect=True,
@@ -711,7 +711,6 @@ def test_pre_sdpa(
     )
 
     slice_size = sdpa_input_output_shape[0]
-    actual_width = ttnn_sdpa_input_result.shape[1]
     expected_width = 4608
 
     for device_idx in range(mesh_rows * mesh_cols):

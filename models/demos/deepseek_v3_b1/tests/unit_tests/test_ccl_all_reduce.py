@@ -46,7 +46,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("use_persistent", [True])
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)  # Open full mesh, create submesh
-@pytest.mark.parametrize("num_iter, num_warmup_iter", [30, 15])
+@pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
     [
