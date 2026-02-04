@@ -124,9 +124,14 @@ class NanoGPT(AbstractModuleBase):
             self.pos_emb = TrainablePositionalEmbedding(
                 config.block_size, config.n_embd, config.dropout
             )
-        else:
+        elif config.positional_embedding_type == "fixed":
             self.pos_emb = PositionalEmbedding(
                 config.block_size, config.n_embd, config.dropout
+            )
+        else:
+            raise ValueError(
+                f"Unsupported positional_embedding_type="
+                f"{config.positional_embedding_type!r}; expected 'trainable' or 'fixed'."
             )
 
         # Transformer blocks (ModuleList auto-registers all blocks)

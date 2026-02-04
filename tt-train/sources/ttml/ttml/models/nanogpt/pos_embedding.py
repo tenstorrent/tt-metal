@@ -14,7 +14,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode
 
 
-def sinusoidal_positional_embedding_np(seq_len: int, d_model: int) -> np.ndarray:
+def sin_pos_embedding_np(seq_len: int, d_model: int) -> np.ndarray:
     """
     Create sinusoidal positional embeddings as described in "Attention Is All You Need".
 
@@ -25,6 +25,9 @@ def sinusoidal_positional_embedding_np(seq_len: int, d_model: int) -> np.ndarray
     Returns:
         Positional embeddings of shape (seq_len, d_model)
     """
+    if d_model % 2 != 0:
+        raise ValueError(f"d_model must be even, got {d_model}")
+
     position = np.arange(seq_len)[:, np.newaxis]  # (seq_len, 1)
     div_term = np.exp(
         np.arange(0, d_model, 2) * (-np.log(10000.0) / d_model)
@@ -56,7 +59,7 @@ class PositionalEmbedding(AbstractModuleBase):
         self.dropout_prob = dropout_prob
 
         device = ttml.autograd.AutoContext.get_instance().get_device()
-        emb_np = sinusoidal_positional_embedding_np(sequence_length, embedding_dim)
+        emb_np = sin_pos_embedding_np(sequence_length, embedding_dim)
         emb_np = emb_np.astype(np.float32)
         emb_np = emb_np.reshape(1, 1, sequence_length, embedding_dim)
         # TODO: Migrate to autograd tensor after branch pruning optimization.
