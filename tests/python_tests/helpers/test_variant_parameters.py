@@ -19,6 +19,7 @@ from .llk_params import (
     EltwiseBinaryReuseDestType,
     FastMode,
     ImpliedMathFormat,
+    L1Accumulation,
     MathFidelity,
     MathOperation,
     NarrowTile,
@@ -365,6 +366,19 @@ class DEST_INDEX(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"int DST_INDEX;", "i"
+
+
+@dataclass
+class L1_ACC(RuntimeParameter):
+    l1_acc: L1Accumulation = L1Accumulation.No
+
+    def covert_to_cpp(self) -> str:
+        return (
+            f"constexpr int L1_ACC = {1 if self.l1_acc == L1Accumulation.Yes else 0};"
+        )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"int L1_ACC;", "i"
 
 
 @dataclass

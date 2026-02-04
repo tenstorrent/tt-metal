@@ -16,7 +16,7 @@ from ttexalens.tt_exalens_lib import write_to_device
 
 from .device import BootMode, wait_for_tensix_operations_finished
 from .format_config import FormatConfig
-from .llk_params import DestAccumulation, PerfRunType
+from .llk_params import DestAccumulation, L1Accumulation, PerfRunType
 from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
 from .test_config import ProfilerBuild, TestConfig, TestMode
@@ -280,6 +280,7 @@ class PerfConfig(TestConfig):
         unpack_to_dest=False,
         disable_format_inference=False,
         dest_acc=DestAccumulation.No,
+        l1_acc=L1Accumulation.No,
     ):
         super().__init__(
             test_name,
@@ -293,6 +294,7 @@ class PerfConfig(TestConfig):
             unpack_to_dest,
             disable_format_inference,
             dest_acc,
+            l1_acc,
         )
 
         self.passed_templates = templates

@@ -43,6 +43,7 @@ from .device import (
 from .format_config import DataFormat, FormatConfig
 from .llk_params import (
     DestAccumulation,
+    L1Accumulation,
 )
 from .stimuli_config import StimuliConfig
 from .test_variant_parameters import RuntimeParameter, TemplateParameter
@@ -312,6 +313,7 @@ class TestConfig:
         unpack_to_dest: bool = False,
         disable_format_inference: bool = False,
         dest_acc: DestAccumulation = DestAccumulation.No,
+        l1_acc: L1Accumulation = L1Accumulation.No,
         skip_build_header: bool = False,
     ):
         self.coverage_build = (
@@ -334,6 +336,7 @@ class TestConfig:
         self.unpack_to_dest = unpack_to_dest
         self.disable_format_inference = disable_format_inference
         self.dest_acc = dest_acc
+        self.l1_acc = l1_acc
         self.skip_build_header = skip_build_header
 
         self.process_runtime_args()
@@ -577,11 +580,13 @@ class TestConfig:
         ]
 
         dest_acc = self.dest_acc
+        l1_acc = self.l1_acc
 
         if self.formats is None:
             header_content.extend(
                 [
                     f"constexpr bool is_fp32_dest_acc_en = {dest_acc.value};",
+                    f"constexpr bool l1_acc_en = {l1_acc.value};",
                     f"constexpr bool unpack_to_dest = {str(self.unpack_to_dest).lower()};",
                     "",
                 ]
@@ -598,6 +603,9 @@ class TestConfig:
 
         # Dest accumulation
         header_content.append(f"constexpr bool is_fp32_dest_acc_en = {dest_acc.value};")
+
+        # L1 accumulation
+        header_content.append(f"constexpr bool l1_acc_en = {l1_acc.value};")
 
         # Fused Test L1 to L1 : Input of first run is used as input for the second run ...
         # Not fusing: single L1-to-L1 iteration, so we retrieve one format configuration

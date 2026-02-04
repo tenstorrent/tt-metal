@@ -183,6 +183,11 @@ class DestAccumulation(Enum):
     No = "false"
 
 
+class L1Accumulation(Enum):
+    Yes = 1
+    No = 0
+
+
 class StochasticRounding(Enum):
     No = "StochRndType::None"
     Fpu = "StochRndType::Fpu"
