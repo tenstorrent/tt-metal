@@ -1,0 +1,23 @@
+# Physical Groupings File for 3-Pod 16x8 Blackhole Galaxy Cluster
+# This file defines groupings in terms of base units without requiring ASIC IDs
+# The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD)
+
+groupings:
+  - base_units:
+      - asic_location_1
+      - asic_location_2
+      - asic_location_3
+      - asic_location_4
+      - asic_location_5
+      - asic_location_6
+      - asic_location_7
+      - asic_location_8
+
+  - trays:
+      asic_locations: [asic_location_1, asic_location_2, asic_location_3, asic_location_4, asic_location_5, asic_location_6, asic_location_7, asic_location_8]
+
+  - hosts:
+      trays: 4
+
+  - meshes:
+      hosts: 1  # Each mesh = 1 host (meshes can have 1 item)

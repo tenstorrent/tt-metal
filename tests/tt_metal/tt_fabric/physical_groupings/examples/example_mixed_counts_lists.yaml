@@ -1,0 +1,38 @@
+# Example: Mixed Counts - Combining Different Grouping Types
+# This example shows mixing different types of lower-level groupings within a single grouping
+# You can combine pods, meshes, superpods, etc. in any combination
+
+groupings:
+  - base_units:
+      - asic_location_1
+      - asic_location_2
+      - asic_location_3
+      - asic_location_4
+      - asic_location_5
+      - asic_location_6
+      - asic_location_7
+      - asic_location_8
+
+  - trays:
+      asic_locations: [asic_location_1, asic_location_2, asic_location_3, asic_location_4, asic_location_5, asic_location_6, asic_location_7, asic_location_8]
+
+  - hosts:
+      trays: 4
+
+  - meshes:
+      hosts: 1  # Each mesh contains 1 host (meshes can have 1 item)
+
+  - pods:
+      meshes: 2  # Each pod contains 2 meshes
+      # Can also mix: meshes: 2, hosts: 8, etc. (if referencing lower-level units)
+
+  - superpods:
+      pods: 2  # Contains 2 pods
+      meshes: 4  # Also contains 4 meshes directly (mixed with pods)
+      # Example: 2 pods + 4 meshes = 8 total meshes (2 from pods + 4 direct)
+
+  - clusters:
+      superpods: 2  # Contains 2 superpods
+      pods: 2  # Also contains 2 pods directly
+      meshes: 3  # Also contains 3 meshes directly
+      # Example: 2 superpods (each with 2 pods + 4 meshes) + 2 pods + 3 meshes
