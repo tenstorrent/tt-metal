@@ -34,7 +34,7 @@ void kernel_main() {
     }
 
     // Get receiver data address from runtime arg (dst CB doesn't exist on sender cores)
-    uint32_t receiver_data_addr = get_arg_val<uint32_t>(0);
+    uint32_t receiver_data_addr = get_common_arg_val<uint32_t>(0);
 
     // Gather sender args (from compile-time args, passed to op as runtime args)
     Gather::SenderArgs gather_args{
