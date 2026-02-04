@@ -272,7 +272,23 @@ git log --oneline -10
 ```bash
 # The test stays on the old branch, not in the PR
 git rm path/to/test_repro.py
+git rm run_test.sh 2>/dev/null || true  # Remove bash script if present
 git commit -m "Remove reproduction test (kept on dev branch)"
+```
+
+**CRITICAL: Verify PR contents are clean**:
+```bash
+# Check what will be in the PR (should only be source files)
+git diff main...HEAD --name-only
+
+# Should NOT include:
+# - info.json
+# - .github/scripts/ files
+# - test files
+# - run_test.sh
+
+# Should ONLY include:
+# - Modified source files (*.cpp, *.hpp, *.py in main codebase)
 ```
 
 **Clean up any debug code**:
