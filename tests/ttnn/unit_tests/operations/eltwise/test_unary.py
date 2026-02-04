@@ -1073,7 +1073,7 @@ def test_unary_atanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, low, high, devi
 )
 @pytest.mark.parametrize(
     "param",
-    {0.65, 7.7, 36.49, 58.6, 97.2},
+    (0.65, 7.7, 36.49, 58.6, 97.2),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1103,7 +1103,7 @@ def test_unary_shrink_functions_ttnn(input_shapes, param, torch_dtype, ttnn_dtyp
 )
 @pytest.mark.parametrize(
     "param",
-    {7.0, 36.49, 58.5, 97.2},
+    (7.0, 36.49, 58.5, 97.2),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1131,7 +1131,7 @@ def test_unary_shrink_functions_bf8b_ttnn(input_shapes, param, ttnn_function, de
 )
 @pytest.mark.parametrize(
     "param",
-    {0.45, 7.7, 197.2, 1e5},
+    (0.45, 7.7, 197.2, 1e5),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1911,7 +1911,7 @@ def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fas
 
 @pytest.mark.parametrize(
     "param",
-    {-1.5, 1.7, 0.0},
+    (-1.5, 0.0, 1.7),
 )
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 def test_unary_rdiv_inf_nan_check(param, rounding_mode, device):
@@ -1944,7 +1944,7 @@ def test_unary_rdiv_inf_nan_check(param, rounding_mode, device):
 )
 @pytest.mark.parametrize(
     "param",
-    {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9},
+    (-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9),
 )
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
