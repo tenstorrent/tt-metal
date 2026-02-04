@@ -228,6 +228,10 @@ class DistributedLayerNorm(Module):
     Implements LayerNorm on an activation sharded on the reduction dimension.
     """
 
+    # Shared dictionary to store reciprocal tensors
+    # Key: width_per_device, Value: recip_tensor
+    _recip_tensors = {}
+
     def __init__(
         self,
         embedding_dim,
@@ -274,14 +278,21 @@ class DistributedLayerNorm(Module):
             else None
         )
 
-        # Create reciprocal tensor for Welford algorithm used in dit_layernorm_pre_allgather
+        # Create or reuse reciprocal tensor for Welford algorithm used in dit_layernorm_pre_allgather
         # Width per device is embedding_dim / mesh_width
         width_per_device = embedding_dim // self.mesh_width
-        grid = mesh_device.compute_with_storage_grid_size()
-        core_range_set = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
-        )
-        self.recip_tensor = ttnn.create_layer_norm_reciprocals(mesh_device, core_range_set, width_per_device)
+
+        # Check if we already have a recip_tensor for this width_per_device
+        if width_per_device not in self._recip_tensors:
+            grid = mesh_device.compute_with_storage_grid_size()
+            core_range_set = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            )
+            self._recip_tensors[width_per_device] = ttnn.create_layer_norm_reciprocals(
+                mesh_device, core_range_set, width_per_device
+            )
+
+        self.recip_tensor = self._recip_tensors[width_per_device]
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
