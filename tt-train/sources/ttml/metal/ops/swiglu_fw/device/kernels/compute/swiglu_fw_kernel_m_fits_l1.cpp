@@ -15,7 +15,6 @@
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
-namespace NAMESPACE {
 
 // ----------------------------------------------------------------------
 // Problem:
@@ -302,7 +301,7 @@ inline void compute_M_for_r() {
 //             Y_partial[r, c] += M[r, k] * W2[k, c]
 //         store Y_partial[r, c] → Y[r, c]
 // ============================================================================
-inline void MAIN {
+void kernel_main() {
     init_sfpu(cb_input_idx, cb_y_idx);
     binary_op_init_common(cb_input_idx, cb_w1_idx, cb_y_idx);
 
@@ -345,5 +344,3 @@ inline void MAIN {
         cb_pop_front(cb_m_idx, hidden_Wt_rounded_up);
     }
 }
-
-}  // namespace NAMESPACE

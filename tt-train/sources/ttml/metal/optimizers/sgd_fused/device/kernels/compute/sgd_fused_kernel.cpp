@@ -10,8 +10,6 @@
 #include "api/compute/eltwise_binary.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
-namespace NAMESPACE {
-
 constexpr auto cb_param_in_idx = tt::CBIndex::c_0;
 constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 constexpr auto cb_momentum_in_idx = tt::CBIndex::c_2;
@@ -40,7 +38,7 @@ constexpr auto cb_output_idx = tt::CBIndex::c_16;
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 
-void MAIN {
+void kernel_main() {
     uint32_t runtime_args_counter = 0;
     const bool use_weight_decay = get_arg_val<uint32_t>(runtime_args_counter++);
     const bool use_dampening = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -171,4 +169,3 @@ void MAIN {
     cb_pop_front(cb_bcast_one_minus_dampening_idx, 1);
     cb_pop_front(cb_bcast_wd_idx, 1);
 }
-}  // namespace NAMESPACE

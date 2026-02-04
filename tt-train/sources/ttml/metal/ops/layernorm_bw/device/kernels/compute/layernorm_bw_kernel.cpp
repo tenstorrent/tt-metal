@@ -14,8 +14,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
-namespace NAMESPACE {
-
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t mask_w = get_compile_time_arg_val(2);
@@ -468,7 +466,7 @@ inline void compute_dbeta_components(
     copy_tile(cb_dL_out_idx, dy_tile_idx, dbeta_register);
 }
 
-inline void MAIN {
+void kernel_main() {
     if constexpr (do_mask_w) {
         cb_wait_front(cb_mask_w_idx, onetile);
     }
@@ -617,5 +615,3 @@ inline void MAIN {
         cb_pop_front(cb_mask_w_idx, onetile);
     }
 }
-
-}  // namespace NAMESPACE
