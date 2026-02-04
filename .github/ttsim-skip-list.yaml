@@ -2,24 +2,31 @@
 # Tests that are not compatible with TTSim simulator
 #
 # Structure:
-#   common: Tests skipped on all architectures
+#   common: Tests skipped on all architectures (multi-chip, trace, etc.)
 #   wormhole_b0: Tests skipped only on Wormhole B0
 #   blackhole: Tests skipped only on Blackhole
 
 common:
-  # Multi-chip/CCL tests
+  # Multi-chip/CCL tests - require multi-device support
   - tests/ttnn/unit_tests/operations/ccl/
   - tests/nightly/tg/
   - tests/nightly/t3000/
   - tests/ttnn/unit_tests/operations/point_to_point/
 
-  # Base functionality - various simulator limitations
+  # Multi-device tests
+  - tests/ttnn/unit_tests/base_functionality/test_multi_device.py
+
+  # Trace tests - require fast dispatch mode
+  - tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py
+
+  # Sub-device tests - require fast dispatch mode
+  - tests/ttnn/unit_tests/base_functionality/test_sub_device.py
+
+wormhole_b0:
+  # Base functionality - simulator limitations
   - tests/ttnn/unit_tests/base_functionality/test_comparison_mode.py
   - tests/ttnn/unit_tests/base_functionality/test_expand.py
-  - tests/ttnn/unit_tests/base_functionality/test_multi_device.py
-  - tests/ttnn/unit_tests/base_functionality/test_sub_device.py
   - tests/ttnn/unit_tests/base_functionality/test_roll.py
-  - tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py
   - tests/ttnn/unit_tests/base_functionality/test_tilize_untilize_2D.py
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
 
@@ -103,8 +110,6 @@ common:
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
-
-wormhole_b0: []
 
 blackhole:
   # Core tests
