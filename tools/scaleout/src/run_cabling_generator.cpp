@@ -161,6 +161,7 @@ int main(int argc, char** argv) {
         std::string factory_output = "out/scaleout/factory_system_descriptor" + config.output_name + ".textproto";
         std::string cabling_output = "out/scaleout/cabling_guide" + config.output_name + ".csv";
         std::string cabling_desc_output = "out/scaleout/cabling_descriptor" + config.output_name + ".textproto";
+        std::string deployment_output = "out/scaleout/deployment_descriptor" + config.output_name + ".textproto";
 
         // Ensure output directory exists
         std::filesystem::create_directories("out/scaleout");
@@ -175,10 +176,14 @@ int main(int argc, char** argv) {
         std::cout << "Generating merged cabling descriptor..." << std::endl;
         cabling_generator.emit_cabling_descriptor(cabling_desc_output);
 
+        std::cout << "Generating deployment descriptor..." << std::endl;
+        cabling_generator.emit_deployment_descriptor(deployment_output);
+
         std::cout << "Successfully generated:" << std::endl;
         std::cout << "  - " << factory_output << std::endl;
         std::cout << "  - " << cabling_output << std::endl;
         std::cout << "  - " << cabling_desc_output << std::endl;
+        std::cout << "  - " << deployment_output << std::endl;
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
