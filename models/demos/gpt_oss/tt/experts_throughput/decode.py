@@ -145,6 +145,12 @@ def decode_forward(
     )
     total_tokens = tokens_per_device * num_dispatch_devices  # Global tokens across dispatch axis
 
+    # Debug: bypass all_to_all dispatch/combine and moe token remap to isolate hangs.
+    disable_moe_routing = True
+    if disable_moe_routing:
+        num_dispatch_devices = 1
+        total_tokens = tokens_per_device
+
     # ==========================================================================
     # STEP 1: PREPARE INPUTS FOR ALL_TO_ALL_DISPATCH
     # ==========================================================================
@@ -156,32 +162,37 @@ def decode_forward(
     # Shape is already [1, 1, tokens_per_device, H], just ensure it's correct
     hidden_rm = ttnn.reshape(hidden_rm, shape=(1, 1, tokens_per_device, config.hidden_size))
 
-    # Expert indices: [1, 1, tokens_per_device, K]
-    topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(topk_expert_indices)
-    topk_indices_rm = ttnn.reshape(topk_indices_rm, shape=(1, 1, tokens_per_device, config.num_experts_per_tok))
+    if disable_moe_routing:
+        ttnn.deallocate(topk_expert_indices)
+        dispatch_output = hidden_rm
+        dispatch_metadata = None
+    else:
+        # Expert indices: [1, 1, tokens_per_device, K]
+        topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(topk_expert_indices)
+        topk_indices_rm = ttnn.reshape(topk_indices_rm, shape=(1, 1, tokens_per_device, config.num_experts_per_tok))
 
-    # ==========================================================================
-    # STEP 2: ALL_TO_ALL_DISPATCH - Route tokens to expert devices
-    # ==========================================================================
-    # Dispatch sends each token to the device(s) that own its assigned expert(s)
-    #
-    # Inputs (tokens on dim -2):
-    #   - hidden_rm: [1, 1, tokens_per_device, H] - token embeddings
-    #   - topk_indices_rm: [1, 1, tokens_per_device, K] - which experts each token routes to
-    #   - expert_mapping_tensors: [1, 1, E, D] - one-hot mapping of expert -> device
-    #
-    # With output_concat_dim=2, outputs have seq_len scaled:
-    #   - dispatch_output: [D, 1, total_tokens, H] - tokens scattered to expert devices
-    #   - dispatch_metadata: [D, 1, total_tokens, K] - expert indices (for combine routing)
-    dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
-        hidden_rm,
-        topk_indices_rm,
-        expert_mapping_tensors,
-        **dispatch_config.as_dict(),
-    )
-    ttnn.deallocate(hidden_rm)
-    ttnn.deallocate(topk_indices_rm)
+        # ==========================================================================
+        # STEP 2: ALL_TO_ALL_DISPATCH - Route tokens to expert devices
+        # ==========================================================================
+        # Dispatch sends each token to the device(s) that own its assigned expert(s)
+        #
+        # Inputs (tokens on dim -2):
+        #   - hidden_rm: [1, 1, tokens_per_device, H] - token embeddings
+        #   - topk_indices_rm: [1, 1, tokens_per_device, K] - which experts each token routes to
+        #   - expert_mapping_tensors: [1, 1, E, D] - one-hot mapping of expert -> device
+        #
+        # With output_concat_dim=2, outputs have seq_len scaled:
+        #   - dispatch_output: [D, 1, total_tokens, H] - tokens scattered to expert devices
+        #   - dispatch_metadata: [D, 1, total_tokens, K] - expert indices (for combine routing)
+        dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
+            hidden_rm,
+            topk_indices_rm,
+            expert_mapping_tensors,
+            **dispatch_config.as_dict(),
+        )
+        ttnn.deallocate(hidden_rm)
+        ttnn.deallocate(topk_indices_rm)
 
     # ==========================================================================
     # STEP 3: MOE_EXPERT_TOKEN_REMAP - Create sparsity pattern
@@ -194,21 +205,24 @@ def decode_forward(
     # remap_topk_mask: [1, dispatch_rows, 1, num_experts]
     # -> repeat to [1, dispatch_rows, tokens_per_device, num_experts]
     # -> reshape to [1, 1, total_tokens, num_experts] to match dispatch_metadata batch/seq dims
-    remap_mask = ttnn.repeat(remap_topk_mask, ttnn.Shape((1, 1, tokens_per_device, 1)))
-    remap_mask = ttnn.reshape(remap_mask, (1, 1, total_tokens, config.num_experts))
-    # moe_expert_token_remap returns:
-    #   - mapping: [D, tokens, 1, experts_per_device] - local expert activation weights
-    #   - sparsity: [D, 1, tokens/reduction_size, experts_per_device] - which blocks are active
-    #
-    # The sparsity tensor tells sparse_matmul which expert blocks have tokens,
-    # avoiding computation on empty slots.
-    _, sparsity = ttnn.moe_expert_token_remap(
-        remap_mask,
-        expert_mapping_tensors,
-        dispatch_metadata,
-        reduction_size=config.sparsity_block_size,
-    )
-    ttnn.deallocate(remap_mask)
+    if disable_moe_routing:
+        sparsity = None
+    else:
+        remap_mask = ttnn.repeat(remap_topk_mask, ttnn.Shape((1, 1, tokens_per_device, 1)))
+        remap_mask = ttnn.reshape(remap_mask, (1, 1, total_tokens, config.num_experts))
+        # moe_expert_token_remap returns:
+        #   - mapping: [D, tokens, 1, experts_per_device] - local expert activation weights
+        #   - sparsity: [D, 1, tokens/reduction_size, experts_per_device] - which blocks are active
+        #
+        # The sparsity tensor tells sparse_matmul which expert blocks have tokens,
+        # avoiding computation on empty slots.
+        _, sparsity = ttnn.moe_expert_token_remap(
+            remap_mask,
+            expert_mapping_tensors,
+            dispatch_metadata,
+            reduction_size=config.sparsity_block_size,
+        )
+        ttnn.deallocate(remap_mask)
 
     # ==========================================================================
     # STEP 4: PREPARE DISPATCH OUTPUT FOR EXPERT COMPUTATION
@@ -232,6 +246,15 @@ def decode_forward(
         post_dispatch,
         shape=(1, num_sparse_blocks, config.sparsity_block_size, config.hidden_size),
     )
+
+    if disable_moe_routing:
+        sparsity = ttnn.ones(
+            (1, 1, num_sparse_blocks, config.num_experts_per_device),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=dispatch_config.memory_config,
+        )
 
     memory_config = dispatch_config.memory_config
 
@@ -343,14 +366,17 @@ def decode_forward(
     # With output_shard_dim=2, output has tokens sharded on dim -2:
     # Output shape: [num_experts_per_tok, 1, tokens_per_device, H]
     # (each token gets outputs from k experts stacked in first dimension)
-    combine_output = ttnn.all_to_all_combine(
-        expert_output,
-        dispatch_metadata,
-        expert_mapping_tensors,
-        **combine_config.as_dict(),
-    )
-    ttnn.deallocate(expert_output)
-    ttnn.deallocate(dispatch_metadata)
+    if disable_moe_routing:
+        combine_output = expert_output
+    else:
+        combine_output = ttnn.all_to_all_combine(
+            expert_output,
+            dispatch_metadata,
+            expert_mapping_tensors,
+            **combine_config.as_dict(),
+        )
+        ttnn.deallocate(expert_output)
+        ttnn.deallocate(dispatch_metadata)
 
     # ==========================================================================
     # STEP 8: APPLY ROUTING WEIGHTS AND REDUCE ACROSS EXPERTS
