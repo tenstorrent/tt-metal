@@ -43,6 +43,10 @@ struct LayerNormMultiCoreProgramFactory {
         const LayerNormParams& operation_attributes,
         const LayerNormInputs& tensor_args,
         Tensor& tensor_return_value);
+
+    // Returns the default core range for non-sharded LayerNorm if a
+    // core range override is not provided
+    static CoreRangeSet default_core_range(IDevice* device);
 };
 
 }  // namespace ttnn::prim

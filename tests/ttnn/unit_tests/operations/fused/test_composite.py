@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import ttnn
 
@@ -754,3 +755,274 @@ def test_composite_program_cache_different_configs(device):
 
     cache_final = device.num_program_cache_entries()
     assert cache_final == cache_after_second, "Rerunning first configuration should not add new cache entry"
+
+
+def test_composite_layer_norm_welford_non_sharded(device):
+    """
+    Test composite layer norm with Welford algorithm on non-sharded (DRAM interleaved) inputs.
+
+    Uses two LayerNorm operations on separate core ranges with DRAM interleaved tensors
+    and Welford algorithm for numerically stable variance computation.
+    """
+    torch.manual_seed(42)
+
+    # Define non-overlapping core ranges
+    left_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
+    right_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 3))])
+
+    # Create tensor shapes
+    shape = (1, 1, 32, 1024)
+    weight_shape = (1, 1, 1, 1024)
+
+    # Create torch tensors
+    torch_left_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_left_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
+    torch_right_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_right_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
+
+    # Convert to TTNN with DRAM interleaved memory
+    left_input = ttnn.from_torch(
+        torch_left_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    left_weight = ttnn.from_torch(
+        torch_left_weight,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    right_input = ttnn.from_torch(
+        torch_right_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    right_weight = ttnn.from_torch(
+        torch_right_weight,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Create program config with Welford enabled
+    welford_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
+
+    # Create branches with Welford LayerNorm
+    left_branch = descriptors.layer_norm(
+        left_input,
+        core_range_set=left_cores,
+        epsilon=1e-5,
+        weight=left_weight,
+        program_config=welford_config,
+    )
+    right_branch = descriptors.layer_norm(
+        right_input,
+        core_range_set=right_cores,
+        epsilon=1e-5,
+        weight=right_weight,
+        program_config=welford_config,
+    )
+
+    # Run composite
+    outputs = composite.launch([left_branch, right_branch])
+
+    # Verify outputs
+    expected_left = torch_layer_norm(torch_left_input, torch_left_weight)
+    actual_left = ttnn.to_torch(ttnn.from_device(outputs[0][0]))
+    assert_allclose(expected_left, actual_left, rtol=1e-2, atol=2.5e-2)
+
+    expected_right = torch_layer_norm(torch_right_input, torch_right_weight)
+    actual_right = ttnn.to_torch(ttnn.from_device(outputs[1][0]))
+    assert_allclose(expected_right, actual_right, rtol=1e-2, atol=2.5e-2)
+
+
+def test_composite_layer_norm_welford_sharded(device):
+    """
+    Test composite layer norm with Welford algorithm on sharded (L1) inputs.
+
+    Uses two LayerNorm operations on separate core ranges with L1 width-sharded tensors
+    and Welford algorithm for numerically stable variance computation.
+    """
+    torch.manual_seed(42)
+
+    # Define non-overlapping core ranges for sharding
+    # Left half: cores (0,0)-(3,7) = 32 cores
+    left_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))])
+    # Right half: cores (4,0)-(7,7) = 32 cores
+    right_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 7))])
+
+    num_cores = 32
+    shard_width = 64  # 2 tiles per core
+    shard_height = 32  # 1 tile row
+    total_width = num_cores * shard_width  # 2048
+
+    # Create tensor shapes
+    shape = (1, 1, shard_height, total_width)
+    weight_shape = (1, 1, 1, total_width)
+
+    # Create torch tensors
+    torch_left_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_left_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
+    torch_right_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_right_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
+
+    # Create sharded memory configs
+    left_shard_spec = ttnn.ShardSpec(left_cores, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
+    left_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=left_shard_spec,
+    )
+
+    right_shard_spec = ttnn.ShardSpec(right_cores, [shard_height, shard_width], ttnn.ShardOrientation.ROW_MAJOR)
+    right_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=right_shard_spec,
+    )
+
+    # Convert to TTNN with sharded memory
+    left_input = ttnn.from_torch(
+        torch_left_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=left_mem_config,
+    )
+    left_weight = ttnn.from_torch(
+        torch_left_weight,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    right_input = ttnn.from_torch(
+        torch_right_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=right_mem_config,
+    )
+    right_weight = ttnn.from_torch(
+        torch_right_weight,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Create program config with Welford enabled for sharded
+    left_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(4, 8),
+        subblock_w=shard_width // 32,
+        block_h=shard_height // 32,
+        block_w=shard_width // 32,
+        inplace=False,
+        use_welford=True,
+    )
+    right_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(4, 8),
+        subblock_w=shard_width // 32,
+        block_h=shard_height // 32,
+        block_w=shard_width // 32,
+        inplace=False,
+        use_welford=True,
+    )
+
+    # Create branches with Welford LayerNorm
+    left_branch = descriptors.layer_norm(
+        left_input,
+        core_range_set=left_cores,
+        epsilon=1e-5,
+        weight=left_weight,
+        memory_config=left_mem_config,
+        program_config=left_program_config,
+    )
+    right_branch = descriptors.layer_norm(
+        right_input,
+        core_range_set=right_cores,
+        epsilon=1e-5,
+        weight=right_weight,
+        memory_config=right_mem_config,
+        program_config=right_program_config,
+    )
+
+    # Run composite
+    outputs = composite.launch([left_branch, right_branch])
+
+    # Verify outputs
+    expected_left = torch_layer_norm(torch_left_input, torch_left_weight)
+    actual_left = ttnn.to_torch(ttnn.from_device(outputs[0][0]))
+    assert_allclose(expected_left, actual_left, rtol=1e-2, atol=2.5e-2)
+
+    expected_right = torch_layer_norm(torch_right_input, torch_right_weight)
+    actual_right = ttnn.to_torch(ttnn.from_device(outputs[1][0]))
+    assert_allclose(expected_right, actual_right, rtol=1e-2, atol=2.5e-2)
+
+
+def test_composite_overlapping_cores_error(device):
+    """
+    Test that composite.launch() raises an error when core ranges overlap.
+
+    Overlapping core ranges between different operations in a composite
+    would cause undefined behavior, so this should be caught and rejected.
+    """
+    torch.manual_seed(42)
+
+    # Define OVERLAPPING core ranges - both include cores (2,0) to (3,3)
+    left_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
+    right_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(5, 3))])
+    # left_cores covers (0,0)-(3,3), right_cores covers (2,0)-(5,3)
+    # Overlap: (2,0)-(3,3)
+
+    # Create tensor shapes
+    shape = (1, 1, 32, 512)
+    weight_shape = (1, 1, 1, 512)
+
+    # Create torch tensors
+    torch_left_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_left_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
+    torch_right_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_right_weight = torch.rand(weight_shape, dtype=torch.bfloat16)
+
+    # Convert to TTNN with DRAM interleaved memory
+    left_input = ttnn.from_torch(
+        torch_left_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    left_weight = ttnn.from_torch(
+        torch_left_weight,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    right_input = ttnn.from_torch(
+        torch_right_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    right_weight = ttnn.from_torch(
+        torch_right_weight,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Create branches with overlapping core ranges
+    left_branch = descriptors.rms_norm(
+        left_input,
+        core_range_set=left_cores,
+        epsilon=1e-5,
+        weight=left_weight,
+    )
+    right_branch = descriptors.rms_norm(
+        right_input,
+        core_range_set=right_cores,
+        epsilon=1e-5,
+        weight=right_weight,
+    )
+
+    # Attempting to launch with overlapping cores should raise an error
+    with pytest.raises(RuntimeError, match="overlapping"):
+        composite.launch([left_branch, right_branch])

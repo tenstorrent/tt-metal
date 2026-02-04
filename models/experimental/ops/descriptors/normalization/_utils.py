@@ -14,23 +14,19 @@ from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
 
 def _build_layernorm_io_tensors(
-    input_tensor: "ttnn.Tensor",
+    tensor_args: "ttnn.LayerNormInputs",
     output_tensor: "ttnn.Tensor",
-    weight: Optional["ttnn.Tensor"] = None,
-    bias: Optional["ttnn.Tensor"] = None,
-    residual_input_tensor: Optional["ttnn.Tensor"] = None,
-    recip_tensor: Optional["ttnn.Tensor"] = None,
 ) -> Tuple[List["ttnn.Tensor"], List["ttnn.Tensor"]]:
     """Build the input and output tensors for a layernorm/rmsnorm operation."""
-    inputs = [input_tensor]
-    if residual_input_tensor is not None:
-        inputs.append(residual_input_tensor)
-    if weight is not None:
-        inputs.append(weight)
-    if bias is not None:
-        inputs.append(bias)
-    if recip_tensor is not None:
-        inputs.append(recip_tensor)
+    inputs = [tensor_args.input]
+    if tensor_args.residual_input_tensor is not None:
+        inputs.append(tensor_args.residual_input_tensor)
+    if tensor_args.weight is not None:
+        inputs.append(tensor_args.weight)
+    if tensor_args.bias is not None:
+        inputs.append(tensor_args.bias)
+    if tensor_args.recip_tensor is not None:
+        inputs.append(tensor_args.recip_tensor)
     outputs = [output_tensor]
     return inputs, outputs
 
@@ -49,9 +45,14 @@ def _create_layernorm_op_descriptor(
 ) -> "OpDescriptor":
     """Create a layernorm/rmsnorm op descriptor."""
 
-    # For non-sharded inputs, core_range_set is required
-    if not input_tensor.is_sharded() and core_range_set is None:
-        raise RuntimeError("core_range_set is required for non-sharded input tensors")
+    device = input_tensor.device()
+
+    # Determine core_range_set if not provided
+    if core_range_set is None:
+        if input_tensor.is_sharded():
+            core_range_set = input_tensor.memory_config().shard_spec.grid
+        else:
+            core_range_set = ttnn.LayerNormMultiCoreProgramFactory.default_core_range(device)
 
     if compute_kernel_config is None:
         raise ValueError("compute_kernel_config is required")
@@ -63,6 +64,18 @@ def _create_layernorm_op_descriptor(
     if program_config is None:
         shard_spec = input_tensor.memory_config().shard_spec if input_tensor.is_sharded() else None
         program_config = ttnn.create_layernorm_program_config(shard_spec)
+
+    # Check if Welford is enabled and create reciprocal tensor if needed
+    recip_tensor = None
+    use_welford = program_config.use_welford
+    if use_welford:
+        if input_tensor.is_sharded():
+            shard_spec = input_tensor.memory_config().shard_spec
+            W = shard_spec.shape[1]  # shard width
+        else:
+            W = input_tensor.shape[-1]  # full tensor width
+
+        recip_tensor = ttnn.create_layer_norm_reciprocals(device, core_range_set, W)
 
     operation_params = ttnn.LayerNormParams()
     operation_params.norm_type = norm_type
@@ -81,6 +94,8 @@ def _create_layernorm_op_descriptor(
         tensor_args.weight = weight
     if bias is not None:
         tensor_args.bias = bias
+    if recip_tensor is not None:
+        tensor_args.recip_tensor = recip_tensor
 
     # Create output tensor using the device operation's create_output_tensors
     output_tensor = ttnn.LayerNormDeviceOperation.create_output_tensors(operation_params, tensor_args)
@@ -90,6 +105,6 @@ def _create_layernorm_op_descriptor(
     program_descriptor = factory.create_descriptor(operation_params, tensor_args, output_tensor, core_range_set)
 
     # Build input and output tensors
-    inputs, outputs = _build_layernorm_io_tensors(input_tensor, output_tensor, weight, bias, residual_input_tensor)
+    inputs, outputs = _build_layernorm_io_tensors(tensor_args, output_tensor)
 
     return OpDescriptor(program_descriptor, inputs, outputs)
