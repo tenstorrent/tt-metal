@@ -52,6 +52,7 @@ target_sources(
         test_blockfloat_common.cpp
         test_duplicate_kernel.cpp
         test_core_local_mem_api.cpp
+        test_context.cpp
 )
 
 target_include_directories(
