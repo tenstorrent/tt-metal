@@ -163,7 +163,7 @@ class MLA1D(AbstractModule):
                     (0, -1),
                     mesh_device,
                     wo_dram_memory_config,
-                    (0, 0),  # No padding needed
+                    (0, 0, 0, 0),  # No padding needed
                 ),
             },
         }
@@ -212,7 +212,7 @@ class MLA1D(AbstractModule):
                     (0, -2),  # Shard along input dim
                     mesh_device,
                     qkv_a_dram_memory_config,
-                    (0, 0),  # No padding needed
+                    (0, 0, 0, 0),  # No padding needed
                 ),
             },
         }
@@ -284,7 +284,7 @@ class MLA1D(AbstractModule):
                     (0, -3),
                     mesh_device,
                     wkv_b1_dram_memory_config,
-                    (0, 0),  # No padding needed
+                    (0, 0, 0, 0),  # No padding needed
                 ),
             },
             "wkv_b2": {
@@ -294,7 +294,7 @@ class MLA1D(AbstractModule):
                     (0, None),
                     mesh_device,
                     wkv_b2_dram_memory_config,
-                    (0, 0),  # No padding needed
+                    (0, 0, 0, 0),  # No padding needed
                 ),
             },
         }
@@ -307,13 +307,13 @@ class MLA1D(AbstractModule):
         dims: tuple[int | None, int | None],
         mesh_device: ttnn.MeshDevice,
         memory_config: ttnn.MemoryConfig,
-        padding_needed: tuple[int, int] = (0, 0),
+        padding_needed: tuple[int, int, int, int] = (0, 0, 0, 0),
     ) -> SavedWeight:
-        if padding_needed != (0, 0):
-            pad_width, pad_height = padding_needed
+        if padding_needed != (0, 0, 0, 0):
+            pad_extra, pad_depth, pad_width, pad_height = padding_needed
             torch_metaweight = torch.nn.functional.pad(
                 torch_metaweight,
-                (0, pad_width, 0, pad_height),
+                (0, pad_extra, 0, pad_depth, 0, pad_width, 0, pad_height),
                 mode="constant",
                 value=0,
             )
