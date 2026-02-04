@@ -738,13 +738,12 @@ void kernel_main() {
 
         // DEBUG: print_e_t_buffer<experts_per_device, tokens, e_t_entry_size>(e_t_cb_id);
 
-        uint32_t e_t_cb_read_ptr = get_read_ptr(e_t_cb_id);
-        uint32_t per_expert_total_tokens_cb_read_ptr = get_read_ptr(per_expert_total_tokens_cb_id);
-        uint32_t total_chunks_cb_read_ptr = get_read_ptr(total_chunks_cb_id);
-
         // Multicast e_t buffer, per_expert_counts, and total_chunks to non-drain-sync cores
         if (num_tilize_cores > 1) {
-            // Get the multicast NOC address for all tilize cores
+            uint32_t e_t_cb_read_ptr = get_read_ptr(e_t_cb_id);
+            uint32_t per_expert_total_tokens_cb_read_ptr = get_read_ptr(per_expert_total_tokens_cb_id);
+            uint32_t total_chunks_cb_read_ptr = get_read_ptr(total_chunks_cb_id);
+
             uint64_t e_t_mcast_addr = get_safe_multicast_noc_addr(
                 tilize_mcast_start_x, tilize_mcast_start_y, tilize_mcast_end_x, tilize_mcast_end_y, e_t_cb_read_ptr);
 
@@ -789,46 +788,33 @@ void kernel_main() {
 
             // Multicast the value 1 to all non-drain tilize cores
             noc_semaphore_set_multicast(metadata_ready_semaphore_addr, semaphore_mcast_addr, num_tilize_cores - 1);
+
+            // Flush writes since we change the local value of metadata_ready_semaphore when signalling
+            // to the matmul cores (vs here where we signal to the non-drain-sync tilize cores )
+            noc_async_writes_flushed();
         }
 
         /*
          * Send metadata to MM cores (repeat for both bounding boxes):
-         * 1) Send number of tokens to MM
-         * 2) Signal via semaphore to MM that metadata has arrived
+         * 1) Encode number of tokens per expert into the semaphore (plus a valid bit)
+         * 2) Signal the metadata via semaphore to MM cores
          */
 
         // == 1 ==
 
-        // get mcast address
-        uint64_t matmul_per_expert_total_tokens_mcast_box_one_addr = get_safe_multicast_noc_addr(
-            matmul_mcast_box_one_start_x,
-            matmul_mcast_box_one_start_y,
-            matmul_mcast_box_one_end_x,
-            matmul_mcast_box_one_end_y,
-            per_expert_total_tokens_cb_read_ptr);
-        uint64_t matmul_per_expert_total_tokens_mcast_box_two_addr = get_safe_multicast_noc_addr(
-            matmul_mcast_box_two_start_x,
-            matmul_mcast_box_two_start_y,
-            matmul_mcast_box_two_end_x,
-            matmul_mcast_box_two_end_y,
-            per_expert_total_tokens_cb_read_ptr);
-
-        // multicast data
-        noc_async_write_multicast(
-            per_expert_total_tokens_cb_read_ptr,
-            matmul_per_expert_total_tokens_mcast_box_one_addr,
-            experts_per_device * sizeof(uint32_t),
-            num_matmul_bounding_box_one_cores);
-        noc_async_write_multicast(
-            per_expert_total_tokens_cb_read_ptr,
-            matmul_per_expert_total_tokens_mcast_box_two_addr,
-            experts_per_device * sizeof(uint32_t),
-            num_matmul_bounding_box_two_cores);
-
-        // == 2 ==
+        // determine encoded value
+        // NOTE: hardcoded to 2 experts
+        volatile tt_l1_ptr uint32_t* num_tokens_per_expert =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
+        uint32_t encoded_value =
+            (num_tokens_per_expert[0] & 0x1FF) | ((num_tokens_per_expert[1] & 0x1FF) << 9) | (1 << 18);
 
         // set local semaphore value
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
+        volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
+        *metadata_ready_semaphore_ptr = encoded_value;
+
+        // == 2 ==
 
         // get mcast address
         uint64_t matmul_metadata_ready_semaphore_mcast_box_one_addr = get_safe_multicast_noc_addr(
