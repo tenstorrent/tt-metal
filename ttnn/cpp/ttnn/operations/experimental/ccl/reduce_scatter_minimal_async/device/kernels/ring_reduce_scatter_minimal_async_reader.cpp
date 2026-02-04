@@ -110,7 +110,13 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < input_tensor_B; b++) {
         if constexpr (fuse_op) {
+#ifdef FUSED_MINIMAL_MATMUL
+            // Minimal matmul does deferred writes on the output. So we need to wait for an extra batch to be completed
+            // before reading, to ensure that the entire input to reduce_scatter has been written.
             matmul_receiver.wait_for_matmul_batch(std::min(b + 1, input_tensor_B - 1));
+#else
+            matmul_receiver.wait_for_matmul_batch(b);
+#endif
         }
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
         uint32_t batch_offset = input_batch_num_pages * b;

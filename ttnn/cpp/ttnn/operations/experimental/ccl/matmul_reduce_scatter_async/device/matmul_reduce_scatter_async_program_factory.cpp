@@ -6,7 +6,6 @@
 
 #include <algorithm>
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -114,7 +113,6 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         reduce_scatter_fused_op_signaler->fused_op_receiver_signal_semaphores,
         reduce_scatter_fused_op_signaler->fused_op_signaler_mode);
 
-    log_info(tt::LogOp, "matmul reduce scatter fused op signaler = {}", matmul_fused_op_signaler);
     // Matmul
     auto matmul_cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_2d_optimized_helper(
         program,

@@ -40,7 +40,6 @@ def run_reduce_scatter_impl(
     num_iters=1,
     enable_trace=True,
 ):
-    enable_trace = False
     torch.manual_seed(0)
 
     tile = (32, 32)
