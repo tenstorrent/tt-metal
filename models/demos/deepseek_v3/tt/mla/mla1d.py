@@ -574,9 +574,17 @@ class MLA1D(AbstractModule):
             "orientation": ttnn.ShardOrientation.ROW_MAJOR,
         }
 
+        # Output L1 WIDTH sharded memory config for qkv_a (using padded n)
+        qkv_a_out_memory_config = ttnn.create_sharded_memory_config(
+            [1, 1, USERS_PER_ROW, qkv_a_n_padded],
+            core_grid=qkv_a_out_core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
         wq_kv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=qkv_a_out_memory_config,
             program_config=qkv_a_program_config,
         )
 
@@ -611,9 +619,17 @@ class MLA1D(AbstractModule):
             "orientation": ttnn.ShardOrientation.ROW_MAJOR,
         }
 
+        # Output L1 WIDTH sharded memory config for wq_b (using padded n)
+        wq_b_out_memory_config = ttnn.create_sharded_memory_config(
+            [1, 1, USERS_PER_ROW, wq_b_n_padded],
+            core_grid=wq_b_out_core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
         wq_b_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=wq_b_out_memory_config,
             program_config=wq_b_program_config,
         )
 
@@ -621,10 +637,11 @@ class MLA1D(AbstractModule):
         # wkv_b1: batch=16 (pads to 24), m=32, k=128, n=512
         # core_grid=(3,4), HEIGHT (batch) sharding
         # =====================================================================
+        wkv_b1_batch = num_heads_local  # 16
+        wkv_b1_batch_padded = pad_batch_to_dram_banks(wkv_b1_batch)  # 24
+        wkv_b1_m = USERS_PER_ROW  # 32
         wkv_b1_k = qk_nope_head_dim  # 128
         wkv_b1_n = kv_lora_rank  # 512
-        wkv_b1_in0_core_grid_x = 3
-        wkv_b1_in0_core_grid_y = 4
 
         # Program config for wkv_b1 (batched DRAM sharded)
         wkv_b1_in0_block_w = wkv_b1_k // tile_size  # 128 // 32 = 4
@@ -638,9 +655,24 @@ class MLA1D(AbstractModule):
             fused_activation=None,
         )
 
+        # Output L1 HEIGHT sharded memory config for wkv_b1
+        # Get optimal DRAM bank-to-worker core assignment
+        optimal_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        wkv_b1_batches_per_core = wkv_b1_batch_padded // num_dram_banks  # 24 // 12 = 2
+        wkv_b1_out_shard_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
+        )
+        wkv_b1_out_shard_shape = [wkv_b1_batches_per_core * wkv_b1_m, wkv_b1_n]  # [2 * 32, 512] = [64, 512]
+        wkv_b1_out_shard_spec = ttnn.ShardSpec(
+            wkv_b1_out_shard_grid, wkv_b1_out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
+        )
+        wkv_b1_out_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, wkv_b1_out_shard_spec
+        )
+
         wkv_b1_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=wkv_b1_out_memory_config,
             program_config=wkv_b1_program_config,
         )
 
@@ -648,6 +680,9 @@ class MLA1D(AbstractModule):
         # wkv_b2: batch=128 (pads to 132), m=4, k=512, n=128, tile_h=4
         # core_grid=(3,4), HEIGHT (batch) sharding
         # =====================================================================
+        wkv_b2_batch = num_heads  # 128
+        wkv_b2_batch_padded = pad_batch_to_dram_banks(wkv_b2_batch)  # 132
+        wkv_b2_m = 4  # m dimension (tiny tile height)
         wkv_b2_k = kv_lora_rank  # 512
         wkv_b2_n = v_head_dim  # 128
         wkv_b2_in0_core_grid_x = 3
@@ -666,9 +701,23 @@ class MLA1D(AbstractModule):
             fused_activation=None,
         )
 
+        # Output L1 HEIGHT sharded memory config for wkv_b2
+        # Reuse optimal_worker_cores from wkv_b1
+        wkv_b2_batches_per_core = wkv_b2_batch_padded // num_dram_banks  # 132 // 12 = 11
+        wkv_b2_out_shard_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
+        )
+        wkv_b2_out_shard_shape = [wkv_b2_batches_per_core * wkv_b2_m, wkv_b2_n]  # [11 * 4, 128] = [44, 128]
+        wkv_b2_out_shard_spec = ttnn.ShardSpec(
+            wkv_b2_out_shard_grid, wkv_b2_out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
+        )
+        wkv_b2_out_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, wkv_b2_out_shard_spec
+        )
+
         wkv_b2_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=wkv_b2_out_memory_config,
             program_config=wkv_b2_program_config,
         )
 
@@ -703,9 +752,17 @@ class MLA1D(AbstractModule):
             "orientation": ttnn.ShardOrientation.ROW_MAJOR,
         }
 
+        # Output L1 WIDTH sharded memory config for wo (using padded n)
+        wo_out_memory_config = ttnn.create_sharded_memory_config(
+            [1, 1, USERS_PER_ROW, wo_n_padded],
+            core_grid=wo_out_core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
         wo_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=wo_out_memory_config,
             program_config=wo_program_config,
         )
 
