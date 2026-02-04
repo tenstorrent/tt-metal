@@ -22,10 +22,9 @@ def test_clip_vision_mlp(batch_size, seq_len, pcc, layer_idx):
     torch_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
     torch_model = torch_model.to(torch.bfloat16)
     torch_model.eval()
-
     config = torch_model.config.vision_config
-
     device = None
+
     try:
         device = ttnn.open_device(device_id=0)
 
@@ -194,16 +193,11 @@ def test_clip_vision_model(batch_size, pcc):
             torch_last_hidden_state = torch_outputs.last_hidden_state.to(torch.bfloat16)
             torch_pooler_output = torch_outputs.pooler_output.to(torch.bfloat16)
 
-        ttnn_last_hidden_state, ttnn_pooler_output = ttnn_model(pixel_values=ttnn_pixel_values)
+        ttnn_pooler_output = ttnn_model(pixel_values=ttnn_pixel_values)
 
         ttnn_last_hidden_torch = ttnn.to_torch(ttnn_last_hidden_state)
         ttnn_pooler_torch = ttnn.to_torch(ttnn_pooler_output)
 
-        # Check last hidden state
-        passed_lhs, pcc_lhs = comp_pcc(torch_last_hidden_state, ttnn_last_hidden_torch, pcc=pcc)
-        assert_with_pcc(torch_last_hidden_state, ttnn_last_hidden_torch, pcc=pcc)
-
-        # Check pooler output
         passed_pool, pcc_pool = comp_pcc(torch_pooler_output, ttnn_pooler_torch, pcc=pcc)
         assert_with_pcc(torch_pooler_output, ttnn_pooler_torch, pcc=pcc)
 

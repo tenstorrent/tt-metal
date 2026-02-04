@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 
@@ -16,7 +16,20 @@ class TtCLIPVisionEmbeddings:
         self.num_patches = (self.image_size // self.patch_size) ** 2
         self.num_positions = self.num_patches + 1
 
-        # Class embedding (CLS token) - shape: (embed_dim,) -> (1, 1, embed_dim)
+        self.position_ids = ttnn.from_torch(
+            torch.arange(self.num_positions).unsqueeze(0),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+
+        self.position_embedding_weight = ttnn.from_torch(
+            parameters.position_embedding.weight,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
         self.class_embedding = ttnn.from_torch(
             parameters.class_embedding.unsqueeze(0).unsqueeze(0),
             dtype=ttnn.bfloat16,
@@ -24,20 +37,10 @@ class TtCLIPVisionEmbeddings:
             device=device,
         )
 
-        # Patch embedding is Conv2d with kernel_size=patch_size, stride=patch_size
-        # HuggingFace shape: (embed_dim, num_channels, patch_size, patch_size)
         self.patch_embedding_weight = ttnn.from_torch(
             parameters.patch_embedding.weight,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-        )
-
-        # Position embedding - shape: (num_positions, embed_dim)
-        self.position_embedding_weight = ttnn.from_torch(
-            parameters.position_embedding.weight,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
             device=device,
         )
 
@@ -68,20 +71,13 @@ class TtCLIPVisionEmbeddings:
 
         patch_embeds = ttnn.reshape(patch_embeds, (batch_size, self.num_patches, self.embed_dim))
 
-        # Expand class embedding to batch size: (1, 1, embed_dim) -> (batch, 1, embed_dim)
+        # Expand class embedding to batch size: (1, 1, embed_dim) -> (batch_size, 1, embed_dim)
         class_embeds = ttnn.repeat(self.class_embedding, ttnn.Shape([batch_size, 1, 1]))
 
         # Concatenate [CLS, patch_1, patch_2, ..., patch_n]
         embeddings = ttnn.concat([class_embeds, patch_embeds], dim=1)
 
-        # Add position embeddings
-        position_ids = ttnn.from_torch(
-            torch.arange(self.num_positions).unsqueeze(0).expand(batch_size, -1),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-        )
-        position_embeddings = ttnn.embedding(position_ids, self.position_embedding_weight, layout=ttnn.TILE_LAYOUT)
+        position_embeddings = ttnn.embedding(self.position_ids, self.position_embedding_weight, layout=ttnn.TILE_LAYOUT)
 
         embeddings = ttnn.add(embeddings, position_embeddings)
 
@@ -168,11 +164,10 @@ class TtCLIPVisionAttention:
             parameters.out_proj.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-    def __call__(self, hidden_states: ttnn.Tensor, attention_mask: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+    def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
         Args:
             hidden_states: shape (batch_size, seq_len, hidden_size)
-            attention_mask: shape (batch_size, seq_len) or None
         Returns:
             output: shape (batch_size, seq_len, hidden_size)
         """
@@ -193,7 +188,7 @@ class TtCLIPVisionAttention:
         value = ttnn.permute(value, (0, 2, 1, 3))
 
         attn_output = ttnn.transformer.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, is_causal=False, scale=self.scale
+            query, key, value, attn_mask=None, is_causal=False, scale=self.scale
         )
 
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
@@ -241,11 +236,10 @@ class TtCLIPVisionEncoderLayer:
             device=device,
         )
 
-    def __call__(self, hidden_states: ttnn.Tensor, attention_mask: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
+    def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
         Args:
             hidden_states: (batch_size, seq_len, hidden_size)
-            attention_mask: (batch_size, seq_len) or None
         Returns:
             output: (batch_size, seq_len, hidden_size)
         """
@@ -257,7 +251,7 @@ class TtCLIPVisionEncoderLayer:
             epsilon=self.config.layer_norm_eps,
         )
 
-        hidden_states = self.self_attn(hidden_states, attention_mask)
+        hidden_states = self.self_attn(hidden_states)
         hidden_states = ttnn.add(residual, hidden_states)
 
         residual = hidden_states
@@ -317,14 +311,11 @@ class TtCLIPVisionModel:
     def __call__(
         self,
         pixel_values: ttnn.Tensor,
-        attention_mask: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Args:
             pixel_values: Input images, shape (batch_size, num_channels, height, width)
-            attention_mask: Optional attention mask
         Returns:
-            last_hidden_state: shape (batch_size, num_patches + 1, hidden_size)
             pooler_output: shape (batch_size, hidden_size) - the CLS token output after post_layernorm
         """
         hidden_states = self.embeddings(pixel_values)
@@ -337,9 +328,7 @@ class TtCLIPVisionModel:
         )
 
         for layer in self.encoder_layers:
-            hidden_states = layer(hidden_states, attention_mask)
-
-        last_hidden_state = hidden_states
+            hidden_states = layer(hidden_states)
 
         batch_size = hidden_states.shape[0]
         hidden_size = hidden_states.shape[2]
@@ -355,4 +344,4 @@ class TtCLIPVisionModel:
             epsilon=self.config.layer_norm_eps,
         )
 
-        return last_hidden_state, pooled_output
+        return pooled_output
