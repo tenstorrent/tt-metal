@@ -1,0 +1,28 @@
+# Example: Pod Containing Multiple Meshes
+# This example shows a pod containing 2 meshes instead of 1
+
+groupings:
+  - base_units:
+      - asic_location_1
+      - asic_location_2
+      - asic_location_3
+      - asic_location_4
+      - asic_location_5
+      - asic_location_6
+      - asic_location_7
+      - asic_location_8
+
+  - trays:
+      asic_locations: [asic_location_1, asic_location_2, asic_location_3, asic_location_4, asic_location_5, asic_location_6, asic_location_7, asic_location_8]
+
+  - hosts:
+      trays: 4
+
+  - meshes:
+      hosts: 1  # Each mesh = 1 host (meshes can have 1 item)
+
+  - pods:
+      meshes: 2  # Each pod contains 2 meshes (instead of 1)
+
+  - superpods:
+      pods: 2  # Each superpod contains 2 pods
