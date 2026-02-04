@@ -185,7 +185,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
                 binary_op = SfpuBinaryOp::LE;
             }
             break;
-        case BinaryOpType::EQ: postprocess = unary::UnaryOpType::EQZ; break;
+        case BinaryOpType::EQ:
+            if (dtype == DataType::FLOAT32) {
+                binary_op = SfpuBinaryOp::EQ;
+            } else {
+                postprocess = unary::UnaryOpType::EQZ;
+            }
+            break;
         case BinaryOpType::NE: postprocess = unary::UnaryOpType::NEZ; break;
         // (a-b)**2
         case BinaryOpType::SQUARED_DIFFERENCE: postprocess = unary::UnaryOpType::SQUARE; break;
@@ -449,6 +455,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case GT: return {"gt_int32_tile_init();", "gt_int32_tile"};
         case GE: return {"ge_int32_tile_init();", "ge_int32_tile"};
         case LE: return {"le_int32_tile_init();", "le_int32_tile"};
+        case EQ: return {"eq_binary_tile_init();", "eq_binary_tile"};
         case WHERE: {
             const char* data_format = (dtype == DataType::INT32)     ? "Int32"
                                       : (dtype == DataType::UINT32)  ? "UInt32"
