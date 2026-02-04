@@ -17,11 +17,9 @@ enum AccessPattern : uint8_t {  // this should be put into experimental/hostdev 
 using PackedTileCounter = uint8_t;  // top 2 bits identify tensix id, bottom 5 bits for counter id
 
 // NOLINTBEGIN(readability-redundant-inline-specifier)
-inline __attribute__((always_inline)) constexpr uint8_t get_tensix_id(const PackedTileCounter& p) {
-    return (p >> 5) & 0x03;
-}
+inline __attribute__((always_inline)) constexpr uint8_t get_tensix_id(PackedTileCounter p) { return (p >> 5) & 0x03; }
 
-inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(const PackedTileCounter& p) { return p & 0x1F; }
+inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTileCounter p) { return p & 0x1F; }
 // NOLINTEND(readability-redundant-inline-specifier)
 
 // move configs and LocalDFBInterface structs to hw/inc/hostdev

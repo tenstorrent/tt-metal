@@ -393,7 +393,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                     uint8_t consumer_tensix_id = get_tensix_id_for_pair((producer_idx * num_producer_tcs) + tc_slot);
                     ::experimental::PackedTileCounter consumer_tc =
                         tile_counter_allocator_.allocate(consumer_tensix_id);
-                    group.consumer_tcs.push_back(consumer_tc);
+                    group.consumer_tcs.push_back(::experimental::get_counter_id(consumer_tc));
                 }
 
                 log_info(
