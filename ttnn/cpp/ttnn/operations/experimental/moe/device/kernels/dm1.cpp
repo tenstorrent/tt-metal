@@ -97,8 +97,12 @@ void kernel_main() {
     }
     uint32_t semaphore_value = 0;
 
-    // Set state for the writes
+    // Set state for the data writes
     noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
+
+    // Set state for the semaphore write
+    noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
+        neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -114,7 +118,8 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_a2a_iters; ++i) {
             for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
                 // Wait for current data to be ready in cb_s2c_in2
-                noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value++);
+                while ((*my_semaphore_ptr) < semaphore_value) {
+                };
 
                 // Signal to compute core that data is ready
                 cb_reserve_back(cb_w2c_rdy, 1);
@@ -129,12 +134,16 @@ void kernel_main() {
                 noc_async_write_one_packet_with_state</*posted=*/true>(
                     local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
 
-                // Signal neighbor that data is ready (increment their semaphore)
-                noc_semaphore_inc</*posted=*/true>(
-                    neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+                // Signal neighbor that data is ready (increment their semaphore value)
+                noc_inline_dw_write_with_state<
+                    /*update_addr_lo=*/false,
+                    /*update_counter=*/true,
+                    /*posted=*/true,
+                    /*update_addr_hi=*/false,
+                    /*update_val=*/true>(++semaphore_value);
 
-                // Ensure write and semaphore have left the core before continuing
-                noc_async_posted_atomic_barrier();
+                // Ensure writes have left the core before continuing
+                noc_async_posted_writes_flushed();
             }
         }
     }
