@@ -37,6 +37,7 @@ void kernel_main() {
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
+    constexpr auto chunk_start_idx_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -45,6 +46,7 @@ void kernel_main() {
     const uint32_t mask_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t page_table_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t attention_sink_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t chunk_start_idx_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t core_id = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_batch_end = get_arg_val<uint32_t>(argidx++);
@@ -61,10 +63,14 @@ void kernel_main() {
         chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
         read_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
     }
+    uint32_t chunked_q_chunk_offset_phase_1_local = chunked_q_chunk_offset_phase_1;
+    uint32_t chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_2;
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
-    // When chunked, update the bounds of valid K sequence length based on Q chunk offset
+    // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
+    // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
+    // different valid_Sqt (e.g. ring_distributed uses full Q length in tiles).
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -77,6 +83,8 @@ void kernel_main() {
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_id_page_table = tt::CBIndex::c_6;
+    constexpr uint32_t cb_id_chunk_start_idx_compute = tt::CBIndex::c_8;
+    constexpr uint32_t cb_id_chunk_start_idx_writer = tt::CBIndex::c_9;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
@@ -95,6 +103,7 @@ void kernel_main() {
     const auto mask_reader = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
     const auto attention_sink_reader =
         TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
+    const auto chunk_start_idx_reader = TensorAccessor(chunk_start_idx_args, chunk_start_idx_addr, 4);
 
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
@@ -107,16 +116,45 @@ void kernel_main() {
     uint32_t mask_tile_id = 0;
     uint32_t barrier_count = 0;
     uint32_t chunked_q_chunk_offset = 0;
+    if constexpr (is_chunked) {
+        if (chunk_start_idx_addr != 0) {
+            cb_reserve_back(cb_id_chunk_start_idx_compute, 1);
+            uint32_t chunk_start_write_ptr = get_write_ptr(cb_id_chunk_start_idx_compute);
+            noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr, 4);
+            noc_async_read_barrier();
+            uint32_t chunk_start_idx = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr);
+            cb_push_back(cb_id_chunk_start_idx_compute, 1);
+
+            cb_reserve_back(cb_id_chunk_start_idx_writer, 1);
+            uint32_t chunk_start_write_ptr_2 = get_write_ptr(cb_id_chunk_start_idx_writer);
+            noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr_2, 4);
+            noc_async_read_barrier();
+            cb_push_back(cb_id_chunk_start_idx_writer, 1);
+
+            const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
+            chunked_q_chunk_offset_phase_1_local = chunk_start_idx / q_chunk_size;
+            if (num_phases == 2) {
+                chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_1_local;
+            }
+        }
+    }
     uint32_t read_offset = 0;
     for (uint32_t phase = 0; phase < num_phases; ++phase) {
         if (phase == 0) {
-            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1_local;
             read_offset = read_offset_phase_1;
         } else {
-            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2_local;
             read_offset = read_offset_phase_2;
         }
-        uint32_t valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
+        uint32_t valid_Skt_bound;
+        if (chunk_start_idx_addr != 0) {
+            // Flexible or ring: cap at valid_Skt so we never read past K/V extent.
+            valid_Skt_bound = std::min(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, valid_Skt);
+        } else {
+            // Legacy: extend by offset so one program can serve all chunks (valid_Skt is chunk 0's).
+            valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
+        }
 
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {

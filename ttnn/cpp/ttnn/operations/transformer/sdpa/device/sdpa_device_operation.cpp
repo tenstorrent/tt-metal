@@ -165,8 +165,35 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     };
 
     auto validate_chunked_mode = [&]() {
-        TT_FATAL(attrs.chunk_start_idx.has_value(), "chunk_start_idx must be provided for chunked mode");
-        TT_FATAL(attrs.chunk_start_idx.value() >= 0, "chunk_start_idx must be non-negative");
+        const bool has_tensor_chunk_start_idx = attrs.chunk_start_idx_tensor.has_value();
+        const bool has_scalar_chunk_start_idx = attrs.chunk_start_idx.has_value();
+
+        // Disallow ambiguous configuration where both scalar and tensor start indices are provided.
+        TT_FATAL(
+            !(has_scalar_chunk_start_idx && has_tensor_chunk_start_idx),
+            "chunked mode accepts only one of chunk_start_idx (scalar) or chunk_start_idx_tensor; both were provided");
+
+        const bool flexible_chunked = has_tensor_chunk_start_idx;
+        const bool legacy_chunked = has_scalar_chunk_start_idx && !has_tensor_chunk_start_idx;
+        TT_FATAL(
+            legacy_chunked || flexible_chunked,
+            "chunked mode requires either chunk_start_idx (scalar) or chunk_start_idx_tensor");
+        if (legacy_chunked) {
+            TT_FATAL(attrs.chunk_start_idx.value() >= 0, "chunk_start_idx must be non-negative");
+        }
+        if (flexible_chunked) {
+            const auto& csi_tensor = attrs.chunk_start_idx_tensor.value();
+            TT_FATAL(csi_tensor.storage_type() == StorageType::DEVICE, "chunk_start_idx tensor must be on device");
+            TT_FATAL(
+                csi_tensor.dtype() == DataType::INT32,
+                "chunk_start_idx tensor must be int32. Got {}",
+                csi_tensor.dtype());
+            auto csi_shape = csi_tensor.logical_shape();
+            TT_FATAL(
+                csi_shape.size() == 1 && csi_shape[0] == 1,
+                "chunk_start_idx tensor must have shape [1]. Got {}",
+                csi_shape);
+        }
         // Validate page table tensor
         const auto& page_table = tensors.page_table.value();
         TT_FATAL(page_table.storage_type() == StorageType::DEVICE, "Page table tensor must be on device");
@@ -236,31 +263,43 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 k_chunk_size,
                 tt::constants::TILE_WIDTH);
 
-            // Validate that chunk_start_idx is a multiple of q_chunk_size
-            // This is required because chunk_start_idx is divided by q_chunk_size to compute chunked_q_chunk_offset
-            TT_FATAL(
-                attrs.chunk_start_idx.value() % q_chunk_size == 0,
-                "chunk_start_idx must be a multiple of q_chunk_size. Got chunk_start_idx: {}, q_chunk_size: {}",
-                attrs.chunk_start_idx.value(),
-                q_chunk_size);
+            if (legacy_chunked) {
+                // Validate that chunk_start_idx is a multiple of q_chunk_size
+                // This is required because chunk_start_idx is divided by q_chunk_size to compute chunked_q_chunk_offset
+                TT_FATAL(
+                    attrs.chunk_start_idx.value() % q_chunk_size == 0,
+                    "chunk_start_idx must be a multiple of q_chunk_size. Got chunk_start_idx: {}, q_chunk_size: {}",
+                    attrs.chunk_start_idx.value(),
+                    q_chunk_size);
 
-            // Validate that chunk_start_idx is a multiple of k_chunk_size
-            // Workaround for https://github.com/tenstorrent/tt-metal/issues/35225
-            TT_FATAL(
-                attrs.chunk_start_idx.value() % k_chunk_size == 0,
-                "chunk_start_idx must be a multiple of k_chunk_size. Got chunk_start_idx: {}, k_chunk_size: {}",
-                attrs.chunk_start_idx.value(),
-                k_chunk_size);
+                // Validate that chunk_start_idx is a multiple of k_chunk_size
+                // Workaround for https://github.com/tenstorrent/tt-metal/issues/35225
+                TT_FATAL(
+                    attrs.chunk_start_idx.value() % k_chunk_size == 0,
+                    "chunk_start_idx must be a multiple of k_chunk_size. Got chunk_start_idx: {}, k_chunk_size: {}",
+                    attrs.chunk_start_idx.value(),
+                    k_chunk_size);
+            }
         }
 
-        // In chunked mode, K's sequence dimension should be >= Q's sequence dimension + chunk_start_idx
-        TT_FATAL(
-            kv_length >= q_shape[2] + attrs.chunk_start_idx.value(),
-            "K's sequence length must be >= Q's sequence length + chunk_start_idx. Got K: {}, Q: {}, chunk_start_idx: "
-            "{}",
-            kv_length,
-            q_shape[2],
-            attrs.chunk_start_idx.value());
+        if (legacy_chunked) {
+            // In chunked mode, K's sequence dimension should be >= Q's sequence dimension + chunk_start_idx
+            TT_FATAL(
+                kv_length >= q_shape[2] + attrs.chunk_start_idx.value(),
+                "K's sequence length must be >= Q's sequence length + chunk_start_idx. Got K: {}, Q: {}, "
+                "chunk_start_idx: "
+                "{}",
+                kv_length,
+                q_shape[2],
+                attrs.chunk_start_idx.value());
+        } else {
+            // Flexible: only require KV length to cover Q
+            TT_FATAL(
+                kv_length >= q_shape[2],
+                "K's sequence length must be >= Q's sequence length. Got K: {}, Q: {}",
+                kv_length,
+                q_shape[2]);
+        }
     };
 
     auto validate_attention_sink = [&]() {
@@ -297,16 +336,16 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     };
 
     auto check_conditions = [&]() {
-        bool has_chunk_start = attrs.chunk_start_idx.has_value();
+        bool has_chunk_start_scalar = attrs.chunk_start_idx.has_value();
+        bool has_chunk_start_tensor = attrs.chunk_start_idx_tensor.has_value();
         bool has_page_table = tensors.page_table.has_value();
-        // For chunked mode, we need at least 2 optional inputs (mask placeholder and page_table)
-        if (has_chunk_start) {
-            TT_FATAL(has_page_table, "page_table must be provided when chunk_start_idx is set");
+        if (has_chunk_start_scalar || has_chunk_start_tensor) {
+            TT_FATAL(has_page_table, "page_table must be provided for chunked mode");
         }
     };
 
     check_conditions();
-    bool is_chunked_mode = attrs.chunk_start_idx.has_value();
+    bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
 
     if (is_chunked_mode) {
         validate_chunked_mode();
@@ -339,12 +378,14 @@ SDPAOperation::tensor_return_value_t SDPAOperation::create_output_tensors(
 }
 
 tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, const SDPAInputs& tensors) {
-    bool is_chunked_prefill = attrs.chunk_start_idx.has_value();
+    bool is_chunked_prefill = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
+    bool flexible_chunked = attrs.chunk_start_idx_tensor.has_value();
 
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
     const Tensor& v = attrs.use_mla ? tensors.k : tensors.v.value_or(tensors.k);
 
+    const std::optional<Tensor> page_table_for_hash = flexible_chunked ? std::nullopt : tensors.page_table;
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
         attrs.scale,
@@ -353,12 +394,13 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attr
         attrs.program_config,
         attrs.is_causal,
         is_chunked_prefill,
+        flexible_chunked,
         attrs.compute_kernel_config,
         q,
         k,
         v,
         tensors.attn_mask,
-        tensors.page_table,
+        page_table_for_hash,
         tensors.attention_sink);
     return hash;
 }
@@ -398,7 +440,7 @@ SDPAOperation::create_op_performance_model(
         TT_ASSERT(v_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor V rank != 4");
     }
 
-    bool is_chunked_prefill = args.chunk_start_idx.has_value();
+    bool is_chunked_prefill = args.chunk_start_idx.has_value() || args.chunk_start_idx_tensor.has_value();
 
     uint32_t batch_size_q = q_shape[0];
     uint32_t batch_size_k = k_shape[0];
@@ -406,7 +448,10 @@ SDPAOperation::create_op_performance_model(
     uint32_t num_heads_q = q_shape[1];
 
     const auto Sq = q_shape[2];
-    const auto Sk = (is_chunked_prefill) ? q_shape[-2] + args.chunk_start_idx.value() : k_shape[2];
+    const auto Sk = (is_chunked_prefill) ? (args.chunk_start_idx.has_value()
+                                                ? q_shape[2] + args.chunk_start_idx.value()
+                                                : k_shape[2])  // flexible: use K length as upper bound for perf model
+                                         : k_shape[2];
     const auto DH = q_shape[3];
 
     uint32_t Sv, DV;
@@ -466,6 +511,7 @@ Tensor sdpa(
     std::optional<float> scale,
     std::optional<uint32_t> sliding_window_size,
     std::optional<int64_t> chunk_start_idx,
+    const std::optional<Tensor>& chunk_start_idx_tensor,
     bool use_mla,
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
@@ -479,6 +525,7 @@ Tensor sdpa(
             .program_config = std::move(program_config),
             .is_causal = is_causal,
             .chunk_start_idx = chunk_start_idx,
+            .chunk_start_idx_tensor = chunk_start_idx_tensor,
             .compute_kernel_config = compute_kernel_config,
             .use_mla = use_mla,
             .head_dim_v = head_dim_v,
