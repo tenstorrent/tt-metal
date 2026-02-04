@@ -47,6 +47,7 @@ Tensor sdpa(
     std::optional<float> scale,
     std::optional<uint32_t> sliding_window_size,
     std::optional<int64_t> chunk_start_idx,
+    const std::optional<Tensor>& chunk_start_idx_tensor,
     bool use_mla,
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
