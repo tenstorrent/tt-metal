@@ -64,6 +64,11 @@ void py_module(nb::module_& m) {
         auto py_binary = static_cast<nb::module_>(m.attr("binary"));
         py_binary.def(
             "add",
+            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const ttnn::Tensor&)>(&ops::operator+),
+            nb::arg("a"),
+            nb::arg("b"));
+        py_binary.def(
+            "add",
             static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::AutocastTensor&)>(
                 &ops::operator+),
             nb::arg("a"),

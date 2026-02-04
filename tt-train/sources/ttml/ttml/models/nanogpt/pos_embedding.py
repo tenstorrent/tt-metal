@@ -55,10 +55,12 @@ class PositionalEmbedding(AbstractModuleBase):
         self.sequence_length = sequence_length
         self.dropout_prob = dropout_prob
 
+        device = ttml.autograd.AutoContext.get_instance().get_device()
         emb_np = sinusoidal_positional_embedding_np(sequence_length, embedding_dim)
-        emb = ttml.autograd.AutocastTensor.from_numpy(
-            emb_np.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-        )
+        emb_np = emb_np.astype(np.float32)
+        emb_np = emb_np.reshape(1, 1, sequence_length, embedding_dim)
+        emb = ttnn.Tensor(emb_np, ttnn.float32, device, ttnn.TILE_LAYOUT)
+        emb = ttnn.typecast(emb, ttnn.bfloat16)
         self.positional_embedding = emb
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
