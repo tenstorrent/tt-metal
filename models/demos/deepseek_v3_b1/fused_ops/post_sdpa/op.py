@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Output Hidden Post SDPA fused operation.
+Post SDPA fused operation.
 
 This implements Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 as a fused execution:
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] distributed across 64 cores (8x8 grid)
@@ -30,11 +30,11 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 )
 
 
-class OutputHiddenPostSDPA:
+class PostSDPA:
     """
-    Output Hidden Post SDPA fused operation implementation using ttnn.generic_op.
+    Post SDPA fused operation implementation using ttnn.generic_op.
 
-    Implements the full output_hidden_post_sdpa + output_hidden fusion:
+    Implements the full post_sdpa fusion:
     - Matmul1 + Gather1 + Mcast + Matmul2 + Gather2
     """
 
@@ -64,7 +64,7 @@ class OutputHiddenPostSDPA:
         fp32_dest_acc_en=False,
     ):
         """
-        Execute output_hidden_post_sdpa fused operation using generic_op.
+        Execute post_sdpa fused operation using generic_op.
 
         Args:
             input_tensor: Input tensor [1, 512] (height-sharded across 8x8 matmul1 cores)
@@ -194,12 +194,6 @@ class OutputHiddenPostSDPA:
         gather1_receiver_data_addr = gather1_output_tensor.buffer_address()
         mcast_receiver_data_addr = weights2_tensor.buffer_address()  # Actually mcast writes to matmul2_in0
         gather2_receiver_data_addr = output_tensor.buffer_address()
-
-        # For mcast, we write directly to the matmul2_in0 CB on receiver cores
-        # Since matmul2_in0_cb is backed by the sharded tensor on matmul2 grid,
-        # we need to get that address. But we don't have a separate tensor for it.
-        # The mcast receiver uses cb_reserve_back/cb_push_back, so we need the CB address.
-        # For now, use a runtime arg approach similar to standalone mcast op.
 
         # ========================================================================
         # NCRISC compile-time args
@@ -401,7 +395,7 @@ class OutputHiddenPostSDPA:
         # Kernel descriptor
         # ========================================================================
         unified_kernel = UnifiedKernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/fused_ops/output_hidden_post_sdpa/kernels/output_hidden_post_sdpa_kernel.cpp",
+            kernel_source="models/demos/deepseek_v3_b1/fused_ops/post_sdpa/kernels/post_sdpa_kernel.cpp",
             core_ranges=full_grid,
             ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
             brisc_named_compile_time_args=brisc_named_compile_time_args,

@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTNN Output Hidden Post SDPA Fused Op Test
+TTNN Post SDPA Fused Op Test
 
-Tests the full output_hidden_post_sdpa fused operation which implements:
+Tests the full post_sdpa fused operation which implements:
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (8x8)
 - Gather1: Collect to [1, 8192] on gather core (11, 9)
 - Mcast: Broadcast [1, 8192] to 96 cores (12x8)
@@ -21,7 +21,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_b1.fused_ops.output_hidden_post_sdpa.op import OutputHiddenPostSDPA
+from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 
 
 @pytest.mark.parametrize(
@@ -31,8 +31,8 @@ from models.demos.deepseek_v3_b1.fused_ops.output_hidden_post_sdpa.op import Out
         (1, 512, 8192, 8192, 6144, ttnn.bfloat16, ttnn.bfloat8_b),
     ],
 )
-def test_output_hidden_post_sdpa(device, M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype):
-    """Test full output_hidden_post_sdpa fused operation"""
+def test_post_sdpa(device, M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype):
+    """Test full post_sdpa fused operation"""
 
     # Tile dimensions
     a_tile = ttnn.Tile([M, 32])  # 1x32 tiles for input/activation
@@ -55,7 +55,7 @@ def test_output_hidden_post_sdpa(device, M, K1, intermediate, K2, output_size, i
     n1_per_core = intermediate // num_matmul1_cores  # 8192 / 64 = 128
     n2_per_core = output_size // num_matmul2_cores  # 6144 / 96 = 64
 
-    logger.info(f"Testing full output_hidden_post_sdpa fused op:")
+    logger.info(f"Testing full post_sdpa fused op:")
     logger.info(f"  Matmul1: [{M}, {K1}] x [{K1}, {intermediate}] on {num_matmul1_cores} cores")
     logger.info(f"  Mcast: [{M}, {intermediate}] to {num_matmul2_cores} cores")
     logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} cores")
@@ -89,7 +89,7 @@ def test_output_hidden_post_sdpa(device, M, K1, intermediate, K2, output_size, i
     # ========================================================================
     # Compute golden reference: input @ weights1 @ weights2
     # ========================================================================
-    torch_expected = OutputHiddenPostSDPA.golden(
+    torch_expected = PostSDPA.golden(
         torch_input_single.float(), torch_weights1.float(), torch_weights2.float()
     ).bfloat16()
     logger.info(f"Golden output shape: {torch_expected.shape}")
@@ -213,8 +213,8 @@ def test_output_hidden_post_sdpa(device, M, K1, intermediate, K2, output_size, i
     # ========================================================================
     # Run fused operation
     # ========================================================================
-    logger.info("Running full output_hidden_post_sdpa fused operation...")
-    ttnn_result = OutputHiddenPostSDPA.op(
+    logger.info("Running full post_sdpa fused operation...")
+    ttnn_result = PostSDPA.op(
         ttnn_input,
         ttnn_weights1,
         ttnn_weights2,
@@ -239,4 +239,4 @@ def test_output_hidden_post_sdpa(device, M, K1, intermediate, K2, output_size, i
     logger.info(f"PCC comparison: {pcc_message}")
 
     assert passing, f"PCC check failed: {pcc_message}"
-    logger.info("✓ Output hidden post SDPA full fused op test passed!")
+    logger.info("✓ Post SDPA full fused op test passed!")
