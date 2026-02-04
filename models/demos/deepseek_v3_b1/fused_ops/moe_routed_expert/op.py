@@ -260,8 +260,10 @@ class MoeRoutedExpert:
         bias_tensor,
         gate_proj_weights_dict=None,
         up_proj_weights_dict=None,
+        down_proj_weights_dict=None,
         eps=1e-20,
         scaling_factor=2.5,
+        use_hardcoded_expert_index=False,
     ):
         """
         PyTorch reference implementation for validation.
@@ -272,6 +274,7 @@ class MoeRoutedExpert:
             bias_tensor: Gate bias tensor (torch.Tensor) [1, 8, 32] or [16, 16]
             gate_proj_weights_dict: Dict mapping expert_idx -> gate_proj weights [1, 1, K, N_expert] (optional)
             up_proj_weights_dict: Dict mapping expert_idx -> up_proj weights [1, 1, K, N_expert] (optional)
+            down_proj_weights_dict: Dict mapping expert_idx -> down_proj weights [1, 1, N_expert, K] (optional)
             eps: Epsilon for numerical stability in gate
             scaling_factor: Scaling factor for gate scores
 
@@ -279,8 +282,8 @@ class MoeRoutedExpert:
             If gate_proj_weights_dict is None:
                 Tuple of (top8_scores, top8_indices) tensors
             Else:
-                Tuple of (top8_scores, top8_indices, fused_output) tensors
-                fused_output = silu(gate_proj) * up_proj
+                Tuple of (top8_scores, top8_indices, down_proj_output) tensors
+                down_proj_output = (silu(gate_proj) * up_proj) @ down_proj_weights
         """
         import torch
 
@@ -300,7 +303,10 @@ class MoeRoutedExpert:
         # 3. Expert matmuls (if expert weights provided)
         if gate_proj_weights_dict is not None:
             # Get the first selected expert index
-            selected_expert_idx = int(top8_indices[0, 0].item())
+            if use_hardcoded_expert_index:
+                selected_expert_idx = 0  # For testing: always use expert 0
+            else:
+                selected_expert_idx = int(top8_indices[0, 0].item())
 
             # gate_proj: input @ weights + SiLU
             gate_proj_weights = gate_proj_weights_dict[selected_expert_idx]
@@ -314,6 +320,12 @@ class MoeRoutedExpert:
 
             # Fused output: silu(gate_proj) * up_proj
             fused_output = gate_proj_output * up_proj_output
+
+            # down_proj: fused_output @ weights (no activation)
+            if down_proj_weights_dict is not None:
+                down_proj_weights = down_proj_weights_dict[selected_expert_idx]
+                down_proj_output = fused_output @ down_proj_weights.float()
+                return top8_scores, top8_indices, down_proj_output
 
             return top8_scores, top8_indices, fused_output
 
@@ -336,9 +348,16 @@ class MoeRoutedExpert:
         up_proj_weights_tensor,
         up_proj_mm_out_tensor,
         fused_output_tensor,
+        down_proj_gather_output_tensor,
+        down_proj_mcast_output_tensor,
+        down_proj_weights_tensor,
+        down_proj_output_tensor,
+        use_hardcoded_expert_index=False,  # For testing: always use expert index 0
     ):
         """
-        Execute mcast + matmul + sigmoid + gather + gate + index_mcast + dram_matmul + silu + mul fused operation.
+        Execute the full MoE routed expert fused operation:
+        mcast + matmul + sigmoid + gather + gate + index_mcast + gate_proj + up_proj + mul +
+        down_proj_gather + down_proj_mcast + down_proj
 
         Args:
             input_tensor: Input tensor [1, K] sharded on single sender core (outside matmul grid)
@@ -356,10 +375,14 @@ class MoeRoutedExpert:
             gate_proj_output_tensor: Expert gate_proj matmul+SiLU output [1, N_expert] width-sharded on DRAM matmul cores
             up_proj_weights_tensor: Expert up_proj weights [K, N_expert] width-sharded in DRAM (first expert)
             up_proj_mm_out_tensor: Expert up_proj matmul output (intermediate) [1, N_expert] width-sharded
-            fused_output_tensor: Final fused output silu(gate_proj) * up_proj [1, N_expert] width-sharded
+            fused_output_tensor: Fused output silu(gate_proj) * up_proj [1, N_expert] width-sharded
+            down_proj_gather_output_tensor: Gathered fused output [1, N_expert] on sender core
+            down_proj_mcast_output_tensor: Mcasted fused output [1, N_expert] on mcast grid
+            down_proj_weights_tensor: down_proj weights [N_expert, K] width-sharded in DRAM (first expert)
+            down_proj_output_tensor: down_proj output [1, K] width-sharded on DRAM matmul cores
 
         Returns:
-            Tuple of (gate_output_scores_tensor, gate_output_indices_tensor, fused_output_tensor)
+            Tuple of (gate_output_scores_tensor, gate_output_indices_tensor, down_proj_output_tensor)
         """
         # Hardcoded parameters
         fp32_dest_acc_en = False  # Gate transpose doesn't support fp32
@@ -449,7 +472,12 @@ class MoeRoutedExpert:
         # Mul CBs for fusing up_proj * gate_proj
         mul_cb_in0 = 14  # up_proj mm output aliased as 16x16 (same memory as up_proj_cb_mm_out)
         mul_cb_in1 = 15  # gate_proj output aliased as 16x16 (same memory as gate_proj_cb_out)
-        mul_cb_out = 16  # final fused output (tensor-backed)
+        mul_cb_out = 16  # fused output (tensor-backed)
+        # down_proj CBs (gather reads directly from mul_cb_out, no separate CB needed)
+        down_proj_gather_dst_cb = 17  # gathered fused output on sender core (tensor-backed)
+        down_proj_mcast_dst_cb = 18  # mcasted fused output on compute cores (tensor-backed)
+        down_proj_cb_in1 = 19  # down_proj weights working buffer
+        down_proj_cb_out = 20  # down_proj output (tensor-backed)
 
         # CB descriptors
         # CB 0: Input tensor (sharded on sender core)
@@ -525,6 +553,85 @@ class MoeRoutedExpert:
         mul_cb_in1_descriptor = mul_params["cb_in1_descriptor"]
         mul_cb_out_descriptor = mul_params["cb_out_descriptor"]
 
+        # ========== down_proj_gather Setup ==========
+        # Get gate_proj_core grid bounds for gather sender grid
+        gate_proj_core_list = list(gate_proj_core_ranges.ranges())
+        # Find bounding box of gate_proj cores
+        gate_proj_min_x = min(r.start.x for r in gate_proj_core_list)
+        gate_proj_min_y = min(r.start.y for r in gate_proj_core_list)
+        gate_proj_max_x = max(r.end.x for r in gate_proj_core_list)
+        gate_proj_max_y = max(r.end.y for r in gate_proj_core_list)
+        num_gate_proj_cores = gate_proj_core_ranges.num_cores()
+
+        # Gather semaphore IDs (defined early so down_proj_gather can reuse them)
+        gather_noc0_receiver_semaphore_id = 2
+        gather_noc1_receiver_semaphore_id = 3
+
+        # Tile format for 1x32 tiles (used for gather/mcast data size calculations)
+        TILE_1x32 = ttnn.Tile((1, 32))
+        tile_1x32_size = TILE_1x32.get_tile_size(data_format)
+        tile_1x32_desc = ttnn.TileDescriptor(TILE_1x32)
+
+        # Data size per core for gather: only valid data (per_core_n tiles of 1x32)
+        # Note: mul outputs 16x16 tiles with padding, but we only send the valid portion
+        # to avoid buffer overflow on the receiver (gather output tensor is sized for valid data only)
+        down_proj_gather_data_size_bytes = gate_proj_params["per_core_n"] * tile_1x32_size
+
+        # down_proj_gather semaphore IDs (reuse gather semaphores since they're reset)
+        down_proj_gather_noc0_receiver_semaphore_id = gather_noc0_receiver_semaphore_id
+        down_proj_gather_noc1_receiver_semaphore_id = gather_noc1_receiver_semaphore_id
+
+        # All gate_proj cores are senders
+        down_proj_gather_noc0_num_senders = num_gate_proj_cores
+        down_proj_gather_noc1_num_senders = 0
+
+        # Gather reads directly from mul_cb_out (CB 16) where mul pushed data
+        # No need for a separate aliased CB - we use mul_cb_out and mul_num_tiles
+
+        # CB for gather destination on sender core (tensor-backed)
+        down_proj_gather_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            down_proj_gather_dst_cb, down_proj_gather_output_tensor
+        )
+
+        # Gather receiver data address
+        down_proj_gather_receiver_data_addr = down_proj_gather_output_tensor.buffer_address()
+
+        # Gather output pages (number of tiles in gathered output)
+        down_proj_gather_output_shard = down_proj_gather_output_tensor.memory_config().shard_spec.shape
+        down_proj_gather_dst_num_pages = (down_proj_gather_output_shard[0] * down_proj_gather_output_shard[1]) // (
+            TILE_1x32.tile_shape[0] * TILE_1x32.tile_shape[1]
+        )
+
+        # ========== down_proj_mcast Setup ==========
+        # CB for mcast destination on compute cores (tensor-backed)
+        down_proj_mcast_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            down_proj_mcast_dst_cb, down_proj_mcast_output_tensor
+        )
+
+        # Mcast parameters for down_proj (same grid as input mcast)
+        down_proj_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
+        down_proj_mcast_receiver_semaphore_id = mcast_data_receiver_semaphore_id
+
+        # Calculate mcast data size (fused output size)
+        fused_output_shard = down_proj_gather_output_tensor.memory_config().shard_spec.shape
+        down_proj_mcast_num_tiles = (fused_output_shard[0] * fused_output_shard[1]) // (
+            TILE_1x32.tile_shape[0] * TILE_1x32.tile_shape[1]
+        )
+        down_proj_mcast_data_size_bytes = down_proj_mcast_num_tiles * tile_1x32_size
+
+        # ========== down_proj DRAM Matmul Setup ==========
+        down_proj_params = setup_dram_matmul(
+            device=device,
+            weights_tensor=down_proj_weights_tensor,
+            output_tensor=down_proj_output_tensor,
+            core_ranges=gate_proj_core_ranges,  # Same cores as gate_proj/up_proj
+            cb_in1_index=down_proj_cb_in1,
+            cb_out_index=down_proj_cb_out,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+        )
+        down_proj_cb_in1_descriptor = down_proj_params["cb_in1_descriptor"]
+        down_proj_cb_out_descriptor = down_proj_params["cb_out_descriptor"]
+
         # CB 10: DRAM matmul index (receives mcasted indices from gate)
         gate_proj_cb_index_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             gate_proj_cb_index, gate_proj_index_tensor
@@ -559,10 +666,6 @@ class MoeRoutedExpert:
         # For simplicity, assume all senders use noc0 (row_major=true)
         gather_noc0_num_senders = num_gate_mm_cores
         gather_noc1_num_senders = 0
-
-        # Gather semaphore IDs
-        gather_noc0_receiver_semaphore_id = 2
-        gather_noc1_receiver_semaphore_id = 3
 
         # Gather output: 1 tile of 16x16 (same 256 elements as 8 tiles of 1x32)
         gather_dst_num_pages = 1
@@ -608,6 +711,23 @@ class MoeRoutedExpert:
             # Mul reader args (setup mul_in1 buffer)
             ("mul_cb_in1", mul_cb_in1),
             ("mul_num_tiles", mul_num_tiles),
+            # down_proj_gather sender args (gate_proj cores send fused output to sender core)
+            ("down_proj_gather_dest_noc_x", sender_core_noc.x),
+            ("down_proj_gather_dest_noc_y", sender_core_noc.y),
+            ("down_proj_gather_data_size_bytes", down_proj_gather_data_size_bytes),
+            ("down_proj_gather_receiver_semaphore_id", down_proj_gather_noc0_receiver_semaphore_id),
+            ("down_proj_gather_src_cb", mul_cb_out),  # Read from mul output CB
+            ("down_proj_gather_src_num_pages", mul_num_tiles),  # Wait for mul_num_tiles (16x16)
+            ("down_proj_gather_sender_grid_start_x", gate_proj_min_x),
+            ("down_proj_gather_sender_grid_start_y", gate_proj_min_y),
+            ("down_proj_gather_sender_grid_end_x", gate_proj_max_x),
+            ("down_proj_gather_sender_grid_end_y", gate_proj_max_y),
+            ("down_proj_gather_row_major", 1),  # Row-major for DRAM bank cores
+            ("down_proj_gather_receiver_data_addr", down_proj_gather_receiver_data_addr),
+            # down_proj_mcast receiver args (compute cores)
+            ("down_proj_mcast_receiver_semaphore", down_proj_mcast_receiver_semaphore_id),
+            ("down_proj_mcast_dst_cb", down_proj_mcast_dst_cb),
+            ("down_proj_mcast_dst_num_pages", down_proj_mcast_num_tiles),
         ]
 
         # Named compile-time args for BRISC (mcast sender + gather receiver + index mcast sender + dram matmul writer)
@@ -669,6 +789,35 @@ class MoeRoutedExpert:
             # Mul writer args (waits for final output)
             ("mul_cb_out", mul_cb_out),
             ("mul_num_tiles", mul_num_tiles),
+            # down_proj_gather receiver args (sender core receives fused output from gate_proj cores)
+            ("down_proj_gather_noc0_num_senders", down_proj_gather_noc0_num_senders),
+            ("down_proj_gather_noc1_num_senders", down_proj_gather_noc1_num_senders),
+            ("down_proj_gather_noc0_receiver_semaphore_id", down_proj_gather_noc0_receiver_semaphore_id),
+            ("down_proj_gather_noc1_receiver_semaphore_id", down_proj_gather_noc1_receiver_semaphore_id),
+            ("down_proj_gather_dst_cb", down_proj_gather_dst_cb),
+            ("down_proj_gather_dst_num_pages", down_proj_gather_dst_num_pages),
+            # down_proj_mcast sender args (sender core broadcasts fused output to compute cores)
+            ("down_proj_mcast_sender_semaphore", down_proj_mcast_sender_semaphore_id),
+            ("down_proj_mcast_receiver_semaphore", down_proj_mcast_receiver_semaphore_id),
+            ("down_proj_mcast_data_size_bytes", down_proj_mcast_data_size_bytes),
+            ("down_proj_mcast_src_cb", down_proj_gather_dst_cb),  # Same as gather dst
+            ("down_proj_mcast_dst_cb", down_proj_mcast_dst_cb),
+            ("down_proj_mcast_src_num_pages", down_proj_mcast_num_tiles),
+            # down_proj DRAM matmul writer args (compute cores)
+            ("down_proj_cb_in1", down_proj_cb_in1),
+            ("down_proj_cb_out", down_proj_cb_out),
+            ("down_proj_in1_tensor_addr", down_proj_params["in1_tensor_addr"]),
+            ("down_proj_in1_page_size", down_proj_params["in1_page_size"]),
+            ("down_proj_in1_num_pages", down_proj_params["in1_num_pages"]),
+            ("down_proj_subblock_k", down_proj_params["subblock_k"]),
+            ("down_proj_per_core_n", down_proj_params["per_core_n"]),
+            ("down_proj_in1_block_size_bytes", down_proj_params["in1_block_size_bytes"]),
+            ("down_proj_out_num_tiles", down_proj_params["out_num_tiles"]),
+            ("down_proj_num_subblocks_k", down_proj_params["num_subblocks_k"]),
+            ("down_proj_cb_index", gate_proj_cb_index),  # Reuses same index CB
+            ("down_proj_index_offset", 0),  # Same expert index
+            # Testing flag: use hardcoded expert index 0 instead of gate output
+            ("use_hardcoded_expert_index", 1 if use_hardcoded_expert_index else 0),
         ]
 
         # Gate parameters (eps and scaling_factor as uint32 bit patterns)
@@ -722,6 +871,18 @@ class MoeRoutedExpert:
             ("mul_cb_out", mul_cb_out),  # final fused output
             ("mul_num_tiles", mul_num_tiles),
             ("up_proj_per_core_n", up_proj_params["per_core_n"]),  # tiles in mm_out format for cb_wait
+            # down_proj matmul compute args (compute cores)
+            ("down_proj_cb_in0", down_proj_mcast_dst_cb),  # Mcasted fused output
+            ("down_proj_cb_in1", down_proj_cb_in1),
+            ("down_proj_cb_out", down_proj_cb_out),
+            ("down_proj_subblock_k", down_proj_params["subblock_k"]),
+            ("down_proj_per_core_n", down_proj_params["per_core_n"]),
+            ("down_proj_subblock_w", down_proj_params["subblock_w"]),
+            ("down_proj_num_subblocks_k", down_proj_params["num_subblocks_k"]),
+            ("down_proj_tile_r_dim", down_proj_params["tile_r_dim"]),
+            ("down_proj_fuse_silu", 0),  # No SiLU for down_proj
+            # Testing flag: use hardcoded expert index 0 instead of gate output
+            ("use_hardcoded_expert_index", 1 if use_hardcoded_expert_index else 0),
         ]
 
         # Semaphore descriptors
@@ -766,11 +927,13 @@ class MoeRoutedExpert:
             core_to_bank_id[(core.x, core.y)] = bank_id
         bank_id_core_values = []
         vc_core_values = []
-        for core in gate_proj_optimal_workers:
+        sender_idx_core_values = []  # For down_proj_gather sender idx
+        for idx, core in enumerate(gate_proj_optimal_workers):
             bank_id = core_to_bank_id[(core.x, core.y)]
             vc = bank_id & 0x3
             bank_id_core_values.append((core, bank_id))
             vc_core_values.append((core, vc))
+            sender_idx_core_values.append((core, idx))  # Explicit sender idx
 
         # Unified kernel descriptor
         unified_kernel = UnifiedKernelDescriptor(
@@ -834,6 +997,23 @@ class MoeRoutedExpert:
                     core_values=vc_core_values,
                     other_value=0,
                 ),
+                # down_proj uses same cores as gate_proj, so same bank_id and vc
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="down_proj_bank_id",
+                    core_values=bank_id_core_values,
+                    other_value=0,
+                ),
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="down_proj_vc",
+                    core_values=vc_core_values,
+                    other_value=0,
+                ),
+                # Explicit sender idx for down_proj_gather (scattered optimal DRAM bank cores)
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="down_proj_gather_sender_idx",
+                    core_values=sender_idx_core_values,
+                    other_value=0,
+                ),
             ],
         )
 
@@ -858,6 +1038,10 @@ class MoeRoutedExpert:
                 mul_cb_in0_descriptor,
                 mul_cb_in1_descriptor,
                 mul_cb_out_descriptor,
+                down_proj_gather_dst_cb_descriptor,
+                down_proj_mcast_dst_cb_descriptor,
+                down_proj_cb_in1_descriptor,
+                down_proj_cb_out_descriptor,
             ],
             semaphores=[
                 mcast_sender_semaphore_descriptor,
@@ -885,7 +1069,11 @@ class MoeRoutedExpert:
             up_proj_weights_tensor,
             up_proj_mm_out_tensor,
             fused_output_tensor,
+            down_proj_gather_output_tensor,
+            down_proj_mcast_output_tensor,
+            down_proj_weights_tensor,
+            down_proj_output_tensor,
         ]
         ttnn.generic_op(io_tensors, program_descriptor)
 
-        return gate_output_scores_tensor, gate_output_indices_tensor, fused_output_tensor
+        return gate_output_scores_tensor, gate_output_indices_tensor, down_proj_output_tensor

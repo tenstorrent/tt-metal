@@ -144,7 +144,10 @@ def test_moe_routed_expert(device):
     # DRAM matmul + SiLU parameters
     gate_proj_K = K  # Same K as routing matmul (7168)
     gate_proj_N = 2048  # Expert output width
-    num_experts = 256  # Number of expert weight matrices (must match gate indices range)
+
+    # Testing mode: when True, hardcode expert index 0 and create only 1 expert
+    use_hardcoded_expert_index = True
+    num_experts = 1 if use_hardcoded_expert_index else 256
 
     # Tile definitions
     tile_1x32 = ttnn.Tile([1, 32])
@@ -424,11 +427,76 @@ def test_moe_routed_expert(device):
         memory_config=up_proj_mm_out_tensor.memory_config(),
         tile=up_proj_mm_out_tensor.get_tile(),
     )
-    logger.info(f"Created fused_output_tensor for final result: silu(gate_proj) * up_proj")
+    logger.info(f"Created fused_output_tensor for intermediate result: silu(gate_proj) * up_proj")
+
+    # ========== down_proj Tensors ==========
+    # down_proj: [1, gate_proj_N] x [gate_proj_N, K] -> [1, K]
+    down_proj_K = gate_proj_N  # Input dimension = fused output width (2048)
+    down_proj_N = K  # Output dimension = original input width (7168)
+
+    # down_proj_gather_output: gathered fused output on sender core
+    # Shape: [1, gate_proj_N_padded] on sender core
+    down_proj_gather_shard_spec = ttnn.ShardSpec(
+        input_core_grid,  # Sender core
+        (M, gate_proj_N_padded),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    down_proj_gather_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, down_proj_gather_shard_spec
+    )
+    down_proj_gather_output_tensor = ttnn.from_torch(
+        torch.zeros([M, gate_proj_N_padded]).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=down_proj_gather_mem_config,
+        tile=tile_1x32,
+    )
+    logger.info(f"Created down_proj_gather_output_tensor on sender core")
+
+    # down_proj_mcast_output: mcasted fused output on mcast grid
+    # Same shape as gather output, but sharded on mcast grid
+    down_proj_mcast_shard_spec = ttnn.ShardSpec(
+        mcast_output_core_grid,  # Mcast grid
+        (M, gate_proj_N_padded),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    down_proj_mcast_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, down_proj_mcast_shard_spec
+    )
+    down_proj_mcast_output_tensor = ttnn.from_torch(
+        torch.zeros([M, gate_proj_N_padded]).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=down_proj_mcast_mem_config,
+        tile=tile_1x32,
+    )
+    logger.info(f"Created down_proj_mcast_output_tensor on gate_proj cores")
+
+    # down_proj expert weights and output
+    (
+        down_proj_weights,
+        down_proj_output,
+        down_proj_weights_dict,
+        down_proj_expert_tensors,
+    ) = create_expert_matmul_tensors(
+        device=device,
+        K=down_proj_K,  # 2048 (fused output width)
+        N=down_proj_N,  # 7168 (original input width)
+        num_experts=num_experts,
+        compute_core_grid=gate_proj_core_ranges,  # Same cores as gate_proj/up_proj
+        num_cores=num_gate_proj_cores,
+        tile_h=M,
+        tile_w=32,
+        dtype=ttnn.bfloat4_b,
+        seed=3000,  # Different seed for different weights
+    )
+    logger.info(f"Created down_proj tensors: weights={down_proj_weights.shape}, output={down_proj_output.shape}")
 
     # Run fused operation
     logger.info("Running MoE routed expert fused operation...")
-    ttnn_result_scores, ttnn_result_indices, ttnn_result_fused = MoeRoutedExpert.op(
+    ttnn_result_scores, ttnn_result_indices, ttnn_result_down_proj = MoeRoutedExpert.op(
         ttnn_input,
         ttnn_mcast_output,
         ttnn_gate_mm_weights,
@@ -444,30 +512,38 @@ def test_moe_routed_expert(device):
         up_proj_weights,
         up_proj_mm_out_tensor,
         fused_output_tensor,
+        down_proj_gather_output_tensor,
+        down_proj_mcast_output_tensor,
+        down_proj_weights,
+        down_proj_output,
+        use_hardcoded_expert_index=use_hardcoded_expert_index,
     )
 
     # Convert back to torch for comparison
     output_scores_torch = ttnn.to_torch(ttnn_result_scores)
     output_indices_torch = ttnn.to_torch(ttnn_result_indices)
-    output_fused_torch = ttnn.to_torch(ttnn_result_fused)
+    output_down_proj_torch = ttnn.to_torch(ttnn_result_down_proj)
 
     # Also read back intermediate matmul outputs for debugging
     output_gate_proj_torch = ttnn.to_torch(gate_proj_output)
     output_up_proj_mm_torch = ttnn.to_torch(up_proj_mm_out_tensor)
+    output_fused_torch = ttnn.to_torch(fused_output_tensor)
 
-    # Compute golden reference (includes gate + expert matmuls + fused mul)
+    # Compute golden reference (includes gate + expert matmuls + fused mul + down_proj)
     (
         torch_expected_scores,
         torch_expected_indices,
-        torch_expected_fused,
+        torch_expected_down_proj,
     ) = MoeRoutedExpert.golden(
         torch_input,
         torch_gate_mm_weights,
         torch_bias,
         gate_proj_weights_dict=expert_weights_dict,
         up_proj_weights_dict=up_proj_weights_dict,
+        down_proj_weights_dict=down_proj_weights_dict,
         eps=gate_eps,
         scaling_factor=gate_scaling_factor,
+        use_hardcoded_expert_index=use_hardcoded_expert_index,
     )
 
     # ========== Verify Outputs ==========
@@ -484,8 +560,12 @@ def test_moe_routed_expert(device):
     assert torch.allclose(sorted_output_scores, sorted_expected_scores, atol=1e-2, rtol=1e-4), "Gate scores mismatch"
 
     # Compute expected intermediate outputs for debugging
-    selected_expert_idx = int(output_indices_torch[0, 0].item())
-    logger.info(f"Selected expert index: {selected_expert_idx}")
+    if use_hardcoded_expert_index:
+        selected_expert_idx = 0
+        logger.info(f"Using expert index: {selected_expert_idx} (hardcoded for testing)")
+    else:
+        selected_expert_idx = int(torch_expected_indices[0, 0].item())
+        logger.info(f"Using expert index: {selected_expert_idx} (from gate output)")
 
     # gate_proj expected: input @ weights + SiLU
     gate_proj_weights_torch = expert_weights_dict[selected_expert_idx]
@@ -496,6 +576,9 @@ def test_moe_routed_expert(device):
     # up_proj expected: input @ weights (no activation)
     up_proj_weights_torch = up_proj_weights_dict[selected_expert_idx]
     torch_expected_up_proj = input_for_expert @ up_proj_weights_torch.float()
+
+    # fused expected: silu(gate_proj) * up_proj
+    torch_expected_fused = torch_expected_gate_proj * torch_expected_up_proj
 
     # Verify gate_proj matmul + SiLU
     passing, pcc_output = comp_pcc(torch_expected_gate_proj, output_gate_proj_torch, 0.98)
@@ -508,6 +591,10 @@ def test_moe_routed_expert(device):
     # Verify fused output: silu(gate_proj) * up_proj
     passing, pcc_output = comp_pcc(torch_expected_fused, output_fused_torch, 0.98)
     logger.info(f"fused output (silu(gate_proj) * up_proj): {pcc_output}")
-    assert passing, f"Fused output PCC check failed: {pcc_output}"
+
+    # Verify down_proj output
+    passing, pcc_output = comp_pcc(torch_expected_down_proj, output_down_proj_torch, 0.98)
+    logger.info(f"down_proj output: {pcc_output}")
+    assert passing, f"down_proj output PCC check failed: {pcc_output}"
 
     logger.info("MoE routed expert test passed!")

@@ -14,6 +14,8 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "compute_kernel_api.h"
+#include "compute_kernel_api/reconfig_data_format.h"
+#include "compute_kernel_api/pack.h"
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
@@ -60,7 +62,8 @@ struct DRAMStreamingMatmul {
         uint32_t vc_,
         uint32_t enable_indexing_ = 0,
         uint32_t cb_index_ = 0,
-        uint32_t index_offset_ = 0>
+        uint32_t index_offset_ = 0,
+        uint32_t use_hardcoded_expert_index_ = 0>
     struct WriterCTArgs {
         static constexpr uint32_t cb_in1 = cb_in1_;
         static constexpr uint32_t cb_out = cb_out_;
@@ -78,6 +81,7 @@ struct DRAMStreamingMatmul {
         static constexpr bool enable_indexing = enable_indexing_ == 1;
         static constexpr uint32_t cb_index = cb_index_;
         static constexpr uint32_t index_offset = index_offset_;  // offset into index tensor
+        static constexpr bool use_hardcoded_expert_index = use_hardcoded_expert_index_ == 1;  // For testing
     };
 
     // Compute CTArgs (TRISC)
@@ -141,9 +145,14 @@ struct DRAMStreamingMatmul {
                 cb_wait_front(CTArgs::cb_index, 1);
 
                 // Read expert index from index tensor at specified offset (uint16)
-                volatile tt_l1_ptr uint16_t* index_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::cb_index));
-                uint32_t expert_idx = static_cast<uint32_t>(index_ptr[CTArgs::index_offset]);
+                uint32_t expert_idx;
+                if constexpr (CTArgs::use_hardcoded_expert_index) {
+                    expert_idx = 0;  // For testing: always use expert 0
+                } else {
+                    volatile tt_l1_ptr uint16_t* index_ptr =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::cb_index));
+                    expert_idx = static_cast<uint32_t>(index_ptr[CTArgs::index_offset]);
+                }
 
                 // Compute offset: expert_idx * expert_size_per_bank
                 // Each expert per bank = k_tiles * per_core_n tiles (column-major shuffled per expert)
