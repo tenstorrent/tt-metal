@@ -806,9 +806,14 @@ class TestNanoGPTConfig:
 class TestNanoGPTIntegration:
     """Integration tests for NanoGPT."""
 
-    def test_training_step(self, tiny_config):
+    @pytest.mark.parametrize(
+        "runner_type",
+        [ttml.models.RunnerType.Default, ttml.models.RunnerType.MemoryEfficient],
+    )
+    def test_training_step(self, tiny_config, runner_type):
         """Test a single training step with optimizer."""
-        model = create_nanogpt(tiny_config)
+        cfg = replace(tiny_config, runner_type=runner_type)
+        model = create_nanogpt(cfg)
         model.train()
 
         batch_size = 2
