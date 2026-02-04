@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <functional>
 #include <map>
@@ -70,7 +70,7 @@ void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice
     run_program(2);
 
     // Check the print log against golden output.
-    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
+    EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 }
 }
 }

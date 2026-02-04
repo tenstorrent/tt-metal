@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "noc_parameters.h"
-#include "risc_attribs.h"
+#include "internal/risc_attribs.h"
 
 ////
 

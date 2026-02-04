@@ -59,7 +59,7 @@ class MotifPipeline:
         num_links: int,
         height: int = 1024,
         width: int = 1024,
-        model_checkpoint_path: str = "Motif-Technologies/Motif-Image-6B-Preview",
+        checkpoint_name: str = "Motif-Technologies/Motif-Image-6B-Preview",
     ) -> None:
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
@@ -116,13 +116,14 @@ class MotifPipeline:
 
         logger.info("loading models...")
         checkpoint_path = huggingface_hub.hf_hub_download(
-            repo_id=model_checkpoint_path,
+            repo_id=checkpoint_name,
             filename="motif_image_preview.bin",
             subfolder="checkpoints",
             revision="update_new_ckpt",
         )
 
-        vae_checkpoint = "stabilityai/stable-diffusion-3-medium-diffusers"
+        # vae_checkpoint = "stabilityai/stable-diffusion-3-medium-diffusers"
+        vae_checkpoint = "stabilityai/stable-diffusion-3.5-large"
         self._torch_vae = AutoencoderKL.from_pretrained(vae_checkpoint, subfolder="vae")
         assert isinstance(self._torch_vae, AutoencoderKL)
 
@@ -242,8 +243,12 @@ class MotifPipeline:
         topology=ttnn.Topology.Linear,
         width=1024,
         height=1024,
-        model_checkpoint_path="Motif-Technologies/Motif-Image-6B-Preview",
+        checkpoint_name="Motif-Technologies/Motif-Image-6B-Preview",
+        model_checkpoint_path=None,
     ):
+        if model_checkpoint_path is not None:
+            checkpoint_name = model_checkpoint_path
+            logger.warning(f"DEPRECATED: model_checkpoint_path parameter is deprecated. Use checkpoint_name instead.")
         default_config = {
             (2, 4): {
                 "cfg_config": (2, 0),
@@ -299,7 +304,7 @@ class MotifPipeline:
             num_links=num_links,
             width=width,
             height=height,
-            model_checkpoint_path=model_checkpoint_path,
+            checkpoint_name=checkpoint_name,
         )
 
         return pipeline
@@ -320,8 +325,8 @@ class MotifPipeline:
         cfg_scale=5.0,
         seed=None,
         traced=True,
-        timer=None,
-        timer_iteration=0,
+        profiler=None,
+        profiler_iteration=0,
     ):
         return self.__call__(
             prompt_1=[prompt],
@@ -334,8 +339,8 @@ class MotifPipeline:
             cfg_scale=cfg_scale,
             seed=seed,
             traced=traced,
-            timer=timer,
-            timer_iteration=timer_iteration,
+            profiler=profiler,
+            profiler_iteration=profiler_iteration,
         )
 
     def __call__(
@@ -354,8 +359,8 @@ class MotifPipeline:
         num_inference_steps: int,
         seed: int | None = None,
         traced: bool = False,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> list[Image.Image]:
         prompt_count = len(prompt_1)
 
@@ -365,11 +370,11 @@ class MotifPipeline:
         assert num_images_per_prompt == 1, "generating multiple images is not supported"
         assert prompt_count == 1, "generating multiple images is not supported"
 
-        with timer("total", timer_iteration) if timer else nullcontext():
+        with profiler("total", profiler_iteration) if profiler else nullcontext():
             cfg_enabled = cfg_scale > 1
             logger.info("encoding prompts...")
 
-            with timer("encoder", timer_iteration) if timer else nullcontext():
+            with profiler("encoder", profiler_iteration) if profiler else nullcontext():
                 with self.encoder_reshape(self.encoder_device):
                     prompt_embeds1, pooled_prompt_embeds1, prompt_embeds2, pooled_prompt_embeds2 = self._encode_prompts(
                         prompt_1=prompt_1,
@@ -380,8 +385,8 @@ class MotifPipeline:
                         negative_prompt_3=negative_prompt_3,
                         num_images_per_prompt=num_images_per_prompt,
                         cfg_enabled=cfg_enabled,
-                        timer=timer,
-                        timer_iteration=timer_iteration,
+                        profiler=profiler,
+                        profiler_iteration=profiler_iteration,
                     )
 
             logger.info("preparing timesteps...")
@@ -475,9 +480,9 @@ class MotifPipeline:
 
             logger.info("denoising...")
 
-            with timer("denoising", timer_iteration) if timer else nullcontext():
+            with profiler("denoising", profiler_iteration) if profiler else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(timesteps)):
-                    with timer(f"denoising_step_{i}", timer_iteration) if timer else nullcontext():
+                    with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
                         sigma_difference = sigmas[i + 1] - sigmas[i]
 
                         tt_timestep_list = []
@@ -533,7 +538,7 @@ class MotifPipeline:
 
             logger.info("decoding image...")
 
-            with timer("vae", timer_iteration) if timer else nullcontext():
+            with profiler("vae", profiler_iteration) if profiler else nullcontext():
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
 
@@ -719,22 +724,22 @@ class MotifPipeline:
         negative_prompt_3: list[str | None],
         num_images_per_prompt: int,
         cfg_enabled: bool,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         no_negative_prompt = [x is None for x in negative_prompt_1]
         negative_prompt_1 = [x if x is not None else "" for x in negative_prompt_1]
         negative_prompt_2 = [x if x is not None else "" for x in negative_prompt_2]
         negative_prompt_3 = [x if x is not None else "" for x in negative_prompt_3]
 
-        with timer("text_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("text_encoding", profiler_iteration) if profiler else nullcontext():
             pos_prompt_embeds, pos_pooled_prompt_embeds = self._text_encoder.encode(
                 prompt_1,
                 prompt_2,
                 prompt_3,
                 num_images_per_prompt=num_images_per_prompt,
-                timer=timer,
-                timer_iteration=timer_iteration,
+                profiler=profiler,
+                profiler_iteration=profiler_iteration,
             )
 
             neg_prompt_embeds, neg_pooled_prompt_embeds = self._text_encoder.encode(
@@ -742,8 +747,8 @@ class MotifPipeline:
                 negative_prompt_2,
                 negative_prompt_3,
                 num_images_per_prompt=num_images_per_prompt,
-                timer=timer,
-                timer_iteration=timer_iteration,
+                profiler=profiler,
+                profiler_iteration=profiler_iteration,
             )
 
         if not cfg_enabled:
@@ -826,13 +831,13 @@ class TextEncoder:
         prompts_3: Iterable[str],
         *,
         num_images_per_prompt: int,
-        timer: BenchmarkProfiler = None,
-        timer_iteration: int = 0,
+        profiler: BenchmarkProfiler = None,
+        profiler_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        with timer("clip_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("clip_encoding", profiler_iteration) if profiler else nullcontext():
             clip_l, pooled_clip_l = self._clip_l.encode(prompts=prompts_1, num_images_per_prompt=num_images_per_prompt)
             clip_g, pooled_clip_g = self._clip_g.encode(prompts=prompts_2, num_images_per_prompt=num_images_per_prompt)
-        with timer("t5_encoding", timer_iteration) if timer else nullcontext():
+        with profiler("t5_encoding", profiler_iteration) if profiler else nullcontext():
             t5 = self._t5.encode(prompts=prompts_3, num_images_per_prompt=num_images_per_prompt)
 
         clip = torch.cat([clip_l, clip_g], dim=-1)

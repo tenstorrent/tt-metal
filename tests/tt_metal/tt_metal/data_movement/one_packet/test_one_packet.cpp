@@ -9,6 +9,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -33,7 +34,7 @@ struct OnePacketConfig {
 /// @return
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePacketConfig& test_config) {
     // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->impl().get_device(0);
     // Program
     Program program = CreateProgram();
 
@@ -151,25 +152,24 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
     }
 
     // Results comparison
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+    bool is_equal = (packed_output == packed_golden);
 
-    if (!pcc) {
-        log_error(tt::LogTest, "PCC Check failed");
+    if (!is_equal) {
+        log_error(tt::LogTest, "Equality Check failed");
         log_info(tt::LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
         log_info(tt::LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 
-    return pcc;
+    return is_equal;
 }
 }  // namespace unit_tests::dm::one_packet
 
 /* ========== Test case for reading varying number of packets and packet sizes; Test id = 80 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -205,7 +205,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes) {
 /* ========== Test case for writing varying number of packets and packet sizes; Test id = 81 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_device(0);
+    auto* device = mesh_device->impl().get_device(0);
 
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =

@@ -10,8 +10,13 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
+#include "tt_metal/fabric/builder/connection_registry.hpp"
+#include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 
 namespace tt::tt_fabric {
+
+// Forward declarations
+class FabricDatamoverBuilderBase;
 
 /**
  * ComputeMeshRouterBuilder
@@ -32,18 +37,27 @@ public:
      * @param program The fabric program
      * @param local_node The local fabric node ID
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
+     * @param connection_registry Optional registry to record connections for testing
      * @return A unique_ptr to the constructed ComputeMeshRouterBuilder
      */
     static std::unique_ptr<ComputeMeshRouterBuilder> build(
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
-        const RouterLocation& location);
+        const RouterLocation& location,
+        std::shared_ptr<ConnectionRegistry> connection_registry = nullptr);
 
     // ============ FabricRouterBuilder Interface Implementation ============
 
     void configure_connection(
         FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) override;
+
+    /**
+     * Configure local connections between routers on the same device (e.g., mesh↔Z)
+     *
+     * @param local_routers Map of direction → router builder for all routers on this device
+     */
+    void configure_local_connections(const std::map<RoutingDirection, FabricRouterBuilder*>& local_routers) override;
 
     void configure_for_dispatch() override;
 
@@ -62,12 +76,23 @@ public:
      */
     SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx);
 
-    uint32_t get_downstream_sender_channel(bool is_2D_routing, eth_chan_directions downstream_direction) const;
+    uint32_t get_downstream_sender_channel(
+        bool is_2D_routing, eth_chan_directions downstream_direction, uint32_t vc) const;
 
     eth_chan_directions get_eth_direction() const;
     size_t get_noc_x() const;
     size_t get_noc_y() const;
     size_t get_configured_risc_count() const;
+
+    /**
+     * Get the builder for a specific VC/channel combination
+     * Encapsulates channel mapping + builder resolution
+     *
+     * @param vc Virtual channel index
+     * @param channel Sender channel index within the VC
+     * @return Pointer to the appropriate builder (erisc or tensix)
+     */
+    FabricDatamoverBuilderBase* get_builder_for_vc_channel(uint32_t vc, uint32_t channel) const;
 
     // ============ Compute-Mesh Specific Accessors ============
 
@@ -91,7 +116,20 @@ private:
         const RouterLocation& location,
         std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
         std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-        FabricRouterChannelMapping channel_mapping);
+        FabricRouterChannelMapping channel_mapping,
+        RouterConnectionMapping connection_mapping,
+        std::shared_ptr<ConnectionRegistry> connection_registry);
+
+    /**
+     * Generic helper to establish connections from this router to a downstream router.
+     * Iterates through all VCs and sender channels, applying the provided connection type filter.
+     *
+     * @param downstream_router The target router to connect to
+     * @param connection_type_filter Function that returns true for connection types to establish
+     */
+    void establish_connections_to_router(
+        ComputeMeshRouterBuilder& downstream_router,
+        const std::function<bool(ConnectionType)>& connection_type_filter);
 
     /**
      * Compute which sender channels are traffic injection channels for a specific VC.
@@ -147,21 +185,13 @@ private:
      */
     void connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder);
 
-    /**
-     * Connect the downstream router over noc or Ethernet. Iterates through all VCs and channels
-     * between the routers and connects them.
-     *
-     * Establishes one-way connection
-     *
-     * @param other The other router builder to connect to
-     * @param vc Virtual channel ID
-     */
-    void connect_to_downstream_router_over_noc(ComputeMeshRouterBuilder& other, uint32_t vc);
-
     // Compute-mesh specific state
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_;
     FabricRouterChannelMapping channel_mapping_;
+    RouterConnectionMapping connection_mapping_;
+    std::shared_ptr<ConnectionRegistry> connection_registry_;
+    bool is_inter_mesh_;  // True if this router connects different meshes
 };
 
 }  // namespace tt::tt_fabric

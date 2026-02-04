@@ -51,7 +51,7 @@ struct MorehGroupNormOperation {
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& outputs);
+            tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<MorehGroupNormFactory>;
@@ -62,25 +62,23 @@ struct MorehGroupNormOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        uint32_t num_groups,
-        float eps,
-        const std::optional<const Tensor>& gamma,
-        const std::optional<const Tensor>& beta,
-        const std::vector<bool>& are_required_outputs,
-        const std::optional<const Tensor>& output,
-        const std::optional<const Tensor>& mean,
-        const std::optional<const Tensor>& rstd,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<MemoryConfig>& mean_memory_config,
-        const std::optional<MemoryConfig>& rstd_memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
+
 }  // namespace ttnn::operations::moreh::moreh_group_norm
 
 namespace ttnn::prim {
-constexpr auto moreh_group_norm = ttnn::register_operation<
-    "ttnn::prim::moreh_group_norm",
-    ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation>();
+ttnn::operations::moreh::moreh_group_norm::MorehGroupNormOperation::tensor_return_value_t moreh_group_norm(
+    const Tensor& input,
+    uint32_t num_groups,
+    float eps,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    const std::vector<bool>& are_required_outputs,
+    const std::optional<const Tensor>& output,
+    const std::optional<const Tensor>& mean,
+    const std::optional<const Tensor>& rstd,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& mean_memory_config,
+    const std::optional<MemoryConfig>& rstd_memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 }

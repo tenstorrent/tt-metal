@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
 #include "ckernel_sfpu_recip.h"
 
@@ -34,7 +33,6 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
         result = _sfpu_reciprocal_<2>(denominator);
     } else {
         result = _sfpu_reciprocal_<1>(denominator);
-        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
     }
 
     return result;
@@ -65,6 +63,10 @@ inline void calculate_sigmoid() {
             sfpi::vFloat val = sfpi::dst_reg[0];
 
             sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
+
+            if constexpr (!is_fp32_dest_acc_en) {
+                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+            }
 
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;

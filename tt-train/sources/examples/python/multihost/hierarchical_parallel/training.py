@@ -16,19 +16,32 @@ sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
 
 import click
 import ttml
-from ttml.common.config import DeviceConfig, MultiHostConfig, TrainingConfig, get_config
+from ttml.common.config import (
+    DeviceConfig,
+    MultiHostConfig,
+    TrainingConfig,
+    load_config,
+)
 from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.utils import create_optimizer, initialize_device, set_seed
 
-from data import prepare_data
+from ttml.common.data import prepare_data
 from trainer import worker, aggregator, optimizer, aggregator_optimizer
 
 
 @click.command()
-@click.option("-c", "--config", type=str, default="training_shakespeare_tinyllama_tensor_parallel_3tier_fabric.yaml")
+@click.option(
+    "-c",
+    "--config",
+    type=str,
+    default="training_shakespeare_tinyllama_tensor_parallel_3tier_fabric.yaml",
+)
 @click.option(
     "--worker-type",
-    type=click.Choice(["worker", "aggregator", "optimizer", "aggregator_optimizer"], case_sensitive=False),
+    type=click.Choice(
+        ["worker", "aggregator", "optimizer", "aggregator_optimizer"],
+        case_sensitive=False,
+    ),
     default=None,
     help="Type of worker (auto-detected if not specified)",
 )
@@ -51,7 +64,7 @@ def main(config: str, worker_type: str):
         worker_type: Type of worker to run (auto-detected from rank if not specified)
     """
     # Load configuration
-    yaml_config = get_config(config)
+    yaml_config = load_config(config)
 
     # Initialize distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -118,7 +131,13 @@ def main(config: str, worker_type: str):
     if worker_type == "worker":
         # Training worker - computes forward/backward and uses RemoteOptimizer
         train_losses, val_losses = worker(
-            training_cfg, model, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp, num_workers
+            training_cfg,
+            model,
+            train_ids,
+            val_ids,
+            device_config.enable_ddp,
+            device_config.enable_tp,
+            num_workers,
         )
         print(f"[Worker {rank}] Completed with {len(train_losses)} loss values")
     elif worker_type == "aggregator":
@@ -131,7 +150,9 @@ def main(config: str, worker_type: str):
     elif worker_type == "aggregator_optimizer":
         # Combined aggregator and optimizer for 2-tier architecture
         optimizer_instance = create_optimizer(model, yaml_config)
-        aggregator_optimizer(model, training_cfg, optimizer_instance, device_config.enable_ddp)
+        aggregator_optimizer(
+            model, training_cfg, optimizer_instance, device_config.enable_ddp
+        )
 
     # Cleanup
     distributed_ctx.barrier()

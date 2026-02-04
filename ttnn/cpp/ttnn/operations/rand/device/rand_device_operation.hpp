@@ -55,20 +55,18 @@ struct RandDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Shape& shape,
-        DataType dtype,
-        Layout layout,
-        const MemoryConfig& memory_config,
-        MeshDevice& device,
-        float from,
-        float to,
-        uint32_t seed);
 };
 
 }  // namespace ttnn::operations::rand
 
 namespace ttnn::prim {
-constexpr auto uniform = ttnn::register_operation<"ttnn::prim::rand", ttnn::operations::rand::RandDeviceOperation>();
+ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
+    const ttnn::Shape& shape,
+    DataType dtype,
+    Layout layout,
+    const MemoryConfig& memory_config,
+    MeshDevice& device,
+    float from,
+    float to,
+    uint32_t seed);
 }  // namespace ttnn::prim

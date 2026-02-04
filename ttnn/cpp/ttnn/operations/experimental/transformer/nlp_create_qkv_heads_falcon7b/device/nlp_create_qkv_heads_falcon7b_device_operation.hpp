@@ -12,13 +12,13 @@
 #include "nlp_create_qkv_heads_falcon7b_device_operation_types.hpp"
 #include "nlp_create_qkv_heads_falcon7b_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer::qkv_heads_falcon7b {
+namespace ttnn::experimental::prim {
 
 struct NlpCreateHeadsFalcon7BDeviceOperation {
-    using operation_attributes_t = qkv_heads_falcon7b::operation_attributes_t;
-    using tensor_args_t = qkv_heads_falcon7b::tensor_args_t;
-    using spec_return_value_t = qkv_heads_falcon7b::spec_return_value_t;
-    using tensor_return_value_t = qkv_heads_falcon7b::tensor_return_value_t;
+    using operation_attributes_t = NlpCreateQkvHeadsFalcon7bParams;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = NlpCreateQkvHeadsFalcon7bResultSpec;
+    using tensor_return_value_t = NlpCreateQkvHeadsFalcon7bResult;
     using program_factory_t = std::variant<NlpCreateQkvHeadsFalcon7BProgramFactory>;
     using shared_variables_t = NlpCreateQkvHeadsFalcon7BProgramFactory::shared_variables_t;
 
@@ -31,15 +31,11 @@ struct NlpCreateHeadsFalcon7BDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input, const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::qkv_heads_falcon7b
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-constexpr auto nlp_create_qkv_heads_falcon7b = ttnn::register_operation<
-    "ttnn::prim::nlp_create_qkv_heads_falcon7b",
-    ttnn::operations::experimental::transformer::qkv_heads_falcon7b::NlpCreateHeadsFalcon7BDeviceOperation>();
+ttnn::experimental::prim::NlpCreateQkvHeadsFalcon7bResult nlp_create_qkv_heads_falcon7b(
+    const Tensor& input, const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
 }  // namespace ttnn::prim

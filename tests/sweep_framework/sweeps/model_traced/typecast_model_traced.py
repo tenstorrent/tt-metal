@@ -5,7 +5,6 @@
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
@@ -52,6 +51,7 @@ def run(
     storage_type="StorageType::DEVICE",
     *,
     device,
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
@@ -61,19 +61,48 @@ def run(
     else:
         shape = input_shape
 
-    # Handle UINT16 specially - PyTorch doesn't have native uint16, use int16 with proper range
+    # Handle UINT16 and UINT32 specially - PyTorch doesn't have native unsigned types
     if input_a_dtype == ttnn.uint16:
         # For uint16, create values in valid range [0, 65535]
         torch_input_tensor_a = torch.randint(0, 65536, shape, dtype=torch.int32)
         # Convert to uint16 representation (but keep as int32 for PyTorch)
         torch_input_tensor_a = torch_input_tensor_a.clamp(0, 65535)
+    elif input_a_dtype == ttnn.uint32:
+        # For uint32, create values in valid range [0, 2^32-1]
+        # Use int64 to avoid overflow
+        torch_input_tensor_a = torch.randint(0, 2**32, shape, dtype=torch.int64)
     else:
         torch_input_tensor_a = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
         )(shape)
 
-    # Typecast to output dtype
-    torch_output_tensor = torch_input_tensor_a.to(torch.float32)  # Convert to float32 first for comparison
+    # Create PyTorch reference output based on output_dtype
+    # Handle each dtype conversion explicitly for correct reference
+    if output_dtype == ttnn.float32:
+        # Convert to float32
+        torch_output_tensor = torch_input_tensor_a.to(torch.float32)
+    elif output_dtype == ttnn.bfloat16:
+        # Convert to bfloat16 then back to float32 for comparison
+        torch_output_tensor = torch_input_tensor_a.to(torch.bfloat16).to(torch.float32)
+    elif output_dtype == ttnn.bfloat8_b:
+        # bfloat8_b doesn't have PyTorch equivalent, use float32
+        torch_output_tensor = torch_input_tensor_a.to(torch.float32)
+    elif output_dtype == ttnn.uint16:
+        # PyTorch doesn't have uint16, keep as int32
+        torch_output_tensor = torch_input_tensor_a.clamp(0, 65535).to(torch.int32)
+    elif output_dtype == ttnn.uint32:
+        # For uint32 output, clamp to uint32 range and keep as int64 to avoid overflow
+        if input_a_dtype == ttnn.uint32:
+            # Input is already uint32 (int64), just ensure it's in range
+            torch_output_tensor = torch_input_tensor_a.clamp(0, 2**32 - 1)
+        else:
+            # Converting from float/int to uint32
+            torch_output_tensor = torch_input_tensor_a.clamp(0, 2**32 - 1).to(torch.int64)
+    elif output_dtype == ttnn.int32:
+        torch_output_tensor = torch_input_tensor_a.to(torch.int32)
+    else:
+        # Default to float32
+        torch_output_tensor = torch_input_tensor_a.to(torch.float32)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -96,7 +125,25 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
+    # Convert both to float32 for comparison to avoid dtype mismatch in PCC
+    # Handle uint32 specially to avoid overflow in conversion
+    if output_dtype == ttnn.uint32 or input_a_dtype == ttnn.uint32:
+        # For uint32, convert to int64 first to avoid overflow, then to float
+        # Ensure both tensors are int64 before converting to float32
+        if torch_output_tensor.dtype != torch.int64:
+            torch_output_tensor_f32 = torch_output_tensor.to(torch.int64).to(torch.float32)
+        else:
+            torch_output_tensor_f32 = torch_output_tensor.to(torch.float32)
+
+        if output_tensor.dtype != torch.int64:
+            output_tensor_f32 = output_tensor.to(torch.int64).to(torch.float32)
+        else:
+            output_tensor_f32 = output_tensor.to(torch.float32)
+    else:
+        torch_output_tensor_f32 = torch_output_tensor.to(torch.float32)
+        output_tensor_f32 = output_tensor.to(torch.float32)
+
     # Check with PCC
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    pcc = check_with_pcc(torch_output_tensor_f32, output_tensor_f32, 0.999)
 
     return [pcc, e2e_perf]

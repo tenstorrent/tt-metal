@@ -4,7 +4,7 @@
 
 // Scribble on the stack to check stack usage detection.
 
-#include "compile_time_args.h"
+#include "api/compile_time_args.h"
 #include <dev_mem_map.h>
 
 extern uint32_t __stack_base[];
@@ -26,5 +26,5 @@ void kernel_main() {
         *point = 0;
 }
 #if defined(COMPILE_FOR_TRISC)
-} // namespace NAMESPACE
+}  // namespace NAMESPACE
 #endif

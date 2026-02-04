@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include <vector>
+#include "../../../../sdpa/device/kernels/dataflow/dataflow_common.hpp"
 /******************************************************************************
  *                                                                             *
  *                   Common Functions for Dataflow Kernels                     *
@@ -12,49 +13,8 @@
  ******************************************************************************/
 
 /******************************************************************************
- *                   Generic Utility Functions                                 *
- ******************************************************************************/
-template <uint32_t tile_bytes, uint32_t num_readers>
-constexpr uint32_t get_barrier_read_threshold() {
-    return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
-}
-
-/******************************************************************************
- *                   Page Cache Functions            *
- ******************************************************************************/
-template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
-uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
-    // Given some index in the sequence tiles in range [0, max_seq_len_t]
-    // Return the physical tile id for that tile row
-    constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
-    const uint32_t head_offset = cur_head * block_size_t * Wt;
-
-    const uint32_t virtual_block = seq_tile_idx / block_size_t;
-
-    const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
-    const uint32_t block_row_offset = seq_tile_idx % block_size_t;
-    const uint32_t block_offset = block_row_offset * Wt;
-    return physical_block * block_stride + head_offset + block_offset;
-}
-
-// Backward-compatible overload (defaults to uint32_t page table entries)
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
-uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr uint32_t* const page_table_ptr) {
-    return virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
-        seq_tile_idx, cur_head, page_table_ptr);
-}
-
-/******************************************************************************
  *                   Generic Tile Manipulation Functions                       *
  ******************************************************************************/
-template <uint32_t tile_bytes>
-void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t src_tile_id, uint32_t dst_tile_id) {
-    noc_async_read(
-        noc_read_addr_base + src_tile_id * tile_bytes, q_write_ptr_base + dst_tile_id * tile_bytes, tile_bytes);
-}
-
 template <uint32_t tile_bytes>
 void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
     if (val == 0) {
@@ -458,32 +418,41 @@ uint32_t write_tiles_to_memory(uint32_t& out_tile_id, const WriterType& out_writ
     return barrier_count;
 }
 
-template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, typename WriterType>
+template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, uint32_t PNHt, typename WriterType>
 uint32_t write_partial_tiles_to_memory(
-    uint32_t& out_tile_id,
+    uint32_t& out_tile_id,  // base tile index in DRAM for this batch
     const WriterType& out_writer,
     uint32_t& barrier_count,
-    uint32_t cur_head,
-    uint32_t num_heads_to_write,
-    uint32_t out_chunk_tiles) {
+    uint32_t cur_head,            // kv-head group index 0..num_kv_heads-1
+    uint32_t num_heads_to_write,  // q-heads per kv-head group, e.g. 8
+    uint32_t out_chunk_tiles) {   // total tiles = PNHt * vDHt
     constexpr uint32_t FACE_HW = 16;
-    constexpr uint32_t FACE_ELEMENT_CNT = FACE_HW * FACE_HW;  // 256
+    constexpr uint32_t TILE_HW = 32;
+    constexpr uint32_t FACE_ELEMENT_CNT = FACE_HW * FACE_HW;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t FACE_LINE_BYTES = FACE_HW * ELEMENT_SIZE;
+    const uint32_t num_hidden_tiles = out_chunk_tiles / PNHt;
 
-    for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
-        uint64_t out_writer_noc_addr = get_noc_addr(out_tile_id, out_writer);
-        uint32_t l1_read_addr = get_read_ptr(cb_out) + tile * tile_bytes;
+    uint32_t l1_base_addr = get_read_ptr(cb_out);
 
-        // write partial output for each head
+    for (uint32_t hidden_tile = 0; hidden_tile < num_hidden_tiles; ++hidden_tile) {
         for (uint32_t head = 0; head < num_heads_to_write; ++head) {
             uint32_t starting_row = cur_head * num_heads_to_write + head;
-            uint32_t in_tile_offset_by_starting_head =
-                starting_row < FACE_HW
-                    ? starting_row * FACE_LINE_BYTES
-                    : (starting_row + FACE_HW) * FACE_LINE_BYTES;  // Skip the second face which has FACE_HW rows
-            uint64_t out_writer_noc_addr_head = out_writer_noc_addr + in_tile_offset_by_starting_head;
-            uint32_t l1_read_addr_head = l1_read_addr + in_tile_offset_by_starting_head;
+            uint32_t tile_row = starting_row % TILE_HW;
+            uint32_t head_tile = starting_row / TILE_HW;
+
+            uint32_t in_tile_offset = (tile_row < FACE_HW) ? tile_row * FACE_LINE_BYTES
+                                                           : (tile_row + FACE_HW) * FACE_LINE_BYTES;  // skip face
+
+            // 2D -> 1D tile index: [head_tile][hidden_tile]
+            uint32_t tile_index = head_tile * num_hidden_tiles + hidden_tile;
+
+            // L1: cb_out tile layout matches tile_index
+            uint32_t l1_read_addr_head = l1_base_addr + tile_index * tile_bytes + in_tile_offset;
+
+            // DRAM tile: global index = out_tile_id + tile_index
+            uint64_t out_writer_tile_addr = get_noc_addr(out_tile_id + tile_index, out_writer);
+            uint64_t out_writer_noc_addr_head = out_writer_tile_addr + in_tile_offset;
 
             // Write first phase
             noc_async_write(l1_read_addr_head, out_writer_noc_addr_head, FACE_LINE_BYTES);
@@ -499,9 +468,10 @@ uint32_t write_partial_tiles_to_memory(
                 barrier_count = 0;
             }
         }
-
-        ++out_tile_id;
     }
+
+    // We've consumed/written out_chunk_tiles tiles worth of data
+    out_tile_id += out_chunk_tiles;
     return barrier_count;
 }
 
@@ -527,6 +497,7 @@ void read_kv_mask_chunks(
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
     uint32_t k_start_tile_id,
+    uint32_t v_start_tile_id,
     uint32_t mask_start_tile_id,
     uint32_t Sk_chunk_t,
     uint32_t k_chunk_tiles,
@@ -581,10 +552,11 @@ void read_kv_mask_chunks(
                 }
             }
         } else {
+            // V is an independent tensor with its own layout (width = vDHt)
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
             barrier_count = 0;
-            uint32_t v_tile_id = k_start_tile_id;
+            uint32_t v_tile_id = v_start_tile_id;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 for (uint32_t col = 0; col < vDHt; ++col) {
                     noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
@@ -595,7 +567,7 @@ void read_kv_mask_chunks(
                     v_tile_id++;
                     v_write_ptr += v_tile_bytes;
                 }
-                v_tile_id += (DHt - vDHt);  // Skip the padding!
+                // No padding to skip - V is an independent tensor with contiguous layout
             }
         }
         noc_async_read_barrier();
@@ -603,5 +575,8 @@ void read_kv_mask_chunks(
 
         // Update the starting tile id for next iteration
         k_start_tile_id += k_chunk_tiles;
+        if constexpr (!reuse_k) {
+            v_start_tile_id += v_chunk_tiles;
+        }
     }
 }

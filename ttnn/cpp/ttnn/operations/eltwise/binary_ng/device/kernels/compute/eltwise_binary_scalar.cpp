@@ -9,8 +9,7 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
@@ -27,7 +26,7 @@ void MAIN {
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
@@ -40,7 +39,7 @@ void MAIN {
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
         tile_regs_acquire();
@@ -55,5 +54,7 @@ void MAIN {
         cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
         cb_push_back(cb_out, num_tiles_per_cycle);
     }
+
+    // Pop the scalar tile from RHS CB
+    cb_pop_front(cb_post_rhs, num_tiles_per_cycle);
 }
-}  // namespace NAMESPACE

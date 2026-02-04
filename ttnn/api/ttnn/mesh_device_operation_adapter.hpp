@@ -56,13 +56,8 @@ struct MeshDeviceOperationAdapter {
 
     // Returns type name of the underlying device operation.
     // Used for logging and debugging; in particular, Tracy profiler uses this to identify operations.
-    static std::string get_type_name(const operation_attributes_t& attribute) {
-        if constexpr (requires { device_operation_t::get_type_name(attribute); }) {
-            // OldInfraDeviceOperation path.
-            return device_operation_t::get_type_name(attribute);
-        } else {
-            return std::string(tt::stl::get_type_name<device_operation_t>());
-        }
+    static std::string get_type_name(const operation_attributes_t& /* attribute */) {
+        return std::string(tt::stl::get_type_name<device_operation_t>());
     }
 
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
@@ -164,15 +159,13 @@ struct MeshDeviceOperationAdapter {
         } else {
             // Use generic Op Performance Models
             if constexpr (requires { tensor_args.input_tensors; }) {
-                // tensor_args_t for Op contains input_tensors attributes (mirror what's done in
-                // OldInfraDeviceOperation)
+                // tensor_args_t for Op contains input_tensors attribute
                 return tt::tt_metal::operation::OpPerformanceModelGeneral(
                     tensor_args.input_tensors,
                     tensor_return_value,
                     1 /* ideal_compute_cycles: specify as 1, since op perf model is not provided*/);
             } else {
-                // tensor_args_t does not comply with interface used by OldInfraDeviceOperation, use default performance
-                // model
+                // tensor_args_t does not have input_tensors, use default performance model
                 return tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>{};
             }
         }

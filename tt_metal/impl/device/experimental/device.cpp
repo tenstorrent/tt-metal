@@ -35,12 +35,10 @@ uint32_t get_worker_noc_hop_distance(
         uint32_t dist_right = src.x <= dst.x ? dst.x - src.x : grid_size.x - src.x + dst.x;
         uint32_t dist_bottom = src.y <= dst.y ? dst.y - src.y : grid_size.y - src.y + dst.y;
         return dist_right + dist_bottom;
-    } else {
-        // NOC1: Preferred -y -> -x
-        uint32_t dist_left = src.x >= dst.x ? src.x - dst.x : grid_size.x - dst.x + src.x;
-        uint32_t dist_top = src.y >= dst.y ? src.y - dst.y : grid_size.y - dst.y + src.y;
-        return dist_left + dist_top;
-    }
+    }  // NOC1: Preferred -y -> -x
+    uint32_t dist_left = src.x >= dst.x ? src.x - dst.x : grid_size.x - dst.x + src.x;
+    uint32_t dist_top = src.y >= dst.y ? src.y - dst.y : grid_size.y - dst.y + src.y;
+    return dist_left + dist_top;
 }
 
 }  // namespace tt::tt_metal::experimental::Device

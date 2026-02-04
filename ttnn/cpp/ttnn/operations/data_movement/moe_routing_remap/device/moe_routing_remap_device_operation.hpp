@@ -59,7 +59,7 @@ struct MoeRoutingRemapDeviceOperation {
             tensor_return_value_t& tensor_return_value);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -83,19 +83,15 @@ struct MoeRoutingRemapDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& routing_weights,
-        uint32_t non_zero_weight_size,
-        uint32_t expert_parallel_size,
-        uint32_t cluster_axis,
-        const std::optional<ttnn::MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_output_routing_weights = std::nullopt);
 };
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-constexpr auto moe_routing_remap = ttnn::register_operation<
-    "ttnn::prim::moe_routing_remap",
-    ttnn::operations::data_movement::MoeRoutingRemapDeviceOperation>();
+ttnn::operations::data_movement::MoeRoutingRemapDeviceOperation::tensor_return_value_t moe_routing_remap(
+    const ttnn::Tensor& routing_weights,
+    uint32_t non_zero_weight_size,
+    uint32_t expert_parallel_size,
+    uint32_t cluster_axis,
+    const std::optional<ttnn::MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& optional_output_routing_weights = std::nullopt);
 }  // namespace ttnn::prim

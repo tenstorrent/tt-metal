@@ -38,13 +38,13 @@ struct MorehDotOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& output);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& output);
     };
 
     using program_factory_t = std::variant<SingleCore>;
@@ -55,18 +55,15 @@ struct MorehDotOperation {
     static void validate(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_a,
-        const Tensor& input_b,
-        const std::optional<Tensor>& output,
-        const std::optional<DataType>& dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_dot
 
 namespace ttnn::prim {
-constexpr auto moreh_dot =
-    ttnn::register_operation<"ttnn::prim::moreh_dot", ttnn::operations::moreh::moreh_dot::MorehDotOperation>();
+ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_return_value_t moreh_dot(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<Tensor>& output,
+    const std::optional<DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 }  // namespace ttnn::prim

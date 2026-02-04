@@ -42,7 +42,6 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
     indirect=True,
 )
-@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 @pytest.mark.parametrize("traced", [True, False], ids=["yes_traced", "no_traced"])
 def test_sd35_pipeline(
     *,
@@ -60,22 +59,15 @@ def test_sd35_pipeline(
     no_prompt,
     model_location_generator,
     traced,
-    use_cache,
     is_ci_env,
-    monkeypatch,
 ) -> None:
     """Test the new SD3.5 pipeline implementation."""
 
     model_version = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
     # Setup CI environment
-    if is_ci_env:
-        if use_cache:
-            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
-        else:
-            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
-        if traced:
-            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
+    if is_ci_env and traced:
+        pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
     # Create pipeline
     pipeline = StableDiffusion3Pipeline.create_pipeline(
@@ -91,8 +83,7 @@ def test_sd35_pipeline(
         sp_config=sp,
         tp_config=tp,
         num_links=num_links,
-        model_checkpoint_path=model_location_generator(model_version, model_subdir="StableDiffusion_35_Large"),
-        use_cache=use_cache,
+        checkpoint_name=model_location_generator(model_version, model_subdir="StableDiffusion_35_Large"),
     )
 
     # Define test prompt
@@ -118,8 +109,8 @@ def test_sd35_pipeline(
                 num_inference_steps=num_inference_steps,
                 seed=0,
                 traced=traced,
-                timer=benchmark_profiler,
-                timer_iteration=0,
+                profiler=benchmark_profiler,
+                profiler_iteration=0,
             )
 
         # Save image

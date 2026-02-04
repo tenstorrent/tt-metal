@@ -12,7 +12,7 @@ RingbufferCacheManager::RingbufferCacheManager(
     int cache_block_sizeB, int cache_size_blocks, int manager_entry_initial_size) :
     cache_block_sizeB_(cache_block_sizeB),
     cache_size_blocks_(cache_size_blocks),
-    cache_manager_initial_entry_size_{manager_entry_initial_size} {
+    cache_manager_initial_entry_size_{static_cast<uint32_t>(manager_entry_initial_size)} {
     TT_ASSERT(cache_size_blocks > 0, "Ringbuffer cache size must be greater than 0");
     TT_ASSERT(cache_block_sizeB > 0, "Ringbuffer cache block size must be greater than 0");
     TT_ASSERT(
@@ -36,7 +36,7 @@ void RingbufferCacheManager::add_manager_entry_no_evict(uint64_t pgm_id, uint32_
         offset + length <= cache_size_blocks_, "RingbufferCacheManager new allocation: offset + length > cache size");
 
     auto idx = manager_.next_idx;
-    manager_.entry[idx] = {offset, length, pgm_id};
+    manager_.entry[idx] = {offset, length, static_cast<uint32_t>(pgm_id)};
 
     TT_ASSERT(pgm_id <= UINT32_MAX, "RingbufferCacheManager new allocation: pgm_id > UINT32_MAX");
     valid_[pgm_id] = idx;

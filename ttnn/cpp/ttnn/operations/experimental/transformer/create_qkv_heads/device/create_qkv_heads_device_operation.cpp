@@ -3,17 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "create_qkv_heads_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "create_qkv_heads_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
+#include "ttnn/device_operation.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::create_qkv_heads {
+namespace ttnn::experimental::prim {
 
 CreateQKVHeadsDeviceOperation::program_factory_t CreateQKVHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return ttnn::operations::experimental::create_qkv_heads::program::CreateQKVHeadsProgramFactory{};
+    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
+    return CreateQKVHeadsProgramFactory{};
 }
 
 void CreateQKVHeadsDeviceOperation::validate_on_program_cache_hit(
@@ -71,7 +73,7 @@ void CreateQKVHeadsDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_shape[0] == num_h_cores, "Batch size {} must be equal to num cores {}", input_shape[0], num_h_cores);
 }
 
-spec_return_value_t CreateQKVHeadsDeviceOperation::compute_output_specs(
+CreateQKVHeadsResultSpec CreateQKVHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_outputs.has_value()) {
         const auto& [q_tensor, k_tensor, v_tensor] = tensor_args.preallocated_outputs.value();
@@ -119,7 +121,7 @@ spec_return_value_t CreateQKVHeadsDeviceOperation::compute_output_specs(
     return {out_tensor_q, out_tensor_k, out_tensor_v};
 }
 
-tensor_return_value_t CreateQKVHeadsDeviceOperation::create_output_tensors(
+CreateQKVHeadsResult CreateQKVHeadsDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_outputs.has_value()) {
         return tensor_args.preallocated_outputs.value();
@@ -149,24 +151,31 @@ tt::stl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
     return hash;
 }
 
-std::tuple<CreateQKVHeadsDeviceOperation::operation_attributes_t, CreateQKVHeadsDeviceOperation::tensor_args_t>
-CreateQKVHeadsDeviceOperation::invoke(
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+ttnn::experimental::prim::CreateQKVHeadsResult create_qkv_heads(
     const Tensor& input_tensor,
-    const uint32_t num_q_heads,
-    const uint32_t num_kv_heads,
-    const uint32_t head_dim,
-    const bool transpose_k_heads,
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim,
+    bool transpose_k_heads,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::tuple<Tensor, Tensor, Tensor>>& preallocated_outputs) {
-    return {
-        operation_attributes_t{
-            .num_q_heads = num_q_heads,
-            .num_kv_heads = num_kv_heads,
-            .head_dim = head_dim,
-            .transpose_k_heads = transpose_k_heads,
-            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-        },
-        tensor_args_t{.input = input_tensor, .preallocated_outputs = preallocated_outputs}};
+    using OperationType = ttnn::experimental::prim::CreateQKVHeadsDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .num_q_heads = num_q_heads,
+        .num_kv_heads = num_kv_heads,
+        .head_dim = head_dim,
+        .transpose_k_heads = transpose_k_heads,
+        .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+    };
+    auto tensor_args =
+        OperationType::tensor_args_t{.input = input_tensor, .preallocated_outputs = preallocated_outputs};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::create_qkv_heads
+}  // namespace ttnn::prim

@@ -7,7 +7,7 @@
 #include "strided_all_gather_async_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl::strided_all_gather_async::program {
+namespace ttnn::experimental::prim {
 
 struct StridedAllGatherAsyncProgramFactory {
     struct shared_variables_t {
@@ -24,16 +24,16 @@ struct StridedAllGatherAsyncProgramFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& operation_attributes,
+        const StridedAllGatherAsyncParams& operation_attributes,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const StridedAllGatherAsyncInputs& tensor_args,
+        Tensor& tensor_return_value);
 
     static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const operation_attributes_t& operation_attributes,
+        const StridedAllGatherAsyncParams& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const StridedAllGatherAsyncInputs& tensor_args,
+        Tensor& output_tensor);
 
     static shared_variables_t strided_all_gather_async_minimal_default_helper(
         tt::tt_metal::Program& program,
@@ -51,7 +51,7 @@ struct StridedAllGatherAsyncProgramFactory {
         std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
         bool read_local_slice_from_input,
         std::optional<uint32_t> tiles_per_chunk,
-        std::optional<uint32_t> num_workers_per_link,
+        std::optional<uint32_t> num_workers_per_direction_opt,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<uint32_t> mm_cores_y,
         std::optional<uint32_t> mm_block_ht,
@@ -61,15 +61,15 @@ struct StridedAllGatherAsyncProgramFactory {
     static void override_runtime_arguments_per_program(
         const shared_variables_t& shared_variables,
         tt::tt_metal::Program& program,
-        const operation_attributes_t& attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensor);
+        const StridedAllGatherAsyncParams& attributes,
+        const StridedAllGatherAsyncInputs& tensor_args,
+        Tensor& output_tensor);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        const StridedAllGatherAsyncParams& operation_attributes,
+        const StridedAllGatherAsyncInputs& tensor_args,
+        Tensor& output_tensor);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async::program
+}  // namespace ttnn::experimental::prim

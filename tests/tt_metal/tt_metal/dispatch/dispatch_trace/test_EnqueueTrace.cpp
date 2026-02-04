@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <stdlib.h>
-#include "impl/dispatch/command_queue.hpp"
+#include <cstdlib>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>

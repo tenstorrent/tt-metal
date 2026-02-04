@@ -21,8 +21,8 @@ using namespace tt;
 TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
     const CoreRange cores({0, 0}, {1, 1});
     const std::string& kernel_src_code = R"(
-    #include "debug/dprint.h"
-    #include "dataflow_api.h"
+    #include "api/debug/dprint.h"
+    #include "api/dataflow/dataflow_api.h"
 
     void kernel_main() {
 
@@ -50,12 +50,11 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
 TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     const CoreRange cores({0, 0}, {1, 1});
     const std::string& kernel_src_code = R"(
-    #include "debug/dprint.h"
+    #include "api/debug/dprint.h"
     #include "compute_kernel_api.h"
 
-    namespace NAMESPACE {
 
-    void MAIN {
+    void kernel_main() {
 
         DPRINT_MATH(DPRINT << "Hello, I am running a void compute kernel." << ENDL());
 
@@ -85,8 +84,8 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
     const std::string& kernel_src_code = R"(
-    #include "debug/dprint.h"
-    #include "dataflow_api.h"
+    #include "api/debug/dprint.h"
+    #include "api/dataflow/dataflow_api.h"
 
     void kernel_main() {
 

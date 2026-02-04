@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <array>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 
 void kernel_main() {

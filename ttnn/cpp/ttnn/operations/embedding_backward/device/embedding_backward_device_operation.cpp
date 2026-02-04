@@ -3,17 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::embedding_backward {
+namespace ttnn::prim {
 
 EmbeddingBackwardDeviceOperation::program_factory_t EmbeddingBackwardDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::EmbeddingBackwardProgramFactory{};
+    return EmbeddingBackwardProgramFactory{};
 }
 
 void EmbeddingBackwardDeviceOperation::validate_on_program_cache_hit(
@@ -46,7 +48,8 @@ void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
         index_tensor_shape[-1] % TILE_WIDTH == 0,
         "Number of columns in the index tensor must be divisible by tile width");
 
-    TT_FATAL(grad_tensor.layout() == Layout::TILE, "Gradient tensor layout must be TILE but got {}", grad_tensor.layout());
+    TT_FATAL(
+        grad_tensor.layout() == Layout::TILE, "Gradient tensor layout must be TILE but got {}", grad_tensor.layout());
     TT_FATAL(
         grad_tensor.dtype() == DataType::BFLOAT16 or grad_tensor.dtype() == DataType::BFLOAT8_B,
         "Output gradient tensor must be BFLOAT16 or BFLOAT8_B");
@@ -84,9 +87,7 @@ EmbeddingBackwardDeviceOperation::spec_return_value_t EmbeddingBackwardDeviceOpe
     return TensorSpec(
         output_shape,
         TensorLayout(
-            operation_attributes.output_dtype,
-            PageConfig(Layout::TILE),
-            operation_attributes.output_mem_config));
+            operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config));
 }
 
 EmbeddingBackwardDeviceOperation::tensor_return_value_t EmbeddingBackwardDeviceOperation::create_output_tensors(
@@ -98,27 +99,24 @@ EmbeddingBackwardDeviceOperation::tensor_return_value_t EmbeddingBackwardDeviceO
     return create_device_tensor(output_spec, tensor_args.grad_tensor.device());
 }
 
-std::tuple<EmbeddingBackwardDeviceOperation::operation_attributes_t, EmbeddingBackwardDeviceOperation::tensor_args_t>
-EmbeddingBackwardDeviceOperation::invoke(
+ttnn::Tensor embedding_backward(
     const Tensor& index_tensor,
     const Tensor& grad_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     uint32_t num_embeddings,
     const std::optional<Tensor>& preallocated_output) {
-    operation_attributes_t operation_attributes{
-        .output_mem_config = output_mem_config,
-        .output_dtype = output_dtype,
-        .num_embeddings = num_embeddings,
-    };
-
-    tensor_args_t tensor_args{
-        .index_tensor = index_tensor,
-        .grad_tensor = grad_tensor,
-        .preallocated_output = preallocated_output,
-    };
-
-    return {operation_attributes, tensor_args};
+    return ttnn::device_operation::launch<EmbeddingBackwardDeviceOperation>(
+        EmbeddingBackwardParams{
+            .output_mem_config = output_mem_config,
+            .output_dtype = output_dtype,
+            .num_embeddings = num_embeddings,
+        },
+        EmbeddingBackwardInputs{
+            .index_tensor = index_tensor,
+            .grad_tensor = grad_tensor,
+            .preallocated_output = preallocated_output,
+        });
 }
 
-}  // namespace ttnn::operations::embedding_backward
+}  // namespace ttnn::prim

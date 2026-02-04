@@ -60,17 +60,15 @@ struct MorehAbsPowOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        float p,
-        const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_abs_pow
 
 namespace ttnn::prim {
-constexpr auto moreh_abs_pow = ttnn::
-    register_operation<"ttnn::prim::moreh_abs_pow", ttnn::operations::moreh::moreh_abs_pow::MorehAbsPowOperation>();
+ttnn::operations::moreh::moreh_abs_pow::MorehAbsPowOperation::tensor_return_value_t moreh_abs_pow(
+    const Tensor& input,
+    float p,
+    const std::optional<Tensor>& output = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 }  // namespace ttnn::prim

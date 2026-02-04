@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 
 template <uint32_t tile_bytes, uint32_t num_readers>

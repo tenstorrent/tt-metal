@@ -80,9 +80,14 @@ cxxopts::Options create_validation_options() {
         "Usage:\n"
         "  run_cluster_validation [OPTIONS]                # Run validation (default)\n"
         "  run_cluster_validation link_reset [OPTIONS]     # Restart a specific cable/link\n\n"
+        "The cabling-descriptor-path can be a single .textproto file or a directory containing\n"
+        "multiple .textproto files that will be merged together.\n\n"
         "To run on a multi-node cluster, use mpirun with a --hostfile option.");
 
-    options.add_options()("cabling-descriptor-path", "Path to cabling descriptor", cxxopts::value<std::string>())(
+    options.add_options()(
+        "cabling-descriptor-path",
+        "Path to cabling descriptor file or directory containing multiple descriptors",
+        cxxopts::value<std::string>())(
         "deployment-descriptor-path", "Path to deployment descriptor", cxxopts::value<std::string>())(
         "factory-descriptor-path", "Path to factory descriptor", cxxopts::value<std::string>())(
         "global-descriptor-path", "Path to global descriptor", cxxopts::value<std::string>())(
@@ -109,9 +114,7 @@ cxxopts::Options create_validation_options() {
 }
 
 cxxopts::Options create_link_reset_options() {
-    cxxopts::Options options(
-        "run_cluster_validation link_reset",
-        "Restart a specific cable/link on the cluster.");
+    cxxopts::Options options("run_cluster_validation link_reset", "Restart a specific cable/link on the cluster.");
 
     options.add_options()("host", "Host name of the source ASIC", cxxopts::value<std::string>())(
         "tray-id", "Tray ID of the source ASIC", cxxopts::value<uint32_t>())(
@@ -129,14 +132,14 @@ void parse_link_reset_args(int argc, char* argv[], InputArgs& input_args) {
         // Skip the first two args (program name and "link_reset" subcommand)
         auto result = options.parse(argc - 1, argv + 1);
 
-        if (result.count("help")) {
+        if (result.contains("help")) {
             input_args.help = true;
             return;
         }
 
         // Validate that all required parameters are provided
-        if (result.count("host") && result.count("tray-id") && result.count("asic-location") &&
-            result.count("channel")) {
+        if (result.contains("host") && result.contains("tray-id") && result.contains("asic-location") &&
+            result.contains("channel")) {
             input_args.reset_host = result["host"].as<std::string>();
             input_args.reset_tray_id = result["tray-id"].as<uint32_t>();
             input_args.reset_asic_location = result["asic-location"].as<uint32_t>();
@@ -159,18 +162,18 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
     try {
         auto result = options.parse(argc, argv);
 
-        if (result.count("help")) {
+        if (result.contains("help")) {
             input_args.help = true;
             return;
         }
 
         // Parse cabling descriptor path
-        if (result.count("cabling-descriptor-path")) {
+        if (result.contains("cabling-descriptor-path")) {
             input_args.cabling_descriptor_path = result["cabling-descriptor-path"].as<std::string>();
         }
 
         // Parse deployment descriptor path
-        if (result.count("deployment-descriptor-path")) {
+        if (result.contains("deployment-descriptor-path")) {
             TT_FATAL(
                 input_args.cabling_descriptor_path.has_value(),
                 "Cabling Descriptor Path is required when Deployment Descriptor Path is provided.");
@@ -178,7 +181,7 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         }
 
         // Parse factory descriptor path
-        if (result.count("factory-descriptor-path")) {
+        if (result.contains("factory-descriptor-path")) {
             TT_FATAL(
                 !(input_args.cabling_descriptor_path.has_value() || input_args.deployment_descriptor_path.has_value()),
                 "Pass in either Cabling Spec + Deployment Spec or just Factory System Descriptor.");
@@ -186,12 +189,12 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         }
 
         // Parse global descriptor path
-        if (result.count("global-descriptor-path")) {
+        if (result.contains("global-descriptor-path")) {
             input_args.gsd_path = result["global-descriptor-path"].as<std::string>();
         }
 
         // Parse output path
-        if (result.count("output-path")) {
+        if (result.contains("output-path")) {
             input_args.output_path = std::filesystem::path(result["output-path"].as<std::string>());
         } else {
             input_args.output_path = generate_output_dir();
@@ -201,7 +204,7 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         input_args.num_iterations = result["num-iterations"].as<uint32_t>();
 
         // Parse data size
-        if (result.count("data-size")) {
+        if (result.contains("data-size")) {
             input_args.data_size = result["data-size"].as<uint32_t>();
             TT_FATAL(
                 input_args.data_size <= tt::tt_metal::hal::get_erisc_l1_unreserved_size(),
@@ -229,7 +232,7 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
             input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
 
         // Parse min-connections
-        if (result.count("min-connections")) {
+        if (result.contains("min-connections")) {
             uint32_t min_conn_value = result["min-connections"].as<uint32_t>();
             TT_FATAL(min_conn_value > 0, "Minimum connections must be a positive integer.");
             input_args.min_connections = min_conn_value;
@@ -277,22 +280,16 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
         auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(input_args.gsd_path.value());
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
-    } else {
-        log_output_rank0("Running Physical Discovery");
-        constexpr bool run_discovery = true;
-        auto& context = tt::tt_metal::MetalContext::instance();
-        const auto& driver = context.get_cluster().get_driver();
-        auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-            driver,
-            context.get_distributed_context_ptr(),
-            &context.hal(),
-            context.rtoptions(),
-            run_discovery
-        );
-        log_output_rank0("Physical Discovery Complete");
-        log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
-        return physical_system_descriptor;
     }
+    log_output_rank0("Running Physical Discovery");
+    constexpr bool run_discovery = true;
+    auto& context = tt::tt_metal::MetalContext::instance();
+    const auto& driver = context.get_cluster().get_driver();
+    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
+        driver, context.get_distributed_context_ptr(), &context.hal(), context.rtoptions(), run_discovery);
+    log_output_rank0("Physical Discovery Complete");
+    log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
+    return physical_system_descriptor;
 }
 
 AsicTopology run_connectivity_validation(
@@ -337,6 +334,10 @@ void set_config_vars() {
     if (getenv("TT_MESH_ID") == nullptr) {
         setenv("TT_MESH_ID", "0", 1);
     }
+    // Disable 2-ERISC mode for Blackhole
+    if (getenv("TT_METAL_DISABLE_MULTI_AERISC") == nullptr) {
+        setenv("TT_METAL_DISABLE_MULTI_AERISC", "1", 1);
+    }
 }
 
 }  // namespace tt::scaleout_tools
@@ -351,7 +352,6 @@ int main(int argc, char* argv[]) {
         print_usage_info(input_args.mode);
         return 0;
     }
-
     bool eth_connections_healthy = true;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 

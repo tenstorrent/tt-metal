@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "mod_div_lib.h"
+#include "internal/mod_div_lib.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack_untilize.h"
@@ -14,8 +14,6 @@
 #endif
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-
-namespace NAMESPACE {
 
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
@@ -73,7 +71,7 @@ inline void reblock_and_untilize(
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 }
 
-void MAIN {
+void kernel_main() {
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;
@@ -380,4 +378,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

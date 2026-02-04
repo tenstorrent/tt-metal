@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -36,7 +36,7 @@ def test_vae_upblock(device, input_shape, block_id, pcc, debug_mode, is_ci_env, 
 
     torch_upblock = vae.decoder.up_blocks[block_id]
 
-    model_config = ModelOptimisations()
+    model_config = VAEModelOptimisations()
     tt_upblock = TtUpDecoderBlock2D(
         device,
         state_dict,

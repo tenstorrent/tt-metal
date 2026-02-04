@@ -28,7 +28,7 @@ public:
         DataType dtype,
         const MemoryConfig& memory_config,
         const std::optional<Shape2D>& physical_shard_size) const;
-    size_t get_page_size_bytes(const Shape2D& page_size, DataType dtype) const;
+    size_t get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const;
 
     const Tile& get_tile() const;
 
@@ -59,7 +59,7 @@ public:
         DataType dtype,
         const MemoryConfig& memory_config,
         const std::optional<Shape2D>& physical_shard_size) const;
-    size_t get_page_size_bytes(const Shape2D& page_size, DataType dtype) const;
+    size_t get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const;
 
     const Tile& get_tile() const;
 
@@ -97,7 +97,7 @@ public:
         DataType dtype,
         const MemoryConfig& memory_config,
         const std::optional<Shape2D>& physical_shard_size) const;
-    size_t get_page_size_bytes(const Shape2D& page_size, DataType dtype) const;
+    size_t get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const;
 
     Tile get_tile() const;
 

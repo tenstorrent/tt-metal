@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
 #include "tt-metalium/constants.hpp"

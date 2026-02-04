@@ -13,7 +13,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsBoltzOperatio
     const std::optional<uint32_t> num_kv_heads,
     const bool transpose_k_heads,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors) {
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
     uint32_t head_dim;
     if (input_tensor_kv.has_value()) {

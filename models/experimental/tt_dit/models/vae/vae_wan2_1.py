@@ -14,6 +14,26 @@ from ...utils.tensor import bf16_tensor
 CACHE_T = 2
 
 
+# helpers
+def rename_norm_state(state):
+    return {"weight": state["gamma"].squeeze()}
+
+
+def conv3d_to_linear_weight(state):
+    weight = state["weight"]
+    out_c, in_c, kt, kh, kw = weight.shape
+    assert kt == kh == kw == 1
+    weight = weight.reshape(out_c, in_c)
+    padded_out_c = aligned_channels(out_c)
+    padded_in_c = aligned_channels(in_c)
+    weight = torch.nn.functional.pad(weight, (0, padded_in_c - in_c, 0, padded_out_c - out_c))
+    bias = state["bias"]
+    bias = torch.nn.functional.pad(bias, (0, padded_out_c - out_c))
+    state["weight"] = weight
+    state["bias"] = bias
+    return state
+
+
 class WanAttentionBlock:
     def __init__(
         self,
@@ -81,20 +101,20 @@ class WanAttentionBlock:
             weight = weight.permute(0, 2, 3, 1).reshape(out_c, in_c)
             return weight
 
-        self.to_qkv.load_state_dict(
+        self.to_qkv.load_torch_state_dict(
             {
                 "weight": permute_conv2d_weights(state_dict["to_qkv.weight"]),
                 "bias": state_dict["to_qkv.bias"],
             }
         )
-        self.proj.load_state_dict(
+        self.proj.load_torch_state_dict(
             {
                 "weight": permute_conv2d_weights(state_dict["proj.weight"]),
                 "bias": state_dict["proj.bias"],
             }
         )
 
-        self.norm.load_state_dict(
+        self.norm.load_torch_state_dict(
             {
                 "weight": state_dict["norm.gamma"].squeeze(),
             }
@@ -240,9 +260,6 @@ class WanCausalConv3d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
-            self.stride,
-            self.internal_padding,
-            padding_mode="zeros",
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
 
@@ -336,7 +353,7 @@ class WanCausalConv3d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2),
                 topology=self.ccl_manager.topology,
             )
             ttnn.synchronize_device(x_BTHWC.device())
@@ -358,7 +375,7 @@ class WanCausalConv3d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_THWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -370,6 +387,12 @@ class WanCausalConv3d:
             weight_tensor=self.conv_weight,
             bias_tensor=self.conv_bias,
             config=self.conv_config,
+            output_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.internal_padding,
+            padding_mode="zeros",
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -448,11 +471,8 @@ class WanResidualBlock:
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
     def load_state_dict(self, state_dict):
-        def rename_norm_state(state):
-            return {"weight": state["gamma"].squeeze()}
-
-        self.norm1.load_state_dict(rename_norm_state(substate(state_dict, "norm1")))
-        self.norm2.load_state_dict(rename_norm_state(substate(state_dict, "norm2")))
+        self.norm1.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm1")))
+        self.norm2.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm2")))
         self.conv1.load_state_dict(substate(state_dict, "conv1"))
         self.conv2.load_state_dict(substate(state_dict, "conv2"))
 
@@ -463,7 +483,7 @@ class WanResidualBlock:
             return weight
 
         if self.conv_shortcut is not None:
-            self.conv_shortcut.load_state_dict(
+            self.conv_shortcut.load_torch_state_dict(
                 {
                     "weight": conv_1d_to_matmul_weight(state_dict["conv_shortcut.weight"]),
                     "bias": state_dict["conv_shortcut.bias"],
@@ -637,9 +657,6 @@ class WanConv2d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
-            self.stride,
-            self.internal_padding,
-            padding_mode="zeros",
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
         logger.info(f"Loaded conv_config: {self.conv_config}")
@@ -711,7 +728,7 @@ class WanConv2d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -733,7 +750,7 @@ class WanConv2d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
+                num_links=get_neighbor_pad_num_links(self.ccl_manager, x_THWC, 2),
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -745,6 +762,12 @@ class WanConv2d:
             weight_tensor=self.conv_weight,
             bias_tensor=self.conv_bias,
             config=self.conv_config,
+            output_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.internal_padding,
+            padding_mode="zeros",
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -765,18 +788,18 @@ class WanResample:
         mesh_device,
         ccl_manager=None,
         parallel_config=None,
-        upsample_out_dim=None,
+        resample_out_dim=None,
     ):
         self.dim = dim
         self.mode = mode
         self.mesh_device = mesh_device
-        upsample_out_dim = upsample_out_dim or dim // 2
+        resample_out_dim = resample_out_dim or (dim // 2 if "upsample" in mode else dim)
 
-        assert mode in ["upsample2d", "upsample3d"]
+        assert mode in ["upsample2d", "upsample3d", "downsample2d", "downsample3d"]
 
         self.conv = WanConv2d(
             in_channels=dim,
-            out_channels=upsample_out_dim,
+            out_channels=resample_out_dim,
             kernel_size=(1, 3, 3),
             padding=(0, 1, 1),
             mesh_device=mesh_device,
@@ -784,12 +807,16 @@ class WanResample:
             parallel_config=parallel_config,
         )
 
-        if mode == "upsample3d":
+        self.is_upsample = "upsample" in mode
+        self.is_3d = "3d" in mode
+
+        if self.is_3d:
             self.time_conv = WanCausalConv3d(
                 in_channels=dim,
-                out_channels=dim * 2,
+                out_channels=dim * 2 if self.is_upsample else dim,
                 kernel_size=(3, 1, 1),
-                padding=(1, 0, 0),
+                padding=(1, 0, 0) if self.is_upsample else (0, 0, 0),
+                stride=(1, 1, 1) if self.is_upsample else (2, 1, 1),
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
@@ -798,12 +825,12 @@ class WanResample:
     def load_state_dict(self, state_dict):
         self.conv.load_state_dict(substate(state_dict, "resample.1"))
 
-        if self.mode == "upsample3d":
+        if self.is_3d:
             self.time_conv.load_state_dict(substate(state_dict, "time_conv"))
 
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
         B, T, H, W, C = x_BTHWC.shape
-        if self.mode == "upsample3d":
+        if self.is_3d and self.is_upsample:  # upsample3d
             if feat_cache is not None:
                 idx = feat_idx[0]
                 if feat_cache[idx] is None:
@@ -841,13 +868,37 @@ class WanResample:
             else:
                 raise ValueError("feat_cache cannot be None")
 
-        T2 = x_BTHWC.shape[1]
-        x_NHWC = ttnn.reshape(x_BTHWC, (B * T2, H, W, C))
-        x_upsamped_NHWC = ttnn.upsample(x_NHWC, scale_factor=2)
-        logical_h *= 2
-        H2, W2 = x_upsamped_NHWC.shape[1], x_upsamped_NHWC.shape[2]
-        x_BTHWC = ttnn.reshape(x_upsamped_NHWC, (B, T2, H2, W2, C))
-        x_conv_BTHWC = self.conv(x_BTHWC, logical_h)
+        if self.is_upsample:
+            T2 = x_BTHWC.shape[1]
+            x_NHWC = ttnn.reshape(x_BTHWC, (B * T2, H, W, C))
+            x_upsamped_NHWC = ttnn.upsample(x_NHWC, scale_factor=2)
+            logical_h *= 2
+            H2, W2 = x_upsamped_NHWC.shape[1], x_upsamped_NHWC.shape[2]
+            x_BTHWC = ttnn.reshape(x_upsamped_NHWC, (B, T2, H2, W2, C))
+            x_conv_BTHWC = self.conv(x_BTHWC, logical_h)
+        else:
+            x_conv_BTHWC = self.conv(x_BTHWC, logical_h)
+            x_conv_BTHWC = x_conv_BTHWC[
+                :, :, 1::2, 1::2, :
+            ]  # 2x2 strided convolution output to support patched conv, with only right and bottom padding
+            logical_h //= 2
+
+        # Handle downsample3d
+        if self.is_3d and not self.is_upsample:  # downsample3d
+            if feat_cache is not None:
+                idx = feat_idx[0]
+                if feat_cache[idx] is None:
+                    feat_cache[idx] = ttnn.clone(x_conv_BTHWC)
+                    feat_idx[0] += 1
+                else:
+                    cache_x_BTHWC = ttnn.clone(x_conv_BTHWC[:, -1:, :, :, :])
+                    x_conv_BTHWC = self.time_conv(
+                        ttnn.concat([feat_cache[idx][:, -1:, :, :, :], x_conv_BTHWC], dim=1), logical_h
+                    )
+                    feat_cache[idx] = cache_x_BTHWC
+                    feat_idx[0] += 1
+            else:
+                raise ValueError("feat_cache cannot be None")
         return x_conv_BTHWC, logical_h
 
 
@@ -1007,10 +1058,7 @@ class WanDecoder3d:
         for i, state in enumerate(indexed_substates(state_dict, "up_blocks")):
             self.up_blocks[i].load_state_dict(state)
 
-        def rename_norm_state(state):
-            return {"weight": state["gamma"].squeeze()}
-
-        self.norm_out.load_state_dict(rename_norm_state(substate(state_dict, "norm_out")))
+        self.norm_out.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm_out")))
         self.conv_out.load_state_dict(substate(state_dict, "conv_out"))
 
     def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0], first_chunk=False):
@@ -1146,21 +1194,7 @@ class WanDecoder:
         self.cached_conv_count = count_convs(self.decoder)
 
     def load_state_dict(self, state_dict):
-        def conv3d_to_linear_weight(state):
-            weight = state["weight"]
-            out_c, in_c, kt, kh, kw = weight.shape
-            assert kt == kh == kw == 1
-            weight = weight.reshape(out_c, in_c)
-            padded_out_c = aligned_channels(out_c)
-            padded_in_c = aligned_channels(in_c)
-            weight = torch.nn.functional.pad(weight, (0, padded_in_c - in_c, 0, padded_out_c - out_c))
-            bias = state["bias"]
-            bias = torch.nn.functional.pad(bias, (0, padded_out_c - out_c))
-            state["weight"] = weight
-            state["bias"] = bias
-            return state
-
-        self.post_quant_conv.load_state_dict(conv3d_to_linear_weight(substate(state_dict, "post_quant_conv")))
+        self.post_quant_conv.load_torch_state_dict(conv3d_to_linear_weight(substate(state_dict, "post_quant_conv")))
         self.decoder.load_state_dict(substate(state_dict, "decoder"))
 
     def clear_cache(self):
@@ -1196,3 +1230,251 @@ class WanDecoder:
         output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
         self.clear_cache()
         return (output_BCTHW, new_logical_h)
+
+
+class WanEncoder3D:
+    def __init__(
+        self,
+        in_channels: int = 3,
+        dim=128,
+        z_dim=4,
+        dim_mult=[1, 2, 4, 4],
+        num_res_blocks=2,
+        attn_scales=[],
+        temperal_downsample=[True, True, False],
+        is_residual: bool = False,  # wan 2.2 vae use a residual downblock
+        mesh_device=None,
+        ccl_manager=None,
+        parallel_config=None,
+    ):
+        assert not is_residual, "is_residual is not supported"
+        self.dim = dim
+        self.z_dim = z_dim
+        self.dim_mult = dim_mult
+        self.num_res_blocks = num_res_blocks
+        self.attn_scales = attn_scales
+        self.temperal_downsample = temperal_downsample
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
+
+        # dimensions
+        dims = [dim * u for u in [1] + dim_mult]
+        scale = 1.0
+
+        # init block
+        self.conv_in = WanCausalConv3d(
+            in_channels,
+            dims[0],
+            kernel_size=3,
+            padding=1,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+        )
+
+        # downsample blocks.
+        self.down_blocks = []
+        for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
+            for _ in range(num_res_blocks):
+                self.down_blocks.append(
+                    WanResidualBlock(
+                        in_dim=in_dim,
+                        out_dim=out_dim,
+                        mesh_device=mesh_device,
+                        ccl_manager=ccl_manager,
+                        parallel_config=parallel_config,
+                    )
+                )
+                if scale in attn_scales:
+                    self.down_blocks.append(
+                        WanAttentionBlock(
+                            dim=out_dim,
+                            mesh_device=mesh_device,
+                            ccl_manager=ccl_manager,
+                            parallel_config=parallel_config,
+                        )
+                    )
+                in_dim = out_dim
+
+            # downsample block
+            if i != len(dim_mult) - 1:
+                mode = "downsample3d" if temperal_downsample[i] else "downsample2d"
+                self.down_blocks.append(
+                    WanResample(
+                        dim=out_dim,
+                        mode=mode,
+                        mesh_device=mesh_device,
+                        ccl_manager=ccl_manager,
+                        parallel_config=parallel_config,
+                    )
+                )
+                scale /= 2.0
+
+        # middle blocks
+        self.mid_block = WanMidBlock(
+            dim=out_dim, num_layers=1, mesh_device=mesh_device, ccl_manager=ccl_manager, parallel_config=parallel_config
+        )
+
+        # output blocks
+        self.norm_out = RMSNorm(
+            embedding_dim=out_dim, norm_eps=1e-6, norm_elementwise_affine=True, bias=False, mesh_device=mesh_device
+        )
+        self.conv_out = WanCausalConv3d(
+            out_dim,
+            z_dim,
+            kernel_size=3,
+            padding=1,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+        )
+
+    def load_state_dict(self, state_dict):
+        self.conv_in.load_state_dict(substate(state_dict, "conv_in"))
+        self.mid_block.load_state_dict(substate(state_dict, "mid_block"))
+        for i, state in enumerate(indexed_substates(state_dict, "down_blocks")):
+            self.down_blocks[i].load_state_dict(state)
+
+        self.norm_out.load_torch_state_dict(rename_norm_state(substate(state_dict, "norm_out")))
+        self.conv_out.load_state_dict(substate(state_dict, "conv_out"))
+
+    def __call__(self, x_BTHWC, logical_h, feat_cache=None, feat_idx=[0]):
+        ## conv1
+        if feat_cache is not None:
+            idx = feat_idx[0]
+            t_start = x_BTHWC.shape[1] - CACHE_T
+            cache_x_BTHWC = x_BTHWC[:, t_start:, :, :, :]
+            if cache_x_BTHWC.shape[1] < 2 and feat_cache[idx] is not None:
+                # Current activation is too short, so append the cached activation as well
+                cache_x_BTHWC = ttnn.concat([feat_cache[idx][:, -1:, :, :, :], cache_x_BTHWC], dim=1)
+            x_BTHWC = self.conv_in(x_BTHWC, logical_h, feat_cache[idx])
+            feat_cache[idx] = cache_x_BTHWC
+            feat_idx[0] += 1
+        else:
+            x_BTHWC = self.conv_in(x_BTHWC, logical_h)
+
+        ## downsamples
+        for down_block in self.down_blocks:
+            if isinstance(down_block, WanResample):
+                x_BTHWC, logical_h = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+            elif isinstance(down_block, WanResidualBlock):
+                x_BTHWC = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+            elif isinstance(down_block, WanAttentionBlock):
+                x_BTHWC = down_block(x_BTHWC, logical_h)
+            else:
+                raise ValueError(f"Unsupported downblock type: {type(down_block)}")
+
+        ## middle
+        x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
+
+        ## head
+        x_tile_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+        x_norm_tile_BTHWC = self.norm_out(x_tile_BTHWC)
+        x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
+        x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+
+        if feat_cache is not None:
+            idx = feat_idx[0]
+            t_start = x_BTHWC.shape[1] - CACHE_T
+            cache_x_BTHWC = x_BTHWC[:, t_start:, :, :, :]
+            if cache_x_BTHWC.shape[1] < 2 and feat_cache[idx] is not None:
+                # Current activation is too short, so append the cached activation as well
+                cache_x_BTHWC = ttnn.concat([feat_cache[idx][:, -1:, :, :, :], cache_x_BTHWC], dim=1)
+            x_BTHWC = self.conv_out(x_BTHWC, logical_h, feat_cache[idx])
+            feat_cache[idx] = cache_x_BTHWC
+            feat_idx[0] += 1
+        else:
+            x_BTHWC = self.conv_out(x_BTHWC, logical_h)
+        return x_BTHWC, logical_h
+
+
+class WanEncoder:
+    def __init__(
+        self,
+        base_dim=96,
+        in_channels: int = 3,
+        z_dim=16,
+        dim_mult=[1, 2, 4, 4],
+        num_res_blocks=2,
+        attn_scales=[],
+        temperal_downsample=[False, True, True],
+        is_residual: bool = False,
+        mesh_device=None,
+        ccl_manager=None,
+        parallel_config=None,
+    ):
+        self.z_dim = z_dim
+        self.out_channels = z_dim * 2  # Mean and logvar
+        self.encoder = WanEncoder3D(
+            in_channels=in_channels,
+            dim=base_dim,
+            z_dim=self.out_channels,
+            dim_mult=dim_mult,
+            num_res_blocks=num_res_blocks,
+            attn_scales=attn_scales,
+            temperal_downsample=temperal_downsample,
+            is_residual=is_residual,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+        )
+        # Linear for quant_conv
+        self.quant_conv = Linear(
+            in_features=aligned_channels(self.out_channels),
+            out_features=aligned_channels(self.out_channels),
+            mesh_device=mesh_device,
+        )
+        self.cached_conv_count = count_convs(self.encoder)
+
+    def load_state_dict(self, state_dict):
+        self.encoder.load_state_dict(substate(state_dict, "encoder"))
+        self.quant_conv.load_torch_state_dict(conv3d_to_linear_weight(substate(state_dict, "quant_conv")))
+
+    def clear_cache(self):
+        self._conv_idx = [0]
+        self._feat_cache = [None] * self.cached_conv_count
+
+    def __call__(self, x_BTHWC, logical_h):
+        B, T, H, W, C = x_BTHWC.shape
+
+        self.clear_cache()
+
+        output_BTHWC = None
+        T_encoded = 1 + (T - 1) // 4
+        for i in range(T_encoded):
+            # Process one frame at a time
+            self._conv_idx = [0]
+            if i == 0:
+                x_BTHWC_chunk = x_BTHWC[:, :1, :, :, :]
+            else:
+                x_BTHWC_chunk = x_BTHWC[:, 1 + 4 * (i - 1) : 1 + 4 * i, :, :, :]
+
+            out_BTHWC, new_logical_h = self.encoder(
+                x_BTHWC_chunk, logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
+            )
+
+            if output_BTHWC is None:
+                output_BTHWC = out_BTHWC
+            else:
+                output_BTHWC = ttnn.concat([output_BTHWC, out_BTHWC], dim=1)
+
+        output_tile_BTHWC = ttnn.to_layout(output_BTHWC, ttnn.TILE_LAYOUT)
+        output_tile_BTHWC = self.quant_conv(output_tile_BTHWC)
+        output_BTHWC = ttnn.to_layout(output_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        # Permute to channel second expected by torch
+        output_BCTHW = ttnn.permute(output_BTHWC, (0, 4, 1, 2, 3))
+        # Trim padding on output channels
+        output_BCTHW = output_BCTHW[:, : self.z_dim, :, :, :]  # Get the mean
+        self.clear_cache()
+        return (output_BCTHW, new_logical_h)
+
+
+def get_neighbor_pad_num_links(ccl_manager, input_tensor, dim):
+    """
+    Neighbor pad can use no more links than the product of the upper dimensions of the input tensor.
+    """
+    upper_dims = 1
+    for i in range(dim):
+        upper_dims *= input_tensor.shape[i]
+    return min(upper_dims, ccl_manager.num_links)

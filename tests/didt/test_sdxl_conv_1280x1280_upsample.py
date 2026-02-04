@@ -14,7 +14,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 NUM_DEVICES = ttnn.distributed.get_num_devices()
 MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
-MESH_Y = 1 if NUM_DEVICES <= 8 else NUM_DEVICES / MESH_X
+MESH_Y = 1 if NUM_DEVICES <= 8 else int(NUM_DEVICES / MESH_X)
 
 
 class SdxlConvTest(OpTestBase):

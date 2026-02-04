@@ -1,0 +1,19 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+  - rank: 1
+    mesh_id: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: "16,17,18,19,20,21,22,23"
+  - rank: 2
+    mesh_id: 2
+    env_overrides:
+      TT_VISIBLE_DEVICES: "24,25,26,27,28,29,30,31"
+  - rank: 3
+    mesh_id: 3
+    env_overrides:
+      TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_2x4_mesh_graph_descriptor.textproto"

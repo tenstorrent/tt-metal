@@ -7,7 +7,61 @@ on:
         description: "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'"
         default: "all"
         type: string
+      enable-ops-recording:
+        description: "Enable Tracy ops recording for all tests (generates operations report)"
+        type: boolean
+        default: false
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   workflow_call:
+    inputs:
+      models-to-run:
+        required: false
+        type: string
+        default: "all"
+        description: "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'"
+      enable-ops-recording:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Tracy ops recording for all tests (generates operations report)"
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 5,14,23 * * *"
 
@@ -18,8 +72,11 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+      tracy: ${{ inputs.enable-ops-recording || false }}
   fd-nightly:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
@@ -28,4 +85,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      models-to-run: ${{ inputs.models-to-run }}
+      models-to-run: ${{ inputs.models-to-run || 'all' }}
+      enable-ops-recording: ${{ inputs.enable-ops-recording || false }}

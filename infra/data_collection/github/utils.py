@@ -102,6 +102,7 @@ def get_job_failure_signature_(github_job, failure_description, workflow_outputs
         "No space left on device": str(InfraErrorV1.DISK_SPACE_FAILURE),
         "API rate limit exceeded": str(InfraErrorV1.API_RATE_LIMIT_FAILURE),
         "Tenstorrent cards seem to be in use": str(InfraErrorV1.RUNNER_CARD_IN_USE_FAILURE),
+        "device timeout, potential hang detected, the device is unrecoverable": str(InfraErrorV1.TT_TRIAGE_JOB_HANG),
     }
 
     # Check the mapping dictionary for specific failure signature types
