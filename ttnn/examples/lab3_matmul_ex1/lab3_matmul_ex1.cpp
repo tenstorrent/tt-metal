@@ -309,7 +309,7 @@ void multicast_tensor_tensix(
     // The mcast_sender kernel reads tiles from DRAM and multicasts them to all receiver cores.
     KernelHandle mcast_sender_id = CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/dataflow/mcast_sender.cpp",
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex1/kernels/dataflow/mcast_sender.cpp",
         sender_core_logical,
         mcast_sender_config);
 
@@ -317,14 +317,14 @@ void multicast_tensor_tensix(
     // mcast_receiver kernel: receives the multicast tiles on each receiver core.
     KernelHandle mcast_receiver_id = CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/dataflow/mcast_receiver.cpp",
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex1/kernels/dataflow/mcast_receiver.cpp",
         receiver_cores_logical,
         mcast_receiver_config);
 
     // write_tiles kernel: writes the processed tiles back to DRAM.
     KernelHandle write_tiles_id = CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/dataflow/write_tiles.cpp",
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex1/kernels/dataflow/write_tiles.cpp",
         all_cores_logical,
         write_tiles_config);
 
@@ -335,7 +335,7 @@ void multicast_tensor_tensix(
     vector<uint32_t> tiles_copy_compile_args = {n_tiles};
     CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/compute/tiles_copy.cpp",
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex1/kernels/compute/tiles_copy.cpp",
         all_cores_logical,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
