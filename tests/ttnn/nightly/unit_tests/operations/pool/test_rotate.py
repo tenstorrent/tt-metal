@@ -5,7 +5,8 @@
 import pytest
 import torch
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_with_pcc, get_rotate_tolerances
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.pool.test_rotate import get_rotate_tolerances
 
 import ttnn
 
