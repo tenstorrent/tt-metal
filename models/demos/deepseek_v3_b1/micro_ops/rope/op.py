@@ -252,7 +252,7 @@ class RopeSingleCore:
         # Program Descriptor
         # ========================================================================
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 input_cb_descriptor,
                 cos_cb_descriptor,
