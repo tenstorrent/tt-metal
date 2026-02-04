@@ -341,7 +341,7 @@ constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT =
 #else
     128;
 #endif
-constexpr bool IDLE_CONTEXT_SWITCHING = true;//get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 13) != 0;
+constexpr bool IDLE_CONTEXT_SWITCHING = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 13) != 0;
 
 constexpr size_t MY_ETH_CHANNEL = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 14);
 
