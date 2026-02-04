@@ -127,6 +127,12 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         help="Maximum number of tokens to prefill.",
     )
+    p.add_argument(
+        "--force-recalculate-cache",
+        action="store_true",
+        default=False,
+        help="Force regeneration of the weight cache even if it already exists.",
+    )
     return p
 
 
@@ -242,6 +248,7 @@ def run_demo(
     repeat_batches: int = 1,
     signpost: bool = False,
     prefill_max_tokens: int = None,
+    force_recalculate_cache: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -340,6 +347,7 @@ def run_demo(
                 enable_trace=enable_trace,
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
+                force_recalculate_cache=force_recalculate_cache,
             )
         # Build the prompt list
         pre_tokenized_prompts = None
@@ -438,6 +446,7 @@ def main() -> None:
         enable_trace=args.enable_trace,
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
+        force_recalculate_cache=bool(args.force_recalculate_cache),
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
