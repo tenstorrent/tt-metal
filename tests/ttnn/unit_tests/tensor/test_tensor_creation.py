@@ -837,3 +837,202 @@ def test_tensor_creation_from_list_with_mem_config(shape, tt_dtype, data_type, m
             assert abs(a - b) < 1e-5, f"Mismatch at index {i}: expected {a}, got {b}"
     else:
         assert flattened == data
+
+
+# =============================================================================
+# Tests for ttnn.Tensor.from_numpy()
+# =============================================================================
+
+# NumPy dtypes that can be used as input to from_numpy (standard dtypes only)
+np_dtypes_for_from_numpy = [
+    np.float32,
+    np.int32,
+    np.uint32,
+]
+
+# Expected ttnn dtype when no conversion is requested
+np_to_tt_dtype_default = {
+    np.float32: ttnn.float32,
+    np.int32: ttnn.int32,
+    np.uint32: ttnn.uint32,
+}
+
+# Target ttnn dtypes supported by from_numpy
+tt_dtypes_for_from_numpy = [
+    ttnn.float32,
+    ttnn.int32,
+    ttnn.uint32,
+    ttnn.bfloat16,
+]
+
+
+def create_np_tensor(shape, np_dtype):
+    """Helper to create numpy tensors with appropriate values for dtype"""
+    np.random.seed(0)
+    if np.issubdtype(np_dtype, np.integer):
+        return np.random.randint(0, 100, shape, dtype=np_dtype)
+    else:
+        return np.random.random(shape).astype(np_dtype)
+
+
+@pytest.mark.parametrize("np_dtype", np_dtypes_for_from_numpy)
+@pytest.mark.parametrize("shape", [(2, 2), (2, 3, 64, 96)])
+def test_tensor_from_numpy_default_dtype(shape, np_dtype):
+    """Test from_numpy infers correct ttnn dtype from numpy dtype"""
+    np_tensor = create_np_tensor(shape, np_dtype)
+    expected_tt_dtype = np_to_tt_dtype_default[np_dtype]
+
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor)
+
+    assert tt_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert tt_tensor.dtype == expected_tt_dtype
+    assert list(tt_tensor.shape) == list(shape)
+
+    # Round-trip test (note: to_numpy may return different dtype, e.g. uint32 -> int32)
+    np_result = tt_tensor.to_numpy()
+    assert np.allclose(np_tensor.astype(np_result.dtype), np_result)
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize("np_dtype", np_dtypes_for_from_numpy)
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_tensor_from_numpy_with_layout(shape, np_dtype, layout):
+    """Test from_numpy with explicit layout parameter"""
+    np_tensor = create_np_tensor(shape, np_dtype)
+
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, layout=layout)
+
+    assert tt_tensor.layout == layout
+
+    # Round-trip test (note: to_numpy may return different dtype)
+    np_result = tt_tensor.to_numpy()
+    assert np.allclose(np_tensor.astype(np_result.dtype), np_result)
+
+
+@pytest.mark.parametrize("tt_dtype", tt_dtypes_for_from_numpy)
+@pytest.mark.parametrize("np_dtype", np_dtypes_for_from_numpy)
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_tensor_from_numpy_with_dtype_conversion(shape, np_dtype, tt_dtype):
+    """Test from_numpy with explicit dtype conversion (numpy dtype x ttnn dtype)"""
+    np_tensor = create_np_tensor(shape, np_dtype)
+
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, dtype=tt_dtype)
+
+    assert tt_tensor.dtype == tt_dtype
+    assert list(tt_tensor.shape) == list(shape)
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize("tt_dtype", tt_dtypes_for_from_numpy)
+@pytest.mark.parametrize("np_dtype", np_dtypes_for_from_numpy)
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_tensor_from_numpy_full_permutation(shape, np_dtype, tt_dtype, layout):
+    """Test from_numpy with all combinations of numpy dtype, ttnn dtype, and layout"""
+    np_tensor = create_np_tensor(shape, np_dtype)
+
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, layout=layout, dtype=tt_dtype)
+
+    assert tt_tensor.layout == layout
+    assert tt_tensor.dtype == tt_dtype
+    assert list(tt_tensor.shape) == list(shape)
+
+
+@pytest.mark.parametrize("tt_dtype", tt_dtypes_for_from_numpy)
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_tensor_from_numpy_ml_dtypes_bfloat16(shape, tt_dtype):
+    """Test from_numpy with ml_dtypes.bfloat16 input, converting to various ttnn dtypes"""
+    ml_dtypes = pytest.importorskip("ml_dtypes")
+
+    np.random.seed(0)
+    np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
+
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, dtype=tt_dtype)
+
+    assert tt_tensor.dtype == tt_dtype
+    assert list(tt_tensor.shape) == list(shape)
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_tensor_from_numpy_ml_dtypes_bfloat16_with_layout(shape, layout):
+    """Test from_numpy with ml_dtypes.bfloat16 and explicit layout"""
+    ml_dtypes = pytest.importorskip("ml_dtypes")
+
+    np.random.seed(0)
+    np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
+
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, layout=layout)
+
+    assert tt_tensor.layout == layout
+    assert tt_tensor.dtype == ttnn.bfloat16
+    assert list(tt_tensor.shape) == list(shape)
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize("tt_dtype", tt_dtypes_for_from_numpy)
+@pytest.mark.parametrize("np_dtype", np_dtypes_for_from_numpy)
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_tensor_from_numpy_to_device_roundtrip(shape, np_dtype, tt_dtype, layout, device):
+    """Test from_numpy followed by device transfer and back"""
+    np_tensor = create_np_tensor(shape, np_dtype)
+
+    # Create tensor from numpy
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, layout=layout, dtype=tt_dtype)
+
+    # Transfer to device and back
+    tt_tensor = tt_tensor.to(device)
+    tt_tensor = tt_tensor.cpu()
+
+    assert tt_tensor.layout == layout
+    assert tt_tensor.dtype == tt_dtype
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize("tt_dtype", tt_dtypes_for_from_numpy)
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_tensor_from_numpy_ml_dtypes_to_device_roundtrip(shape, tt_dtype, layout, device):
+    """Test from_numpy with ml_dtypes.bfloat16 followed by device transfer"""
+    ml_dtypes = pytest.importorskip("ml_dtypes")
+
+    np.random.seed(0)
+    np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
+
+    # Create tensor from numpy
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, layout=layout, dtype=tt_dtype)
+
+    # Transfer to device and back
+    tt_tensor = tt_tensor.to(device)
+    tt_tensor = tt_tensor.cpu()
+
+    assert tt_tensor.layout == layout
+    assert tt_tensor.dtype == tt_dtype

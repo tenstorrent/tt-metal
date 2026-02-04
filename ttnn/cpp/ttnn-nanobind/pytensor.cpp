@@ -380,6 +380,214 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
     return to_host_buffer(preprocessed_py_tensor.contiguous_py_tensor);
 }
 
+// ============================================================================
+// from_numpy helper functions
+// ============================================================================
+
+// NumPy dtype.kind single-character code
+// See: https://numpy.org/doc/stable/reference/generated/numpy.dtype.kind.html
+namespace NumpyDtypeKind {
+constexpr auto VOID = "V";  // Void/structured (custom dtypes like ml_dtypes.bfloat16)
+}  // namespace NumpyDtypeKind
+
+// Helper: Create tensor from numpy data span for from_numpy (host-only)
+template <typename NumpyType, typename MetalType>
+Tensor create_tensor_from_numpy_span(
+    std::span<const NumpyType> numpy_data_span,
+    const ShapeBase::Container& shape_container,
+    DataType tensor_data_type,
+    Layout target_layout) {
+    const Shape tensor_shape(shape_container);
+    static const MemoryConfig tensor_memory_config{};
+    const PageConfig tensor_page_config(target_layout);
+    TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
+    TensorSpec tensor_spec(tensor_shape, tensor_layout);
+
+    if constexpr (!std::is_same_v<MetalType, NumpyType>) {
+        std::vector<MetalType> converted_data;
+        converted_data.reserve(numpy_data_span.size());
+        converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
+
+        return Tensor::from_vector(converted_data, tensor_spec, /*device=*/nullptr);
+    } else {
+        return Tensor::from_span(numpy_data_span, tensor_spec, /*device=*/nullptr);
+    }
+}
+
+// Fast path: standard NumPy dtypes validated by nanobind
+Tensor tensor_from_numpy(nb::ndarray<nb::numpy> numpy_data, Layout target_layout, std::optional<DataType> new_type) {
+    auto numpy_data_type = numpy_data.dtype();
+    const size_t rank = numpy_data.ndim();
+
+    TT_FATAL(!(numpy_data_type.bits % 8), "Unsupported precision: {} bits", numpy_data_type.bits);
+
+    const auto impl =
+        [&numpy_data_type, rank, &numpy_data, target_layout]<typename NumpyType>(DataType tensor_data_type) {
+            static_assert(std::is_same_v<NumpyType, std::remove_cvref_t<NumpyType>>);
+
+            TT_FATAL(
+                (numpy_data_type.bits == (sizeof(NumpyType) * 8)),
+                "Unsupported precision: expected {} bits, got {} bits",
+                sizeof(NumpyType) * 8,
+                numpy_data_type.bits);
+
+            ShapeBase::Container shape_container(rank);
+            for (size_t dimension = 0; dimension < rank; ++dimension) {
+                const auto dimension_size = numpy_data.shape(dimension);
+                TT_FATAL(
+                    (dimension_size > std::numeric_limits<uint32_t>::min()),
+                    "Invalid shape parameter for dimension {}: {} is too small",
+                    dimension,
+                    dimension_size);
+                TT_FATAL(
+                    (dimension_size <= std::numeric_limits<uint32_t>::max()),
+                    "Invalid shape parameter for dimension {}: {} exceeds uint32_t maximum",
+                    dimension,
+                    dimension_size);
+                shape_container[dimension] = dimension_size;
+            }
+
+            // Compute data size and get pointer
+            size_t data_size =
+                std::accumulate(shape_container.begin(), shape_container.end(), size_t(1), std::multiplies<size_t>());
+
+            const void* data_ptr = numpy_data.data();
+            std::span<const NumpyType> numpy_data_span(static_cast<const NumpyType*>(data_ptr), data_size);
+
+            // Dispatch based on target data type
+            switch (tensor_data_type) {
+                case DataType::INT32:
+                    return create_tensor_from_numpy_span<NumpyType, int32_t>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
+                case DataType::UINT32:
+                    return create_tensor_from_numpy_span<NumpyType, uint32_t>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
+                case DataType::FLOAT32:
+                    return create_tensor_from_numpy_span<NumpyType, float>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
+                case DataType::BFLOAT16:
+                    return create_tensor_from_numpy_span<NumpyType, bfloat16>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
+                default: TT_THROW("Unsupported data type for from_numpy: {}", tensor_data_type);
+            }
+        };
+
+    // Map dtype codes to appropriate handlers
+    switch (numpy_data_type.code) {
+        case static_cast<uint8_t>(nb::dlpack::dtype_code::Int):
+            return impl.operator()<int32_t>(new_type.value_or(DataType::INT32));
+        case static_cast<uint8_t>(nb::dlpack::dtype_code::UInt):
+            return impl.operator()<uint32_t>(new_type.value_or(DataType::UINT32));
+        case static_cast<uint8_t>(nb::dlpack::dtype_code::Float):
+            return impl.operator()<float>(new_type.value_or(DataType::FLOAT32));
+        case static_cast<uint8_t>(nb::dlpack::dtype_code::Bfloat):
+            return impl.operator()<bfloat16>(new_type.value_or(DataType::BFLOAT16));
+        case static_cast<uint8_t>(nb::dlpack::dtype_code::Complex): TT_THROW("Unsupported type: Complex");
+        case static_cast<uint8_t>(nb::dlpack::dtype_code::Bool): TT_THROW("Unsupported type: Bool");
+        default:
+            TT_THROW(
+                "Unsupported dtype code: {}. For custom dtypes like ml_dtypes.bfloat16, use the nb::object overload.",
+                static_cast<int>(numpy_data_type.code));
+    }
+}
+
+// Custom dtype handler: only accepts custom dtypes (like ml_dtypes.bfloat16)
+Tensor tensor_from_numpy_custom_dtype(
+    nb::object numpy_data_obj, Layout target_layout, std::optional<DataType> new_type) {
+    // Validate this is a custom dtype (like ml_dtypes.bfloat16)
+    nb::object dtype_obj = numpy_data_obj.attr("dtype");
+    nb::object itemsize_obj = dtype_obj.attr("itemsize");
+    int itemsize_bytes = nb::cast<int>(itemsize_obj);
+
+    // Check dtype kind - custom dtypes have kind='V' (void/structured)
+    nb::object kind_obj = dtype_obj.attr("kind");
+    const auto dtype_kind = nb::cast<std::string>(kind_obj);
+    const bool is_custom_dtype = (dtype_kind == NumpyDtypeKind::VOID);
+
+    // Reject standard dtypes - they should use the fast path
+    TT_FATAL(
+        is_custom_dtype,
+        "Standard dtypes should use the nb::ndarray<nb::numpy> overload, not the nb::object overload. "
+        "This function is only for custom dtypes like ml_dtypes.bfloat16.");
+
+    // Validate this is bfloat16 (the only supported custom dtype)
+    TT_FATAL(
+        itemsize_bytes == sizeof(bfloat16),
+        "Unsupported custom dtype with size {} bytes. Only ml_dtypes.bfloat16 (2 bytes) is supported.",
+        itemsize_bytes);
+
+    // Check dtype name
+    nb::object name_obj = dtype_obj.attr("name");
+    std::string dtype_name = nb::cast<std::string>(name_obj);
+
+    TT_FATAL(
+        dtype_name == "bfloat16", "Unsupported custom dtype '{}'. Only ml_dtypes.bfloat16 is supported.", dtype_name);
+
+    // Force bfloat16 type if not already specified
+    if (!new_type.has_value()) {
+        new_type = DataType::BFLOAT16;
+    }
+
+    // Get rank and shape from Python directly
+    nb::object ndim_obj = numpy_data_obj.attr("ndim");
+    size_t rank = nb::cast<size_t>(ndim_obj);
+
+    nb::object shape_obj = numpy_data_obj.attr("shape");
+    nb::tuple shape_tuple = nb::cast<nb::tuple>(shape_obj);
+    std::vector<size_t> shape_from_python;
+    for (size_t i = 0; i < rank; ++i) {
+        shape_from_python.push_back(nb::cast<size_t>(shape_tuple[i]));
+    }
+
+    const auto impl =
+        [rank, &numpy_data_obj, target_layout, &shape_from_python]<typename NumpyType>(DataType tensor_data_type) {
+            static_assert(std::is_same_v<NumpyType, std::remove_cvref_t<NumpyType>>);
+
+            ShapeBase::Container shape_container(rank);
+            for (size_t dimension = 0; dimension < rank; ++dimension) {
+                const auto dimension_size = shape_from_python[dimension];
+                TT_FATAL(
+                    (dimension_size <= std::numeric_limits<uint32_t>::max()),
+                    "Invalid shape parameter for dimension {}: {} exceeds uint32_t maximum",
+                    dimension,
+                    dimension_size);
+                shape_container[dimension] = dimension_size;
+            }
+
+            // Compute size from shape
+            size_t data_size =
+                std::accumulate(shape_container.begin(), shape_container.end(), size_t(1), std::multiplies<size_t>());
+
+            // Get data pointer from Python's __array_interface__
+            nb::object array_interface = numpy_data_obj.attr("__array_interface__");
+            nb::dict ai_dict = nb::cast<nb::dict>(array_interface);
+            nb::tuple data_tuple = nb::cast<nb::tuple>(ai_dict["data"]);
+            const void* data_ptr = reinterpret_cast<const void*>(nb::cast<uintptr_t>(data_tuple[0]));
+
+            std::span<const NumpyType> numpy_data_span(static_cast<const NumpyType*>(data_ptr), data_size);
+
+            // Dispatch based on target data type
+            switch (tensor_data_type) {
+                case DataType::INT32:
+                    return create_tensor_from_numpy_span<NumpyType, int32_t>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
+                case DataType::UINT32:
+                    return create_tensor_from_numpy_span<NumpyType, uint32_t>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
+                case DataType::FLOAT32:
+                    return create_tensor_from_numpy_span<NumpyType, float>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
+                case DataType::BFLOAT16:
+                    return create_tensor_from_numpy_span<NumpyType, bfloat16>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
+                default: TT_THROW("Unsupported data type for from_numpy: {}", tensor_data_type);
+            }
+        };
+
+    // Handle custom dtype (ml_dtypes.bfloat16)
+    return impl.template operator()<bfloat16>(new_type.value_or(DataType::BFLOAT16));
+}
+
 }  // namespace
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
@@ -725,6 +933,78 @@ void pytensor_module(nb::module_& mod) {
                     py_tensor = np.zeros((1, 1, 32, 32))
                     ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
             )doc")
+        .def_static(
+            "from_numpy",
+            [](nb::ndarray<nb::numpy> numpy_tensor,
+               std::optional<Layout> layout,
+               std::optional<DataType> dtype) -> Tensor {
+                using namespace CMAKE_UNIQUE_NAMESPACE;
+                return tensor_from_numpy(numpy_tensor, layout.value_or(Layout::ROW_MAJOR), dtype);
+            },
+            nb::arg("numpy_tensor"),
+            nb::arg("layout") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            R"doc(
+            Create a TT Tensor from a numpy tensor on host.
+
+            This is the recommended way to create a tensor from numpy arrays.
+            The tensor will be created on the host. Use `.to()` to move it to a device.
+
+            +---------------+-------------------------------------+
+            | Argument      | Description                         |
+            +===============+=====================================+
+            | numpy_tensor  | NumPy tensor to convert             |
+            +---------------+-------------------------------------+
+            | layout        | Layout (ROW_MAJOR or TILE)          |
+            +---------------+-------------------------------------+
+            | dtype         | Target data type (optional)         |
+            +---------------+-------------------------------------+
+
+            Example:
+
+            .. code-block:: python
+
+                import numpy as np
+                import ttnn
+
+                # Create tensor from numpy
+                np_data = np.array([[1, 2], [3, 4]], dtype=np.float32)
+                tt_tensor = ttnn.Tensor.from_numpy(np_data)
+
+                # With explicit layout and dtype
+                tt_tensor = ttnn.Tensor.from_numpy(np_data, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+                # Move to device
+                device = ttnn.open_device(0)
+                tt_tensor = tt_tensor.to(device)
+        )doc")
+        .def_static(
+            "from_numpy",
+            [](nb::object numpy_tensor_obj, std::optional<Layout> layout, std::optional<DataType> dtype) -> Tensor {
+                using namespace CMAKE_UNIQUE_NAMESPACE;
+                return tensor_from_numpy_custom_dtype(numpy_tensor_obj, layout.value_or(Layout::ROW_MAJOR), dtype);
+            },
+            nb::arg("numpy_tensor"),
+            nb::arg("layout") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            R"doc(
+            Create a TT Tensor from a numpy tensor with custom dtype (like ml_dtypes.bfloat16).
+
+            This overload handles custom dtypes that are not natively supported by nanobind,
+            such as ml_dtypes.bfloat16.
+
+            Example:
+
+            .. code-block:: python
+
+                import numpy as np
+                import ml_dtypes
+                import ttnn
+
+                # Create tensor from ml_dtypes.bfloat16 array
+                np_data = np.array([[1, 2], [3, 4]], dtype=ml_dtypes.bfloat16)
+                tt_tensor = ttnn.Tensor.from_numpy(np_data)
+        )doc")
         .def_prop_ro("spec", [](const Tensor& self) { return self.tensor_spec(); })
         .def_prop_ro("shape", [](const Tensor& self) { return self.logical_shape(); })
         .def_prop_ro("padded_shape", [](const Tensor& self) { return self.padded_shape(); })
