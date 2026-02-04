@@ -2,7 +2,7 @@
 # Tests that are not compatible with TTSim simulator
 #
 # Structure:
-#   common: Tests skipped on all architectures (multi-chip, trace, etc.)
+#   common: Tests skipped on all architectures
 #   wormhole_b0: Tests skipped only on Wormhole B0
 #   blackhole: Tests skipped only on Blackhole
 
@@ -22,15 +22,14 @@ common:
   # Sub-device tests - require fast dispatch mode
   - tests/ttnn/unit_tests/base_functionality/test_sub_device.py
 
-wormhole_b0:
-  # Base functionality - simulator limitations
+  # Base functionality - simulator limitations (tilize/untilize, layout conversion)
   - tests/ttnn/unit_tests/base_functionality/test_comparison_mode.py
   - tests/ttnn/unit_tests/base_functionality/test_expand.py
   - tests/ttnn/unit_tests/base_functionality/test_roll.py
   - tests/ttnn/unit_tests/base_functionality/test_tilize_untilize_2D.py
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
 
-  # Eltwise - INT32/UINT32/FLOAT32/UINT16 data format limitations
+  # Eltwise - data format limitations (INT32/UINT32/FLOAT32/UINT16)
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py
@@ -78,6 +77,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_fmod.py
   - tests/ttnn/unit_tests/operations/eltwise/test_expm1.py
 
+wormhole_b0:
   # Pool tests
   - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
