@@ -160,7 +160,6 @@ run_quad_galaxy_tests() {
   run_dual_galaxy_deepseekv3_tests_on_quad_galaxy
 }
 
-fail=0
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
   if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
@@ -216,10 +215,6 @@ main() {
       exit 1
       ;;
   esac
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
 }
 
 main "$@"
