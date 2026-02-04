@@ -138,6 +138,7 @@ def apply_linear_height_sharded(
     compute_config=None,
     program_config=None,
     fused_activation=None,
+    activation: str | None = None,
     program_config_factory=None,
     min_tiles_per_core: int = 2,
     min_K_tiles: int = 1,
@@ -160,7 +161,13 @@ def apply_linear_height_sharded(
         x_was_reshaped = True
 
     if not use_sharding:
-        out_2d = ttnn.linear(x_2d, weight, bias=bias, compute_kernel_config=compute_config)
+        out_2d = ttnn.linear(
+            x_2d,
+            weight,
+            bias=bias,
+            activation=activation,
+            compute_kernel_config=compute_config,
+        )
         if x_was_reshaped:
             ttnn.deallocate(x_2d)
         out = ttnn.reshape(out_2d, out_shape)
@@ -174,7 +181,13 @@ def apply_linear_height_sharded(
     )
 
     if not do_shard:
-        out_2d = ttnn.linear(x_2d, weight, bias=bias, compute_kernel_config=compute_config)
+        out_2d = ttnn.linear(
+            x_2d,
+            weight,
+            bias=bias,
+            activation=activation,
+            compute_kernel_config=compute_config,
+        )
         if x_was_reshaped:
             ttnn.deallocate(x_2d)
         out = ttnn.reshape(out_2d, out_shape)
@@ -266,7 +279,7 @@ def make_1d_mcast_prog_config_for_height_sharded(
     out_k: int,
     fuse_batch: bool = True,
     # fused_activation = None,
-    mcast_in0: bool = True,
+    mcast_in0: bool = False,
     in0_block_w_tiles: int = 1,
     out_subblock_h: int = 1,
     out_subblock_w: int = 1,
