@@ -15,7 +15,6 @@
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #endif
-#include "api/debug/dprint.h"
 
 namespace deepseek_b1_ops {
 
@@ -103,7 +102,6 @@ struct Matmul {
             constexpr bool dense_packing = true;
             constexpr bool finalize = split_acc && true;
             constexpr bool read_transposed = transpose && true;
-            constexpr const char* version_str = "split";
 
             // Wait for all input tiles (both from sharded tensors in L1)
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
@@ -113,68 +111,14 @@ struct Matmul {
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            // Use optimized custom_mm API for single output tile with K-dimension reduction
             custom_mm_block_init<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
 
             tile_regs_acquire();
 
-            volatile std::uint32_t* base_address = (std::uint32_t*)MEM_LLK_DEBUG_BASE;
-            tensix_sync();
-            UNPACK((base_address[1] = 1));
-            MATH((base_address[2] = 2));
-            PACK((base_address[3] = 3));
-            while (base_address[1] != 1) {
-                asm("nop");
-            }
-            while (base_address[2] != 2) {
-                asm("nop");
-            }
-            while (base_address[3] != 3) {
-                asm("nop");
-            }
-            UNPACK((base_address[5] = 5));
-            MATH((base_address[6] = 6));
-            PACK((base_address[7] = 7));
-            while (base_address[5] != 5) {
-                asm("nop");
-            }
-            while (base_address[6] != 6) {
-                asm("nop");
-            }
-            while (base_address[7] != 7) {
-                asm("nop");
-            }
-            UNPACK((base_address[1] = 0));
-            MATH((base_address[2] = 0));
-            PACK((base_address[3] = 0));
-            while (base_address[1] != 0) {
-                asm("nop");
-            }
-            while (base_address[2] != 0) {
-                asm("nop");
-            }
-            while (base_address[3] != 0) {
-                asm("nop");
-            }
-            UNPACK((base_address[5] = 0));
-            MATH((base_address[6] = 0));
-            PACK((base_address[7] = 0));
-            uint64_t start = ckernel::read_wall_clock();
-
-            // Single call handles all K tiles internally via MOP replay
             custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
-
-            tensix_sync();
-            uint64_t end = ckernel::read_wall_clock();
-            uint64_t kernel_runtime = (end - start);
-            UNPACK(
-                (DPRINT << "version " << version_str << " " << get_operand_face_r_dim(args.in0) << " "
-                        << args.k_num_tiles << " " << out_w << " " << (int)transpose << " "
-                        << unpack_src_format[args.in1] << " " << kernel_runtime << ENDL()));
 
             tile_regs_commit();
 
-            // Pack output tile
             tile_regs_wait();
             for (uint32_t dst_idx = 0; dst_idx < out_w; dst_idx++) {
                 pack_tile(dst_idx, args.out, dst_idx);
