@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <utility>
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include <tools/profiler/kernel_profiler.hpp>
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -315,6 +316,7 @@ void kernel_main() {
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             chunk_count = 0;
             while (tiles_read < tiles_to_read) {
+                DeviceZoneScopedN("writer handle tiles from current packet");
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                 uint32_t tiles_to_put_in_current_packet =
                     std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
@@ -338,47 +340,59 @@ void kernel_main() {
                 }
 
                 if (direction == 1) {
-                    if constexpr (num_targets_backward_direction) {
-                        if (tiles_to_put_in_current_packet > 1) {
-                            fabric_unicast_noc_scatter_write_with_state<
-                                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                                UnicastScatterWriteUpdateMask::PayloadSize>(
-                                mux_connection_handle,
-                                pkt_scatter_hdr,
-                                l1_read_addr,
-                                NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                                page_size * tiles_to_put_in_current_packet);
-                        } else {
-                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                mux_connection_handle,
-                                pkt_unicast_hdr,
-                                l1_read_addr,
-                                NocUnicastCommandHeader{noc_addrs[0]});
+                    {
+                        DeviceZoneScopedN("writer backward fabric push")
+
+                            if constexpr (num_targets_backward_direction) {
+                            if (tiles_to_put_in_current_packet > 1) {
+                                fabric_unicast_noc_scatter_write_with_state<
+                                    UnicastScatterWriteUpdateMask::DstAddrs |
+                                    UnicastScatterWriteUpdateMask::ChunkSizes |
+                                    UnicastScatterWriteUpdateMask::PayloadSize>(
+                                    mux_connection_handle,
+                                    pkt_scatter_hdr,
+                                    l1_read_addr,
+                                    NocUnicastScatterCommandHeader(
+                                        noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                                    page_size * tiles_to_put_in_current_packet);
+                            } else {
+                                fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                    mux_connection_handle,
+                                    pkt_unicast_hdr,
+                                    l1_read_addr,
+                                    NocUnicastCommandHeader{noc_addrs[0]});
+                            }
                         }
                     }
-
-                    for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
-                        noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
+                    {
+                        DeviceZoneScopedN("writer backward local push") for (uint32_t i = 0;
+                                                                             i < tiles_to_put_in_current_packet;
+                                                                             i++) {
+                            noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
+                        }
+                        noc_async_write_barrier();
                     }
-                    noc_async_write_barrier();
-
                 } else {
-                    if constexpr (num_targets_forward_direction) {
-                        if (tiles_to_put_in_current_packet > 1) {
-                            fabric_unicast_noc_scatter_write_with_state<
-                                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                                UnicastScatterWriteUpdateMask::PayloadSize>(
-                                mux_connection_handle,
-                                pkt_scatter_hdr,
-                                l1_read_addr,
-                                NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                                page_size * tiles_to_put_in_current_packet);
-                        } else {
-                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                mux_connection_handle,
-                                pkt_unicast_hdr,
-                                l1_read_addr,
-                                NocUnicastCommandHeader{noc_addrs[0]});
+                    {
+                        DeviceZoneScopedN("writer forward fabric push") if constexpr (num_targets_forward_direction) {
+                            if (tiles_to_put_in_current_packet > 1) {
+                                fabric_unicast_noc_scatter_write_with_state<
+                                    UnicastScatterWriteUpdateMask::DstAddrs |
+                                    UnicastScatterWriteUpdateMask::ChunkSizes |
+                                    UnicastScatterWriteUpdateMask::PayloadSize>(
+                                    mux_connection_handle,
+                                    pkt_scatter_hdr,
+                                    l1_read_addr,
+                                    NocUnicastScatterCommandHeader(
+                                        noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                                    page_size * tiles_to_put_in_current_packet);
+                            } else {
+                                fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                    mux_connection_handle,
+                                    pkt_unicast_hdr,
+                                    l1_read_addr,
+                                    NocUnicastCommandHeader{noc_addrs[0]});
+                            }
                         }
                     }
                 }
@@ -545,6 +559,7 @@ void kernel_main() {
             chunk_count = 0;
 
             while (tiles_read < tiles_to_read) {
+                DeviceZoneScopedN("writer handle tiles from current packet");
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                 uint32_t tiles_to_put_in_current_packet =
                     std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
@@ -564,18 +579,24 @@ void kernel_main() {
                     noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
                 }
 
-                if (tiles_to_put_in_current_packet > 1) {
-                    fabric_unicast_noc_scatter_write_with_state<
-                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                        UnicastScatterWriteUpdateMask::PayloadSize>(
-                        mux_connection_handle,
-                        pkt_scatter_hdr,
-                        l1_read_addr,
-                        NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                        page_size * tiles_to_put_in_current_packet);
-                } else {
-                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                        mux_connection_handle, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_addrs[0]});
+                {
+                    DeviceZoneScopedN("writer fabric push") if (tiles_to_put_in_current_packet > 1) {
+                        fabric_unicast_noc_scatter_write_with_state<
+                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                            UnicastScatterWriteUpdateMask::PayloadSize>(
+                            mux_connection_handle,
+                            pkt_scatter_hdr,
+                            l1_read_addr,
+                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                            page_size * tiles_to_put_in_current_packet);
+                    }
+                    else {
+                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                            mux_connection_handle,
+                            pkt_unicast_hdr,
+                            l1_read_addr,
+                            NocUnicastCommandHeader{noc_addrs[0]});
+                    }
                 }
 
                 tiles_read += tiles_to_put_in_current_packet;
@@ -621,9 +642,10 @@ void kernel_main() {
         }
         slice_writes++;
     }
-
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    {
+        DeviceZoneScopedN("writer write barrier") noc_async_write_barrier();
+        noc_async_atomic_barrier();
+    }
 
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
