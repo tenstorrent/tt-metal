@@ -204,76 +204,17 @@ Alternatively, if you generated an FSD, update the scripts to use `--factory-des
 
 ## Step 5: Run Physical Validation
 
-Run 50 iterations of physical validation to verify hardware stability.
+Run 50 iterations of physical validation to verify hardware stability. Use the merged descriptors from Step 3.
 
-### For 4x32 Topology
+See [Physical Validation](./README.md#physical-validation) in the README for validation script usage and result analysis.
 
-```bash
-./tools/scaleout/exabox/run_validation_4x32.sh \
-    bh-glx-c05u02,bh-glx-c05u08,bh-glx-c06u02,bh-glx-c06u08 \
-    ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a
-```
+For success criteria and interpreting results, see [Analyzing validation logs](./TROUBLESHOOTING.md#general-debugging-tips) in the Troubleshooting guide.
 
-### For 8x16 Topology
+## Step 6: Run Fabric Tests (Optional)
 
-```bash
-./tools/scaleout/exabox/run_validation_8x16.sh \
-    bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08 \
-    ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a
-```
+After physical validation passes, run fabric tests to verify coordinated workloads across the mesh.
 
-**Note:** Replace the host list with all hosts in your expanded cluster (comma-separated, no spaces).
-
-Logs are written to `validation_output/` in your current directory.
-
-## Step 6: Analyze Results
-
-After validation completes, analyze the results to verify the cluster meets the stability threshold.
-
-### Quick Analysis (Shell Script)
-
-```bash
-./tools/scaleout/exabox/analyze_validation_results.sh validation_output/
-```
-
-### Detailed Analysis (Python Script)
-
-For more detailed analysis with plots:
-
-```bash
-python3 ./tools/scaleout/exabox/analyze_validation_results.py \
-    validation_output/ \
-    --plot \
-    --plot-dir ./analysis_output
-```
-
-### Success Criteria
-
-| Success Rate | Status | Action |
-|-------------|--------|--------|
-| 80%+ (40/50) | Pass | Cluster is ready for workloads |
-| 70-79% | Marginal | Review failure patterns, may need cable investigation |
-| <70% | Fail | Investigate failures before proceeding |
-
-For detailed baseline expectations, see the [Physical Validation Results spreadsheet](https://docs.google.com/spreadsheets/d/1lg6cG0TovYqwJtn6kkm5Fb1erQHH9p-p8NIUL279V0U/edit?pli=1&gid=489670889#gid=489670889).
-
-## Step 7: Run Fabric Tests (Optional)
-
-After physical validation passes, run fabric tests to verify coordinated workloads.
-
-Choose the script matching your topology:
-
-```bash
-# For 4x32 topology
-./tools/scaleout/exabox/run_fabric_tests_4x32.sh \
-    bh-glx-c05u02,bh-glx-c05u08,bh-glx-c06u02,bh-glx-c06u08 \
-    ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a
-
-# For 8x16 topology
-./tools/scaleout/exabox/run_fabric_tests_8x16.sh \
-    bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08 \
-    ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a
-```
+See [Fabric Tests](./README.md#fabric-tests) in the README for topology-specific scripts and usage.
 
 ## Troubleshooting
 
