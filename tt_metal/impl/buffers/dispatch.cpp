@@ -1191,9 +1191,20 @@ void copy_completion_queue_data_into_user_space(
         core_page_mapping_it = core_page_mapping->begin();
     }
 
+    // Optimization: For large transfers (>256KB), add initial delay to let device write more data
+    // before we start polling. This reduces the number of wait iterations and gives device
+    // uninterrupted time to perform bulk transfers.
+    constexpr DeviceAddr LARGE_TRANSFER_THRESHOLD = 256 * 1024;  // 256KB
+    if (padded_num_bytes > LARGE_TRANSFER_THRESHOLD) {
+        // Sleep for a brief period proportional to transfer size to allow bulk write
+        // Assume ~1MB/s device write speed, add 50% margin
+        auto estimated_ms = (padded_num_bytes / 1024) * 1.5;  // ~1.5ms per KB
+        std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<uint32_t>(std::min(estimated_ms, 1000.0))));
+    }
+
     while (remaining_bytes_to_read != 0) {
         uint32_t completion_queue_write_ptr_and_toggle =
-            sysmem_manager.completion_queue_wait_front(cq_id, exit_condition);
+            sysmem_manager.completion_queue_wait_front(cq_id, exit_condition, padded_num_bytes);
 
         if (exit_condition) {
             break;

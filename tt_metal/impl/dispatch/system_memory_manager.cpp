@@ -595,7 +595,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 }
 
 uint32_t SystemMemoryManager::completion_queue_wait_front(
-    const uint8_t cq_id, std::atomic<bool>& exit_condition) const {
+    const uint8_t cq_id, std::atomic<bool>& exit_condition, uint32_t expected_bytes) const {
     if (is_mock_device()) {
         return 0;
     }
@@ -632,12 +632,18 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         return get_cq_dispatch_progress(this->device_id, cq_id);
     };
 
-    loop_and_wait_with_timeout(
-        wait_operation_body,
-        wait_condition,
-        on_timeout,
-        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations(),
-        get_dispatch_progress);
+    // Scale timeout based on expected transfer size
+    // Large transfers (>256KB) need more time; small transfers use default timeout
+    auto base_timeout = tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
+    auto timeout = base_timeout;
+
+    constexpr uint32_t LARGE_TRANSFER_THRESHOLD = 256 * 1024;  // 256KB
+    if (expected_bytes > LARGE_TRANSFER_THRESHOLD) {
+        // For large transfers, scale timeout: 10x for transfers > 256KB
+        timeout = base_timeout * 10.0f;
+    }
+
+    loop_and_wait_with_timeout(wait_operation_body, wait_condition, on_timeout, timeout, get_dispatch_progress);
 
     return write_ptr_and_toggle;
 }
