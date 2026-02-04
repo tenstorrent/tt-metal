@@ -12,7 +12,7 @@ from transformers.models.qwen3_vl.modeling_qwen3_vl import (
     Qwen3VLForConditionalGeneration as Ref_Qwen3VLForConditionalGeneration,
 )
 from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.qwen2_5_vl import Qwen2_5_VLProcessingInfo
+from vllm.model_executor.models.qwen3_vl import Qwen3VLProcessingInfo
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
@@ -90,14 +90,14 @@ class CustomNamespace(SimpleNamespace):
         return key in self.__dict__
 
 
-class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
+class TT_Qwen3VLProcessingInfo(Qwen3VLProcessingInfo):
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
         return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
 
 
 # TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
 @MULTIMODAL_REGISTRY.register_processor(
-    MultiModalProcessor, info=TT_Qwen2_5_VLProcessingInfo, dummy_inputs=DummyInputsBuilder
+    MultiModalProcessor, info=TT_Qwen3VLProcessingInfo, dummy_inputs=DummyInputsBuilder
 )
 class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
@@ -170,6 +170,7 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         page_table,
         kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
+        enable_trace=False,
     ):
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
