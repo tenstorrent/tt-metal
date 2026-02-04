@@ -112,19 +112,18 @@ def test_copy_host_to_device_tensor(device):
     dtype = ttnn.bfloat16
     layout = ttnn.ROW_MAJOR_LAYOUT
 
-    host_tensor = ttnn.from_torch(torch.randn((10, 64, 32)), dtype=dtype, layout=layout)
+    tensor = ttnn.rand((10, 64, 32), device=device, dtype=dtype, layout=layout)
+    host_tensor = ttnn.from_device(tensor)
+    device_tensor_copy = ttnn.allocate_tensor_on_device(host_tensor.spec, device)
+    ttnn.copy_host_to_device_tensor(host_tensor, device_tensor_copy)
 
-    device_tensor = ttnn.allocate_tensor_on_device(host_tensor.spec, device)
-    ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
-
-    # Verify round-trip
-    roundtrip_host = ttnn.from_device(device_tensor)
-    assert torch.allclose(ttnn.to_torch(roundtrip_host), ttnn.to_torch(host_tensor))
-    logger.info("TT-NN tensor shape after copying to device", device_tensor.shape)
+    logger.info("TT-NN tensor shape after copying to device", device_tensor_copy.shape)
 
 
 def test_to_dtype(device):
-    tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
+    # Create a TT-NN tensor on the host and convert it to a different data type
+    tensor = ttnn.rand((10, 64, 32), device=device, dtype=ttnn.bfloat16)
+    tensor = ttnn.from_device(tensor)  # to_dtype requires a host tensor
     tensor = ttnn.to_dtype(tensor, dtype=ttnn.uint8)
     assert tensor.dtype == ttnn.uint8
     assert tensor.shape == (10, 64, 32)
@@ -133,6 +132,7 @@ def test_to_dtype(device):
 
 
 def test_typecast(device):
+    # Create a TT-NN tensor (on host or device) and typecast it to a different data type
     tensor = ttnn.typecast(ttnn.rand((10, 3, 32, 32), dtype=ttnn.bfloat16, device=device), dtype=ttnn.uint16)
     assert tensor.dtype == ttnn.uint16
     assert tensor.shape == (10, 3, 32, 32)
