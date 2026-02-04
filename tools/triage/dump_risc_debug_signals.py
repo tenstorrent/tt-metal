@@ -34,7 +34,7 @@ script_config = ScriptConfig(
 
 # RISC cores to check for each block type
 BLOCK_RISC_CORES = {
-    "tensix": ["brisc", "trisc0", "trisc1", "trisc2"],
+    "functional_workers": ["brisc", "trisc0", "trisc1", "trisc2"],
     "idle_eth": ["erisc", "erisc0", "erisc1"],
 }
 
@@ -74,7 +74,7 @@ def collect_debug_bus_signals(
             continue
 
         try:
-            raise RiscHaltError()
+            raise RiscHaltError(risc_name, location)
             with risc_debug.ensure_halted():
                 pass
         except RiscHaltError:
