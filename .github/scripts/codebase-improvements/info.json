@@ -1,7 +1,7 @@
 {
   "deterministic": true,
   "url": "",
-  "prompt": "Fix ttnn.to_torch() timeout with wide tensors [1, 151936]. Optimize completion queue copy in system_memory_manager.cpp",
-  "raw-logs": "RuntimeError: TT_THROW @ /tt-metal/tt_metal/impl/dispatch/system_memory_manager.cpp:627: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable\n\nStack trace:\n  at buffer_dispatch::copy_completion_queue_data_into_user_space()\n  at tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()\n  at Device::read_buffer()\n  at ttnn.to_torch()\n\nTest: test_gather_long_tensor_stress[0]\nShape: [1, 151936]\nOperation: ttnn.gather() followed by ttnn.to_torch()\nTimeout setting: TT_METAL_OPERATION_TIMEOUT_SECONDS=5",
+  "prompt": "Fix ttnn.to_torch() timeout with wide tensors [1, 151936]. The completion queue read in system_memory_manager.cpp is too slow. Optimize it.",
+  "raw-logs": "RuntimeError: TT_THROW @ /tt-metal/tt_metal/impl/dispatch/system_memory_manager.cpp:627: tt::exception\ninfo:\nTIMEOUT: device timeout, potential hang detected, the device is unrecoverable\n\nStack trace:\n  at buffer_dispatch::copy_completion_queue_data_into_user_space()\n  at tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()\n  at Device::read_buffer()\n  at ttnn.to_torch()\n\nTest: test_gather_long_tensor_stress[0]\nShape: [1, 151936]\nOperation: ttnn.gather() followed by ttnn.to_torch()\nTimeout setting: TT_METAL_OPERATION_TIMEOUT_SECONDS=5\n\nThe operation times out after 5 seconds during the completion queue read.",
   "existing-test-path": "reproduce-deterministic-failures/timeout-in-datamovement/tests/test_gather_timeout_stress.py"
 }
