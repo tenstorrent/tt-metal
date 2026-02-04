@@ -46,6 +46,9 @@ def rms_norm(
     device = input_tensor.device()
     arch = device.arch()
 
+    if program_config is not None and program_config.use_welford:
+        raise ValueError("Welford's algorithm is not supported for RMS norm")
+
     # Initialize compute kernel config if not provided
     if compute_kernel_config is None:
         compute_kernel_config = ttnn.rmsnorm_default_compute_config(arch)

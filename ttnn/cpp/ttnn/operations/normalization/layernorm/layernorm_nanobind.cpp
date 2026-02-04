@@ -328,6 +328,19 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
 
             Returns:
                 ttnn.ProgramDescriptor: The program descriptor for the layer norm operation.
+            )doc")
+        .def_static(
+            "default_core_range",
+            &ttnn::prim::LayerNormMultiCoreProgramFactory::default_core_range,
+            nb::arg("device"),
+            R"doc(
+            Returns the default core range for non-sharded LayerNorm based on device compute grid.
+
+            Args:
+                device: The device to get the compute grid from.
+
+            Returns:
+                ttnn.CoreRangeSet: The default core range covering the device's compute grid.
             )doc");
 
     nb::class_<ttnn::prim::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactory")

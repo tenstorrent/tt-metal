@@ -215,43 +215,22 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     uint32_t num_tile_rows = NC * Ht;
 
-    // Use provided core_range_set if available, otherwise compute from device grid
-    uint32_t num_cores;
-    CoreRangeSet all_cores;
-    CoreRangeSet core_group_1;
-    CoreRangeSet core_group_2;
-    uint32_t num_tile_rows_per_core_group_1;
-    uint32_t num_tile_rows_per_core_group_2;
-    CoreCoord grid_size;
+    CoreRangeSet all_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(device);
+    uint32_t num_cores = all_cores.num_cores();
 
-    if (core_range_set.has_value()) {
-        // Use provided CoreRangeSet
-        all_cores = core_range_set.value();
-        num_cores = all_cores.num_cores();
-        // Simple work split: distribute tile rows evenly across provided cores
-        num_tile_rows_per_core_group_1 = (num_tile_rows + num_cores - 1) / num_cores;
-        num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_1;
-        // When using fewer cores, some might get one less row
-        uint32_t remainder = num_tile_rows % num_cores;
-        if (remainder > 0) {
-            num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_1 - 1;
-        }
-        core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet();
-        // Compute bounding box for grid_size
-        auto bbox = all_cores.bounding_box();
-        grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
-    } else {
-        // Original behavior: compute from device grid
-        grid_size = device->compute_with_storage_grid_size();
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_tile_rows_per_core_group_1,
-            num_tile_rows_per_core_group_2) = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
+    // Distribute tile rows evenly across cores
+    uint32_t num_tile_rows_per_core_group_1 = (num_tile_rows + num_cores - 1) / num_cores;
+    uint32_t num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_1;
+    // When using fewer cores, some might get one less row
+    uint32_t remainder = num_tile_rows % num_cores;
+    if (remainder > 0) {
+        num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_1 - 1;
     }
+    CoreRangeSet core_group_1 = all_cores;
+    CoreRangeSet core_group_2 = CoreRangeSet();
+    // Compute bounding box for grid_size
+    auto bbox = all_cores.bounding_box();
+    CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
 
     // Use passed-in reciprocal LUT tensor if using Welford
     std::optional<Tensor> recip_tensor = std::nullopt;
@@ -695,6 +674,11 @@ void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
             runtime_args[0] = dst_dram_buffer->address();
         }
     }
+}
+
+CoreRangeSet LayerNormMultiCoreProgramFactory::default_core_range(IDevice* device) {
+    auto grid_size = device->compute_with_storage_grid_size();
+    return CoreRangeSet({CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1})});
 }
 
 }  // namespace ttnn::prim
