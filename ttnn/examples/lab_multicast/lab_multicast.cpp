@@ -285,76 +285,76 @@ void multicast_tensor_tensix(
     create_cb(prog_state.program, all_cores_logical, tiles_per_cb, tt::CBIndex::c_16);
 
     ////////// DATA MOVEMENT CONFIG SETUP //////////
-    // Compile-time args for coordinator kernel to read input tiles from DRAM.
+    // Compile-time args for mcast_sender kernel to read input tiles from DRAM.
     // TensorAccessorArgs extracts data distribution details from MeshBuffer so kernels
     // don't need to deal with low-level details like bank IDs.
-    std::vector<uint32_t> coordinator_compile_time_args;
-    TensorAccessorArgs(*src_mesh_buffer).append_to(coordinator_compile_time_args);
-    DataMovementConfig DataMovementConfigCoordinator = {
+    std::vector<uint32_t> mcast_sender_compile_args;
+    TensorAccessorArgs(*src_mesh_buffer).append_to(mcast_sender_compile_args);
+    DataMovementConfig mcast_sender_config = {
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
-        .compile_args = coordinator_compile_time_args};
+        .compile_args = mcast_sender_compile_args};
 
-    // Receiver cores use the default config for inbound (no compile-time args needed).
-    DataMovementConfig DataMovementConfigIn = {
+    // mcast_receiver uses the default config (no compile-time args needed).
+    DataMovementConfig mcast_receiver_config = {
         .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
 
-    std::vector<uint32_t> writer_compile_time_args;
-    TensorAccessorArgs(*dst_mesh_buffer).append_to(writer_compile_time_args);
-    DataMovementConfig DataMovementConfigOut = {
+    std::vector<uint32_t> write_tiles_compile_args;
+    TensorAccessorArgs(*dst_mesh_buffer).append_to(write_tiles_compile_args);
+    DataMovementConfig write_tiles_config = {
         .processor = DataMovementProcessor::RISCV_1,
         .noc = NOC::RISCV_1_default,
-        .compile_args = writer_compile_time_args};
+        .compile_args = write_tiles_compile_args};
 
-    ////////// COORDINATOR KERNEL SETUP //////////
-    // The coordinator kernel reads tiles from DRAM and multicasts them to all receiver cores.
-    KernelHandle coordinator_kernel_id = CreateKernel(
+    ////////// MCAST SENDER KERNEL SETUP //////////
+    // The mcast_sender kernel reads tiles from DRAM and multicasts them to all receiver cores.
+    KernelHandle mcast_sender_id = CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/dataflow/coordinator_kernel.cpp",
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/dataflow/mcast_sender.cpp",
         sender_core_logical,
-        DataMovementConfigCoordinator);
+        mcast_sender_config);
 
     ////////// DATAFLOW KERNELS SETUP //////////
-    // Inbound kernel: receives the multicast tiles on each receiver core.
-    KernelHandle inbound_kernel_id = CreateKernel(
+    // mcast_receiver kernel: receives the multicast tiles on each receiver core.
+    KernelHandle mcast_receiver_id = CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/dataflow/inbound_kernel.cpp",
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/dataflow/mcast_receiver.cpp",
         receiver_cores_logical,
-        DataMovementConfigIn);
+        mcast_receiver_config);
 
-    // Outbound kernel: writes the received tiles back to DRAM for verification.
-    KernelHandle outbound_kernel_id = CreateKernel(
+    // write_tiles kernel: writes the processed tiles back to DRAM.
+    KernelHandle write_tiles_id = CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/dataflow/outbound_kernel.cpp",
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/dataflow/write_tiles.cpp",
         receiver_cores_logical,
-        DataMovementConfigOut);
+        write_tiles_config);
 
     ////////// COMPUTE KERNEL SETUP //////////
-    // Compute kernel copies tiles from input CB to output CB.
+    // tiles_copy kernel copies tiles from input CB to output CB.
     // In a real application, this is where computation would happen.
     // n_tiles is passed as a compile-time argument for loop bounds.
-    vector<uint32_t> compute_compile_args = {n_tiles};
+    vector<uint32_t> tiles_copy_compile_args = {n_tiles};
     CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/compute/void_compute_kernel.cpp",
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/compute/tiles_copy.cpp",
         receiver_cores_logical,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
-            .compile_args = compute_compile_args});
+            .compile_args = tiles_copy_compile_args});
 
     ////////// RUNTIME ARGS SETUP //////////
 
-    // Args for the sender core to multicast tiles.
-    // They must have access to coordinates of all receiver cores to execute multicast operation.
+    // Args for the mcast_sender kernel to multicast tiles.
+    // It needs coordinates of all receiver cores to execute multicast operation.
     // Observe how SetRuntimeArgs, which is a host-level function, takes in logical coordinates,
     // but the runtime arguments passed to kernels use device coordinates.
     // This is because runtime arguments are used by kernels, which run on the device, and they need
     // to know the device coordinates of the cores.
     SetRuntimeArgs(
         prog_state.program,
-        coordinator_kernel_id,
+        mcast_sender_id,
         sender_core_logical,
         {static_cast<uint32_t>(receiver_cores_device.start_coord.x),
          static_cast<uint32_t>(receiver_cores_device.start_coord.y),
@@ -366,11 +366,11 @@ void multicast_tensor_tensix(
          n_tiles,
          num_dests});
 
-    // Args for the receiver cores to receive tiles.
-    // They must have access to coordinates of the sender core to listen for multicast operation.
+    // Args for the mcast_receiver kernel to receive tiles.
+    // It needs coordinates of the sender core to signal readiness for multicast.
     SetRuntimeArgs(
         prog_state.program,
-        inbound_kernel_id,
+        mcast_receiver_id,
         receiver_cores_logical,
         {static_cast<uint32_t>(sender_core_device.x),
          static_cast<uint32_t>(sender_core_device.y),
@@ -378,14 +378,14 @@ void multicast_tensor_tensix(
          tile_sent_semaphore,
          n_tiles});
 
-    // Args for the receiver cores to send tiles back to DRAM.
+    // Args for the write_tiles kernel to write tiles back to DRAM.
     // Each receiver writes to a different section of the output buffer.
     // receiver_idx determines the starting tile offset for each receiver.
     int receiver_idx = 0;
     for (const CoreCoord& core : receiver_cores_logical) {
         SetRuntimeArgs(
             prog_state.program,
-            outbound_kernel_id,
+            write_tiles_id,
             core,
             {dst_mesh_buffer->address(), n_tiles, static_cast<uint32_t>(receiver_idx)});
         receiver_idx++;

@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-// Coordinator kernel: reads tiles from DRAM and multicasts them to receiver cores.
+// Multicast sender kernel: reads tiles from DRAM and multicasts them to receiver cores.
 // This kernel runs on the sender core (e.g., logical core 0,0).
 // Uses double-buffering for improved performance.
 void kernel_main() {
