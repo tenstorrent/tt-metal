@@ -176,7 +176,7 @@ void kernel_main() {
     compute_kernel_lib::tilize<
         cb_in_rm,
         cb_in,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitOnly,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,  // should have unninit also
         compute_kernel_lib::tilize_config::WaitMode::NoWait>(per_core_N, per_core_M);
 #endif
     cb_wait_front(cb_in, per_core_MN);
