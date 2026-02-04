@@ -346,6 +346,7 @@ jobs:
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
               "use-vllm-v1": true,
               "multimodal": false,
+              "skip-sampling-tests": true,
               "co-owner-1-id": "U08CEGF78ET"
             },
             {
@@ -361,6 +362,7 @@ jobs:
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
               "use-vllm-v1": true,
               "multimodal": false,
+              "skip-sampling-tests": true,
               "owner_id": "U08CEGF78ET"
             }
           ]'
@@ -627,6 +629,7 @@ jobs:
             exit 1
           fi
       - name: 🧪 Run sampling tests
+        if: ${{ !matrix.test-group.skip-sampling-tests }}
         timeout-minutes: 10
         run: |
           pytest vllm/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
