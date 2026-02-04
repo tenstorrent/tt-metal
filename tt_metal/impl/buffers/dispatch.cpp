@@ -744,7 +744,6 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         if (write_sub_cmds.empty() && relay_sub_cmds.empty()) {
             return;
         }
-        
         // Calculate total relay length for the command
         uint32_t total_relay_length = 0;
         for (const auto& relay_sub_cmd : relay_sub_cmds) {
@@ -1166,7 +1165,7 @@ bool write_to_device_buffer(
     }
     if (is_sharded(buffer.buffer_layout())) {
         // Check alignment for sharded buffer pinned transfer
-        if (has_pinned_inputs && is_unpadded && !use_pinned_transfer) {
+        if (has_pinned_inputs && is_unpadded) {
             auto device_id = buffer.device()->id();
             auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
             if (noc_addr_pair_opt.has_value() and noc_addr_pair_opt->device_id == device_id) {
