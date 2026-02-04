@@ -5,13 +5,12 @@
 #pragma once
 
 #include <type_traits>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "worker_edm_utils.hpp"
-#include "tt_metal/hw/inc/ethernet/dataflow_api.h"
-
+#include "internal/ethernet/dataflow_api.h"
 namespace ccl {
 namespace edm {
 

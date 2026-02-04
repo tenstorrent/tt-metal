@@ -6,7 +6,7 @@
 
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
 #include <atomic>
@@ -34,6 +34,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "impl/allocator/allocator.hpp"
+#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -52,7 +53,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
 
     for (const auto& trace_md : mesh_trace_md) {
         const auto& sysmem_mgr_coord = trace_md.sysmem_manager_coord;
-        auto& sysmem_manager = mesh_device->get_device(sysmem_mgr_coord)->sysmem_manager();
+        auto& sysmem_manager = mesh_device->impl().get_device(sysmem_mgr_coord)->sysmem_manager();
         auto trace_data_word_offset = trace_md.offset / sizeof(uint32_t);
         auto trace_data_size_words = trace_md.size / sizeof(uint32_t);
         auto& bypass_data = sysmem_manager.get_bypass_data();
@@ -181,7 +182,7 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     std::unordered_map<MeshCoordinateRange, uint32_t> write_offset_per_device_range = {};
     for (auto& mesh_trace_data : trace_buffer->desc->ordered_trace_data) {
         auto& device_range = mesh_trace_data.device_range;
-        if (write_offset_per_device_range.find(device_range) == write_offset_per_device_range.end()) {
+        if (!write_offset_per_device_range.contains(device_range)) {
             write_offset_per_device_range.insert({device_range, 0});
         }
         std::vector<uint32_t> write_data = mesh_trace_data.data;

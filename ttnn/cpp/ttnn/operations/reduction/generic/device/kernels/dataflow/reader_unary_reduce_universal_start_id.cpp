@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #ifndef REDUCE_ROW_SUM_VIA_MM
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #else
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
+#include "ttnn/kernel/dataflow/generate_mm_scaler.hpp"
 #endif
 
 void kernel_main() {

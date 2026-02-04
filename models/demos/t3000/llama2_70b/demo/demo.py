@@ -436,7 +436,7 @@ def test_LlamaModel_demo(
     temperature,
     chat,
     # TT args
-    t3k_mesh_device,
+    mesh_device,
     n_devices,
     decode_only,
     trace_mode,
@@ -452,7 +452,7 @@ def test_LlamaModel_demo(
         llama_version=llama_version,
     )
 
-    check_mesh_device(t3k_mesh_device, model_config)
+    check_mesh_device(mesh_device, model_config)
 
     args = construct_arg(
         implementation=implementation,
@@ -470,7 +470,7 @@ def test_LlamaModel_demo(
         top_k=top_k,
         temperature=temperature,
         chat=chat,
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         n_devices=n_devices,
         cache_path=cache_path,
         decode_only=decode_only,

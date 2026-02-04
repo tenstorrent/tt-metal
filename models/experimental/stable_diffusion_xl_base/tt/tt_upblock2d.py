@@ -9,9 +9,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_upsample2d import TtUpsa
 
 
 class TtUpBlock2D(LightweightModule):
-    def __init__(
-        self, device, state_dict, module_path, model_config, debug_mode=False, dram_groupnorm=False, has_upsample=False
-    ):
+    def __init__(self, device, state_dict, module_path, model_config, debug_mode=False, has_upsample=False):
         super().__init__()
 
         num_layers = 3
@@ -26,8 +24,6 @@ class TtUpBlock2D(LightweightModule):
                     model_config,
                     conv_shortcut=True,
                     debug_mode=debug_mode,
-                    use_negative_mask="up_blocks.0" not in module_path,
-                    dram_groupnorm=dram_groupnorm and i == 0,
                 )
             )
 

@@ -46,7 +46,14 @@ def close_device(device: "ttnn.device.Device"):
         Closing device 0
 
     """
-    synchronize_device(device)
+    # Try to synchronize first, but don't let failures prevent device close.
+    # If synchronize fails (e.g., due to device timeout/hang), we still need
+    # to close the device to release handles and allow subsequent operations.
+    try:
+        synchronize_device(device)
+    except Exception:
+        logger.exception("close_device: synchronize_device failed. Continuing with device close.")
+
     ttnn._ttnn.device.close_device(device)
 
 
@@ -200,8 +207,7 @@ def ReadDeviceProfiler(device):
 
 
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices
-EnablePersistentKernelCache = ttnn._ttnn.device.EnablePersistentKernelCache
-DisablePersistentKernelCache = ttnn._ttnn.device.DisablePersistentKernelCache
+ClearKernelCache = ttnn._ttnn.device.ClearKernelCache
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers

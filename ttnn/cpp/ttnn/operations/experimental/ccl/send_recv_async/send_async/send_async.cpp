@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include <tt-metalium/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_async/device/send_async_op_device_operation.hpp"
 
 namespace ttnn::operations::experimental::ccl {

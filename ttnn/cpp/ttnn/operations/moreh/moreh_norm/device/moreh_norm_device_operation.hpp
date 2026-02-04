@@ -60,22 +60,19 @@ struct MorehNormOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        float p,
-        int64_t dim,
-        bool keepdim,
-        const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_norm
 
 namespace ttnn::prim {
-constexpr auto moreh_norm =
-    ttnn::register_operation<"ttnn::prim::moreh_norm", ttnn::operations::moreh::moreh_norm::MorehNormOperation>();
-}
+ttnn::operations::moreh::moreh_norm::MorehNormOperation::tensor_return_value_t moreh_norm(
+    const Tensor& input,
+    float p,
+    int64_t dim,
+    bool keepdim,
+    const std::optional<Tensor>& output,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+}  // namespace ttnn::prim
 
 #undef DEFINE_PROGRAM_FACTORY

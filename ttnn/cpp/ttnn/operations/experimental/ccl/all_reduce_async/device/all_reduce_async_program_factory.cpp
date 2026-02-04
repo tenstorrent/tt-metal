@@ -10,7 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -82,13 +82,15 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
     return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }
 
-namespace operations::experimental::ccl::all_reduce_async {
+}  // namespace ttnn
+
+namespace ttnn::experimental::prim {
 
 AllReduceAsyncMeshWorkloadFactory::cached_mesh_workload_t AllReduceAsyncMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+    const AllReduceAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const AllReduceAsyncInputs& tensor_args,
+    Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& coord : tensor_coords.coords()) {
@@ -100,10 +102,10 @@ AllReduceAsyncMeshWorkloadFactory::cached_mesh_workload_t AllReduceAsyncMeshWork
 }
 
 AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+    const AllReduceAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& coord,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const AllReduceAsyncInputs& tensor_args,
+    Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& buffer_tensor = tensor_args.buffer_tensor;
 
@@ -178,8 +180,21 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     const auto num_input_cores = input_tensor_cores.num_cores();
     const auto output_tensor_num_pages = output_tensor.buffer()->num_pages();
     // Get only cores that have actual data
+    const auto& output_tensor_original_corerangeset = output_tensor.memory_config().shard_spec()->grid;
     const auto& cores_with_data = output_tensor.buffer()->buffer_distribution_spec()->cores_with_data();
-    const auto output_tensor_cores = CoreRangeSet(cores_with_data);
+
+    // filter output_tensor_cores to only include cores that have data and preserve original order
+    CoreRangeSet output_tensor_cores;
+    if (cores_with_data.size() == output_tensor_original_corerangeset.num_cores()) {
+        output_tensor_cores = output_tensor_original_corerangeset;
+    } else {
+        std::vector<CoreRange> output_core_ranges;
+        output_core_ranges.reserve(cores_with_data.size());
+        for (const auto& coord : cores_with_data) {
+            output_core_ranges.emplace_back(coord, coord);
+        }
+        output_tensor_cores = CoreRangeSet(output_core_ranges);
+    }
     const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec()->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
     const auto num_output_cores = output_tensor_cores.num_cores();
@@ -581,9 +596,9 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
 
 void AllReduceAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    const AllReduceAsyncParams& operation_attributes,
+    const AllReduceAsyncInputs& tensor_args,
+    Tensor& output_tensor) {
     // Update runtime arguments for each program in the mesh workload
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
@@ -618,6 +633,4 @@ void AllReduceAsyncMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace operations::experimental::ccl::all_reduce_async
-
-}  // namespace ttnn
+}  // namespace ttnn::experimental::prim

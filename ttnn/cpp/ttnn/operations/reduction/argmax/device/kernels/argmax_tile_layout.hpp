@@ -5,8 +5,8 @@
 
 #include "argmax_common.hpp"
 #include "tt-metalium/constants.hpp"
-#include "debug/assert.h"
-#include "debug/waypoint.h"
+#include "api/debug/assert.h"
+#include "api/debug/waypoint.h"
 
 constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
 constexpr uint32_t face_height = tt::constants::FACE_HEIGHT;

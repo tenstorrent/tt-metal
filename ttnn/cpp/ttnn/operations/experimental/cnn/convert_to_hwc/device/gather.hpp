@@ -10,7 +10,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail {
+namespace ttnn::experimental::prim {
 
 /**
  * @brief High-level transfer representation with semantic information
@@ -334,29 +334,23 @@ inline std::vector<uint32_t> serialize_blocked_transfer_groups(
     return output;
 }
 
-}  // namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail
+}  // namespace ttnn::experimental::prim
 
 // fmt formatter template specializations for pretty printing
 template <>
-struct fmt::formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::GatherTransfer>
-    : formatter<string_view> {
-    auto format(
-        const ttnn::operations::experimental::cnn::convert_to_hwc::detail::GatherTransfer& t,
-        fmt::format_context& ctx) const -> format_context::iterator;
+struct fmt::formatter<ttnn::experimental::prim::GatherTransfer> : formatter<string_view> {
+    auto format(const ttnn::experimental::prim::GatherTransfer& t, fmt::format_context& ctx) const
+        -> format_context::iterator;
 };
 
 template <>
-struct fmt::formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::LowLevelGatherTransfer>
-    : formatter<string_view> {
-    auto format(
-        const ttnn::operations::experimental::cnn::convert_to_hwc::detail::LowLevelGatherTransfer& t,
-        fmt::format_context& ctx) const -> format_context::iterator;
+struct fmt::formatter<ttnn::experimental::prim::LowLevelGatherTransfer> : formatter<string_view> {
+    auto format(const ttnn::experimental::prim::LowLevelGatherTransfer& t, fmt::format_context& ctx) const
+        -> format_context::iterator;
 };
 
 template <>
-struct fmt::formatter<ttnn::operations::experimental::cnn::convert_to_hwc::detail::BlockedTransferGroup>
-    : formatter<string_view> {
-    auto format(
-        const ttnn::operations::experimental::cnn::convert_to_hwc::detail::BlockedTransferGroup& t,
-        fmt::format_context& ctx) const -> format_context::iterator;
+struct fmt::formatter<ttnn::experimental::prim::BlockedTransferGroup> : formatter<string_view> {
+    auto format(const ttnn::experimental::prim::BlockedTransferGroup& t, fmt::format_context& ctx) const
+        -> format_context::iterator;
 };

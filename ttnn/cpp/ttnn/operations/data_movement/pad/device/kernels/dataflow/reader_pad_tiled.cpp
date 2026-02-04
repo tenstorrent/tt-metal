@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include <algorithm>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
 
 void kernel_main() {

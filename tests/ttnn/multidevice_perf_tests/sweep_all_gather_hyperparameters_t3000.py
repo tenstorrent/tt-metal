@@ -85,7 +85,7 @@ TOPOLOGY = ["ring", "linear"]
     ids=WORKERS_PER_LINK_IDS,
 )
 def test_all_gather_chunks_per_sync(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -106,7 +106,7 @@ def test_all_gather_chunks_per_sync(
     logger.info(f"Running with chunks_per_sync: {chunks_per_sync}")
 
     run_all_gather_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         ag_output_shape,
         dim,

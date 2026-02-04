@@ -10,6 +10,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+pytestmark = pytest.mark.use_module_device
+
 
 def run_relational_test(device, h, w, ttnn_function, pcc=0.9999):
     torch.manual_seed(0)

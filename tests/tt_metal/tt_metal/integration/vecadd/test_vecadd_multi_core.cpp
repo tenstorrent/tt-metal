@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stddef.h>
+#include <cstddef>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <cstdint>
@@ -32,10 +32,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
-
-namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -73,7 +69,7 @@ CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBI
 namespace unit_tests_common::vecadd::test_vecadd_multi_core {
 
 bool vecadd_multi_core(
-    MeshDispatchFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles) {
+    MeshDispatchFixture* /*fixture*/, const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t n_tiles) {
     const uint32_t num_core = 4;
     TT_FATAL(n_tiles >= num_core, "Parameter mismatch {} {}", n_tiles, num_core);
 

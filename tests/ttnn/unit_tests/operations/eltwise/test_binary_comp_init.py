@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,
 )
@@ -116,7 +116,7 @@ def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function
 )
 @pytest.mark.parametrize(
     "scalar",
-    {2.3, 15.6, 55.4, 72.5, 120.6},
+    (2.3, 15.6, 55.4, 72.5, 120.6),
 )
 @pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16))
 @pytest.mark.parametrize(

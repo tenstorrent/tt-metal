@@ -8,6 +8,8 @@ import ttnn
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
 
+pytestmark = pytest.mark.use_module_device
+
 
 def test_sub_fp32(device):
     x_torch = torch.tensor([[1]], dtype=torch.float32)

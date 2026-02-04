@@ -173,11 +173,14 @@ tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::creat
 
 tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
     const std::vector<Tensor>& input_tensors) const {
-    log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = input_tensors[0].padded_shape();
-    auto input_memory_layout = input_tensors[0].layout();
-    auto input_dtype = input_tensors[0].dtype();
-    auto input_memory_config = input_tensors[0].memory_config();
+    log_trace(tt::LogOp, "RingAttentionAllGatherAsync::compute_program_hash is called");
+
+    const ttnn::Tensor& input_tensor = input_tensors[0];
+
+    auto subdevice_id = this->sub_device_id;
+    auto* mesh_device = input_tensor.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     return tt::tt_metal::operation::hash_operation<RingAttentionAllGatherAsync>(
         this->dim,
@@ -186,15 +189,8 @@ tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
-        this->sub_device_id.has_value(),
-        this->sub_device_id.has_value()
-            ? input_tensors[0].device()->worker_cores(
-                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
-            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+        subdevice_core_range_set,
+        input_tensor);
 }
 
 namespace operations::experimental::ccl {
@@ -229,8 +225,8 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
 
     std::vector<std::optional<Tensor>> optional_output_tensors;
     optional_output_tensors.reserve(persistent_output_buffer.size());
-    for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
-        optional_output_tensors.push_back(persistent_output_buffer[i]);
+    for (const auto& buffer : persistent_output_buffer) {
+        optional_output_tensors.push_back(buffer);
     }
 
     return tt::tt_metal::operation::run(

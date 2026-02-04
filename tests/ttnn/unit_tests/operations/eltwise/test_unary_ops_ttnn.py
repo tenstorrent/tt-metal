@@ -6,12 +6,14 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,
     compare_pcc,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
+
+pytestmark = pytest.mark.use_module_device
 
 
 @pytest.mark.parametrize(
@@ -970,7 +972,7 @@ def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
 )
 @pytest.mark.parametrize(
     "param",
-    {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9, float("inf"), float("-inf"), float("nan")},
+    (-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9, float("-inf"), float("inf"), float("nan")),
 )
 def test_unary_celu(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)

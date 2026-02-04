@@ -75,7 +75,7 @@ struct ReduceToRootOp {
             std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
 
         static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_program,
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -101,35 +101,6 @@ struct ReduceToRootOp {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_l,
-        const Tensor& input_tensor_s,
-        const Tensor& input_tensor_m,
-        const tt::tt_fabric::Topology& topology,
-        const MeshCoordinate& root_coord,
-        float scale_fp32,
-        const std::optional<Tensor>& optional_output_tensor_l = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor_s = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor_m = std::nullopt,
-        const std::optional<Tensor>& optional_intermediate_tensor = std::nullopt,
-        const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt) {
-        return std::make_tuple(
-            operation_attributes_t{
-                root_coord,
-                scale_fp32,
-                topology,
-                input_mux_cores,
-                {input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()}},
-            tensor_args_t{
-                input_tensor_l,
-                input_tensor_s,
-                input_tensor_m,
-                optional_output_tensor_l,
-                optional_output_tensor_s,
-                optional_output_tensor_m,
-                optional_intermediate_tensor});
-    };
-
 private:
     static void validate(const operation_attributes_t&, const tensor_args_t&);
 };
@@ -147,7 +118,17 @@ device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_variables_t
 }  // namespace operations::ccl
 
 namespace prim {
-constexpr auto reduce_to_root =
-    ttnn::register_operation<"ttnn::prim::reduce_to_root", ttnn::operations::ccl::ReduceToRootOp>();
+ttnn::operations::ccl::ReduceToRootOp::tensor_return_value_t reduce_to_root(
+    const Tensor& input_tensor_l,
+    const Tensor& input_tensor_s,
+    const Tensor& input_tensor_m,
+    const tt::tt_fabric::Topology& topology,
+    const MeshCoordinate& root_coord,
+    float scale_fp32,
+    const std::optional<Tensor>& optional_output_tensor_l = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor_s = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor_m = std::nullopt,
+    const std::optional<Tensor>& optional_intermediate_tensor = std::nullopt,
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt);
 }  // namespace prim
 }  // namespace ttnn

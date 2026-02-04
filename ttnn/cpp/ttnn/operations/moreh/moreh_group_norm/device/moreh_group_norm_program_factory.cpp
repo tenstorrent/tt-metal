@@ -69,9 +69,14 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
 
     const auto num_channels = c;
     const auto num_rows = n * num_groups;
+    TT_FATAL(
+        num_channels % num_groups == 0,
+        "Group norm requires num_channels ({}) to be divisible by num_groups ({})",
+        num_channels,
+        num_groups);
     const auto num_inner_tiles = (num_channels / num_groups) * Ht * Wt;
 
-    const auto f_c = static_cast<float>(num_channels / num_groups);
+    const auto f_c = static_cast<float>(num_channels) / static_cast<float>(num_groups);
     const auto f_ht = static_cast<float>(origin_h) / static_cast<float>(TILE_HEIGHT);
     const auto f_wt = static_cast<float>(origin_w) / static_cast<float>(TILE_WIDTH);
     auto scaler = 1.0f / (static_cast<float>(TILE_WIDTH) * sqrt(f_c * f_ht * f_wt));
@@ -308,7 +313,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
 
 void MorehGroupNormOperation::MorehGroupNormFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto* input_buffer = tensor_args.input.buffer();

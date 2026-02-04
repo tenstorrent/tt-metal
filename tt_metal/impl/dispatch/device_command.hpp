@@ -56,7 +56,9 @@ public:
 
     void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
 
-    void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint32_t addr);
+    void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, DeviceAddr addr);
+
+    void add_prefetch_relay_linear_h(uint32_t noc_xy_addr, DeviceAddr lengthB, DeviceAddr addr);
 
     void add_prefetch_relay_paged(
         uint8_t is_dram,
@@ -88,10 +90,20 @@ public:
         const void* data = nullptr,
         uint32_t write_offset_index = 0);
 
+    // Like add_dispatch_write_linear, but emits CQ_DISPATCH_CMD_WRITE_LINEAR_H (dispatch_h variant).
+    template <bool flush_prefetch = true, bool inline_data = false>
+    void add_dispatch_write_linear_h(
+        uint8_t num_mcast_dests,
+        uint32_t noc_xy_addr,
+        DeviceAddr addr,
+        DeviceAddr data_sizeB,
+        const void* data = nullptr,
+        uint32_t write_offset_index = 0);
+
     void add_dispatch_go_signal_mcast(
         uint32_t wait_count,
         uint32_t go_signal,
-        uint32_t wait_addr,
+        uint32_t wait_stream,
         uint8_t multicast_go_offset,
         uint8_t num_unicast_txns,
         uint8_t noc_data_start_index,

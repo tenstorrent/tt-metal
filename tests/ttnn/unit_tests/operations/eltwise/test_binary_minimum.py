@@ -5,8 +5,10 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+pytestmark = pytest.mark.use_module_device
 
 
 @pytest.mark.parametrize(
@@ -19,7 +21,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "low_a, high_a, low_b, high_b",
     [
-        (-2147483647, 2147483647, -21474, 21474),
+        (-2147483648, 2147483647, -21474, 21474),
     ],
 )
 def test_binary_min_int32(input_shapes, low_a, high_a, low_b, high_b, device):
@@ -60,7 +62,7 @@ def test_binary_min_int32(input_shapes, low_a, high_a, low_b, high_b, device):
     "input_a_val, input_b_val",
     [
         (-1, 1),
-        (2147483647, -2147483647),
+        (2147483647, -2147483648),
         (11, 53),
     ],
 )
@@ -104,7 +106,7 @@ def test_binary_min_fill_val_int32(input_shapes, input_a_val, input_b_val, devic
     "low_a, high_a, low_b, high_b",
     [
         (-100, 100, -300, 300),
-        (-2147483647, 2147483647, -21474, 21474),
+        (-2147483648, 2147483647, -21474, 21474),
     ],
 )
 def test_binary_min_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_b, high_b, device):
@@ -150,7 +152,7 @@ def test_binary_min_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
     "low_a, high_a, low_b, high_b",
     [
         (-100, 100, -300, 300),
-        (-2147483647, 2147483647, -21474, 21474),
+        (-2147483648, 2147483647, -21474, 21474),
     ],
 )
 def test_binary_min_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device):

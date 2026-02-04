@@ -5,6 +5,7 @@
 
 #include <any>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <typeindex>
@@ -27,11 +28,20 @@ private:
     template <typename T, std::size_t N>
     void register_small_vector();
 
+    template <typename T, std::size_t N>
+    void register_array();
+
+    template <typename T>
+    void register_vector();
+
     template <typename T>
     void register_type();
 
     template <typename OptionalT>
     void register_optional_type();
+
+    template <typename T>
+    void register_optional_reference_type();
 
     void initialize();
 

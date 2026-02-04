@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"  // required in all kernels using DPRINT
-#include "dataflow_api.h"
+#include "api/debug/dprint.h"  // required in all kernels using DPRINT
+#include "api/dataflow/dataflow_api.h"
 
 // Ensure this is set: export TT_METAL_DPRINT_CORES='(0,0)-(3,0)'
 void kernel_main() {

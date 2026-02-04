@@ -10,11 +10,14 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using ttnn::operations::data_movement::float_to_uint16;
+using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
-namespace ttnn::operations::data_movement::transpose::program {
+namespace ttnn::prim {
 
 namespace {
 
@@ -24,7 +27,8 @@ void set_runtime_args_hc_tiled_interleaved(
     KernelHandle writer_kernel_id,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    bool is_create) {
+    bool is_create,
+    const CoreRange& total_cores) {
     auto* input_buffer = input_tensor.buffer();
     auto* output_buffer = output_tensor.buffer();
 
@@ -55,7 +59,8 @@ void set_runtime_args_hc_tiled_interleaved(
 
     uint32_t start_idx = 0;
     uint32_t padded_start_idx = 0;
-    for (const auto& core : cores) {
+    // Need to set runtime args for all cores, not just the ones doing work.
+    for (const auto& core : total_cores) {
         uint32_t num_tiles_per_core;
         uint32_t padded_tiles_per_core;
 
@@ -100,12 +105,10 @@ void set_runtime_args_hc_tiled_interleaved(
 }  // namespace
 
 TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInterleavedProgramFactory::create(
-    const transpose::operation_attributes_t& operation_attributes,
-    const transpose::tensor_args_t& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
-    auto& output_tensor = tensor_return_value;
-    const auto& pad_value = operation_attributes.pad_value;
+    // pad_value is always defined at API level; padding is decided purely by shape
+    const float pad_value = operation_attributes.pad_value;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
@@ -115,7 +118,7 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
     uint32_t C = input_tensor.logical_shape()[1];
-    bool needs_padding = (C % tile_shape[1] != 0) && pad_value.has_value();
+    bool needs_padding = (C % tile_shape[1] != 0);
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -131,11 +134,11 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     CircularBufferConfig cb_src0_config = CircularBufferConfig(2 * single_tile_size, {{src0_cb_index, cb_data_format}})
                                               .set_page_size(src0_cb_index, single_tile_size);
     CreateCircularBuffer(program, total_cores, cb_src0_config);
-
+    auto max_padding_write = face_shape[0] * face_shape[1];
     if (needs_padding) {
         CircularBufferConfig cb_src1_config =
-            CircularBufferConfig(face_shape[1] * input_tensor.element_size(), {{padding_cb_index, cb_data_format}})
-                .set_page_size(padding_cb_index, face_shape[1] * input_tensor.element_size());
+            CircularBufferConfig(max_padding_write * input_tensor.element_size(), {{padding_cb_index, cb_data_format}})
+                .set_page_size(padding_cb_index, max_padding_write * input_tensor.element_size());
         CreateCircularBuffer(program, total_cores, cb_src1_config);
     }
 
@@ -145,17 +148,26 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     uint32_t num_writes = 0;
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
 
-    if (pad_value.has_value() && C % tile_shape[1] != 0) {
+    if (C % tile_shape[1] != 0) {
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
-        num_writes = face_shape[1] / num_packed_values;
-        if (input_tensor.dtype() == DataType::BFLOAT16) {
-            padding_val_packed =
-                pack_two_bfloat16_into_uint32({bfloat16(pad_value.value()), bfloat16(pad_value.value())});
-        } else if (num_packed_values == 2) {
-            padding_val_packed =
-                static_cast<uint32_t>(pad_value.value()) | (static_cast<uint32_t>(pad_value.value()) << 16);
-        } else {
-            padding_val_packed = std::bit_cast<uint32_t>(pad_value.value());
+        num_writes = max_padding_write / num_packed_values;
+        switch (input_tensor.dtype()) {
+            case DataType::INT32:
+            case DataType::UINT32: padding_val_packed = pad_value; break;
+            case DataType::BFLOAT16:
+                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
+                break;
+            case DataType::UINT16:
+                padding_val_packed =
+                    pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+                break;
+            case DataType::FLOAT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
+            default:
+                padding_val_packed = 0;
+                TT_ASSERT(
+                    false,
+                    "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
+                    "FLOAT32");
         }
     }
 
@@ -202,26 +214,31 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
         WriterDataMovementConfig(writer_compile_time_args));
 
     set_runtime_args_hc_tiled_interleaved(
-        program, reader_kernel_id, writer_kernel_id, input_tensor, output_tensor, true);
+        program, reader_kernel_id, writer_kernel_id, input_tensor, output_tensor, true, total_cores);
 
     return {std::move(program), {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id}};
 }
 
 void TransposeHCTiledInterleavedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const transpose::operation_attributes_t& operation_attributes,
-    const transpose::tensor_args_t& tensor_args,
-    transpose::tensor_return_value_t& tensor_return_value) {
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
+    auto compute_with_storage_grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     set_runtime_args_hc_tiled_interleaved(
         program,
         shared_variables.reader_kernel_id,
         shared_variables.writer_kernel_id,
         tensor_args.input,
-        tensor_return_value,
-        false);
+        output_tensor,
+        false,
+        total_cores);
 }
 
-}  // namespace ttnn::operations::data_movement::transpose::program
+}  // namespace ttnn::prim

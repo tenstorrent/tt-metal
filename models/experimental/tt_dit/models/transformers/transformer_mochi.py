@@ -625,19 +625,19 @@ class MochiTransformer3DModel:
         self.pos_frequencies.data = torch.load(cache_dict["pos_frequencies"])
         self.rope.load_state_dict(torch.load(cache_dict["rope"]))
 
-    def load_state_dict(self, state_dict):
-        self.patch_embed.load_state_dict(substate(state_dict, "patch_embed"))
+    def load_torch_state_dict(self, state_dict):
+        self.patch_embed.load_torch_state_dict(substate(state_dict, "patch_embed"))
         self.time_embed.load_state_dict(substate(state_dict, "time_embed"))
         self.pos_frequencies.data = state_dict["pos_frequencies"]
         for i, block in enumerate(self.transformer_blocks):
             block.load_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
-        self.norm_out_norm.load_state_dict(substate(state_dict, "norm_out.norm"))
-        self.norm_out_linear.load_state_dict(substate(state_dict, "norm_out.linear"))
-        self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
+        self.norm_out_norm.load_torch_state_dict(substate(state_dict, "norm_out.norm"))
+        self.norm_out_linear.load_torch_state_dict(substate(state_dict, "norm_out.linear"))
+        self.proj_out.load_torch_state_dict(substate(state_dict, "proj_out"))
 
         identity_tensor = torch.eye(self.inner_dim)
         identity_state = {"weight": identity_tensor}
-        self.fracture_spatial_input.load_state_dict(identity_state)
+        self.fracture_spatial_input.load_torch_state_dict(identity_state)
 
     def prepare_rope_features(self, T, H, W):
         pH, pW = H // self.patch_size, W // self.patch_size
@@ -648,10 +648,10 @@ class MochiTransformer3DModel:
         )
 
         rope_cos_1HND = pad_vision_seq_parallel(
-            rope_cos_1HND, chunk_size_lcm=512, num_devices=self.parallel_config.sequence_parallel.factor
+            rope_cos_1HND, num_devices=self.parallel_config.sequence_parallel.factor
         )
         rope_sin_1HND = pad_vision_seq_parallel(
-            rope_sin_1HND, chunk_size_lcm=512, num_devices=self.parallel_config.sequence_parallel.factor
+            rope_sin_1HND, num_devices=self.parallel_config.sequence_parallel.factor
         )
 
         trans_mat = get_rot_transformation_mat()
@@ -718,9 +718,7 @@ class MochiTransformer3DModel:
         spatial = spatial.reshape(B, C, T, pH, self.patch_size, pW, self.patch_size)
         spatial = spatial.permute(0, 2, 3, 5, 4, 6, 1).reshape(1, B, N, self.patch_size * self.patch_size * C)
         logger.info(f"spatial input after patchifying: {spatial.shape}")
-        spatial = pad_vision_seq_parallel(
-            spatial, chunk_size_lcm=512, num_devices=self.parallel_config.sequence_parallel.factor
-        )
+        spatial = pad_vision_seq_parallel(spatial, num_devices=self.parallel_config.sequence_parallel.factor)
         logger.info(f"spatial input after padding: {spatial.shape}")
         spatial = bf16_tensor(
             spatial, device=self.mesh_device, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis, shard_dim=-2

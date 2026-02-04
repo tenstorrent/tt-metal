@@ -5,8 +5,9 @@
 #include <mesh_buffer.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
+#include "tt_metal/experimental/dataflow_buffer/dataflow_buffer.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <functional>
@@ -98,6 +99,8 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
     program.impl().compile(mesh_device);
     program.impl().allocate_circular_buffers(mesh_device);
     program.impl().validate_circular_buffer_region(mesh_device);
+    program.impl().allocate_dataflow_buffers(mesh_device);
+    program.impl().validate_dataflow_buffer_region(mesh_device);
 }
 
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
@@ -126,7 +129,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
     auto* mesh_device = mesh_cq.device();
     if (!program_binary_status_.empty()) {
         TT_FATAL(
-            program_binary_status_.find(mesh_device->id()) != program_binary_status_.end(),
+            program_binary_status_.contains(mesh_device->id()),
             "Reusing MeshWorkloads across MeshDevices is currently not supported.");
         TT_FATAL(
             program_binary_status_.at(mesh_device->id()) == ProgramBinaryStatus::Committed,
@@ -187,7 +190,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
 }
 
 ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh_id) const {
-    if (program_binary_status_.find(mesh_id) != program_binary_status_.end()) {
+    if (program_binary_status_.contains(mesh_id)) {
         return program_binary_status_.at(mesh_id);
     }
     return ProgramBinaryStatus::NotSent;
@@ -405,6 +408,14 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         return this->semaphores();
     };
 
+    // TODO: Add dataflow buffer support to MeshWorkload
+    static const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
+        empty_dataflow_buffers;
+    tt::tt_metal::detail::DataflowBuffersGetter dataflow_buffers_getter =
+        []() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
+        return empty_dataflow_buffers;
+    };
+
     // Create a span with all programs
     std::vector<tt::tt_metal::detail::ProgramImpl*> program_impls;
     program_impls.reserve(programs_.size());
@@ -414,7 +425,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
-        mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+        mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, dataflow_buffers_getter, programs);
 
     set_finalized();
 }

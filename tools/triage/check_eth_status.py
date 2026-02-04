@@ -8,16 +8,21 @@ Usage:
     check_eth_status.py
 
 Description:
-    Check status on the ethernet cores
+    This script checks the link is up and there are no retrain counts on active ethernet cores.
+    An ethernet core is considered active if the port status is up.
+    A link being down or high retrain counts may indicate the eth connection is unstable.
+
+Owner:
+    nhuang-tt
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from run_checks import run as get_run_checks
 from triage import ScriptConfig, triage_field, log_check_location, run_script
+from ttexalens import read_word_from_device
 from ttexalens.context import Context
 from ttexalens.device import Device, OnChipCoordinate
-from ttexalens.register_store import read_word_from_device
 import utils
 
 script_config = ScriptConfig(
@@ -100,6 +105,10 @@ class EthCore(ABC):
             else:
                 output.port_status = port_status_str
             log_check_location(self.location, port_status_str != "Down", "port is down")
+
+        # if the port is unused the rest of these checks are not relevant
+        if output.port_status in ("Unused", "Unknown", "Undefined", None):
+            return output
 
         # RETRAIN COUNT
         output.retrain_count = int(

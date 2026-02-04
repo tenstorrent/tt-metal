@@ -24,7 +24,7 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
-    return ttnn::prim::all_gather_concat(
+    return ttnn::experimental::prim::all_gather_concat(
         input_tensor,
         buffer_tensor,
         dim,

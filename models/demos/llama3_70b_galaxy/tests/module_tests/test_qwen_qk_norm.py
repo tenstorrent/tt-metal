@@ -51,6 +51,7 @@ def test_qwen3_tg_qk_norm(
         mesh_device,
         n_tensors=2,
         n_layers=1,
+        is_qwen=True,
     )
     mesh_device.set_sub_device_stall_group(
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]

@@ -93,7 +93,7 @@ void RunTest(
         fixture->RunProgram(mesh_device, workload);
 
         // Check the print log against golden output.
-        EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
+        EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 
         // Clear the log file for the next core's test
         MetalContext::instance().dprint_server()->clear_log_file();

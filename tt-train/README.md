@@ -19,17 +19,32 @@ source ./init_repo.sh
 # Building the project:
 You have two options for building the project:
 
+## Compiler Selection
+By default, the project uses `clang-20` (via `CC`/`CXX` environment variables). You can override the compiler using standard CMake environment variables:
+
+```bash
+# Use standard CC/CXX environment variables
+CC=gcc-12 CXX=g++-12 cmake -B build -GNinja
+
+# Or specify compilers directly via CMake cache variables
+cmake -DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12 -B build -GNinja
+```
+
+For more information on compiler selection, see:
+- https://cmake.org/cmake/help/latest/envvar/CC.html
+- https://cmake.org/cmake/help/latest/envvar/CXX.html
+
 ## 1. VSCode
 * Install the [CMake](https://marketplace.visualstudio.com/items?itemName=twxs.cmake) and [direnv](https://marketplace.visualstudio.com/items?itemName=mkhl.direnv) extensions for VSCode.
 * Use UI to build all targets.
 
 ## 2. Terminal
-### Debug
+#### Debug
 ```
 cmake -DCMAKE_BUILD_TYPE=Debug -B build -GNinja
 cmake --build build --config Debug --clean-first
 ```
-### Release
+#### Release
 ```
 cmake -DCMAKE_BUILD_TYPE=Release -B build -GNinja
 cmake --build build --config Release --clean-first
@@ -75,6 +90,8 @@ To run it in github please search for `Nightly tt-metal L2 tests`.
 ### wandb support
 If you don't have an account to wandb (or don't want to use it), use `-w 0` argument or run `wandb offline` beforehand (creates `wandb/settings` file)
 
+### GPU baseline
+[This repository](https://github.com/philei-tt/tt-train_nanoGPT-gpu-baseline) can be used to compare speed and accuracy to GPU implementation of nanoGPT and gpt2s
 
 # Profiler
 Use of profiler requires additional setup. Follow instructions [here](./docs/PROFILER.md).

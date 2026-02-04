@@ -5,7 +5,7 @@
 #include "tt_elffile.hpp"
 
 #include <elf.h>
-#include <errno.h>
+#include <cerrno>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>

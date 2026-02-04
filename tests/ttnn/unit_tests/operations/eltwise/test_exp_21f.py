@@ -8,6 +8,8 @@ import ttnn
 import numpy as np
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
+pytestmark = pytest.mark.use_module_device
+
 
 def test_exp_arange_masking(device):
     # Exp Working range - Overflow from 88.5(inf), Underflow till -87(<0)

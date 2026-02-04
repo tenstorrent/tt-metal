@@ -10,14 +10,14 @@
 #include "copy_device_operation_types.hpp"
 #include "copy_program_factory.hpp"
 
-namespace ttnn::operations::data_movement::copy {
+namespace ttnn::prim {
 
 struct CopyDeviceOperation {
-    using operation_attributes_t = copy::operation_attributes_t;
-    using tensor_args_t = copy::tensor_args_t;
-    using spec_return_value_t = copy::spec_return_value_t;
-    using tensor_return_value_t = copy::tensor_return_value_t;
-    using program_factory_t = std::variant<copy::program::CopyProgramFactory>;
+    using operation_attributes_t = ttnn::prim::CopyParams;
+    using tensor_args_t = ttnn::prim::CopyInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<CopyProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -38,17 +38,13 @@ struct CopyDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        const tt::tt_metal::DataType& output_dtype,
-        const std::optional<Tensor>& preallocated_output);
 };
 
-}  // namespace ttnn::operations::data_movement::copy
+Tensor copy(
+    const Tensor& input,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const tt::tt_metal::DataType& output_dtype,
+    const std::optional<Tensor>& preallocated_output,
+    bool backwards = false);
 
-namespace ttnn::prim {
-constexpr auto copy =
-    ttnn::register_operation<"ttnn::prim::copy", ttnn::operations::data_movement::copy::CopyDeviceOperation>();
 }  // namespace ttnn::prim

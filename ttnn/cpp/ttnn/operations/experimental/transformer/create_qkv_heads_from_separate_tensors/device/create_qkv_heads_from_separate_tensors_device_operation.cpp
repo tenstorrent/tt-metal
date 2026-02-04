@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "create_qkv_heads_from_separate_tensors_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer {
-
-using namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors;
+namespace ttnn::experimental::prim {
 
 void CreateQKVHeadsSeparateTensorsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -224,7 +224,7 @@ CreateQKVHeadsSeparateTensorsDeviceOperation::create_output_tensors(
 
 CreateQKVHeadsSeparateTensorsDeviceOperation::program_factory_t
 CreateQKVHeadsSeparateTensorsDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return CreateQKVHeadsSeparateTensorsProgramFactory{};
 }
 
@@ -241,10 +241,11 @@ tt::stl::hash::hash_t CreateQKVHeadsSeparateTensorsDeviceOperation::compute_prog
         tensor_args);
 }
 
-std::tuple<
-    CreateQKVHeadsSeparateTensorsDeviceOperation::operation_attributes_t,
-    CreateQKVHeadsSeparateTensorsDeviceOperation::tensor_args_t>
-CreateQKVHeadsSeparateTensorsDeviceOperation::invoke(
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+std::tuple<Tensor, Tensor, Tensor> create_qkv_heads_from_separate_tensors(
     const Tensor& input_tensor,
     const Tensor& input_tensor_kv,
     uint32_t num_q_heads,
@@ -253,9 +254,20 @@ CreateQKVHeadsSeparateTensorsDeviceOperation::invoke(
     bool transpose_k_heads,
     const MemoryConfig& output_mem_config,
     const std::optional<std::array<Tensor, 3>>& optional_output_tensors) {
-    return {
-        operation_attributes_t{num_q_heads, num_kv_heads, head_dim, transpose_k_heads, output_mem_config},
-        tensor_args_t{input_tensor, input_tensor_kv, optional_output_tensors}};
+    using OperationType = ttnn::experimental::prim::CreateQKVHeadsSeparateTensorsDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .num_q_heads = num_q_heads,
+        .num_kv_heads = num_kv_heads,
+        .head_dim = head_dim,
+        .transpose_k_heads = transpose_k_heads,
+        .output_mem_config = output_mem_config};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor,
+        .input_tensor_kv = input_tensor_kv,
+        .optional_output_tensors = optional_output_tensors};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::prim

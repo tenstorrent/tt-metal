@@ -9,8 +9,9 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
-from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
 
 
 class Attention(LightweightModule):
@@ -18,6 +19,7 @@ class Attention(LightweightModule):
         self,
         mesh_device,
         tt_ccl,
+        args,
         state_dict,
         weight_cache_path,
         layer_num,
@@ -28,7 +30,7 @@ class Attention(LightweightModule):
         use_paged_kv_cache=False,
     ):
         super().__init__()
-
+        self.args = args
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
@@ -42,8 +44,6 @@ class Attention(LightweightModule):
         self.paged_attention_config = paged_attention_config
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
-        self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
-        self.num_all_gather_links = configuration.num_all_gather_links
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
         self.rms_norm_add_unit_offset = configuration.rms_norm_add_unit_offset
@@ -382,6 +382,65 @@ class Attention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
+    def to_qk_fused_memory_config(self, q_tensor: ttnn.Tensor, k_tensor: ttnn.Tensor):
+        """
+        Convert Q and K tensors to height-sharded memory layouts suitable for
+        fused QK ops such as rotary_embedding_llama_fused_qk and the subsequent
+        QK matmul/attention score computation.
+
+        This function:
+        - Infers the number of Q heads and KV heads from the input tensors
+        - Shards Q and K along the batch dimension using HEIGHT sharding
+        - Places Q and K on disjoint core regions to avoid overlap (assuming a row size of 8 cores):
+            - For q_batch = 32: 32 cores for Q fill 4 complete rows (32 // 8 = 4), so K starts at row 4, column 0
+            - For q_batch = 1: 1 core for Q starts at (0,0), so K starts at column 1, row 0
+        - Uses row-major shard orientation with explicit shard shapes
+
+        The resulting memory layouts are compatible with fused attention
+        kernels that expect Q and K to be distributed across separate
+        core ranges while preserving per-head contiguity.
+
+        Args:
+            q_tensor (ttnn.Tensor):
+                Query tensor with shape [..., batch, num_q_heads, head_dim].
+
+            k_tensor (ttnn.Tensor):
+                Key tensor with shape [..., batch, num_kv_heads, head_dim].
+
+        Returns:
+            Tuple[ttnn.Tensor, ttnn.Tensor]:
+                (q_tensor, k_tensor) converted to sharded memory configurations.
+        """
+        n_q_heads = q_tensor.shape[2]
+        n_kv_heads = k_tensor.shape[2]
+        q_batch = q_tensor.shape[1]
+        k_batch = k_tensor.shape[1]
+        assert q_batch == k_batch
+
+        row_size = 8  # We assume a row size of 8 cores
+        k_start_core = ttnn.CoreCoord(q_batch % row_size, q_batch // row_size)
+
+        q_core_grid = ttnn.CoreRangeSet({num_to_corerange(q_batch)})
+        k_core_grid = ttnn.CoreRangeSet({num_to_corerange(k_batch, start_core=k_start_core)})
+
+        q_mem_config = ttnn.create_sharded_memory_config(
+            shape=(nearest_32(n_q_heads), self.head_dim),
+            core_grid=q_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        k_mem_config = ttnn.create_sharded_memory_config(
+            shape=(nearest_32(n_kv_heads), self.head_dim),
+            core_grid=k_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        q_tensor = ttnn.to_memory_config(q_tensor, q_mem_config)
+        k_tensor = ttnn.to_memory_config(k_tensor, k_mem_config)
+        return q_tensor, k_tensor
+
     def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -415,8 +474,6 @@ class Attention(LightweightModule):
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
-            num_reduce_scatter_links=self.num_reduce_scatter_links,
-            num_all_gather_links=self.num_all_gather_links,
             memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
             sharded=True,
             dtype=self.ccl_dtype,
@@ -462,16 +519,25 @@ class Attention(LightweightModule):
 
         ttnn.deallocate(xqkv_fused)
 
-        # Q Rotary Embeddings
-        q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
-        )
+        # Q, K Rotary Embeddings
+        if self.args.use_qk_fused:
+            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD = self.to_qk_fused_memory_config(
+                q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD
+            )
 
-        # K Rotary Embeddings
-        k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
-        )
+            q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
+                q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
+            )
+        else:
+            # Q Rotary Embeddings
+            q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
+                q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
+            )
 
+            # K Rotary Embeddings
+            k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
+                k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
+            )
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
 
@@ -487,11 +553,18 @@ class Attention(LightweightModule):
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
-        ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)
-        ttnn.experimental.paged_update_cache(
-            values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
-        )
 
+        if self.args.use_qk_fused:
+            ttnn.experimental.paged_fused_update_cache(
+                keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+            )
+        else:
+            ttnn.experimental.paged_update_cache(
+                keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+            )
+            ttnn.experimental.paged_update_cache(
+                values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+            )
         ttnn.deallocate(k_heads_1BKD)
         ttnn.deallocate(v_heads_1BKD)
 
@@ -504,8 +577,8 @@ class Attention(LightweightModule):
                 q_heads_1BQD,
                 keys,
                 values,
-                cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
+                cur_pos_tensor=current_pos,
                 scale=self.scale,
                 sliding_window_size=self.sliding_window,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
@@ -597,7 +670,6 @@ class Attention(LightweightModule):
                 self.tt_ccl,
                 dim=2,
                 cluster_axis=1,
-                num_links=2,
                 memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
                 sharded=True,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
@@ -633,8 +705,6 @@ class Attention(LightweightModule):
                 self.mesh_device,
                 self.tt_ccl,
                 cluster_axis=0,
-                num_reduce_scatter_links=self.num_reduce_scatter_links,
-                num_all_gather_links=self.num_all_gather_links,
                 dim=0 if (self.TG and self.hidden_size < 8192) else 3,
                 topology=self.ccl_topology,
                 memory_config=(
@@ -698,8 +768,6 @@ class Attention(LightweightModule):
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
-            num_reduce_scatter_links=self.num_reduce_scatter_links,
-            num_all_gather_links=self.num_all_gather_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.ccl_dtype,
         )
@@ -823,7 +891,7 @@ class Attention(LightweightModule):
                 page_table_tensor=page_table,
                 chunk_start_idx=chunk_start_idx,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx),
             )
         else:
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
@@ -893,8 +961,6 @@ class Attention(LightweightModule):
                 self.tt_ccl,
                 cluster_axis=0,
                 dim=0 if self.TG else 3,
-                num_reduce_scatter_links=self.num_reduce_scatter_links,
-                num_all_gather_links=self.num_all_gather_links,
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,

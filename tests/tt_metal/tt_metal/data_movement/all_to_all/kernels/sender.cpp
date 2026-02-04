@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dataflow_api.h"
-#include "debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "ckernel.h"
 
 void kernel_main() {
@@ -56,4 +56,5 @@ void kernel_main() {
     DeviceTimestampedData("Number of transactions", num_of_transactions * num_subordinates);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction_per_master);
     DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
+    DeviceTimestampedData("Number of subordinates", num_subordinates);
 }

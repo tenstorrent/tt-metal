@@ -89,7 +89,6 @@ class TransformerModelFactory:
             Llama model instance
         """
         lcfg = ttml.models.llama.LlamaConfig()
-        tc = self.transformer_config
 
         # Core fields with sensible defaults
         lcfg.num_heads = self.transformer_config.num_heads
@@ -104,9 +103,9 @@ class TransformerModelFactory:
         lcfg.dropout_prob = self.transformer_config.dropout_prob
 
         # Optional fields
-        if self.transformer_config.intermediate_dim:
+        if self.transformer_config.intermediate_dim is not None:
             lcfg.intermediate_dim = self.transformer_config.intermediate_dim
-        if self.transformer_config.theta:
+        if self.transformer_config.theta is not None:
             lcfg.theta = self.transformer_config.theta
 
         # Runner type (simple mapping like GPT2)

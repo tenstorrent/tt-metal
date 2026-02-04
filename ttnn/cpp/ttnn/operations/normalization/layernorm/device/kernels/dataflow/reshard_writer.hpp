@@ -5,7 +5,7 @@
 #pragma once
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 inline void write_resharded_data(
     uint32_t cb_out,

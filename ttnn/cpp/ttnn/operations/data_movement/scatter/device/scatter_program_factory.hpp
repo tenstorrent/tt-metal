@@ -7,19 +7,11 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include "../scatter_enums.hpp"
 #include "scatter_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::data_movement::scatter {
-
-enum class ScatterCB : std::underlying_type_t<tt::CBIndex> {
-    INPUT = CBIndex::c_0,
-    SRC = CBIndex::c_1,
-    INDEX = CBIndex::c_2,
-    DST = CBIndex::c_3
-};
+namespace ttnn::prim {
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -33,24 +25,9 @@ struct ScatterProgramFactory {
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static cached_program_t create(const ScatterParams&, const ScatterInputs&, Tensor&);
 
-    static void override_runtime_arguments(
-        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
-
-    static CBHandle create_cb(
-        Program& program,
-        const DataType& dtype,
-        const ScatterCB& scatter_cb,
-        const CoreRangeSet& core_range_set,
-        const uint32_t& tiles_num);
-
-    static KernelHandle create_kernel(
-        Program& program,
-        const char* kernel_path,
-        const CoreRangeSet& core_range_set,
-        const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
-        const std::vector<uint32_t>& runtime_args = {});
+    static void override_runtime_arguments(cached_program_t&, const ScatterParams&, const ScatterInputs&, Tensor&);
 };
 
-}  // namespace ttnn::operations::data_movement::scatter
+}  // namespace ttnn::prim

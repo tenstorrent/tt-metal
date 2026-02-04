@@ -16,12 +16,10 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer::sdpa::program {
+namespace ttnn::prim {
 
 SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SDPAParams& operation_attributes, const SDPAInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const auto& input_tensor_v = operation_attributes.use_mla ? tensor_args.k : tensor_args.v.value_or(tensor_args.k);
@@ -50,7 +48,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     Q: B x NQH x S x DH
     K: B x NKH x DH x S
     V: B x NKH x S x DH
-    attn_mask: B x NQH x S x S
+    attn_mask: B x NQH x S x S  or  B x 1 x S x S
     */
 
     const auto& q_shape = input_tensor_q.logical_shape();
@@ -59,9 +57,20 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t NKH = k_shape[1];
 
     // Paged cache parameters when in chunked mode
-    bool is_chunked = chunk_start_idx.has_value();
-    // In chunked mode, we only need to process K/V up to chunk_start_idx + Sq
-    const uint32_t Sk = is_chunked ? (chunk_start_idx.value() + Sq) : k_shape[2];
+    const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
+    const bool is_chunked_legacy = chunk_start_idx.has_value() && !flexible_chunked;
+    const bool is_chunked = is_chunked_legacy || flexible_chunked;
+    // For flexible chunked: max prefix length = page_table num_pages * block_size (from K/V layout).
+    uint32_t max_prefix_tokens_flexible = 0;
+    if (is_chunked && flexible_chunked) {
+        const uint32_t block_size_for_sk = k_shape[2];
+        const uint32_t max_blocks = page_table.value().padded_shape()[1];
+        max_prefix_tokens_flexible = max_blocks * block_size_for_sk;
+    }
+    // In chunked mode: legacy uses chunk_start_idx + Sq; flexible uses Sq + max prefix from page table.
+    const uint32_t Sk = is_chunked
+                            ? (flexible_chunked ? (Sq + max_prefix_tokens_flexible) : (chunk_start_idx.value() + Sq))
+                            : k_shape[2];
 
     /*
     Note about tensor shapes:
@@ -83,18 +92,20 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t valid_Sqt = std::ceil((float)Sq / TILE_HEIGHT);
     const uint32_t valid_Skt = std::ceil((float)Sk / TILE_HEIGHT);
     /*
-    For non-causal case we must provide a padded mask if the K sequence length has been padded
-    Note that we dont have this issue in non-causal case if Q is padded, since those pad tokens
-    don't affect attention of unpadded tokens.
-    In causal case, the causal mask takes care of masking K pad tokens.
+    For non-causal case with Q/K padding:
+    - If user provides a mask: reader reads unpadded mask and fills padded K positions with -inf
+    - If no mask provided: writer generates a mask with 0 for valid K and -inf for padded K
+    In causal case, the causal mask naturally handles masking of padded K tokens.
     */
-    const bool use_padded_mask = (!is_causal) && (padded_Sk != Sk);
+    const bool use_padded_mask = (!is_causal) && ((padded_Sk != Sk) || (padded_Sq != Sq));
 
     const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
     const uint32_t q_num_chunks = padded_Sq / q_chunk_size;
     const uint32_t k_num_chunks = padded_Sk / k_chunk_size;
     const bool use_provided_mask = attn_mask.has_value();
+    const bool broadcast_provided_mask_batch = use_provided_mask ? (attn_mask.value().logical_shape()[0] == 1) : false;
+    const bool broadcast_provided_mask_heads = use_provided_mask ? (attn_mask.value().logical_shape()[1] == 1) : false;
 
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
@@ -129,19 +140,25 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     tt::DataFormat page_table_df = tt::DataFormat::Int32;
 
     if (is_chunked) {
-        chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
+        if (is_chunked_legacy) {
+            // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
+            chunked_q_chunk_offset = chunk_start_idx.value() / q_chunk_size;
+        }
+        // else: flexible_chunked - chunked_q_chunk_offset set inside of the op
         const auto& page_table_tensor = page_table.value();
         block_size = k_shape[2];  // K's sequence dimension represents block size
         block_size_t = block_size / TILE_HEIGHT;
-        max_blocks_per_seq = page_table_tensor.padded_shape()[1];
-        page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
-        TT_FATAL(
-            page_table_stick_size % 32 == 0,
-            "page table page size in bytes must be a multiple of 32 due to address alignment");
-
-        TT_FATAL(
-            page_table_stick_size % 32 == 0,
-            "page table page size in bytes must be a multiple of 32 due to address alignment");
+        if (flexible_chunked) {
+            max_blocks_per_seq = page_table_tensor.padded_shape()[1];
+            page_table_stick_size = max_blocks_per_seq * sizeof(int32_t);
+            TT_FATAL(page_table_stick_size % 32 == 0, "page table stick size must be a multiple of 32");
+        } else {
+            max_blocks_per_seq = page_table_tensor.padded_shape()[1];
+            page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
+            TT_FATAL(
+                page_table_stick_size % 32 == 0,
+                "page table page size in bytes must be a multiple of 32 due to address alignment");
+        }
     }
     // Log page table info
     log_debug(tt::LogOp, "is_chunked: {}", is_chunked);
@@ -363,6 +380,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       num_cores,
                                                       (std::uint32_t)is_causal,
                                                       (std::uint32_t)use_provided_mask,
+                                                      (std::uint32_t)broadcast_provided_mask_batch,
+                                                      (std::uint32_t)broadcast_provided_mask_heads,
                                                       (std::uint32_t)use_padded_mask,
                                                       (uint32_t)is_chunked,
                                                       block_size_t,
@@ -375,6 +394,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     TensorAccessorArgs(attn_mask.has_value() ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args);
     TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
     TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -555,6 +576,17 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                 .set_page_size(tt::CBIndex::c_6, page_table_stick_size);
         CreateCircularBuffer(program, core_grid, c_in6_config);
     }
+    if (flexible_chunked) {
+        constexpr uint32_t chunk_start_idx_page_size = 32;
+        auto c_chunk_start_compute_config =
+            CircularBufferConfig(chunk_start_idx_page_size, {{tt::CBIndex::c_8, tt::DataFormat::Int32}})
+                .set_page_size(tt::CBIndex::c_8, chunk_start_idx_page_size);
+        CreateCircularBuffer(program, core_grid, c_chunk_start_compute_config);
+        auto c_chunk_start_writer_config =
+            CircularBufferConfig(chunk_start_idx_page_size, {{tt::CBIndex::c_9, tt::DataFormat::Int32}})
+                .set_page_size(tt::CBIndex::c_9, chunk_start_idx_page_size);
+        CreateCircularBuffer(program, core_grid, c_chunk_start_writer_config);
+    }
 
     // Create attention sink buffer if provided
     if (use_attention_sink) {
@@ -667,6 +699,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 mask_addr,
                 is_chunked ? page_table.value().buffer()->address() : 0,
                 attention_sink_addr,
+                flexible_chunked ? operation_attributes.chunk_start_idx_tensor.value().buffer()->address() : 0,
                 i,
                 local_batch_start,
                 local_batch_end,
@@ -691,6 +724,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
              local_q_start,
              local_q_end,
              num_phases,
+             static_cast<uint32_t>(flexible_chunked ? 1 : 0),
              chunked_q_chunk_offset,
              write_offset});  // write_offset
         SetRuntimeArgs(
@@ -705,6 +739,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
              local_q_start,
              local_q_end,
              num_phases,
+             static_cast<uint32_t>(flexible_chunked ? 1 : 0),
              chunked_q_chunk_offset});
     }
 
@@ -724,13 +759,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
 void SDPAProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SDPAParams& operation_attributes,
+    const SDPAInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    const bool is_chunked = operation_attributes.chunk_start_idx.has_value();
+    const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
+    const bool is_chunked = operation_attributes.chunk_start_idx.has_value() || flexible_chunked;
     const bool use_mla = operation_attributes.use_mla;
     std::size_t q_chunk_size =
         operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
@@ -752,9 +788,16 @@ void SDPAProgramFactory::override_runtime_arguments(
 
     uint32_t page_table_addr = 0;
     uint32_t chunked_q_chunk_offset = 0;
+    uint32_t chunk_start_idx_addr = 0;
+    const uint32_t use_chunk_start_idx_tensor = flexible_chunked ? 1 : 0;
     if (is_chunked) {
         page_table_addr = tensor_args.page_table.value().buffer()->address();
-        chunked_q_chunk_offset = operation_attributes.chunk_start_idx.value() / q_chunk_size;
+        if (!flexible_chunked) {
+            // chunk_start_idx must be a multiple of q_chunk_size (validated in sdpa_device_operation.cpp)
+            chunked_q_chunk_offset = operation_attributes.chunk_start_idx.value() / q_chunk_size;
+        } else {
+            chunk_start_idx_addr = operation_attributes.chunk_start_idx_tensor.value().buffer()->address();
+        }
     }
 
     auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
@@ -777,13 +820,16 @@ void SDPAProgramFactory::override_runtime_arguments(
         reader_args[3] = mask_addr;
         reader_args[4] = page_table_addr;
         reader_args[5] = attention_sink_addr;
-        reader_args[14] = chunked_q_chunk_offset;
+        reader_args[6] = chunk_start_idx_addr;
+        reader_args[15] = chunked_q_chunk_offset;
 
         writer_args[0] = out_addr;
-        writer_args[9] = chunked_q_chunk_offset;
+        writer_args[9] = use_chunk_start_idx_tensor;
+        writer_args[10] = chunked_q_chunk_offset;
 
-        compute_args[8] = chunked_q_chunk_offset;
+        compute_args[8] = use_chunk_start_idx_tensor;
+        compute_args[9] = chunked_q_chunk_offset;
     }
 }
 
-}  // namespace ttnn::operations::transformer::sdpa::program
+}  // namespace ttnn::prim

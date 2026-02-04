@@ -5,20 +5,21 @@
 #include "padded_slice_device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::padded_slice {
+namespace ttnn::experimental::prim {
 
 PaddedSliceDeviceOperation::program_factory_t PaddedSliceDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
-        return program::PaddedSliceRMProgramFactory{};
-    } else if (tensor_args.input.layout() == Layout::TILE) {
-        return program::PaddedSliceTileProgramFactory{};
-    } else {
-        TT_THROW("Unsupported layout for padded_slice operation: {}", tensor_args.input.layout());
+        return PaddedSliceRMProgramFactory{};
     }
+    if (tensor_args.input.layout() == Layout::TILE) {
+        return PaddedSliceTileProgramFactory{};
+    }
+    TT_THROW("Unsupported layout for padded_slice operation: {}", tensor_args.input.layout());
 }
 
 void PaddedSliceDeviceOperation::validate_on_program_cache_hit(
@@ -28,7 +29,6 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_hit(
 
 void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-
     const auto& input_tensor_a = tensor_args.input;
 
     // Validate step parameter early - padded_slice does not support strided slices
@@ -62,7 +62,7 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
             args.padded_slice_end[i]);
     }
     if (tensor_args.preallocated_output.has_value()) {
-        const auto output_shape_required = compute_output_specs(args, tensor_args).logical_shape();
+        const auto output_shape_required = compute_output_specs(args, tensor_args).padded_shape();
         const auto& out_tensor = tensor_args.preallocated_output.value();
         TT_FATAL(
             out_tensor.padded_shape() == output_shape_required,
@@ -72,7 +72,7 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t PaddedSliceDeviceOperation::compute_output_specs(
+TensorSpec PaddedSliceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
@@ -102,7 +102,7 @@ spec_return_value_t PaddedSliceDeviceOperation::compute_output_specs(
     return TensorSpec(output_tensor_shape, tensor_layout);
 }
 
-tensor_return_value_t PaddedSliceDeviceOperation::create_output_tensors(
+Tensor PaddedSliceDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return *tensor_args.preallocated_output;
@@ -112,30 +112,37 @@ tensor_return_value_t PaddedSliceDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t PaddedSliceDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    log_trace(tt::LogOp, "PaddedSliceDeviceOperation::compute_program_hash is called");
+
     auto program_factory = select_program_factory(args, tensor_args);
+
     // Include input shape last dimension as it affects pad_output_row decision (RM factory)
     // and max_num_tiles_per_row calculation (Tile factory), which affect kernel selection and CB configs
-    operation::Hash hash =
-        operation::hash_operation<PaddedSliceDeviceOperation>(args, program_factory.index(), tensor_args);
-
-    return hash;
+    return tt::tt_metal::operation::hash_operation<PaddedSliceDeviceOperation>(
+        args, tensor_args, program_factory.index());
 }
 
-std::tuple<PaddedSliceDeviceOperation::operation_attributes_t, PaddedSliceDeviceOperation::tensor_args_t>
-PaddedSliceDeviceOperation::invoke(
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+ttnn::experimental::prim::PaddedSliceDeviceOperation::tensor_return_value_t padded_slice(
     const Tensor& input,
     const ttnn::Shape& padded_slice_start,
     const ttnn::Shape& padded_slice_end,
     const ttnn::Shape& step,
     const MemoryConfig& output_mem_config,
     const std::optional<Tensor>& preallocated_output) {
-    return {
-        operation_attributes_t{
-            .padded_slice_start = padded_slice_start,
-            .padded_slice_end = padded_slice_end,
-            .step = step,
-            .output_mem_config = output_mem_config},
-        tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
+    using OperationType = ttnn::experimental::prim::PaddedSliceDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .padded_slice_start = padded_slice_start,
+        .padded_slice_end = padded_slice_end,
+        .step = step,
+        .output_mem_config = output_mem_config};
+    auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = preallocated_output};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::padded_slice
+}  // namespace ttnn::prim

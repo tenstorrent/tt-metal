@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "device/interleaved_to_sharded_partial_op.hpp"
 #include "interleaved_to_sharded_partial.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -11,8 +11,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
-    const ttnn::Tensor& input_tensor,
+Tensor InterleavedToShardedPartialOperation::invoke(
+    const Tensor& input_tensor,
     const std::variant<CoreCoord, CoreRangeSet>& grid,
     const std::array<uint32_t, 2>& shard_shape,
     int64_t& num_slices,
