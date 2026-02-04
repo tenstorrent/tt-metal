@@ -218,24 +218,24 @@ class MoE(SharedStateAddOn, AbstractModule):
         topk_experts_indices_rm = ttnn.reshape(
             topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
         )
-        print(f"all_to_all_dispatch input shape: {x_rm.shape}")
-        print(f"all_to_all_dispatch expert indices shape: {topk_experts_indices_rm.shape}")
-        print(f"all_to_all_dispatch expert mapping shape: {cfg['expert_mapping_tensors'].shape}")
+        # print(f"all_to_all_dispatch input shape: {x_rm.shape}")
+        # print(f"all_to_all_dispatch expert indices shape: {topk_experts_indices_rm.shape}")
+        # print(f"all_to_all_dispatch expert mapping shape: {cfg['expert_mapping_tensors'].shape}")
         # print(f"Expert maping tensor is: ", cfg['expert_mapping_tensors'][:, :, 128:136, :])
-        print("cfg[all_to_all_dispatch is :", cfg["all_to_all_dispatch"])
+        # print("cfg[all_to_all_dispatch is :", cfg["all_to_all_dispatch"])
         all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
             x_rm,
             topk_experts_indices_rm,
             cfg["expert_mapping_tensors"],
             cluster_axis=0,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+            num_links=4,
+            topology=ttnn.Topology.Ring,
             subdevice_id=None,
         )
 
-        print(f"all_to_all_dispatch output shape: {all_to_all_dispatch_output_tensors.shape}")
-        print(f"all_to_all_dispatch metadata shape: {all_to_all_dispatch_metadata_tensors.shape}")
+        # print(f"all_to_all_dispatch output shape: {all_to_all_dispatch_output_tensors.shape}")
+        # print(f"all_to_all_dispatch metadata shape: {all_to_all_dispatch_metadata_tensors.shape}")
         post_all_to_all_dispatch_output = ttnn.reshape(
             all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
         )
@@ -254,17 +254,17 @@ class MoE(SharedStateAddOn, AbstractModule):
         experts_output = ttnn.reshape(
             experts_output, shape=(cfg["num_experts_per_device"], batch_size, seq_len, cfg["hidden_size"])
         )
-        print(f"all_to_all_combine input shape: {experts_output.shape}")
+        # print(f"all_to_all_combine input shape: {experts_output.shape}")
         all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
             experts_output,
             all_to_all_dispatch_metadata_tensors,
             cfg["expert_mapping_tensors"],
             cluster_axis=0,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+            num_links=4,
+            topology=ttnn.Topology.Ring,
         )
-        print(f"all_to_all_combine output shape: {all_to_all_combine_output_tensors.shape}")
+        # print(f"all_to_all_combine output shape: {all_to_all_combine_output_tensors.shape}")
         post_combine_output_tensor = ttnn.reshape(
             all_to_all_combine_output_tensors,
             shape=(cfg["num_experts_per_tok"], 1, batch_size_per_device * seq_len, cfg["hidden_size"]),
