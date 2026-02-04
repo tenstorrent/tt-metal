@@ -1,0 +1,31 @@
+# Example: Mesh Defined by ASIC Locations
+# This example shows meshes defined directly at the ASIC location level
+
+groupings:
+  - base_units:
+      - asic_location_1
+      - asic_location_2
+      - asic_location_3
+      - asic_location_4
+      - asic_location_5
+      - asic_location_6
+      - asic_location_7
+      - asic_location_8
+
+  - trays:
+      asic_locations: [asic_location_1, asic_location_2, asic_location_3, asic_location_4, asic_location_5, asic_location_6, asic_location_7, asic_location_8]
+
+  - hosts:
+      trays: 4
+
+  - meshes:
+      asic_locations: [asic_location_1]  # Each mesh uses 1 ASIC location (smaller mesh example)
+
+  - pods:
+      meshes: 2
+
+  - superpods:
+      pods: 2  # Each superpod contains 2 pods
+
+  - clusters:
+      superpods: 2  # Each cluster contains 2 superpods

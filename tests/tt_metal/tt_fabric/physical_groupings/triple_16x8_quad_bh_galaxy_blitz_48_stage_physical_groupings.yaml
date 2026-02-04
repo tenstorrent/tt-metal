@@ -1,0 +1,24 @@
+# Physical Groupings File for Triple 16x8 Quad BH Galaxy Blitz 48-Stage Pipeline
+# This file defines groupings for a pipelined configuration with 48 stages (meshes)
+# Each mesh is 16x8 (128 ASICs = 4 hosts), arranged in 3 pods with 16 meshes each
+# The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD)
+
+groupings:
+  - base_units:
+      - asic_location_1
+      - asic_location_2
+      - asic_location_3
+      - asic_location_4
+      - asic_location_5
+      - asic_location_6
+      - asic_location_7
+      - asic_location_8
+
+  - trays:
+      asic_locations: [asic_location_1, asic_location_2, asic_location_3, asic_location_4, asic_location_5, asic_location_6, asic_location_7, asic_location_8]
+
+  - hosts:
+      trays: 4
+
+  - meshes:
+      trays: 1  # Each mesh contains 1 tray, 8 ASICS
