@@ -81,6 +81,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_sender_grid_end_y"),
         get_named_compile_time_arg_val("gather_row_major"),
         get_named_compile_time_arg_val("gather_receiver_data_addr"),
+        0,  // sender_idx (unused when UsePerCoreSenderIdx=false)
     };
 
     // ------------------------------------------------------------------------
@@ -113,6 +114,40 @@ void kernel_main() {
     using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
 
     // ------------------------------------------------------------------------
+    // down_proj_gather (sender - gate_proj cores send fused output to sender core)
+    // ------------------------------------------------------------------------
+    deepseek_b1_ops::Gather::SenderArgs down_proj_gather_args{
+        get_named_compile_time_arg_val("down_proj_gather_dest_noc_x"),
+        get_named_compile_time_arg_val("down_proj_gather_dest_noc_y"),
+        get_named_compile_time_arg_val("down_proj_gather_data_size_bytes"),
+        get_named_compile_time_arg_val("down_proj_gather_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("down_proj_gather_src_cb"),
+        get_named_compile_time_arg_val("down_proj_gather_src_num_pages"),
+        get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_x"),
+        get_named_compile_time_arg_val("down_proj_gather_sender_grid_start_y"),
+        get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_x"),
+        get_named_compile_time_arg_val("down_proj_gather_sender_grid_end_y"),
+        get_named_compile_time_arg_val("down_proj_gather_row_major"),
+        get_named_compile_time_arg_val("down_proj_gather_receiver_data_addr"),
+        get_named_compile_time_arg_val(
+            "down_proj_gather_sender_idx"),  // Explicit sender index (UsePerCoreSenderIdx=true)
+    };
+
+    // ------------------------------------------------------------------------
+    // down_proj_mcast (receiver) - receives broadcasted fused output
+    // ------------------------------------------------------------------------
+    deepseek_b1_ops::Mcast::ReceiverArgs down_proj_mcast_args{
+        get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore"),
+        get_named_compile_time_arg_val("down_proj_mcast_dst_cb"),
+        get_named_compile_time_arg_val("down_proj_mcast_dst_num_pages"),
+    };
+
+    // ------------------------------------------------------------------------
+    // down_proj DRAM Matmul (reader - no-op, cb_in0 reuses mcast output)
+    // ------------------------------------------------------------------------
+    using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs;
+
+    // ------------------------------------------------------------------------
     // Setup sharded persistent buffers
     // ------------------------------------------------------------------------
     if constexpr (Core::is_sender_core) {
@@ -126,6 +161,9 @@ void kernel_main() {
         constexpr uint32_t gate_input_indices_cb = get_named_compile_time_arg_val("gate_input_indices_cb");
         unified_kernels::setup_sharded_buffer(gate_bias_cb, 1);
         unified_kernels::setup_sharded_buffer(gate_input_indices_cb, 1);
+
+        // down_proj_mcast source CB (same as down_proj_gather destination)
+        // Note: down_proj_gather_dst_cb is NOT setup here - gather already pushes to it
     }
     if constexpr (Core::is_gate_mm_core) {
         constexpr uint32_t gate_mm_in1 = get_named_compile_time_arg_val("gate_mm_in1");
@@ -227,7 +265,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("gate_proj_vc"),
         1,  // enable_indexing = true
         get_named_compile_time_arg_val("gate_proj_cb_index"),
-        get_named_compile_time_arg_val("gate_proj_index_offset")>;
+        get_named_compile_time_arg_val("gate_proj_index_offset"),
+        get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
 
     // ------------------------------------------------------------------------
     // up_proj Matmul (writer) - writes to intermediate CB, not final output
@@ -247,13 +286,66 @@ void kernel_main() {
         get_named_compile_time_arg_val("up_proj_vc"),
         1,  // enable_indexing = true
         get_named_compile_time_arg_val("up_proj_cb_index"),
-        get_named_compile_time_arg_val("up_proj_index_offset")>;
+        get_named_compile_time_arg_val("up_proj_index_offset"),
+        get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
 
     // ------------------------------------------------------------------------
     // Mul (writer) - waits for final output after mul
     // ------------------------------------------------------------------------
     using MulCTArgs = deepseek_b1_ops::EltwiseMul::
         WriterCTArgs<get_named_compile_time_arg_val("mul_cb_out"), get_named_compile_time_arg_val("mul_num_tiles")>;
+
+    // ------------------------------------------------------------------------
+    // down_proj_gather (receiver - sender core receives fused output from gate_proj cores)
+    // ------------------------------------------------------------------------
+    deepseek_b1_ops::Gather::ReceiverArgs down_proj_gather_args{
+        get_named_compile_time_arg_val("down_proj_gather_noc0_num_senders"),
+        get_named_compile_time_arg_val("down_proj_gather_noc1_num_senders"),
+        get_named_compile_time_arg_val("down_proj_gather_noc0_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("down_proj_gather_noc1_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("down_proj_gather_dst_cb"),
+        get_named_compile_time_arg_val("down_proj_gather_dst_num_pages"),
+    };
+
+    // ------------------------------------------------------------------------
+    // down_proj_mcast (sender) - broadcasts gathered fused output to compute cores
+    // ------------------------------------------------------------------------
+    constexpr uint32_t down_proj_mcast_src_cb = get_named_compile_time_arg_val("down_proj_mcast_src_cb");
+    constexpr uint32_t down_proj_mcast_dst_cb = get_named_compile_time_arg_val("down_proj_mcast_dst_cb");
+    deepseek_b1_ops::Mcast::SenderArgs down_proj_mcast_args{
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("down_proj_mcast_sender_semaphore"),
+        get_named_compile_time_arg_val("down_proj_mcast_receiver_semaphore"),
+        get_named_compile_time_arg_val("down_proj_mcast_data_size_bytes"),
+        down_proj_mcast_src_cb,
+        get_named_compile_time_arg_val("down_proj_mcast_src_num_pages"),
+        get_read_ptr(down_proj_mcast_src_cb),
+        get_write_ptr(down_proj_mcast_dst_cb),
+    };
+
+    // ------------------------------------------------------------------------
+    // down_proj DRAM Matmul (writer)
+    // ------------------------------------------------------------------------
+    using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs<
+        get_named_compile_time_arg_val("down_proj_cb_in1"),
+        get_named_compile_time_arg_val("down_proj_cb_out"),
+        get_named_compile_time_arg_val("down_proj_in1_tensor_addr"),
+        get_named_compile_time_arg_val("down_proj_in1_page_size"),
+        get_named_compile_time_arg_val("down_proj_in1_num_pages"),
+        get_named_compile_time_arg_val("down_proj_subblock_k"),
+        get_named_compile_time_arg_val("down_proj_per_core_n"),
+        get_named_compile_time_arg_val("down_proj_in1_block_size_bytes"),
+        get_named_compile_time_arg_val("down_proj_out_num_tiles"),
+        get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
+        get_named_compile_time_arg_val("down_proj_bank_id"),
+        get_named_compile_time_arg_val("down_proj_vc"),
+        1,  // enable_indexing = true
+        get_named_compile_time_arg_val("down_proj_cb_index"),
+        get_named_compile_time_arg_val("down_proj_index_offset"),
+        get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
 
 #elif defined(COMPILE_FOR_TRISC)
     // ------------------------------------------------------------------------
@@ -337,6 +429,30 @@ void kernel_main() {
         get_named_compile_time_arg_val("mul_num_tiles"),        // number of 16x16 tiles
         get_named_compile_time_arg_val("up_proj_cb_mm_out"),    // wait on this CB before reading mul_cb_in0
         get_named_compile_time_arg_val("up_proj_per_core_n")>;  // number of tiles in mm_out format
+
+    // ------------------------------------------------------------------------
+    // down_proj_gather (no-op for TRISC)
+    // ------------------------------------------------------------------------
+    deepseek_b1_ops::Gather::ComputeArgs down_proj_gather_args{};
+
+    // ------------------------------------------------------------------------
+    // down_proj_mcast (no-op for TRISC)
+    // ------------------------------------------------------------------------
+    deepseek_b1_ops::Mcast::ComputeArgs down_proj_mcast_args{};
+
+    // ------------------------------------------------------------------------
+    // down_proj DRAM Matmul (compute)
+    // ------------------------------------------------------------------------
+    using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+        get_named_compile_time_arg_val("down_proj_cb_in0"),
+        get_named_compile_time_arg_val("down_proj_cb_in1"),
+        get_named_compile_time_arg_val("down_proj_cb_out"),
+        get_named_compile_time_arg_val("down_proj_subblock_k"),
+        get_named_compile_time_arg_val("down_proj_per_core_n"),
+        get_named_compile_time_arg_val("down_proj_subblock_w"),
+        get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
+        get_named_compile_time_arg_val("down_proj_tile_r_dim"),
+        get_named_compile_time_arg_val("down_proj_fuse_silu")>;
 #endif
 
     // ============================================================================
@@ -425,7 +541,38 @@ void kernel_main() {
         mul_op();
     }
 
-    // Only need one teardown since both mcasts reuse the same semaphores
+    // ========================================================================
+    // 9. down_proj_gather: Gather fused output from gate_proj cores to sender core
+    //    for down_proj input
+    // ========================================================================
+    {
+        DeviceZoneScopedN("DOWN_PROJ_GATHER");
+        // pop_src = true (mul output consumed after gather)
+        // UsePerCoreSenderIdx = true (use explicit sender_idx for scattered optimal DRAM bank cores)
+        deepseek_b1_ops::Gather::Op<Core::is_gate_proj_core, Core::is_sender_core, true, true> down_proj_gather;
+        down_proj_gather(down_proj_gather_args);
+    }
+
+    // ========================================================================
+    // 10. down_proj_mcast: Broadcast gathered fused output to compute cores
+    //     Same mcast grid as input mcast
+    // ========================================================================
+    {
+        DeviceZoneScopedN("DOWN_PROJ_MCAST");
+        mcast(down_proj_mcast_args);
+    }
+
+    // ========================================================================
+    // 11. down_proj: DRAM streaming matmul for final projection
+    //     [1, hidden_dim] x [hidden_dim, K] -> [1, K]
+    // ========================================================================
+    {
+        DeviceZoneScopedN("DOWN_PROJ");
+        deepseek_b1_ops::DRAMStreamingMatmul::Op<DownProjCTArgs, Core::is_gate_proj_core, true> down_proj;
+        down_proj();
+    }
+
+    // Only need one teardown since all mcasts reuse the same semaphores
     mcast.teardown();
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
