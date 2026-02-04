@@ -44,14 +44,14 @@ static constexpr uint32_t A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH = 1000000000;
 static constexpr uint32_t MAGIC_HANDSHAKE_VALUE = 0xAA;
 
 // Data-Structure used for EDM to EDM Handshaking.
+// The scratch buffer is sent to the peer and overwrites the first 16 bytes of their struct,
+// populating neighbor_mesh_id and neighbor_device_id with the sender's identity.
 struct handshake_info_t {
-    uint32_t local_value;  // Updated by remote
-    uint16_t mesh_id;
-    uint16_t neighbor_mesh_id;
-    uint8_t device_id;
-    uint8_t neighbor_device_id;
-    uint32_t padding[1];   // Ensures 16B alignment for scratch register
-    uint32_t scratch[4];   // TODO: This can be removed if we use a stream register for handshaking.
+    uint32_t local_value;        // Bytes 0-3: Updated by remote with MAGIC_HANDSHAKE_VALUE
+    uint16_t neighbor_mesh_id;   // Bytes 4-5: Peer's mesh_id (populated via scratch[1])
+    uint8_t neighbor_device_id;  // Byte 6: Peer's device_id (populated via scratch[1])
+    uint32_t padding[2];         // Bytes 8-15: Ensures 16B alignment for scratch register
+    uint32_t scratch[4];         // Bytes 16-31: TODO: Can be removed if we use a stream register for handshaking.
 };
 
 FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
@@ -60,10 +60,11 @@ FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
         reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
     handshake_info->local_value = 0;
     handshake_info->scratch[0] = MAGIC_HANDSHAKE_VALUE;
-    // Sender exposes itself as the neighbor to its peer. Shifts align our IDs to the
-    // neighbor_mesh_id (<<16) and neighbor_device_id (<<8) offsets in the peer's handshake_info_t.
-    handshake_info->scratch[1] = (static_cast<uint32_t>(my_mesh_id) << 16);
-    handshake_info->scratch[2] = (static_cast<uint32_t>(my_device_id) << 8);
+    // Sender exposes itself as the neighbor to its peer. On little-endian:
+    // - my_mesh_id in lower 16 bits maps to bytes 4-5 (neighbor_mesh_id)
+    // - my_device_id shifted by 16 maps to byte 6 (neighbor_device_id)
+    handshake_info->scratch[1] = static_cast<uint32_t>(my_mesh_id) | (static_cast<uint32_t>(my_device_id) << 16);
+    handshake_info->scratch[2] = 0;
     handshake_info->scratch[3] = 0;
     return handshake_info;
 }
@@ -88,10 +89,6 @@ FORCE_INLINE void sender_side_handshake(
         }
         invalidate_l1_cache();
     }
-    // reinitialize our own mesh_id and device_id to the values received from the peer
-    // these values are cleared by the handshake_info_t initialization above.
-    handshake_info->mesh_id = my_mesh_id;
-    handshake_info->device_id = my_device_id;
 }
 
 FORCE_INLINE void receiver_side_handshake(
@@ -114,10 +111,6 @@ FORCE_INLINE void receiver_side_handshake(
         invalidate_l1_cache();
     }
     internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
-    // reinitialize our own mesh_id and device_id to the values received from the peer
-    // these values are cleared by the handshake_info_t initialization above.
-    handshake_info->mesh_id = my_mesh_id;
-    handshake_info->device_id = my_device_id;
 }
 
 namespace deprecated {
