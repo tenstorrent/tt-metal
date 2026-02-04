@@ -42,6 +42,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         | cb_w2c_in3     | CBIndex::c_5  | Float16_b  | true  |    8     |      16384      |
         | cb_w2c_in4     | CBIndex::c_6  | Float16_b  | true  |    7     |      14336      |
         | cb_w2c_in5     | CBIndex::c_7  | Float16_b  | true  |    1     |      2048       |
+        | cb_w2c_in6     | CBIndex::c_8  | Float16_b  | true  |    1     |      2048       |
         ------------------------------------------------------------------------------------
     */
 
@@ -53,6 +54,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         {"cb_w2c_in3", tt::CBIndex::c_5, tt::DataFormat::Float16_b, true, 8},
         {"cb_w2c_in4", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, 7},
         {"cb_w2c_in5", tt::CBIndex::c_7, tt::DataFormat::Float16_b, true, 1},
+        {"cb_w2c_in6", tt::CBIndex::c_8, tt::DataFormat::Float16_b, true, 1},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
@@ -89,50 +91,6 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     for (const auto& tensor : tensors) {
         tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
     }
-
-    std::unordered_map<std::string, uint32_t> named_compile_time_args = {
-        {"layer_id", operation_attributes.layer_id},
-        {"num_cores", static_cast<uint32_t>(num_cores)},
-    };
-
-    // Create kernels for the program
-    auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/moe_gate_mm/device/kernels/dm0.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_0,
-            .compile_args = compile_args,
-            .named_compile_args = named_compile_time_args});
-
-    auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/moe_gate_mm/device/kernels/dm1.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = compile_args,
-            .named_compile_args = named_compile_time_args});
-
-    auto compute_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/moe_gate_mm/device/kernels/compute.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::LoFi,
-            .fp32_dest_acc_en = false,
-            .dst_full_sync_en = false,
-            .bfp8_pack_precise = false,
-            .math_approx_mode = true,
-            .compile_args = compile_args,
-            .named_compile_args = named_compile_time_args});
-
-    // Create semaphores to wait for the partial to arrive from the other core
-    // There will be 8 cores, each waiting for partial to come from 4 other cores.
-    // The 4 cores will send partial to two cores each.
-    const uint32_t partial_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     // Create optimal ring ordering for NOC1 to minimize traffic conflicts
     // NOC1 routes: decreasing y (top) first, then decreasing x (left)
@@ -176,7 +134,56 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
         bank2tile_id[ring_pos2bank_id[core_id]] = tile_id++;
     }
 
-    const auto& core_collector = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[11]]);
+    const auto& collector_core = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[11]]);
+    const auto& first_core = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[0]]);
+
+    std::unordered_map<std::string, uint32_t> named_compile_time_args = {
+        {"layer_id", operation_attributes.layer_id},
+        {"num_cores", static_cast<uint32_t>(num_cores)},
+        {"collector_physical_x", collector_core.x},
+        {"collector_physical_y", collector_core.y},
+        {"first_physical_x", first_core.x},
+        {"first_physical_y", first_core.y},
+    };
+
+    // Create kernels for the program
+    auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/moe_gate_mm/device/kernels/dm0.cpp",
+        all_cores,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::NOC_0,
+            .compile_args = compile_args,
+            .named_compile_args = named_compile_time_args});
+
+    auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/moe_gate_mm/device/kernels/dm1.cpp",
+        all_cores,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::NOC_1,
+            .compile_args = compile_args,
+            .named_compile_args = named_compile_time_args});
+
+    auto compute_kernel_handle = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/moe_gate_mm/device/kernels/compute.cpp",
+        all_cores,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::LoFi,
+            .fp32_dest_acc_en = false,
+            .dst_full_sync_en = false,
+            .bfp8_pack_precise = false,
+            .math_approx_mode = true,
+            .compile_args = compile_args,
+            .named_compile_args = named_compile_time_args});
+
+    // Create semaphores to wait for the partial to arrive from the other core
+    // There will be 8 cores, each waiting for partial to come from 4 other cores.
+    // The 4 cores will send partial to two cores each.
+    const uint32_t partial_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> runtime_args;
@@ -194,9 +201,7 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
     runtime_args.push_back(0);  // Neighbor1 physical y
     runtime_args.push_back(0);  // Neighbor2 physical x
     runtime_args.push_back(0);  // Neighbor2 physical y
-    runtime_args.push_back(0);  // Collector core ID
-    runtime_args.push_back(core_collector.x);  // Collector physical x
-    runtime_args.push_back(core_collector.y);  // Collector physical y
+    runtime_args.push_back(0);  // Core ID
 
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
@@ -230,8 +235,6 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
             runtime_args[9] = dram_bank2neighbors[dram_bank][3];
             runtime_args[10] = dram_bank2neighbors[dram_bank][4];
             runtime_args[11] = 0;
-            runtime_args[12] = 0;
-            runtime_args[13] = 0;
         } else {
             runtime_args[6] = 0;
             runtime_args[7] = 0;
@@ -239,8 +242,6 @@ MoEGateMMProgramFactory::cached_program_t MoEGateMMProgramFactory::create(
             runtime_args[9] = 0;
             runtime_args[10] = 0;
             runtime_args[11] = bank2tile_id[dram_bank];
-            runtime_args[12] = core_collector.x;
-            runtime_args[13] = core_collector.y;
         }
 
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);

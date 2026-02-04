@@ -122,23 +122,12 @@ inline void _calculate_top4_() {
         TTI_SFPOR(0, p_sfpu::LREG6, p_sfpu::LREG4, 0);
     }
 
-    // For cleaner output, just set other regs to 0.
-    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_USHORT, 0);
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_USHORT, 0);
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0);
-
     //-------------------------------------------------------------------------
     // Step 9: Write back the 4 indices as raw uint16 values
     // Using LO16 mode to write the lower 16 bits (the indices)
     //-------------------------------------------------------------------------
-    TTI_SFPTRANSP(0, 0, 0, 0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, 0);  // Write 1st index
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, 2);  // Write 2nd index
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, 4);  // Write 3rd index
-    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, 6);  // Write 4th index
-    TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
 }  // namespace sfpu

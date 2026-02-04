@@ -28,8 +28,7 @@ inline void _mask_group_configure_addrmod_() {
         .set(ADDR_MOD_0);
 }
 
-template <uint32_t tile_index>
-inline void _mask_group_() {
+inline void _mask_group_(uint32_t tile_index, uint32_t dst_index) {
     // Extract bit for this tile from LREG4
     TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);  // Copy bitmask to LREG5
 
@@ -98,10 +97,9 @@ inline void _llk_math_mask_group_init_() {
         ckernel::sfpu::_mask_group_configure_addrmod_);
 }
 
-template <uint32_t tile_index>
-inline void _llk_math_mask_group_(uint32_t dst_index) {
+inline void _llk_math_mask_group_(uint32_t tile_index, uint32_t dst_index) {
     _llk_math_eltwise_unary_sfpu_params_</*APPROXIMATE=*/true>(
-        ckernel::sfpu::_mask_group_<tile_index>, dst_index, VectorMode::RC_custom);
+        ckernel::sfpu::_mask_group_, tile_index, dst_index, VectorMode::RC_custom);
 }
 
 #endif
@@ -116,9 +114,6 @@ inline void mask_group_init() { MATH((_llk_math_mask_group_init_())); }
  * @brief Calculates the mask of the group
  * @return None. Modifies each tile in place.
  */
-template <uint32_t tile_index>
-ALWI void mask_group(uint32_t dst_index) {
-    MATH((_llk_math_mask_group_<tile_index>(dst_index)));
-}
+ALWI void mask_group(uint32_t tile_index, uint32_t dst_index) { MATH((_llk_math_mask_group_(tile_index, dst_index))); }
 
 }  // namespace ckernel

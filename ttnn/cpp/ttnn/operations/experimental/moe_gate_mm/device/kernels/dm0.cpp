@@ -26,6 +26,10 @@ void kernel_main() {
     // Compile time arguments
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
+    constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
+    constexpr uint32_t first_physical_x = get_named_compile_time_arg_val("first_physical_x");
+    constexpr uint32_t first_physical_y = get_named_compile_time_arg_val("first_physical_y");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -44,6 +48,7 @@ void kernel_main() {
     const auto neighbor1_physical_y = get_arg_val<uint32_t>(argidx++);
     const auto neighbor2_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto neighbor2_physical_y = get_arg_val<uint32_t>(argidx++);
+    const auto core_id = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;

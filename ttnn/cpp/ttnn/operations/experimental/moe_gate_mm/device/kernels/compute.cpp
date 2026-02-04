@@ -11,7 +11,6 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "top2.h"
 #include "top4.h"
-#include "mask.h"
 #include "top8.h"
 
 #include "compute_kernel_api/eltwise_unary/fill.h"
@@ -146,6 +145,10 @@ inline void add_row_to_dst(uint32_t row_cb, uint32_t tile_idx, uint32_t dst_idx)
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
+    constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
+    constexpr uint32_t first_physical_x = get_named_compile_time_arg_val("first_physical_x");
+    constexpr uint32_t first_physical_y = get_named_compile_time_arg_val("first_physical_y");
 
     // Run-time arguments
     uint32_t argidx = 0;
@@ -161,8 +164,6 @@ void kernel_main() {
     const auto neighbor2_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto neighbor2_physical_y = get_arg_val<uint32_t>(argidx++);
     const auto core_id = get_arg_val<uint32_t>(argidx++);
-    const auto collector_physical_x = get_arg_val<uint32_t>(argidx++);
-    const auto collector_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
@@ -173,6 +174,7 @@ void kernel_main() {
     constexpr auto cb_w2c_in3 = tt::CBIndex::c_5;
     constexpr auto cb_w2c_in4 = tt::CBIndex::c_6;
     constexpr auto cb_w2c_in5 = tt::CBIndex::c_7;
+    constexpr auto cb_w2c_in6 = tt::CBIndex::c_8;
 
     // NOC Packet size
     constexpr uint32_t noc_packet_size = 8192;
@@ -192,6 +194,11 @@ void kernel_main() {
     const uint32_t w_last_block_txns = (w_remaining_tiles + w_tiles_per_txn - 1) / w_tiles_per_txn;  // Ceiling division
     const uint32_t w_tiles_per_block_last = w_remaining_tiles - 1;
     const uint32_t bias_tile_index = w_tiles_per_block_last;  // Bias is the last tile in the last block
+
+    //-------------------------------------------------------------------------
+    // Collector core
+    //-------------------------------------------------------------------------
+    constexpr uint32_t COLLECTOR_CORE_ID = 7;
 
     //-------------------------------------------------------------------------
     // Compute configuration
@@ -264,38 +271,28 @@ void kernel_main() {
         cb_push_back(cb_c2w_rdy, 1);
 
         tile_regs_release();
-    } else {
-        // Initialize matmul: input @ weight -> output
-        mm_block_init(cb_s2c_in, cb_r2c_w, cb_s2c_out, /*transpose=*/false, /*ct_dim=*/1, /*rt_dim=*/1, /*kt_dim=*/1);
 
-        //-------------------------------------------------------------------------
-        // Compute: input @ weight -> output
-        //-------------------------------------------------------------------------
-        tile_regs_acquire();
+        return;
+    }
 
-        uint32_t tile_index = 0;
-        for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
-            cb_wait_front(cb_r2c_w, w_tiles_per_block);
+    // -------------------------------------------------------------------------
+    // Rest of the 8 cores do more
+    // -------------------------------------------------------------------------
 
-            for (uint32_t tile_id = 0; tile_id < w_tiles_per_block; ++tile_id) {
-                // Perform matmul: 1 input tile @ 1 weight tile
-                matmul_block(
-                    cb_s2c_in,
-                    cb_r2c_w,
-                    /*in0_index=*/tile_index++,
-                    /*in1_index=*/tile_id,
-                    /*idst=*/0,
-                    /*transpose=*/false,
-                    /*ct_dim=*/1,
-                    /*rt_dim=*/1,
-                    /*kt_dim=*/1);
-            }
-            cb_pop_front(cb_r2c_w, w_tiles_per_block);
-        }
+    // Initialize matmul: input @ weight -> output
+    mm_block_init(cb_s2c_in, cb_r2c_w, cb_s2c_out, /*transpose=*/false, /*ct_dim=*/1, /*rt_dim=*/1, /*kt_dim=*/1);
 
-        // Last block
+    //-------------------------------------------------------------------------
+    // Compute: input @ weight -> output
+    //-------------------------------------------------------------------------
+    tile_regs_acquire();
+
+    uint32_t tile_index = 0;
+    for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
         cb_wait_front(cb_r2c_w, w_tiles_per_block);
-        for (uint32_t tile_id = 0; tile_id < w_tiles_per_block_last; ++tile_id) {
+
+        for (uint32_t tile_id = 0; tile_id < w_tiles_per_block; ++tile_id) {
+            // Perform matmul: 1 input tile @ 1 weight tile
             matmul_block(
                 cb_s2c_in,
                 cb_r2c_w,
@@ -307,134 +304,161 @@ void kernel_main() {
                 /*rt_dim=*/1,
                 /*kt_dim=*/1);
         }
+        cb_pop_front(cb_r2c_w, w_tiles_per_block);
+    }
 
-        binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);
+    // Last block
+    cb_wait_front(cb_r2c_w, w_tiles_per_block);
+    for (uint32_t tile_id = 0; tile_id < w_tiles_per_block_last; ++tile_id) {
+        matmul_block(
+            cb_s2c_in,
+            cb_r2c_w,
+            /*in0_index=*/tile_index++,
+            /*in1_index=*/tile_id,
+            /*idst=*/0,
+            /*transpose=*/false,
+            /*ct_dim=*/1,
+            /*rt_dim=*/1,
+            /*kt_dim=*/1);
+    }
 
-        // Wait for the partial to come, add it
-        cb_wait_front(cb_w2c_in2, 1);
-        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2, 0, 0);
-        cb_pop_front(cb_w2c_in2, 1);
+    binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);
 
-        //-------------------------------------------------------------------------
-        // Sigmoid
-        //-------------------------------------------------------------------------
+    // Wait for the partial to come, add it
+    cb_wait_front(cb_w2c_in2, 1);
+    binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2, 0, 0);
+    cb_pop_front(cb_w2c_in2, 1);
 
-        // Sigmoid the output
-        sigmoid_tile_init();
-        sigmoid_tile(0);
+    //-------------------------------------------------------------------------
+    // Sigmoid
+    //-------------------------------------------------------------------------
 
-        //-------------------------------------------------------------------------
-        // Retain a copy
-        //-------------------------------------------------------------------------
-        // Retain this copy for final scores (raw scores)
-        copy_dest_values_init();
-        copy_dest_values(1, 0);
+    // Sigmoid the output
+    sigmoid_tile_init();
+    sigmoid_tile(0);
 
-        //-------------------------------------------------------------------------
-        // Add bias
-        //-------------------------------------------------------------------------
-        add_row_to_dst_init();
-        add_row_to_dst(cb_r2c_w, bias_tile_index, 0);
+    //-------------------------------------------------------------------------
+    // Retain a copy
+    //-------------------------------------------------------------------------
+    // Retain this copy for final scores (raw scores)
+    copy_dest_values_init();
+    copy_dest_values(1, 0);
 
-        //-------------------------------------------------------------------------
-        // Sum of top2 scores for this group
-        //-------------------------------------------------------------------------
-        // Pack the output and bring it back as transposed
-        tile_regs_commit();
-        tile_regs_wait();
+    //-------------------------------------------------------------------------
+    // Add bias
+    //-------------------------------------------------------------------------
+    add_row_to_dst_init();
+    add_row_to_dst(cb_r2c_w, bias_tile_index, 0);
 
-        // Send the bias adjusted scores to be sent over to the collector core
-        cb_reserve_back(cb_s2c_out, 1);
-        pack_tile(0, cb_s2c_out);
-        cb_push_back(cb_s2c_out, 1);
+    //-------------------------------------------------------------------------
+    // Sum of top2 scores for this group
+    //-------------------------------------------------------------------------
+    // First, pack the output and bring it back as transposed
+    tile_regs_commit();
+    tile_regs_wait();
 
-        // Pack the raw scores to be sent over to the collector core
-        cb_reserve_back(cb_w2c_in5, 1);
-        pack_tile(1, cb_w2c_in5);
-        cb_push_back(cb_w2c_in5, 1);
+    // Store the bias adjusted scores for transpose
+    cb_reserve_back(cb_s2c_out, 1);
+    pack_tile(0, cb_s2c_out);
+    cb_push_back(cb_s2c_out, 1);
 
-        // Signal to DM1 that both are ready
-        cb_reserve_back(cb_c2w_rdy, 1);
-        cb_push_back(cb_c2w_rdy, 1);
+    // Store the raw scores for transpose
+    cb_reserve_back(cb_w2c_in5, 1);
+    pack_tile(1, cb_w2c_in5);
+    cb_push_back(cb_w2c_in5, 1);
 
-        tile_regs_release();
+    tile_regs_release();
 
-        cb_wait_front(cb_s2c_out, 1);
+    cb_wait_front(cb_s2c_out, 1);
+    tile_regs_acquire();
+
+    // Transpose
+    transpose_wh_init_short(cb_s2c_out);
+    transpose_wh_tile(cb_s2c_out, 0, 0);
+
+    // Sum the top-2 of the output
+    sum_top2_tile_init();
+    sum_top2_tile(0);
+
+    tile_regs_commit();
+
+    cb_reserve_back(cb_c2w_rdy, 1);
+
+    tile_regs_wait();
+    // Pack output tile
+    pack_tile(0, cb_c2w_rdy);
+    tile_regs_release();
+    cb_push_back(cb_c2w_rdy, 1);
+
+    cb_pop_front(cb_r2c_w, w_tiles_per_block);
+
+    //-------------------------------------------------------------------------
+    // Non-collector cores
+    //-------------------------------------------------------------------------
+    if (core_id != COLLECTOR_CORE_ID) {
+        // Wait for the group masks
+        cb_wait_front(cb_w2c_in6, 1);
+
         tile_regs_acquire();
 
-        // Transpose
-        transpose_wh_init_short(cb_s2c_out);
-        transpose_wh_tile(cb_s2c_out, 0, 0);
+        copy_tile_init(cb_w2c_in6);
+        copy_tile(cb_w2c_in6, 0, 0);
 
-        // Sum the top-2 of the output
-        sum_top2_tile_init();
-        sum_top2_tile(0);
+        top8_tile_init();
+        top8_tile(/*tile_index=*/core_id, /*dst_index=*/0);
+
+        cb_pop_front(cb_w2c_in6, 1);
 
         tile_regs_commit();
-
-        cb_reserve_back(cb_c2w_rdy, 1);
-
         tile_regs_wait();
-        // Pack output tile
-        pack_tile(0, cb_c2w_rdy);
         tile_regs_release();
-        cb_push_back(cb_c2w_rdy, 1);
-
-        cb_pop_front(cb_r2c_w, w_tiles_per_block);
-
-        //-------------------------------------------------------------------------
-        // Collector core
-        //-------------------------------------------------------------------------
-        if (core_id == 7) {
-            // I am collecting, let us wait for everyone else to finish sending their data to me
-            cb_wait_front(cb_w2c_in3, 8);
-
-            tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_w2c_in3);
-
-            // Copy the group scores
-            copy_tile(cb_w2c_in3, 7, 7);
-
-            //-------------------------------------------------------------------------
-            // Top 4 groups for each token
-            //-------------------------------------------------------------------------
-            top4_tile_init();
-            top4_tile(7);
-
-            //-------------------------------------------------------------------------
-            // Adjusted scores -> Copy to mask and find top8 experts for each token
-            //-------------------------------------------------------------------------
-            mask_group_init();
-            for (uint32_t i = 0; i < 7; i++) {
-                copy_tile(cb_w2c_in3, i, i);
-            }
-            mask_group<0>(0);
-            mask_group<1>(1);
-            mask_group<2>(2);
-            mask_group<3>(3);
-            mask_group<4>(4);
-            mask_group<5>(5);
-            mask_group<6>(6);
-
-            // My own data
-            copy_tile(cb_s2c_out, 0, 7);
-            mask_group<7>(7);
-
-            top8_bitonic_tile_init();
-            top8_bitonic_tile(0);
-
-            cb_pop_front(cb_w2c_in3, 8);
-            //-------------------------------------------------------------------------
-            // Raw scores -> Use it to normalize and pack
-            //-------------------------------------------------------------------------
-            cb_wait_front(cb_w2c_in4, 7);
-
-            cb_pop_front(cb_w2c_in4, 7);
-
-            tile_regs_commit();
-            tile_regs_wait();
-            tile_regs_release();
-        }
-        cb_pop_front(cb_s2c_out, 1);
     }
+
+    //-------------------------------------------------------------------------
+    // Collector core
+    //-------------------------------------------------------------------------
+    if (core_id == COLLECTOR_CORE_ID) {
+        // I am collecting, let us wait for everyone else to finish sending their data to me
+        cb_wait_front(cb_w2c_in3, 1);
+
+        tile_regs_acquire();
+        copy_tile_to_dst_init_short(cb_w2c_in3);
+
+        // Copy the group scores
+        copy_tile(cb_w2c_in3, 0, 0);
+
+        //-------------------------------------------------------------------------
+        // Top 4 groups for each token
+        //-------------------------------------------------------------------------
+        top4_tile_init();
+        top4_tile(0);
+
+        // Pack this out
+        tile_regs_commit();
+        tile_regs_wait();
+        cb_reserve_back(cb_w2c_in6, 1);
+        pack_tile(0, cb_w2c_in6);
+        // pack_rows_init(4);
+        // pack_rows(0, cb_w2c_in6);
+        // pack_rows_uninit();
+        cb_push_back(cb_w2c_in6, 1);
+
+        // TODO: Do top-8 for our tile here
+        top8_tile_init();
+        top8_tile(/*tile_index=*/core_id, /*dst_index=*/0);
+        cb_pop_front(cb_w2c_in3, 1);
+
+        //-------------------------------------------------------------------------
+        // Adjusted scores -> Copy to mask and find top8 experts for each token
+        //-------------------------------------------------------------------------
+        // My own data
+        // copy_tile(cb_s2c_out, 0, 7);
+        // mask_group<7>(7);
+
+        // top8_tile_init();
+        // top8_tile(0);
+
+        tile_regs_release();
+    }
+    cb_pop_front(cb_s2c_out, 1);
 }
