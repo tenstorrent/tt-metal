@@ -362,215 +362,35 @@ class MLA1D(AbstractModule):
 
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-        # DRAM sharding constants
-        num_dram_banks = 12
-        tile_size = 32
-
-        # =====================================================================
-        # qkv_a (wq_kv_a): m=32, k=896, n=2112 (pads to 2304)
-        # in0_core_grid=(1,7), out_core_grid=(1,8), WIDTH sharding
-        # =====================================================================
-        qkv_a_k = dim  # 896
-        qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim  # 2112
-        qkv_a_n_padded = pad_n_to_dram_banks(qkv_a_n)  # 2304
-        qkv_a_in0_core_grid = ttnn.CoreGrid(y=1, x=7)
-        qkv_a_out_core_grid = ttnn.CoreGrid(y=1, x=8)
-        qkv_a_num_in0_cores = 7
-        qkv_a_num_out_cores = 8
-
-        # in0 L1 WIDTH sharded memory config for qkv_a
-        qkv_a_in0_memory_config = {
-            "core_grid": qkv_a_in0_core_grid,
-            "strategy": ttnn.ShardStrategy.WIDTH,
-            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
-        }
-
-        # Program config for qkv_a (using n_padded for per_core_N)
-        qkv_a_in0_block_w = qkv_a_k // qkv_a_num_in0_cores // tile_size  # 896 // 7 // 32 = 4
-        qkv_a_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        qkv_a_per_core_N = qkv_a_n_padded // qkv_a_num_out_cores // tile_size  # 2304 // 8 // 32 = 9
-
-        qkv_a_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=qkv_a_in0_block_w,
-            per_core_M=qkv_a_per_core_M,
-            per_core_N=qkv_a_per_core_N,
-            fused_activation=None,
-        )
-
-        # Output memory config for qkv_a
-        qkv_a_out_memory_config = {
-            "core_grid": qkv_a_out_core_grid,
-            "strategy": ttnn.ShardStrategy.WIDTH,
-            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
-        }
-
+        # Fused wq_a and wkv_a config
         wq_kv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=qkv_a_program_config,
+            program_config=None,
         )
-
-        # =====================================================================
-        # wq_b: m=32, k=1536, n=3072 (already aligned, no padding needed)
-        # in0_core_grid=(2,8), out_core_grid=(2,8), WIDTH sharding
-        # =====================================================================
-        wq_b_k = q_lora_rank  # 1536
-        wq_b_n = num_heads_local * qk_head_dim  # 16 * 192 = 3072
-        wq_b_n_padded = pad_n_to_dram_banks(wq_b_n)  # 3072 (already aligned)
-        wq_b_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
-        wq_b_out_core_grid = ttnn.CoreGrid(y=2, x=8)
-        wq_b_num_in0_cores = 16
-        wq_b_num_out_cores = 16
-
-        # in0 L1 WIDTH sharded memory config for wq_b
-        wq_b_in0_memory_config = {
-            "core_grid": wq_b_in0_core_grid,
-            "strategy": ttnn.ShardStrategy.WIDTH,
-            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
-        }
-
-        # Program config for wq_b (using n_padded for per_core_N)
-        wq_b_in0_block_w = wq_b_k // wq_b_num_in0_cores // tile_size  # 1536 // 16 // 32 = 3
-        wq_b_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        wq_b_per_core_N = wq_b_n_padded // wq_b_num_out_cores // tile_size  # 3072 // 16 // 32 = 6
-
-        wq_b_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=wq_b_in0_block_w,
-            per_core_M=wq_b_per_core_M,
-            per_core_N=wq_b_per_core_N,
-            fused_activation=None,
-        )
-
-        # Output memory config for wq_b
-        wq_b_out_memory_config = {
-            "core_grid": wq_b_out_core_grid,
-            "strategy": ttnn.ShardStrategy.WIDTH,
-            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
-        }
 
         wq_b_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=wq_b_program_config,
-        )
-
-        # =====================================================================
-        # wkv_b1: batch=num_heads_local, m=seq_len, k=qk_nope_head_dim, n=kv_lora_rank
-        # in0_core_grid=(3,4), HEIGHT (batch) sharding
-        # =====================================================================
-        wkv_b1_k = qk_nope_head_dim  # 128
-        wkv_b1_n = kv_lora_rank  # 512
-        wkv_b1_in0_core_grid_x = 3
-        wkv_b1_in0_core_grid_y = 4
-        wkv_b1_num_cores = wkv_b1_in0_core_grid_x * wkv_b1_in0_core_grid_y  # 12
-
-        # in0 L1 HEIGHT sharded memory config for wkv_b1 (batch sharding)
-        wkv_b1_in0_shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0), ttnn.CoreCoord(wkv_b1_in0_core_grid_x - 1, wkv_b1_in0_core_grid_y - 1)
-                )
-            }
-        )
-
-        # Program config for wkv_b1 (batched DRAM sharded)
-        wkv_b1_in0_block_w = wkv_b1_k // tile_size  # 128 // 32 = 4
-        wkv_b1_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        wkv_b1_per_core_N = wkv_b1_n // tile_size  # 512 // 32 = 16
-
-        wkv_b1_program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
-            in0_block_w=wkv_b1_in0_block_w,
-            per_core_M=wkv_b1_per_core_M,
-            per_core_N=wkv_b1_per_core_N,
-            fused_activation=None,
+            program_config=None,
         )
 
         wkv_b1_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=wkv_b1_program_config,
-        )
-
-        # =====================================================================
-        # wkv_b2: batch=num_heads, m=seq_len, k=kv_lora_rank, n=v_head_dim
-        # in0_core_grid=(3,4), HEIGHT (batch) sharding, tile_h=4
-        # =====================================================================
-        wkv_b2_k = kv_lora_rank  # 512
-        wkv_b2_n = v_head_dim  # 128
-        wkv_b2_in0_core_grid_x = 3
-        wkv_b2_in0_core_grid_y = 4
-        wkv_b2_num_cores = wkv_b2_in0_core_grid_x * wkv_b2_in0_core_grid_y  # 12
-        wkv_b2_tile_h = 4  # Tiny tile for wkv_b2
-
-        # in0 L1 HEIGHT sharded memory config for wkv_b2 (batch sharding)
-        wkv_b2_in0_shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0), ttnn.CoreCoord(wkv_b2_in0_core_grid_x - 1, wkv_b2_in0_core_grid_y - 1)
-                )
-            }
-        )
-
-        # Program config for wkv_b2 (batched DRAM sharded)
-        wkv_b2_in0_block_w = wkv_b2_k // tile_size  # 512 // 32 = 16
-        wkv_b2_per_core_M = 1  # m // tile_h = 4 // 4 = 1
-        wkv_b2_per_core_N = wkv_b2_n // tile_size  # 128 // 32 = 4
-
-        wkv_b2_program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
-            in0_block_w=wkv_b2_in0_block_w,
-            per_core_M=wkv_b2_per_core_M,
-            per_core_N=wkv_b2_per_core_N,
-            fused_activation=None,
+            program_config=None,
         )
 
         wkv_b2_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=wkv_b2_program_config,
+            program_config=None,
         )
-
-        # =====================================================================
-        # wo: m=32, k=16384, n=896 (pads to 1152, 36 tiles, out_core_grid divides 36)
-        # in0_core_grid=(1,8), out_core_grid=(1,6), WIDTH sharding
-        # =====================================================================
-        wo_k = num_heads * v_head_dim  # 128 * 128 = 16384
-        wo_n = dim  # 896
-        wo_n_padded = pad_n_to_dram_banks(wo_n)  # 1152
-        wo_in0_core_grid = ttnn.CoreGrid(y=1, x=8)
-        wo_out_core_grid = ttnn.CoreGrid(y=1, x=6)
-        wo_num_in0_cores = 8
-        wo_num_out_cores = 6
-
-        # in0 L1 WIDTH sharded memory config for wo
-        wo_in0_memory_config = {
-            "core_grid": wo_in0_core_grid,
-            "strategy": ttnn.ShardStrategy.WIDTH,
-            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
-        }
-
-        # Program config for wo (using n_padded for per_core_N)
-        wo_in0_block_w = wo_k // wo_num_in0_cores // tile_size  # 16384 // 8 // 32 = 64
-        wo_per_core_M = 1  # m // tile_size = 32 // 32 = 1
-        wo_per_core_N = wo_n_padded // wo_num_out_cores // tile_size  # 1152 // 6 // 32 = 6
-
-        wo_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=wo_in0_block_w,
-            per_core_M=wo_per_core_M,
-            per_core_N=wo_per_core_N,
-            fused_activation=None,
-        )
-
-        # Output memory config for wo
-        wo_out_memory_config = {
-            "core_grid": wo_out_core_grid,
-            "strategy": ttnn.ShardStrategy.WIDTH,
-            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
-        }
 
         wo_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=wo_program_config,
+            program_config=None,
         )
 
         # FlashMLA
@@ -662,13 +482,10 @@ class MLA1D(AbstractModule):
             "v_head_dim": v_head_dim,
             "input_memory_config": input_memory_config,
             "wq_kv_a": wq_kv_a_config,
-            "wq_kv_a_in0_memory_config": qkv_a_in0_memory_config,
             "wq_b": wq_b_config,
-            "wq_b_in0_memory_config": wq_b_in0_memory_config,
             "wkv_b1": wkv_b1_config,
             "wkv_b2": wkv_b2_config,
             "wo": wo_config,
-            "wo_in0_memory_config": wo_in0_memory_config,
             "flash_mla": flash_mla_config,
             "q_norm": q_norm_config,
             "kv_norm": kv_norm_config,
@@ -721,57 +538,176 @@ class MLA1D(AbstractModule):
             strategy=ttnn.ShardStrategy.WIDTH,
         )
 
-        # Fused wq_a and wkv_a config
+        # DRAM sharding constants
+        num_dram_banks = 12
+        tile_size = 32
+        dim = hf_config.hidden_size
+
+        # =====================================================================
+        # qkv_a (wq_kv_a): m=32, k=896, n=2112 (pads to 2304)
+        # in0_core_grid=(7,1), out_core_grid=(8,1), WIDTH sharding
+        # =====================================================================
+        qkv_a_k = dim  # 896
+        qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim  # 2112
+        qkv_a_n_padded = pad_n_to_dram_banks(qkv_a_n)  # 2304
+        qkv_a_in0_core_grid = ttnn.CoreGrid(y=1, x=7)
+        qkv_a_out_core_grid = ttnn.CoreGrid(y=1, x=8)
+        qkv_a_num_in0_cores = 7
+        qkv_a_num_out_cores = 8
+
+        # Program config for qkv_a
+        qkv_a_in0_block_w = qkv_a_k // qkv_a_num_in0_cores // tile_size  # 896 // 7 // 32 = 4
+        qkv_a_per_core_M = 1  # m // tile_size = 32 // 32 = 1
+        qkv_a_per_core_N = qkv_a_n_padded // qkv_a_num_out_cores // tile_size  # 2304 // 8 // 32 = 9
+
+        qkv_a_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=qkv_a_in0_block_w,
+            per_core_M=qkv_a_per_core_M,
+            per_core_N=qkv_a_per_core_N,
+            fused_activation=None,
+        )
+
+        # in0 L1 WIDTH sharded memory config for qkv_a
+        wq_kv_a_in0_memory_config = {
+            "core_grid": qkv_a_in0_core_grid,
+            "strategy": ttnn.ShardStrategy.WIDTH,
+            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
+        }
+
         wq_kv_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            program_config=None,
+            program_config=qkv_a_program_config,
         )
+
+        # =====================================================================
+        # wq_b: m=32, k=1536, n=3072 (already aligned)
+        # in0_core_grid=(8,2), out_core_grid=(8,2), WIDTH sharding
+        # =====================================================================
+        wq_b_k = q_lora_rank  # 1536
+        wq_b_n = num_heads_local * qk_head_dim  # 16 * 192 = 3072
+        wq_b_n_padded = pad_n_to_dram_banks(wq_b_n)  # 3072 (already aligned)
+        wq_b_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
+        wq_b_out_core_grid = ttnn.CoreGrid(y=2, x=8)
+        wq_b_num_in0_cores = 16
+        wq_b_num_out_cores = 16
+
+        # Program config for wq_b
+        wq_b_in0_block_w = wq_b_k // wq_b_num_in0_cores // tile_size  # 1536 // 16 // 32 = 3
+        wq_b_per_core_M = 1  # m // tile_size = 32 // 32 = 1
+        wq_b_per_core_N = wq_b_n_padded // wq_b_num_out_cores // tile_size  # 3072 // 16 // 32 = 6
+
+        wq_b_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=wq_b_in0_block_w,
+            per_core_M=wq_b_per_core_M,
+            per_core_N=wq_b_per_core_N,
+            fused_activation=None,
+        )
+
+        # in0 L1 WIDTH sharded memory config for wq_b
+        wq_b_in0_memory_config = {
+            "core_grid": wq_b_in0_core_grid,
+            "strategy": ttnn.ShardStrategy.WIDTH,
+            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
+        }
 
         wq_b_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            program_config=None,
+            program_config=wq_b_program_config,
+        )
+
+        # =====================================================================
+        # wkv_b1: batch=16 (pads to 24), m=32, k=128, n=512
+        # core_grid=(3,4), HEIGHT (batch) sharding
+        # =====================================================================
+        wkv_b1_k = qk_nope_head_dim  # 128
+        wkv_b1_n = kv_lora_rank  # 512
+        wkv_b1_in0_core_grid_x = 3
+        wkv_b1_in0_core_grid_y = 4
+
+        # Program config for wkv_b1 (batched DRAM sharded)
+        wkv_b1_in0_block_w = wkv_b1_k // tile_size  # 128 // 32 = 4
+        wkv_b1_per_core_M = 1  # m // tile_size = 32 // 32 = 1
+        wkv_b1_per_core_N = wkv_b1_n // tile_size  # 512 // 32 = 16
+
+        wkv_b1_program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+            in0_block_w=wkv_b1_in0_block_w,
+            per_core_M=wkv_b1_per_core_M,
+            per_core_N=wkv_b1_per_core_N,
+            fused_activation=None,
         )
 
         wkv_b1_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            program_config=None,
+            program_config=wkv_b1_program_config,
+        )
+
+        # =====================================================================
+        # wkv_b2: batch=128 (pads to 132), m=4, k=512, n=128, tile_h=4
+        # core_grid=(3,4), HEIGHT (batch) sharding
+        # =====================================================================
+        wkv_b2_k = kv_lora_rank  # 512
+        wkv_b2_n = v_head_dim  # 128
+        wkv_b2_in0_core_grid_x = 3
+        wkv_b2_in0_core_grid_y = 4
+        wkv_b2_tile_h = 4  # Tiny tile for wkv_b2
+
+        # Program config for wkv_b2 (batched DRAM sharded)
+        wkv_b2_in0_block_w = wkv_b2_k // tile_size  # 512 // 32 = 16
+        wkv_b2_per_core_M = 1  # m // tile_h = 4 // 4 = 1
+        wkv_b2_per_core_N = wkv_b2_n // tile_size  # 128 // 32 = 4
+
+        wkv_b2_program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+            in0_block_w=wkv_b2_in0_block_w,
+            per_core_M=wkv_b2_per_core_M,
+            per_core_N=wkv_b2_per_core_N,
+            fused_activation=None,
         )
 
         wkv_b2_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            program_config=None,
+            program_config=wkv_b2_program_config,
         )
+
+        # =====================================================================
+        # wo: m=32, k=16384, n=896 (pads to 1152)
+        # in0_core_grid=(8,1), out_core_grid=(6,1), WIDTH sharding
+        # =====================================================================
+        wo_k = num_heads * v_head_dim  # 128 * 128 = 16384
+        wo_n = dim  # 896
+        wo_n_padded = pad_n_to_dram_banks(wo_n)  # 1152
+        wo_in0_core_grid = ttnn.CoreGrid(y=1, x=8)
+        wo_out_core_grid = ttnn.CoreGrid(y=1, x=6)
+        wo_num_in0_cores = 8
+        wo_num_out_cores = 6
+
+        # Program config for wo
+        wo_in0_block_w = wo_k // wo_num_in0_cores // tile_size  # 16384 // 8 // 32 = 64
+        wo_per_core_M = 1  # m // tile_size = 32 // 32 = 1
+        wo_per_core_N = wo_n_padded // wo_num_out_cores // tile_size  # 1152 // 6 // 32 = 6
+
+        wo_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=wo_in0_block_w // 2,
+            per_core_M=wo_per_core_M,
+            per_core_N=wo_per_core_N,
+            fused_activation=None,
+        )
+
+        # in0 L1 WIDTH sharded memory config for wo
+        wo_in0_memory_config = {
+            "core_grid": wo_in0_core_grid,
+            "strategy": ttnn.ShardStrategy.WIDTH,
+            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
+        }
 
         wo_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            program_config=None,
+            program_config=wo_program_config,
         )
-
-        # in0 L1 WIDTH sharded memory config for qkv_a (matching prefill core grids)
-        wq_kv_a_in0_memory_config = {
-            "core_grid": ttnn.CoreGrid(y=1, x=7),
-            "strategy": ttnn.ShardStrategy.WIDTH,
-            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
-        }
-
-        # in0 L1 WIDTH sharded memory config for wq_b (matching prefill core grids)
-        wq_b_in0_memory_config = {
-            "core_grid": ttnn.CoreGrid(y=2, x=8),
-            "strategy": ttnn.ShardStrategy.WIDTH,
-            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
-        }
-
-        # in0 L1 WIDTH sharded memory config for wo (matching prefill core grids)
-        wo_in0_memory_config = {
-            "core_grid": ttnn.CoreGrid(y=1, x=8),
-            "strategy": ttnn.ShardStrategy.WIDTH,
-            "orientation": ttnn.ShardOrientation.ROW_MAJOR,
-        }
 
         # Resharding for q_rope
         q_rope_shape = (1, USERS_PER_ROW, num_heads_local, qk_rope_head_dim)
