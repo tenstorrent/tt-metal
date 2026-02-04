@@ -9,7 +9,13 @@ enum Arch: uint {
 
 enum DataMovementProcessor : byte {
   RISCV_0,
-  RISCV_1
+  RISCV_1,
+  RISCV_2,
+  RISCV_3,
+  RISCV_4,
+  RISCV_5,
+  RISCV_6,
+  RISCV_7
 }
 
 enum NOC : byte {

@@ -42,6 +42,7 @@ inline void llk_unpack_A_init(
     const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
     const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
     if (unpack_to_dest && is_32bit_input(operand_unpack_src_format, operand_unpack_dst_format)) {
+        // TODO NC: Move to TRISC1 tt-metal#36411
         llk_unpack_dbg_feature_disable();
     }
 

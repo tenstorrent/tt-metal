@@ -72,7 +72,7 @@ void kernel_main() {
             log_tile(0);
 #ifdef WHERE  // Conditional negation: when eps > 0.5 and input < eps, negate the logit result (multiply by -1.0) to
               // ensure positive output. WHERE selects negated result (true) or original result (false).
-            copy_dest_values(2, 0);
+            copy_dest_values(0, 2);
 
             copy_tile_init(cb_input);
             copy_tile(cb_input, 0, 1);
@@ -84,7 +84,7 @@ void kernel_main() {
             mul_unary_tile(0, 0xBF800000);  // multiply by -1.0
 
             where_tile_init();
-            where_tile(1, 0, 2, 0);
+            WHERE(1, 0, 2, 0);
 #endif
 
             tile_regs_commit();

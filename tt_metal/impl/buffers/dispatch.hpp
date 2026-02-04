@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include "dispatch/command_queue.hpp"
 #include <stdint.h>
 #include <sub_device_types.hpp>
 #include <atomic>
 #include <memory>
 #include <variant>
-#include <vector>
 
 #include "buffer.hpp"
 #include "core_coord.hpp"
@@ -22,6 +20,11 @@
 namespace tt::tt_metal {
 class IDevice;
 enum class TensorMemoryLayout;
+struct ReadBufferDescriptor;
+struct ReadEventDescriptor;
+struct ReadCoreDataDescriptor;
+using CompletionReaderVariant =
+    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -56,9 +59,6 @@ struct ReadBufferDescriptor {
         dst_offset(dst_offset),
         num_pages_read(num_pages_read) {}
 };
-
-using CompletionReaderVariant =
-    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 
 // Contains helper functions to interface with buffers on device
 namespace buffer_dispatch {
@@ -114,7 +114,8 @@ void write_to_device_buffer(
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids);
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    const std::shared_ptr<experimental::PinnedMemory>& pinned_memory = nullptr);
 
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);
