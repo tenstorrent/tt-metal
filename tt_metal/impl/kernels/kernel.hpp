@@ -218,7 +218,8 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config) {
-        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_DM0 + enchantum::to_underlying(config.processor);
+        // Use HAL to map DM processor type to architecture-specific dispatch class
+        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_DM0 + MetalContext::instance().hal().get_dm_dispatch_class(enchantum::to_underlying(config.processor));
     }
 
     ~DataMovementKernel() override = default;
@@ -298,9 +299,8 @@ public:
             config.defines,
             config.named_compile_args),
         config_(config) {
-        // Note: it's wrong to use HalProcessorClassType here, because DM == 0 and COMPUTE == 1,
-        // but DISPATCH_CLASS_TENSIX_COMPUTE == 2.
-        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE;
+        // Use HAL to get the architecture-specific dispatch class for COMPUTE processors
+        this->dispatch_class_ = MetalContext::instance().hal().get_compute_dispatch_class();
     }
 
     ~ComputeKernel() override = default;

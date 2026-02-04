@@ -143,9 +143,9 @@ uint32_t configure_rta_offsets_for_kernel_groups(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset) {
     const auto& hal = MetalContext::instance().hal();
-    // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
-    // whereas the RTA allocation is separate for DM0/DM1/COMPUTE.
-    std::vector<uint32_t> max_rtas(DISPATCH_CLASS_MAX);
+    // RTA allocation is per dispatch class (not per HAL processor class).
+    // Use get_dispatch_class_count() which returns the correct count per architecture.
+    std::vector<uint32_t> max_rtas(hal.get_dispatch_class_count());
     uint32_t max_unique_rta_size = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
@@ -209,12 +209,19 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t crta_base_offset,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
+    std::span<uint32_t> crta_offsets,
+    std::span<uint32_t> crta_sizes) {
     const auto& hal = MetalContext::instance().hal();
-    // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
-    // whereas the CRTA allocation is separate for DM0/DM1/COMPUTE.
-    std::vector<uint32_t> max_crtas(DISPATCH_CLASS_MAX, 0);
+    // CRTA allocation is per dispatch class (not per HAL processor class).
+    // Use get_dispatch_class_count() which returns the correct count per architecture.
+    const uint32_t dispatch_class_count = hal.get_dispatch_class_count();
+    TT_ASSERT(
+        crta_offsets.size() == dispatch_class_count && crta_sizes.size() == dispatch_class_count,
+        "crta_offsets/crta_sizes size mismatch: expected {}, got offsets={}, sizes={}",
+        dispatch_class_count,
+        crta_offsets.size(),
+        crta_sizes.size());
+    std::vector<uint32_t> max_crtas(dispatch_class_count, 0);
 
     // Find the max # common RTAs across all kernels for each dispatch class
     for (auto& kernel_info : kernels) {
@@ -226,7 +233,7 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     // Derive crta offsets and sizes per dispatch class
     uint32_t offset = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+    for (uint32_t dispatch_class = 0; dispatch_class < dispatch_class_count; dispatch_class++) {
         uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
         crta_offsets[dispatch_class] = crta_base_offset + offset;
         crta_sizes[dispatch_class] = size;
@@ -272,8 +279,8 @@ uint32_t finalize_rt_args(
     uint32_t base_offset,
     uint32_t programmable_core_type_index,
     uint32_t& rta_offset,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
+    std::span<uint32_t> crta_offsets,
+    std::span<uint32_t> crta_sizes) {
     uint32_t max_unique_rta_size = program_dispatch::configure_rta_offsets_for_kernel_groups(
         programmable_core_type_index, kernels, kernel_groups, base_offset);
     uint32_t crta_base_offset = base_offset + max_unique_rta_size;
@@ -861,9 +868,9 @@ BatchedTransfers assemble_runtime_args_commands(
         // On ETH use unicast
         if (!use_kernel_group_crta_multicast ||
             !tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(index)) {
-            // Note: it's wrong to use HAL processor classes here, because it only has DM/COMPUTE,
-            // whereas CRTA is separate for DM0/DM1/COMPUTE.
-            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+            // CRTA allocation is per dispatch class
+            const uint32_t dispatch_class_count = tt::tt_metal::MetalContext::instance().hal().get_dispatch_class_count();
+            for (uint32_t dispatch_class = 0; dispatch_class < dispatch_class_count; dispatch_class++) {
                 const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
                 uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
                 if (common_size == 0) {
