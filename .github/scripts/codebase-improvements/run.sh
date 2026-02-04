@@ -104,6 +104,30 @@ parse_info_json() {
     fi
 }
 
+# Function to clean up old fix branches from previous failed runs
+cleanup_old_branches() {
+    log_info "Checking for abandoned fix branches from previous runs..."
+
+    # Find all fix/ branches
+    OLD_FIX_BRANCHES=$(git branch | grep "fix/fix-ttnn-to-torch" | sed 's/^[ *]*//' || true)
+
+    if [ -n "$OLD_FIX_BRANCHES" ]; then
+        log_warning "Found old fix branches from previous runs:"
+        echo "$OLD_FIX_BRANCHES" | while read branch; do
+            echo "  - $branch"
+        done
+
+        log_info "Cleaning up old branches..."
+        echo "$OLD_FIX_BRANCHES" | while read branch; do
+            git branch -D "$branch" 2>/dev/null && {
+                log_success "Deleted: $branch"
+            }
+        done
+    else
+        log_info "No old fix branches found"
+    fi
+}
+
 # Function to fetch logs from URL
 fetch_logs_from_url() {
     log_info "Fetching logs from URL: $URL"
@@ -437,21 +461,31 @@ EOF
         # Check if there are any commits on the branch
         COMMIT_COUNT=$(git rev-list --count main.."$FIX_BRANCH" 2>/dev/null || echo "0")
 
-        if [ "$COMMIT_COUNT" -eq "0" ] || [ "$COMMIT_COUNT" -eq "1" ]; then
-            # No meaningful work done, clean up the branch
-            log_info "No meaningful changes on fix branch, cleaning up..."
+        # Check if there are only test-related commits (no actual fix)
+        FIX_COMMITS=$(git log main.."$FIX_BRANCH" --oneline --grep -v "Add reproduction test" 2>/dev/null | wc -l)
+
+        if [ "$COMMIT_COUNT" -eq "0" ] || [ "$COMMIT_COUNT" -eq "1" ] || [ "$FIX_COMMITS" -eq "0" ]; then
+            # No meaningful fix work done, clean up the branch
+            log_info "No fix commits on branch (only $FIX_COMMITS fix commits, $COMMIT_COUNT total)"
+            log_info "Cleaning up abandoned fix branch..."
 
             # Return to original branch first
-            log_info "Returning to original branch: $OLD_BRANCH"
-            git checkout "$OLD_BRANCH"
+            CURRENT=$(git branch --show-current)
+            if [ "$CURRENT" != "$OLD_BRANCH" ]; then
+                log_info "Returning to original branch: $OLD_BRANCH"
+                git checkout "$OLD_BRANCH"
+            fi
 
             # Delete the abandoned fix branch
             git branch -D "$FIX_BRANCH" 2>/dev/null && {
                 log_success "Deleted abandoned branch: $FIX_BRANCH"
+            } || {
+                log_warning "Could not delete branch: $FIX_BRANCH"
             }
         else
-            log_warning "Fix branch has $COMMIT_COUNT commits but wasn't pushed"
+            log_warning "Fix branch has $FIX_COMMITS fix commits (total: $COMMIT_COUNT) but wasn't pushed"
             log_info "Keeping branch for manual review: $FIX_BRANCH"
+            log_info "To manually clean up: git branch -D $FIX_BRANCH"
         fi
 
         export FIX_BRANCH_PUSHED="no"
@@ -609,7 +643,8 @@ main() {
     log_info "Starting run at $(date)"
     log_info "Run ID: $RUN_ID"
 
-    # Phase 0: Parse configuration
+    # Phase 0: Cleanup and parse configuration
+    cleanup_old_branches
     parse_info_json
 
     # Check if we're on main branch (common in CI)
