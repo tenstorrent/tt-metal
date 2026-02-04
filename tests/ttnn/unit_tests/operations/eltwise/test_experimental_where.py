@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import is_watcher_enabled
 from tests.ttnn.utils_for_testing import assert_with_pcc, tt_dtype_to_torch_dtype
 
 
@@ -56,6 +57,8 @@ def _ttt_where_test_impl(
 
 
 def test_ttt_where_0d(device):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test_ttt_where_0d with watcher enabled, github issue #37048")
     _ttt_where_test_impl(device, ())
 
 
