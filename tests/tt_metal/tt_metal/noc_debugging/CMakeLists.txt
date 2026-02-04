@@ -1,4 +1,5 @@
-set(UNIT_TESTS_NOC_DEBUGGING_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_reads_writes.cpp)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 add_executable(unit_tests_noc_debugging ${UNIT_TESTS_NOC_DEBUGGING_SRC})
 
