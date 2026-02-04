@@ -128,6 +128,15 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         page_table = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
         empty_slots = kwargs.get("empty_slots", None)
+        global_stride = kwargs.get("global_stride", None)
+        if getattr(self, "dp_factor", 1) > 1 and global_stride is None:
+            raise RuntimeError(
+                "vLLM is too old for DeepseekV3 DP: `global_stride` is required. "
+                "Please pass `global_stride` from "
+                "`vllm.worker.tt_model_runner.TTModelRunner._execute_model_single_step` (legacy) or "
+                "`vllm.v1.worker.tt_model_runner.TTModelRunner.execute_with_model_input` (v1) "
+                "into `DeepseekV3ForCausalLM.prefill_forward`."
+            )
 
         if page_table is not None and not hasattr(self, "_validated_vllm_prefill"):
             self._validate_vllm_prefill_inputs(tokens, lengths, page_table)
@@ -147,16 +156,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             ((max_prompt_len + pad_block_size - 1) // pad_block_size) * pad_block_size if max_prompt_len > 0 else 0
         )
         num_of_users = tokens.shape[0]
-        stride_guess = None
-        if empty_slots is not None and len(empty_slots) > 0:
-            # Guess stride by detecting first discontinuity (vLLM global user ids)
-            for i in range(1, len(empty_slots)):
-                if empty_slots[i] != empty_slots[i - 1] + 1:
-                    stride_guess = int(empty_slots[i])
-                    break
-            if stride_guess is None:
-                stride_guess = int(len(empty_slots))
-
         if getattr(self, "debug_investigation", False) and not hasattr(self, "_debug_prefill_logged"):
             self._debug_prefill_logged = True
             lens_t = lengths if isinstance(lengths, torch.Tensor) else torch.as_tensor(lengths)
@@ -171,45 +170,21 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                     "head": [int(x) for x in empty_slots[: min(16, len(empty_slots))]],
                 }
             logger.info(
-                "[INV] prefill_forward: tokens_shape={} num_users={} prompt_lens[min,max]=({},{}) empty_slots={} stride_guess={} page_table_shape={}",
+                "[INV] prefill_forward: tokens_shape={} num_users={} prompt_lens[min,max]=({},{}) empty_slots={} global_stride={} page_table_shape={}",
                 tuple(tokens.shape),
                 num_of_users,
                 lens_min,
                 lens_max,
                 empty_summary,
-                stride_guess,
+                global_stride,
                 None if page_table is None else tuple(page_table.shape),
             )
         stride = None
         if getattr(self, "dp_factor", 1) > 1:
-            global_stride = kwargs.get("global_stride", None)
-            if global_stride is not None:
-                stride = int(global_stride)
-                self._vllm_global_stride = stride
-            elif stride_guess is not None:
-                # Prefer the global stride encoded in empty_slots
-                stride = int(stride_guess)
-            elif (
-                empty_slots is not None
-                and len(empty_slots) > 0
-                and page_table is not None
-                and page_table.shape[0] >= self.dp_factor
-            ):
-                # Fallback only if no empty_slots/global_stride are available
-                stride = int(page_table.shape[0] // self.dp_factor)
-
-            if stride is not None and stride <= 0:
-                stride = None
-
-            if stride_guess is not None and stride is not None and stride != stride_guess and global_stride is None:
-                logger.warning(
-                    "[INV] stride mismatch: stride={} stride_guess={} page_table_shape={} dp_factor={}. Using stride_guess.",
-                    stride,
-                    stride_guess,
-                    None if page_table is None else tuple(page_table.shape),
-                    self.dp_factor,
-                )
-                stride = int(stride_guess)
+            stride = int(global_stride)
+            if stride <= 0:
+                raise ValueError(f"Invalid vLLM global_stride={stride}; expected a positive integer.")
+            self._vllm_global_stride = stride
 
         batch_per_shard = (
             even_int_div(USERS_PER_ROW, self.dp_factor) if getattr(self, "dp_factor", 1) > 1 else USERS_PER_ROW
@@ -307,6 +282,16 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         if global_stride is not None:
             self._vllm_global_stride = int(global_stride)
         global_stride = self._vllm_global_stride
+        if getattr(self, "dp_factor", 1) > 1 and global_stride is None:
+            raise RuntimeError(
+                "vLLM is too old for DeepseekV3 DP: `global_stride` is required. "
+                "Please pass `global_stride` from "
+                "`vllm.worker.tt_model_runner.TTModelRunner._execute_model_single_step` (legacy) or "
+                "`vllm.v1.worker.tt_model_runner.TTModelRunner.execute_with_model_input` (v1) "
+                "into `DeepseekV3ForCausalLM.decode_forward`."
+            )
+        if global_stride is not None and int(global_stride) <= 0:
+            raise ValueError(f"Invalid vLLM global_stride={int(global_stride)}; expected a positive integer.")
         if getattr(self, "debug_investigation", False) and not hasattr(self, "_debug_decode_forward_logged"):
             self._debug_decode_forward_logged = True
             positions = kwargs.get("start_pos", None)
