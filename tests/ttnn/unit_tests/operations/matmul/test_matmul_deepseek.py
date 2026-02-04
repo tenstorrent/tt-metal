@@ -647,11 +647,14 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
     num_in0_cores = num_dram_banks
     num_out_cores = num_dram_banks
 
-    batches_per_core_in0 = batch // num_in0_cores
-    batches_per_core_out = batch // num_out_cores
+    # Pad batch to be divisible by num_dram_banks (required for even sharding)
+    batch_padded = pad_batch_to_dram_banks(batch, num_dram_banks)
 
-    in0_shape = [1, batch, m, k]
-    in1_shape = [1, batch, k, n]
+    batches_per_core_in0 = batch_padded // num_in0_cores
+    batches_per_core_out = batch_padded // num_out_cores
+
+    in0_shape_padded = [1, batch_padded, m, k]
+    in1_shape_padded = [1, batch_padded, k, n]
 
     # Use optimal worker cores for L1 shard grids - this ensures the shard ordering
     # matches the factory's worker ordering (critical for correct data routing!)
@@ -673,7 +676,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
     in0_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
 
     # in1: DRAM sharded by batch
-    batches_per_dram_bank = batch // num_dram_banks
+    batches_per_dram_bank = batch_padded // num_dram_banks
     in1_shard_shape = [batches_per_dram_bank * k, n]
     in1_shard_spec = ttnn.ShardSpec(dram_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
@@ -696,9 +699,15 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
     )
 
     for _ in range(2):
-        # Create input tensors
-        in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
-        in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
+        # Create input tensors at original size
+        in0_orig = torch.randn([1, batch, m, k], dtype=torch.bfloat16)
+        in1_orig = torch.randn([1, batch, k, n], dtype=torch.bfloat16)
+
+        # Pad tensors to padded dimensions (pad with zeros)
+        in0 = torch.zeros(in0_shape_padded, dtype=torch.bfloat16)
+        in0[:, :batch, :, :] = in0_orig
+        in1 = torch.zeros(in1_shape_padded, dtype=torch.bfloat16)
+        in1[:, :batch, :, :] = in1_orig
 
         in0_t = ttnn.from_torch(
             in0,
@@ -730,7 +739,9 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
 
         # Validate correctness
         output_tensor = ttnn.to_torch(output_t)
-        pt_out = torch.matmul(in0, in1)
+        # Slice off padding from output to get original dimensions [1, batch, m, n]
+        output_tensor = output_tensor[:, :batch, :m, :n]
+        pt_out = torch.matmul(in0_orig, in1_orig)
         assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
         # Dummy tensor to change tensor allocation (tests program cache robustness)
