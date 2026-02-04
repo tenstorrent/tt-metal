@@ -2029,7 +2029,8 @@ uint32_t process_relay_linear_packed_h_cmd(uint32_t cmd_ptr, uint32_t& downstrea
     relay_linear_to_downstream<true>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
-    return stride;
+    return stride + sizeof(CQPrefetchHToPrefetchDHeader);
+
 }
 
 // This function is only valid when called on the H variant
