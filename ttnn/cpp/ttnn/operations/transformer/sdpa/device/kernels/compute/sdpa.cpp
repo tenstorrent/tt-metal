@@ -48,29 +48,26 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t core_id = get_arg_val<uint32_t>(argidx++);
 
+    // Always read hierarchical indices (unified for causal and non-causal)
+    const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_batch_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_nh_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_nh_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
+
+    // Detect global Q partitioning mode for non-causal
+    bool use_global_q_flat_loop = false;
     uint32_t global_q_start = 0;
     uint32_t global_q_count = 0;
-    uint32_t local_batch_start, local_batch_end, local_nh_start, local_nh_end, local_q_start, local_q_end;
 
     if constexpr (!is_causal) {
-        // Non-causal: read global indices (2 args)
-        global_q_start = get_arg_val<uint32_t>(argidx++);
-        global_q_count = get_arg_val<uint32_t>(argidx++);
-        // Set loops to run once for non-causal
-        local_batch_start = 0;
-        local_batch_end = 1;
-        local_nh_start = 0;
-        local_nh_end = 1;
-        local_q_start = 0;
-        local_q_end = 0;  // Not used
-    } else {
-        // Causal: read hierarchical ranges (6 args)
-        local_batch_start = get_arg_val<uint32_t>(argidx++);
-        local_batch_end = get_arg_val<uint32_t>(argidx++);
-        local_nh_start = get_arg_val<uint32_t>(argidx++);
-        local_nh_end = get_arg_val<uint32_t>(argidx++);
-        local_q_start = get_arg_val<uint32_t>(argidx++);
-        local_q_end = get_arg_val<uint32_t>(argidx++);
+        use_global_q_flat_loop =
+            (local_batch_start == 0 && local_batch_end == B && local_nh_start == 0 && local_nh_end == NQH);
+        if (use_global_q_flat_loop) {
+            global_q_start = local_q_start;
+            global_q_count = local_q_end - local_q_start;
+        }
     }
 
     const uint32_t num_phases = get_arg_val<uint32_t>(argidx++);
@@ -80,7 +77,7 @@ void kernel_main() {
         chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
     }
 
-    const uint32_t q_chunks_per_core = is_causal ? (local_q_end - local_q_start) : global_q_count;
+    const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
