@@ -21,9 +21,6 @@ from .linear_regression import LinearRegression, create_linear_regression_model
 from .nanogpt import NanoGPT, NanoGPTConfig, create_nanogpt
 
 __all__ = [
-    "RunnerType",
-    "WeightTyingType",
-    "memory_efficient_runner",
     "LinearRegression",
     "create_linear_regression_model",
     "NanoGPT",
