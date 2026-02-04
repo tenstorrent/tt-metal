@@ -709,27 +709,11 @@ def test_pre_sdpa(
         knope_dim=KNOPE_DIM,
         krope_dim=KROPE_DIM,
     )
-    # Debug: Print per-device output slices
-    logger.info("=== DEBUG: Per-device output slices ===")
+
     slice_size = sdpa_input_output_shape[0]
     actual_width = ttnn_sdpa_input_result.shape[1]
     expected_width = 4608
-    logger.info(f"  slice_size={slice_size}, actual_width={actual_width}, expected_width={expected_width}")
 
-    for device_idx in range(mesh_rows * mesh_cols):
-        start = device_idx * slice_size
-        end = start + slice_size
-        device_slice = sdpa_input_output_torch[start:end, :]
-        slice_sum = torch.sum(torch.abs(device_slice)).item()
-        slice_max = torch.max(torch.abs(device_slice)).item()
-        # Check first 128 and last 128 elements
-        first_128_sum = torch.sum(torch.abs(device_slice[:, :128])).item()
-        last_128_sum = torch.sum(torch.abs(device_slice[:, -128:])).item()
-        logger.info(
-            f"  Device {device_idx}: sum={slice_sum:.4f}, max={slice_max:.4f}, first128={first_128_sum:.4f}, last128={last_128_sum:.4f}"
-        )
-    print("sdpa_input_output_torch shape :", sdpa_input_output_torch.shape)
-    print("expected shape: ", torch_sdpa_expected.shape)
     for device_idx in range(mesh_rows * mesh_cols):
         start = device_idx * slice_size
         end = start + slice_size

@@ -984,7 +984,6 @@ class PreSDPA:
         for row in range(mesh_rows):
             # ("start of loop for device row {}".format(row))
             for col in range(mesh_cols):
-                # print("start of loop for device row {}, col {}".format(row, col))
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
 
@@ -1110,7 +1109,6 @@ class PreSDPA:
                     core_ranges=worker_core_set,
                     format_descriptors=[bcast_pkt_cb_format],
                 )
-                # print("after creating bcast pkt")
 
                 # CB: Gamma (created from sharded tensor)
                 gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gamma_cb, gamma_tensor_device)
@@ -1718,7 +1716,6 @@ class PreSDPA:
                         gather_noc1_receiver_semaphore_descriptor,  # ID 3
                     ],
                 )
-                # print("Program has {} kernels".format(len(program.kernels)))
 
                 # Set runtime args for reader/writer kernels on worker core
                 # With unified_compile_time_core_descriptors, there are multiple kernel groups
@@ -1731,20 +1728,10 @@ class PreSDPA:
                         if isinstance(kernel.config, ttnn.ReaderConfigDescriptor):
                             # NCRISC reader kernel
                             kernel.runtime_args = reader_rt_args
-                            # print(
-                            #    "Set reader runtime args for kernel {} on worker core ({},{})".format(
-                            #        idx, worker_core.x, worker_core.y
-                            #    )
-                            # )
                         elif isinstance(kernel.config, ttnn.WriterConfigDescriptor):
                             # BRISC writer kernel
                             kernel.runtime_args = writer_rt_args
                             worker_writer_kernel_idx = idx
-                            # print(
-                            #    "Set writer runtime args for kernel {} on worker core ({},{})".format(
-                            #        idx, worker_core.x, worker_core.y
-                            #    )
-                            # )
 
                 # Append fabric connection args if needed
                 if not skip_ccl and num_connections > 0 and worker_writer_kernel_idx is not None:
@@ -1757,7 +1744,6 @@ class PreSDPA:
                     writer_rt_args_ref.extend(fabric_args)
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
-                # print("Created program for device at row {}, col {}".format(row, col))
 
         result = ttnn.generic_op(
             [

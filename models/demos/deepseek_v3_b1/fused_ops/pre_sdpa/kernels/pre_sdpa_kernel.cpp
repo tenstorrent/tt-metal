@@ -620,29 +620,6 @@ void kernel_main() {
     }
 #endif
 
-    // DPRINT << "is input core: " << (uint32_t)Core::is_input_core << "\n";
-    // DPRINT << "is matmul core: " << (uint32_t)Core::is_matmul_core << "\n";
-    // DPRINT << "is matmul2 core: " << (uint32_t)Core::is_matmul2_core << "\n";
-    // DPRINT << "skip ccl: " << (uint32_t)Core::skip_ccl << "\n";
-
-#if defined(COMPILE_FOR_TRISC)
-    // Debug: Print key CB IDs and params before any operations
-    if constexpr (Core::is_input_core) {
-        // DPRINT << "=== TRISC DEBUG (input core) ===\n";
-        // DPRINT << "rmsnorm_input_cb: " << rmsnorm_args.input_cb << "\n";
-        // DPRINT << "rmsnorm_gamma_cb: " << rmsnorm_args.gamma_cb << "\n";
-        // DPRINT << "rmsnorm_output_cb: " << rmsnorm_args.output_cb << "\n";
-        // DPRINT << "rmsnorm_num_tiles: " << (uint32_t)RMSNormCTArgs::num_tiles << "\n";
-        // DPRINT << "rmsnorm_epsilon: " << rmsnorm_args.epsilon << "\n";
-        // DPRINT << "rmsnorm_scalar: " << rmsnorm_args.scalar << "\n";
-        // DPRINT << "rmsnorm2_input_cb: " << rmsnorm2_args.input_cb << "\n";
-        // DPRINT << "rmsnorm2_gamma_cb: " << rmsnorm2_args.gamma_cb << "\n";
-        // DPRINT << "rmsnorm2_output_cb: " << rmsnorm2_args.output_cb << "\n";
-        // DPRINT << "rmsnorm2_num_tiles: " << (uint32_t)RMSNorm2CTArgs::num_tiles << "\n";
-        // DPRINT << "rmsnorm2_scalar: " << rmsnorm2_args.scalar << "\n";
-    }
-#endif
-
     // ========================================================================
     // CCL Broadcast (optional, skip if single-device mode)
     // ========================================================================
@@ -651,9 +628,6 @@ void kernel_main() {
             DeviceZoneScopedN("CCL_BROADCAST");
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
             bcast(bcast_args);
-            if (Core::is_input_core) {
-                // DPRINT << "CCL Broadcast completed\n";
-            }
         }
     }
 
@@ -670,7 +644,6 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
         unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
         unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
-        // DPRINT << "Single-device: All sharded buffers set up by NCRISC\n";
     }
 #endif
 
@@ -681,11 +654,8 @@ void kernel_main() {
         constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
 
-        // DPRINT << "before rmsnorm cb setup\n";
         cb_reserve_back(rmsnorm_input_cb, rmsnorm_num_tiles);
-        // DPRINT << "after rmsnorm input cb reserve\n";
         cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
-        // DPRINT << "RMSNorm input CB set up: " << (uint32_t)rmsnorm_input_cb << "\n";
     }
 #endif
 
