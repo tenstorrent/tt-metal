@@ -163,7 +163,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             lens_min = int(lens_t.min().item()) if lens_t.numel() else 0
             lens_max = int(lens_t.max().item()) if lens_t.numel() else 0
             empty_summary = None
-            stride_guess = None
             if empty_slots is not None and len(empty_slots) > 0:
                 empty_summary = {
                     "len": len(empty_slots),
@@ -171,20 +170,14 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                     "max": int(max(empty_slots)),
                     "head": [int(x) for x in empty_slots[: min(16, len(empty_slots))]],
                 }
-                # Guess stride by detecting first discontinuity
-                for i in range(1, len(empty_slots)):
-                    if empty_slots[i] != empty_slots[i - 1] + 1:
-                        stride_guess = int(empty_slots[i])
-                        break
             logger.info(
-                "[INV] prefill_forward: tokens_shape={} num_users={} prompt_lens[min,max]=({},{}) empty_slots={} global_stride={} stride_guess={} page_table_shape={}",
+                "[INV] prefill_forward: tokens_shape={} num_users={} prompt_lens[min,max]=({},{}) empty_slots={} global_stride={} page_table_shape={}",
                 tuple(tokens.shape),
                 num_of_users,
                 lens_min,
                 lens_max,
                 empty_summary,
                 global_stride,
-                stride_guess,
                 None if page_table is None else tuple(page_table.shape),
             )
         stride = None
@@ -380,36 +373,25 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         expected_kvpe_dim = int(self.hf_config.kv_lora_rank + self.hf_config.qk_rope_head_dim)
         expected_block_size = int(self.paged_config.block_size)
         expected_blocks_per_seq = int(self.hf_config.max_seq_len // expected_block_size)
-        assert (
-            kv_cache_shape[2] == expected_block_size
-        ), (
+        assert kv_cache_shape[2] == expected_block_size, (
             f"vLLM kv_cache_shape[2] (block_size) mismatch: "
             f"kv_cache_shape[2]={kv_cache_shape[2]} vs "
             f"paged_config.block_size={expected_block_size}"
         )
-        assert (
-            kv_cache_shape[3] == expected_kvpe_dim
-        ), (
+        assert kv_cache_shape[3] == expected_kvpe_dim, (
             f"vLLM kv_cache_shape[3] (kvpe_dim) mismatch: "
             f"kv_cache_shape[3]={kv_cache_shape[3]} vs "
             f"kv_lora_rank+qk_rope_head_dim={expected_kvpe_dim}"
         )
-        assert (
-            kv_cache_shape[1] == 1
-        ), (
-            f"vLLM kv_cache_shape[1] (num_kv_heads) mismatch: "
-            f"kv_cache_shape[1]={kv_cache_shape[1]} vs expected=1"
+        assert kv_cache_shape[1] == 1, (
+            f"vLLM kv_cache_shape[1] (num_kv_heads) mismatch: " f"kv_cache_shape[1]={kv_cache_shape[1]} vs expected=1"
         )
-        assert (
-            kv_cache_shape[0] >= expected_blocks_per_seq
-        ), (
+        assert kv_cache_shape[0] >= expected_blocks_per_seq, (
             f"vLLM kv_cache_shape[0] (max_num_blocks) too small: "
             f"kv_cache_shape[0]={kv_cache_shape[0]} vs "
             f"min_required_blocks={expected_blocks_per_seq}"
         )
-        assert (
-            num_layers == self.hf_config.num_hidden_layers
-        ), (
+        assert num_layers == self.hf_config.num_hidden_layers, (
             f"vLLM num_layers mismatch: num_layers={num_layers} vs "
             f"hf_config.num_hidden_layers={self.hf_config.num_hidden_layers}"
         )
