@@ -116,6 +116,55 @@ void py_module(nb::module_& m) {
             nb::arg("module"),
             nb::arg("name"),
             "Override an existing submodule");
+
+        // Hook registration methods for FSDP and other use cases
+        py_module_base.def(
+            "register_pre_forward_hook",
+            &ModuleBase::register_pre_forward_hook,
+            nb::arg("hook"),
+            "Register a pre-forward hook. Returns a handle to remove the hook.");
+        py_module_base.def(
+            "register_post_forward_hook",
+            &ModuleBase::register_post_forward_hook,
+            nb::arg("hook"),
+            "Register a post-forward hook. Returns a handle to remove the hook.");
+        py_module_base.def(
+            "remove_pre_forward_hook",
+            &ModuleBase::remove_pre_forward_hook,
+            nb::arg("handle"),
+            "Remove a pre-forward hook by its handle.");
+        py_module_base.def(
+            "remove_post_forward_hook",
+            &ModuleBase::remove_post_forward_hook,
+            nb::arg("handle"),
+            "Remove a post-forward hook by its handle.");
+        py_module_base.def(
+            "clear_pre_forward_hooks", &ModuleBase::clear_pre_forward_hooks, "Clear all pre-forward hooks.");
+        py_module_base.def(
+            "clear_post_forward_hooks", &ModuleBase::clear_post_forward_hooks, "Clear all post-forward hooks.");
+        py_module_base.def("clear_all_hooks", &ModuleBase::clear_all_hooks, "Clear all hooks.");
+        py_module_base.def(
+            "has_pre_forward_hooks",
+            &ModuleBase::has_pre_forward_hooks,
+            "Check if any pre-forward hooks are registered.");
+        py_module_base.def(
+            "has_post_forward_hooks",
+            &ModuleBase::has_post_forward_hooks,
+            "Check if any post-forward hooks are registered.");
+
+        // Call with hooks methods
+        py_module_base.def(
+            "call_with_hooks",
+            static_cast<autograd::TensorPtr (ModuleBase::*)(const autograd::TensorPtr&)>(&ModuleBase::call_with_hooks),
+            nb::arg("tensor"),
+            "Call forward with pre/post hooks.");
+        py_module_base.def(
+            "call_with_hooks",
+            static_cast<autograd::TensorPtr (ModuleBase::*)(const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &ModuleBase::call_with_hooks),
+            nb::arg("tensor"),
+            nb::arg("other"),
+            "Call forward with pre/post hooks (two inputs).");
     }
 
     {

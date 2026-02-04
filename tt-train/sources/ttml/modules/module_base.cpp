@@ -118,4 +118,82 @@ autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& tensor, co
         "implemented");
 }
 
+// Hook registration methods
+HookHandle ModuleBase::register_pre_forward_hook(PreForwardHook hook) {
+    HookHandle handle = m_next_hook_handle++;
+    m_pre_forward_hooks.emplace_back(handle, std::move(hook));
+    return handle;
+}
+
+HookHandle ModuleBase::register_post_forward_hook(PostForwardHook hook) {
+    HookHandle handle = m_next_hook_handle++;
+    m_post_forward_hooks.emplace_back(handle, std::move(hook));
+    return handle;
+}
+
+void ModuleBase::remove_pre_forward_hook(HookHandle handle) {
+    m_pre_forward_hooks.erase(
+        std::remove_if(
+            m_pre_forward_hooks.begin(),
+            m_pre_forward_hooks.end(),
+            [handle](const auto& pair) { return pair.first == handle; }),
+        m_pre_forward_hooks.end());
+}
+
+void ModuleBase::remove_post_forward_hook(HookHandle handle) {
+    m_post_forward_hooks.erase(
+        std::remove_if(
+            m_post_forward_hooks.begin(),
+            m_post_forward_hooks.end(),
+            [handle](const auto& pair) { return pair.first == handle; }),
+        m_post_forward_hooks.end());
+}
+
+void ModuleBase::clear_pre_forward_hooks() {
+    m_pre_forward_hooks.clear();
+}
+
+void ModuleBase::clear_post_forward_hooks() {
+    m_post_forward_hooks.clear();
+}
+
+void ModuleBase::clear_all_hooks() {
+    clear_pre_forward_hooks();
+    clear_post_forward_hooks();
+}
+
+bool ModuleBase::has_pre_forward_hooks() const {
+    return !m_pre_forward_hooks.empty();
+}
+
+bool ModuleBase::has_post_forward_hooks() const {
+    return !m_post_forward_hooks.empty();
+}
+
+void ModuleBase::run_pre_forward_hooks(const autograd::TensorPtr& input) {
+    for (const auto& [_, hook] : m_pre_forward_hooks) {
+        hook(this, input);
+    }
+}
+
+void ModuleBase::run_post_forward_hooks(const autograd::TensorPtr& input, const autograd::TensorPtr& output) {
+    for (const auto& [_, hook] : m_post_forward_hooks) {
+        hook(this, input, output);
+    }
+}
+
+autograd::TensorPtr ModuleBase::call_with_hooks(const autograd::TensorPtr& tensor) {
+    run_pre_forward_hooks(tensor);
+    auto output = (*this)(tensor);
+    run_post_forward_hooks(tensor, output);
+    return output;
+}
+
+autograd::TensorPtr ModuleBase::call_with_hooks(const autograd::TensorPtr& tensor, const autograd::TensorPtr& other) {
+    run_pre_forward_hooks(tensor);
+    auto output = (*this)(tensor, other);
+    run_post_forward_hooks(tensor, output);
+    return output;
+}
+
 }  // namespace ttml::modules
