@@ -39,6 +39,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
+        "supports_global_stride": True,
     }
 
     def __init__(self, *args, **kwargs):
