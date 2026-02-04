@@ -15,7 +15,7 @@ struct AdamWConfig {
     float beta2{0.999F};
     float epsilon{1e-8F};
     float weight_decay{0.01F};
-    // TODO: add amsgrad
+    bool amsgrad{false};
 
     // flag to enable kahan summation to reduce floating point errors
     bool use_kahan_summation{false};
@@ -76,6 +76,7 @@ private:
     AdamWConfig m_config;
     serialization::NamedParameters m_first_moment;
     serialization::NamedParameters m_second_moment;
+    serialization::NamedParameters m_max_exp_avg_sq;
     serialization::NamedParameters m_kahan_compensation;
 };
 
