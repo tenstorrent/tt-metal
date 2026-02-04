@@ -138,7 +138,7 @@ class Attention1DConfig:
     kv_cache: "tuple[LazyWeight, LazyWeight] | tuple[ttnn.Tensor, ttnn.Tensor] | None" = None
     paged_attention_config: "PagedAttentionConfig | None" = None  # type: ignore
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
-    # todo)) double check this against TTTv1
+    # Threshold for sharding KV cache during prefill to handle update_cache memory limitations.
     min_kv_prefill_shard_seqlen: int | None = None
 
     # Weight dtypes
@@ -182,8 +182,10 @@ class Attention1DConfig:
     sdpa_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
     li_o_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
 
-    # Transformation matrices for rotary embedding (static, computed once)
-    # todo)) add explanation for not using LazyWeight here
+    # Transformation matrices for rotary embedding (static, computed once).
+    # These are NOT LazyWeights because they are:
+    # - Small fixed-size tensors (32x32), not large model weights
+    # - Computed programmatically (get_rot_transformation_mat), not loaded from checkpoints
     transformation_mat_decode: ttnn.Tensor | None = None
     transformation_mat_prefill: ttnn.Tensor | None = None
 
@@ -420,15 +422,11 @@ class Attention1D(LightweightModule):
             k_heads = ttnn.experimental.rotary_embedding_llama(
                 k_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_decode, is_decode_mode=True
             )
-
         ttnn.deallocate(q_heads_pre_rot)
         ttnn.deallocate(k_heads_pre_rot)
 
         # --- STAGE 6: KV Cache Update ---
         keys, values = self.kv_cache
-
-        # todo)) always use fused qk if it is better! --> does this work for all our models?
-        # if it does not cover all models, we can make a separate module for fused --> maybe experimental?
         if cfg.use_qk_fused:
             ttnn.experimental.paged_fused_update_cache(
                 keys, k_heads, values, v_heads, update_idxs_tensor=current_pos, page_table=page_table
@@ -436,12 +434,12 @@ class Attention1D(LightweightModule):
         else:
             ttnn.experimental.paged_update_cache(keys, k_heads, update_idxs_tensor=current_pos, page_table=page_table)
             ttnn.experimental.paged_update_cache(values, v_heads, update_idxs_tensor=current_pos, page_table=page_table)
-
         ttnn.deallocate(k_heads)
         ttnn.deallocate(v_heads)
 
         # --- STAGE 7: SDPA ---
         # todo)) prefer paged but do want to test both! --> PagedAttention1D and Attention1D
+        # todo)) this needs to be refactored as page_table is static config
         if page_table is not None:
             attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads,
@@ -542,10 +540,6 @@ class Attention1D(LightweightModule):
         n_local_heads = cfg.n_heads // num_devices
         n_local_kv_heads = cfg.n_kv_heads // num_devices
 
-        # todo)) maybe we can make each stage into a function and then allow concrete classes to override them?
-        # q/k_norm could be in base
-        # page should its own thing
-        # llama optimized attentions --> fused qk and fused all-gather matmul
         # --- STAGE 1: Reshape for long sequences ---
         if seq_len > MAX_QKV_MM_SEQ_LEN:
             if seq_len % MAX_QKV_MM_SEQ_LEN != 0:
@@ -594,7 +588,8 @@ class Attention1D(LightweightModule):
             k_heads_pre_rot = self.k_norm.prefill_forward(k_heads_pre_rot)
 
         # --- STAGE 6: Rotary Embedding ---
-        # todo)) maybe typecast is already a no-op when source == target types
+        # Explicit dtype check is required - ttnn.typecast is NOT a no-op when source == target types.
+        # Without this check, typecast would allocate a new tensor and run an identity copy kernel.
         if q_heads_pre_rot.dtype != ttnn.bfloat16:
             q_heads_pre_rot = ttnn.typecast(q_heads_pre_rot, dtype=ttnn.bfloat16)
 
@@ -651,10 +646,12 @@ class Attention1D(LightweightModule):
         q_heads_sdpa = ttnn.typecast(q_heads, dtype=cfg.activation_dtype or ttnn.bfloat8_b)
         ttnn.deallocate(q_heads)
 
-        # todo)) similar to paged versus non-paged; there may be some limitations around chunked.
-        # we probably do not want all the combindations of paged, chunked, non-paged, and non-chunked;  --> do a deep dive on this!
-        # for example, chunked and paged is normal combo! in fact, chunked requires paged! but paged does not require chunked!
-        # --> can we just use chunked with a single chunk to run the else case here?
+        # Chunked vs non-chunked is a RUNTIME decision (based on seq_len vs max_prefill_chunk_size),
+        # so this branching is valid under TTTv2 principles. Valid combinations:
+        # - Paged + Chunked: production vLLM serving (long prompts)
+        # - Paged + Non-chunked: short prompts in vLLM
+        # - Non-paged + Non-chunked: simple testing (uses else branch with contiguous KV)
+        # - Non-paged + Chunked: invalid (chunked_sdpa requires page_table)
         if chunk_start_idx is not None:
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
                 input_tensor_q=q_heads_sdpa,
