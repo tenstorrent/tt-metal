@@ -193,20 +193,30 @@ struct ChannelCounter {
     }
 };
 
+// Helper struct to conditionally include completion tracking fields
+// Only needed when enable_first_level_ack is true (packed mode)
+template <bool enable_first_level_ack>
+struct OutboundReceiverChannelPointersCompletionTracking {
+    // Empty when enable_first_level_ack is false - zero cost!
+};
+
+// Specialization for when we need completion tracking (enable_first_level_ack)
+template <>
+struct OutboundReceiverChannelPointersCompletionTracking<true> {
+    volatile uint32_t* completions_received_counter_ptr;
+    uint32_t completions_received_and_processed;
+};
+
 /*
  * Tracks receiver channel pointers (from sender side)
  */
-template <uint8_t RECEIVER_NUM_BUFFERS, bool UNUSED = false>
-struct OutboundReceiverChannelPointers {
+template <uint8_t RECEIVER_NUM_BUFFERS, bool enable_first_level_ack = true>
+struct OutboundReceiverChannelPointers : OutboundReceiverChannelPointersCompletionTracking<enable_first_level_ack> {
     uint32_t slot_size_bytes;
     uint32_t remote_receiver_channel_address_base;
     uint32_t remote_receiver_channel_address_ptr;
     uint32_t remote_receiver_channel_address_last;
     uint32_t num_free_slots;
-
-    // Completion tracking - shared across all sender channels to this receiver channel
-    volatile uint32_t* completions_received_counter_ptr;
-    uint32_t completions_received_and_processed;
 
     FORCE_INLINE void init() {
         this->slot_size_bytes = 0U;
@@ -214,8 +224,10 @@ struct OutboundReceiverChannelPointers {
         this->remote_receiver_channel_address_ptr = 0U;
         this->remote_receiver_channel_address_last = 0U;
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
-        this->completions_received_counter_ptr = nullptr;
-        this->completions_received_and_processed = 0;
+        if constexpr (enable_first_level_ack) {
+            this->completions_received_counter_ptr = nullptr;
+            this->completions_received_and_processed = 0;
+        }
     }
 
     FORCE_INLINE void init(uint32_t const remote_receiver_buffer_address, uint32_t const slot_size_bytes, volatile uint32_t* completion_counter_ptr) {
@@ -224,8 +236,10 @@ struct OutboundReceiverChannelPointers {
         this->remote_receiver_channel_address_ptr = remote_receiver_buffer_address;
         this->remote_receiver_channel_address_last = remote_receiver_buffer_address + ((RECEIVER_NUM_BUFFERS - 1U) * slot_size_bytes);
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
-        this->completions_received_counter_ptr = completion_counter_ptr;
-        this->completions_received_and_processed = 0;
+        if constexpr (enable_first_level_ack) {
+            this->completions_received_counter_ptr = completion_counter_ptr;
+            this->completions_received_and_processed = 0;
+        }
     }
 
     FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
@@ -240,16 +254,27 @@ struct OutboundReceiverChannelPointers {
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
-        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-        uint32_t received = *completions_received_counter_ptr;
-        uint32_t unprocessed = received - completions_received_and_processed;
-        return unprocessed;
+        if constexpr (enable_first_level_ack) {
+            router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
+            uint32_t received = *this->completions_received_counter_ptr;
+            uint32_t unprocessed = received - this->completions_received_and_processed;
+            return unprocessed;
+        }
+        return 0;  // Won't be called when enable_first_level_ack=true, but satisfies compiler
     }
 
     FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
-        completions_received_and_processed += num_completions;
+        if constexpr (enable_first_level_ack) {
+            this->completions_received_and_processed += num_completions;
+        }
     }
 };
+
+// Compile-time verification that EBO is working and completion tracking is truly zero-cost
+static_assert(
+    sizeof(OutboundReceiverChannelPointers<8, true>) - sizeof(OutboundReceiverChannelPointers<8, false>) >=
+        sizeof(volatile uint32_t*) + sizeof(uint32_t),
+    "Empty base optimization failed! Completion tracking fields should be zero-cost when enable_first_level_ack=false");
 
 template <uint8_t RECEIVER_NUM_BUFFERS, bool enable_first_level_ack>
 struct ReceiverChannelPointersMembers {

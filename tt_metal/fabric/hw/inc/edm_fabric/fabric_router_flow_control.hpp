@@ -396,10 +396,11 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     // Completion tracking methods (only for unpacked mode where !enable_first_level_ack)
     template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
-        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         if constexpr (!enable_first_level_ack) {
+            router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
             return *completions_received_counter_ptr - completions_received_and_processed;
         }
+        return 0;  // Won't be called when enable_first_level_ack=true, but satisfies compiler
     }
 
     FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
