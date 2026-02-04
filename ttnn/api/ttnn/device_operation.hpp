@@ -524,14 +524,18 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
+    std::cout << "generic device operation invoked" << std::endl;
     std::vector<std::reference_wrapper<const Tensor>> input_tensors;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
+    std::cout << "no errors #1" << std::endl;
     tt::tt_metal::GraphTracker::instance().track_function_start(
         detail::get_operation_name<device_operation_t>(operation_attributes), operation_attributes, input_tensors);
 
+    std::cout << "no errors #2" << std::endl;
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+    std::cout << "no errors #3" << std::endl;
     if (first_tensor.has_value()) [[likely]] {
         const auto& storage = first_tensor.value().storage();
         TT_FATAL(
@@ -539,14 +543,17 @@ typename device_operation_t::tensor_return_value_t launch(
             "Device Operations expect tensor with Device storage in inputs");
     }
 
+    std::cout << "no errors #4" << std::endl;
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
-
+    std::cout << "no errors #5" << std::endl;
     ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
 
+    std::cout << "no errors #6" << std::endl;
     if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
         mesh_device_operation_utils::filter_tensor_shards(
             mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device), tensor_return_value);
     }
+    std::cout << "no errors #7" << std::endl;
 
     if (first_tensor.has_value()) [[likely]] {
         // Check if op provides custom output topologies
@@ -558,6 +565,7 @@ typename device_operation_t::tensor_return_value_t launch(
                       }) {
             custom_topologies = device_operation_t::compute_output_topologies(operation_attributes, tensor_args);
         }
+        std::cout << "no errors #8" << std::endl;
 
         if (!custom_topologies.empty()) {
             // Use custom topologies provided by the op
@@ -584,12 +592,18 @@ typename device_operation_t::tensor_return_value_t launch(
                 },
                 tensor_return_value);
         }
+
+        std::cout << "no errors #9" << std::endl;
     }
 
+    std::cout << "no errors #10" << std::endl;
+    // operation launched here
     detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
 
+    std::cout << "no errors #11" << std::endl;
     tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
+    std::cout << "no errors #12" << std::endl;
     return tensor_return_value;
 }
 

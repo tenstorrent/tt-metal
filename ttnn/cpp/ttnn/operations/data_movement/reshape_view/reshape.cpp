@@ -213,7 +213,7 @@ ttnn::Tensor reshape_tiled(
     const bool recreate_mapping_tensor,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // squeeze input tensor and requested shape to 3D
-
+    printf("Starting rehsape tiled\n");
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
         if (shape.rank() > 3) {
             return squeeze_shape_to_3D(shape);
@@ -229,13 +229,15 @@ ttnn::Tensor reshape_tiled(
 
     const auto requested_padded_shape_3d = compute_padded_shape(requested_shape_3d);
     const auto input_padded_shape_3d = compute_padded_shape(input_tensor_shape_3d);
+    printf("Doing perform view\n");
     auto tensor3d = PerformView(tensor, input_tensor_shape_3d, input_padded_shape_3d);
 
-    if (tensor.memory_config().is_sharded()) {
-        TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
-        MemoryConfig working_input_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-        tensor3d = ttnn::sharded_to_interleaved(tensor, working_input_memory_config, std::nullopt);
-    }
+    // if (tensor.memory_config().is_sharded()) {
+    // TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
+    // MemoryConfig working_input_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
+    //  tensor3d = ttnn::sharded_to_interleaved(tensor, working_input_memory_config, std::nullopt); // s to i
+    //}
+    printf("Doing typecasting view\n");
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         TT_FATAL(!sub_core_grid.has_value(), "Bfloat8 reshape does not support sub core grid specification\n");
@@ -243,28 +245,34 @@ ttnn::Tensor reshape_tiled(
     }
 
     MemoryConfig working_output_memory_config = memory_config;
-    if (memory_config.is_sharded()) {
-        working_output_memory_config =
-            MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
-    }
-
-    auto output_tensor_3d = ttnn::prim::reshape_view(
+    // if (memory_config.is_sharded()) {
+    //     working_output_memory_config
+    //         MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
+    // }
+    printf("Doing reshape view\n");
+    auto output_tensor_3d = ttnn::prim::reshape_view(  // error occurs here
         tensor3d,
         requested_shape_3d,
         requested_padded_shape_3d,
         working_output_memory_config,
         recreate_mapping_tensor,
         sub_core_grid);
+    printf("Dealing with post reshape\n");
 
     if (memory_config.is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
 
         // Recompute the shard spec for the output tensor shape
         auto output_mem_config = detail::recompute_shard_spec_for_output(memory_config, output_tensor_3d.tensor_spec());
-
-        output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt);
+        auto output_tensor_3d = ttnn::prim::reshape_view(
+            tensor3d,
+            requested_shape_3d,
+            requested_padded_shape_3d,
+            output_mem_config,
+            recreate_mapping_tensor,
+            sub_core_grid);
+        // output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt); // i to s
     }
-
     if (tensor.dtype() == DataType::BFLOAT8_B) {
         TT_FATAL(!sub_core_grid.has_value(), "Bfloat8 reshape does not support sub core grid specification\n");
         output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
@@ -281,6 +289,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    std::cout << "reshapeview invoked" << std::endl;
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();

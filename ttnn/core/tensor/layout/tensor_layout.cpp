@@ -103,6 +103,10 @@ void validate_shard_spec(const TensorLayout& tensor_layout) {
         const auto& tile_shape = tensor_layout.get_tile().get_tile_shape();
         if (memory_config.shard_spec().has_value()) {
             const auto& physical_shard_shape = tensor_layout.get_physical_shard_shape();
+            // if (physical_shard_shape.height() == 1) std::cout << "physical shard shape height x width: " <<
+            // physical_shard_shape.height() << ", " << physical_shard_shape.width() << std::endl;
+            std::cout << "physical shard shape height x width: " << physical_shard_shape.height() << ", "
+                      << physical_shard_shape.width() << std::endl;
             TT_FATAL(
                 (physical_shard_shape.height() % tile_shape[0] == 0 &&
                  physical_shard_shape.width() % tile_shape[1] == 0),
@@ -126,6 +130,7 @@ void validate_shard_spec(const TensorLayout& tensor_layout) {
 TensorLayout::TensorLayout(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
     dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {
+    std::cout << "TENSOR LAYOUT INVOKED" << std::endl;
     initialize_alignment();
     CMAKE_UNIQUE_NAMESPACE::validate_alignment(*this);
     CMAKE_UNIQUE_NAMESPACE::validate_shard_spec(*this);

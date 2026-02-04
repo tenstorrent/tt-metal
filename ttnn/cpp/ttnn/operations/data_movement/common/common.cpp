@@ -571,8 +571,13 @@ ttnn::Shape compute_padded_shape(
     auto shapeit = tile_shape.rbegin();
 
     std::for_each(output_shape_vec.rbegin(), output_shape_vec.rbegin() + 2, [&shapeit](auto& x) {
+        printf("Rounding up %d to %d\n", x, *shapeit);
         x = tt::round_up(x, *(shapeit++));
+        printf("It is now %d\n", x);
     });
+    printf("Shape is:\n");
+    std::for_each(output_shape_vec.rbegin(), output_shape_vec.rbegin() + 2, [&shapeit](auto& x) { printf("%d,", x); });
+    printf("\n");
 
     return ttnn::Shape(output_shape_vec);
 }
