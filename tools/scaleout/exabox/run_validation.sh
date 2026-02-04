@@ -54,6 +54,10 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --iterations)
+            if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --iterations must be a positive integer, got '$2'"
+                exit 1
+            fi
             ITERATIONS="$2"
             shift 2
             ;;
