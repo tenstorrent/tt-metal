@@ -33,12 +33,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-namespace tt_metal {
-class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -50,12 +44,12 @@ using namespace tt::tt_metal;
 // and incrementing by 1.0f for each element.
 void inc_populate(std::vector<std::uint32_t>& vec, float start_from) {
     float val = start_from;
-    for (std::uint32_t i = 0; i < vec.size(); i++) {
+    for (unsigned int& elem : vec) {
         bfloat16 num_1_bfloat16 = bfloat16(val);
         val = val + 1.0f;
         bfloat16 num_2_bfloat16 = bfloat16(val);
         val = val + 1.0f;
-        vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+        elem = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
 }
 
@@ -131,7 +125,7 @@ void RunDelayTestOnCore(
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 
-    SetRuntimeArgs(program_, eltwise_binary_kernel, core, {NUM_TILES, 1});
+    SetRuntimeArgs(program_, eltwise_binary_kernel, core, {NUM_TILES, 1, 0});
 
     float constant = 0.0f;
     float start_from = 0.0f;

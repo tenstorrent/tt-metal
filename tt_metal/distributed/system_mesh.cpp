@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <system_mesh.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape2d.hpp>
@@ -26,14 +26,13 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 namespace tt::tt_metal::distributed {
-namespace {
-
 // Helper type to keep track of device ID and fabric node ID for a given mesh coordinate.
 struct MappedDevice {
     MaybeRemote<int> device_id;
     tt::tt_fabric::FabricNodeId fabric_node_id;
 };
 
+namespace {
 // Initializes a mesh container with MappedDevice objects, with configured fabric node IDs.
 MeshContainer<MappedDevice> initialize_mapped_devices(const tt::tt_fabric::MeshId mesh_id, const MeshShape& shape) {
     std::vector<MappedDevice> system_mesh_devices;
@@ -143,6 +142,22 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
     const MeshShape& system_shape = coordinate_translator_.global_shape();
     const MeshShape requested_shape = shape.value_or(system_shape);
     mapped_devices.mesh_shape = requested_shape;
+
+    // Validate requested mesh shape has valid size
+    const size_t requested_size = requested_shape.mesh_size();
+    const size_t system_size = system_shape.mesh_size();
+    TT_FATAL(
+        requested_size > 0,
+        "Requested mesh shape {} has zero devices (mesh_size=0). MeshShape must have at least one device.",
+        requested_shape);
+    TT_FATAL(
+        requested_size <= system_size,
+        "Requested mesh shape {} requires {} devices, but only {} devices are available in the system mesh {}.",
+        requested_shape,
+        requested_size,
+        system_size,
+        system_shape);
+
     const size_t system_dimensions = system_shape.dims();
 
     const MeshCoordinate system_offset = [&offset, system_dimensions]() {
@@ -153,9 +168,8 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
                 offset,
                 system_dimensions);
             return *offset;
-        } else {
-            return MeshCoordinate::zero_coordinate(system_dimensions);
         }
+        return MeshCoordinate::zero_coordinate(system_dimensions);
     }();
 
     if (requested_shape.is_line_topology()) {

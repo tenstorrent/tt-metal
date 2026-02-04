@@ -87,9 +87,9 @@ def test_device_perf_wh_bare_metal(
         ("prefill", 1, 128, 0, "BFLOAT16-DRAM", 2115),
         ("prefill", 1, 1024, 0, "BFLOAT16-DRAM", 3120),
         ("prefill", 1, 2048, 0, "BFLOAT16-DRAM", 2870),
-        ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 629),
+        ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 647),
         ("decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 572),
-        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 533),
+        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 548),
     ),
 )
 def test_device_perf(llm_mode, batch, seq_len, kv_cache_len, model_config_str, samples):

@@ -10,9 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
-namespace ttnn {
-namespace experimental {
-namespace ccl {
+namespace ttnn::experimental::ccl {
 
 struct CoreSemPair {
     CoreCoord core = {0, 0};
@@ -182,7 +180,7 @@ struct MatmulFusedOpSignaler {
         uint32_t output_page_offset,
         bool is_clockwise_direction,
 
-        uint32_t weight_tensor_width);
+        uint32_t weight_output_page_offset);
 
     void init_llama_all_gather(
         uint32_t num_transfers,
@@ -190,15 +188,15 @@ struct MatmulFusedOpSignaler {
         uint32_t start_ring_index,
         uint32_t tensor_slice_shape_width,
         uint32_t output_page_offset,
-        uint32_t weight_tensor_width,
-        uint32_t cb_index_start);
+        uint32_t weight_output_page_offset,
+        uint32_t start_cb_index);
 
     void init_reduce_scatter(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
         const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
         FusedOpSignalerMode fused_op_signaler_mode);
 
-    void init_llama_rs_cores_rs(const CoreRangeSet& rs_reader_cores, tt::tt_metal::Program& program);
+    void init_llama_rs_cores_rs(const CoreRangeSet& rs_cores, tt::tt_metal::Program& program);
     void init_llama_rs_cores_mm(
         const CoreRangeSet& matmul_cores,
         tt::tt_metal::Program& program,
@@ -227,10 +225,10 @@ struct MatmulFusedOpSignaler {
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
-    bool is_all_gather();
-    bool is_reduce_scatter();
-    bool is_llama_reduce_scatter();
-    bool is_llama_all_gather();
+    bool is_all_gather() const;
+    bool is_reduce_scatter() const;
+    bool is_llama_reduce_scatter() const;
+    bool is_llama_all_gather() const;
 
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t curr_worker_in0_idx, uint32_t curr_worker_in1_idx);
@@ -276,6 +274,4 @@ struct MinimalMatmulFusedOpSignaler {
         std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
 };
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental::ccl

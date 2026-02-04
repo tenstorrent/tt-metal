@@ -4,8 +4,7 @@
 
 #include "compute_kernel_api/matmul.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t sub_Mt = get_compile_time_arg_val(0);
     uint32_t Kt = get_compile_time_arg_val(1);
     uint32_t sub_Nt = get_compile_time_arg_val(2);
@@ -18,7 +17,7 @@ void MAIN {
         for (uint32_t nt = 0; nt < sub_Nt; ++nt) {
             acquire_dst();
             for (uint32_t kt = 0; kt < Kt; ++kt) {
-                matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, mt * Kt + kt, nt * Kt + kt, 0, false);
+                matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, mt * Kt + kt, nt * Kt + kt, 0);
             }
             cb_reserve_back(tt::CBIndex::c_16, onetile);
             pack_tile(0, tt::CBIndex::c_16);
@@ -27,4 +26,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

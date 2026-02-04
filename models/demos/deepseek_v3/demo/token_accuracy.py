@@ -3,92 +3,161 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, List, Optional
 
 import torch
-from loguru import logger
+
+
+@dataclass
+class AccuracyResult:
+    top1: float
+    top5: float
+    matches_top1: int
+    matches_top5: int
+    total: int
 
 
 class TokenAccuracy:
     """
-    Minimal teacher-forcing helper for DeepSeek-V3 demo.
+    Teacher forcing helper backed by the HF-generated reference .refpt file.
 
-    Expects a reference .pt/.refpt file with:
-      - reference_tokens: LongTensor [1, T] (prompt + continuation)
-      - top5_tokens: LongTensor [T, 5] (optional)
-
-    Splits reference_tokens at T//2 + 1 into input prompt tokens and ground-truth continuation.
+    Expected payload keys (your current refpt format):
+      - prompt_tokens: Tensor [1, prompt_len]
+      - generated_tokens: Tensor [1, gen_len]  (ground-truth continuation)
+      - top5_tokens: Tensor [L, 5] where L = prompt_len + gen_len
+      - tf_prompt_len: int
     """
 
-    def __init__(self, reference_file: str | Path, prompt_len: int | None = None):
-        self._path = str(reference_file)
-        data = torch.load(self._path)
+    def __init__(self, reference_file: str | Path, prompt_len: Optional[int] = None) -> None:
+        self.reference_file = Path(reference_file)
+        payload = torch.load(self.reference_file, weights_only=False)
 
-        self.reference_tokens = data["reference_tokens"].long()
-        if self.reference_tokens.dim() == 1:
-            self.reference_tokens = self.reference_tokens.unsqueeze(0)
+        # --- Validate payload shape invariants (keeps teacher forcing alignment unambiguous) ---
+        required = ("prompt_tokens", "generated_tokens", "top5_tokens", "tf_prompt_len")
+        missing = [k for k in required if k not in payload]
+        if missing:
+            raise KeyError(f"Reference file missing keys: {missing}. File={self.reference_file}")
 
-        self.top5_tokens = data.get("top5_tokens", None)
-        if self.top5_tokens is not None:
-            self.top5_tokens = self.top5_tokens.long()
+        self.prompt_tokens = payload["prompt_tokens"]  # [1, P]
+        self.generated_tokens = payload["generated_tokens"]  # [1, G]
+        self.top5_tokens = payload["top5_tokens"]  # [P+G, 5]
+        self.tf_prompt_len = int(payload["tf_prompt_len"])
 
-        T = self.reference_tokens.shape[-1]
-        # Determine prompt length. Default matches simple_text_demo: T//2 + 1
-        if prompt_len is None:
-            split_point = (T // 2) + 1
-        else:
-            # Clamp to valid range [1, T-1]
-            split_point = max(1, min(int(prompt_len), T - 1))
-        self.input_prompt = self.reference_tokens[0, :split_point]
-        self.gt_tokens = self.reference_tokens[0, split_point:]
+        if (
+            not isinstance(self.prompt_tokens, torch.Tensor)
+            or self.prompt_tokens.dim() != 2
+            or self.prompt_tokens.shape[0] != 1
+        ):
+            raise ValueError(
+                f"prompt_tokens must be a Tensor of shape [1, P], got {type(self.prompt_tokens)} {getattr(self.prompt_tokens,'shape',None)}"
+            )
+        if (
+            not isinstance(self.generated_tokens, torch.Tensor)
+            or self.generated_tokens.dim() != 2
+            or self.generated_tokens.shape[0] != 1
+        ):
+            raise ValueError(
+                f"generated_tokens must be a Tensor of shape [1, G], got {type(self.generated_tokens)} {getattr(self.generated_tokens,'shape',None)}"
+            )
+        if (
+            not isinstance(self.top5_tokens, torch.Tensor)
+            or self.top5_tokens.dim() != 2
+            or self.top5_tokens.shape[1] != 5
+        ):
+            raise ValueError(
+                f"top5_tokens must be a Tensor of shape [L, 5], got {type(self.top5_tokens)} {getattr(self.top5_tokens,'shape',None)}"
+            )
 
-        if self.top5_tokens is not None:
-            # Align top5 tokens to decode steps (starting from last prompt token index)
-            self.top5_tokens = self.top5_tokens[split_point - 1 :, ...]
+        file_prompt_len = int(self.prompt_tokens.shape[1])
+        file_gen_len = int(self.generated_tokens.shape[1])
+        expected_L = file_prompt_len + file_gen_len
+        if int(self.top5_tokens.shape[0]) != expected_L:
+            raise ValueError(
+                f"top5_tokens length mismatch: expected L={expected_L} (=prompt {file_prompt_len} + gen {file_gen_len}), got {int(self.top5_tokens.shape[0])}"
+            )
+        if self.tf_prompt_len != file_prompt_len:
+            raise ValueError(
+                f"tf_prompt_len in file ({self.tf_prompt_len}) != prompt_tokens length ({file_prompt_len}). File={self.reference_file}"
+            )
 
-        self._gt_pos = -1
-        self._pred_tokens: list[int] = []
-        self._max_index = len(self.gt_tokens) - 1
+        if prompt_len is not None and int(prompt_len) != self.tf_prompt_len:
+            raise ValueError(f"prompt_len arg ({prompt_len}) != tf_prompt_len in file ({self.tf_prompt_len})")
 
-        logger.info(
-            f"Loaded reference file: {self._path} (prompt_len={len(self.input_prompt)}, gt_len={len(self.gt_tokens)})"
-        )
+        # Flatten to 1D for convenience
+        self._prompt_1d = self.prompt_tokens[0].to(torch.long).contiguous()
+        self._gt_gen_1d = self.generated_tokens[0].to(torch.long).contiguous()
 
-    def prepare_ref_tokens(self, tokenizer) -> str:
-        """Decode the prompt token ids to a string prompt."""
-        return tokenizer.decode(self.input_prompt.tolist())
+        # Collected TT predictions (one per generated token position)
+        self._pred_tokens: List[int] = []
+        self._cursor = 0  # how many GT tokens have been consumed/forced
+
+        # Optional token id metadata for nicer debugging / fallbacks
+        meta = payload.get("token_ids_meta", {}) if isinstance(payload.get("token_ids_meta", {}), dict) else {}
+        self.eos_id: Optional[int] = int(meta["eos_id"]) if "eos_id" in meta and meta["eos_id"] is not None else None
+
+    def reset(self) -> None:
+        """Reset internal cursor/prediction buffer so the same instance can be reused safely."""
+        self._pred_tokens.clear()
+        self._cursor = 0
+
+    def get_prompt_token_ids(self) -> List[int]:
+        return self._prompt_1d.tolist()
 
     def num_gt_tokens(self) -> int:
-        return len(self.gt_tokens)
+        return int(self._gt_gen_1d.numel())
 
-    def collect_predicted_tokens(self, token_id: int) -> int:
-        """Record model’s prediction for the current step and return the ground-truth token to force next step.
+    def num_pred_tokens(self) -> int:
+        return len(self._pred_tokens)
 
-        Returns the GT token id at this step as an int.
+    def collect_predicted_tokens(self, tt_pred_token: int) -> int:
         """
-        self._pred_tokens.append(int(token_id))
-        self._gt_pos += 1
-        idx = min(self._gt_pos, self._max_index)
-        return int(self.gt_tokens[idx].item())
-
-    def compute_accuracy(self) -> dict[str, float | None]:
-        """Compute top-1 and optional top-5 accuracy for the collected predictions.
-
-        Returns a dict with keys 'top1' and 'top5' (top5 is None if unavailable).
+        Record TT's predicted token for the *next* generated position,
+        and return the ground-truth token to force into TT decode.
         """
-        matching = min(len(self.gt_tokens), len(self._pred_tokens))
-        if matching == 0:
-            return {"top1": 0.0, "top5": None}
+        if self._cursor >= self.num_gt_tokens():
+            # If TT generates beyond GT length, just keep returning EOS-ish
+            self._pred_tokens.append(int(tt_pred_token))
+            if self.eos_id is not None:
+                return int(self.eos_id)
+            return int(self._gt_gen_1d[-1].item())
 
-        gt = self.gt_tokens[:matching]
-        pred = torch.tensor(self._pred_tokens[:matching], dtype=torch.long)
-        top1 = float((gt == pred).sum().item()) / matching
+        self._pred_tokens.append(int(tt_pred_token))
+        forced = int(self._gt_gen_1d[self._cursor].item())
+        self._cursor += 1
+        return forced
 
-        top5_val = None
-        if self.top5_tokens is not None and self.top5_tokens.numel() > 0:
-            t5 = self.top5_tokens[:matching]
-            # check if pred in each row of top5
-            in_top5 = [(int(pred[i].item()) in set(t5[i].tolist())) for i in range(matching)]
-            top5_val = float(sum(in_top5)) / matching
+    def compute_accuracy(self) -> Dict[str, float]:
+        """
+        Accuracy vs HF baseline top5_tokens:
+          For generated step i:
+            - sequence position = tf_prompt_len + i
+            - HF top-1 token = top5_tokens[pos][0]
+            - HF top-5 tokens = top5_tokens[pos][:]
+        """
+        total = min(len(self._pred_tokens), self.num_gt_tokens())
+        if total == 0:
+            return {"top1": 0.0, "top5": 0.0, "matches_top1": 0, "matches_top5": 0, "total": 0}
 
-        return {"top1": top1, "top5": top5_val}
+        matches_top1 = 0
+        matches_top5 = 0
+
+        for i in range(total):
+            pos = self.tf_prompt_len + i
+            hf_top5 = self.top5_tokens[pos].tolist()
+            hf_top1 = hf_top5[0]
+            tt_pred = int(self._pred_tokens[i])
+
+            if tt_pred == hf_top1:
+                matches_top1 += 1
+            if tt_pred in hf_top5:
+                matches_top5 += 1
+
+        return {
+            "top1": matches_top1 / total,
+            "top5": matches_top5 / total,
+            "matches_top1": matches_top1,
+            "matches_top5": matches_top5,
+            "total": total,
+        }

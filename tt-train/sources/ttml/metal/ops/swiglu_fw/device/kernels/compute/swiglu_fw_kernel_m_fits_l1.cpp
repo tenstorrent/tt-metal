@@ -104,7 +104,7 @@ inline void mul_AxB_accumulate_C(
 
         // Compute C[r, c] += sum_k( A[r, k] * B[k, c] )
         for (uint32_t k = 0; k < ab_block_size; ++k) {
-            matmul_tiles(cb_a_idx, cb_b_idx, a_start_idx + k, k, c, false);
+            matmul_tiles(cb_a_idx, cb_b_idx, a_start_idx + k, k, c);
         }
 
         cb_pop_front(cb_b_idx, block_size);  // Done with all B data
@@ -155,7 +155,7 @@ inline void mul_XW_accumulate_k_block(
 
         // Accumulate: result[k] += X[p] * W[p, k] for all k in k_block
         for (uint32_t k = 0; k < k_block_size; ++k) {
-            matmul_tiles(cb_x_idx, cb_w_idx, p, k, k, false);
+            matmul_tiles(cb_x_idx, cb_w_idx, p, k, k);
         }
 
         cb_pop_front(cb_w_idx, block_size);
@@ -254,7 +254,7 @@ inline void compute_M_for_r() {
 
             // Apply SiLU activation to compute SiLU(XW1)
             copy_dest_values_init();
-            copy_dest_values(silu_reg, xw1_reg);
+            copy_dest_values(xw1_reg, silu_reg);
             sigmoid_tile_init();
             sigmoid_tile(silu_reg);
             // Multiply XW1 * sigmoid(XW1) to get SiLU(XW1)

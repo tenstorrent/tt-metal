@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
@@ -23,18 +23,21 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(13);
     constexpr uint32_t is_causal = get_compile_time_arg_val(14) == 1;
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(15) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(18);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(19);
-    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(20) == 1;
+    constexpr uint32_t broadcast_provided_mask_batch = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t broadcast_provided_mask_heads = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(19) == 1;
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(20);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(21);
+    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(22) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<21>();
+    constexpr auto q_args = TensorAccessorArgs<23>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
+    constexpr auto chunk_start_idx_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -43,6 +46,7 @@ void kernel_main() {
     const uint32_t mask_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t page_table_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t attention_sink_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t chunk_start_idx_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t core_id = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_batch_end = get_arg_val<uint32_t>(argidx++);
@@ -59,10 +63,14 @@ void kernel_main() {
         chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
         read_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
     }
+    uint32_t chunked_q_chunk_offset_phase_1_local = chunked_q_chunk_offset_phase_1;
+    uint32_t chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_2;
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
-    // When chunked, update the bounds of valid K sequence length based on Q chunk offset
+    // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
+    // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
+    // different valid_Sqt (e.g. ring_distributed uses full Q length in tiles).
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -75,6 +83,8 @@ void kernel_main() {
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_id_page_table = tt::CBIndex::c_6;
+    constexpr uint32_t cb_id_chunk_start_idx_compute = tt::CBIndex::c_8;
+    constexpr uint32_t cb_id_chunk_start_idx_writer = tt::CBIndex::c_9;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
@@ -93,11 +103,11 @@ void kernel_main() {
     const auto mask_reader = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
     const auto attention_sink_reader =
         TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
+    const auto chunk_start_idx_reader = TensorAccessor(chunk_start_idx_args, chunk_start_idx_addr, 4);
 
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
     const auto v_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
-    const auto mask_tile_shape = TensorTileShape(B, 1, valid_Sqt, valid_Skt);
     const auto attention_sink_tile_shape = TensorTileShape(B, NQH, 1, 1);
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
@@ -106,31 +116,68 @@ void kernel_main() {
     uint32_t mask_tile_id = 0;
     uint32_t barrier_count = 0;
     uint32_t chunked_q_chunk_offset = 0;
+    if constexpr (is_chunked) {
+        if (chunk_start_idx_addr != 0) {
+            cb_reserve_back(cb_id_chunk_start_idx_compute, 1);
+            uint32_t chunk_start_write_ptr = get_write_ptr(cb_id_chunk_start_idx_compute);
+            noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr, 4);
+            noc_async_read_barrier();
+            uint32_t chunk_start_idx = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr);
+            cb_push_back(cb_id_chunk_start_idx_compute, 1);
+
+            cb_reserve_back(cb_id_chunk_start_idx_writer, 1);
+            uint32_t chunk_start_write_ptr_2 = get_write_ptr(cb_id_chunk_start_idx_writer);
+            noc_async_read(chunk_start_idx_reader.get_noc_addr(0), chunk_start_write_ptr_2, 4);
+            noc_async_read_barrier();
+            cb_push_back(cb_id_chunk_start_idx_writer, 1);
+
+            const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
+            chunked_q_chunk_offset_phase_1_local = chunk_start_idx / q_chunk_size;
+            if (num_phases == 2) {
+                chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_1_local;
+            }
+        }
+    }
     uint32_t read_offset = 0;
     for (uint32_t phase = 0; phase < num_phases; ++phase) {
         if (phase == 0) {
-            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1_local;
             read_offset = read_offset_phase_1;
         } else {
-            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2_local;
             read_offset = read_offset_phase_2;
         }
-        uint32_t valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
+        uint32_t valid_Skt_bound;
+        if (chunk_start_idx_addr != 0) {
+            // Flexible or ring: cap at valid_Skt so we never read past K/V extent.
+            valid_Skt_bound = std::min(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, valid_Skt);
+        } else {
+            // Legacy: extend by offset so one program can serve all chunks (valid_Skt is chunk 0's).
+            valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
+        }
 
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             if constexpr (is_chunked) {
                 // Chunked means that we have paged attention
-                const auto page_table_reader = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
                 cb_reserve_back(cb_id_page_table, 1);
-                uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-                uint64_t page_table_noc_addr = page_table_reader.get_noc_addr(nb);
-                noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
-                noc_async_read_barrier();
+                page_table_ptr = read_page_table_for_batch(
+                    cb_id_page_table, nb, page_table_args, page_table_addr, page_table_stick_size);
                 cb_push_back(cb_id_page_table, 1);
-                page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
             }
 
-            const uint32_t mask_batch_offset = nb * Sqt * Skt;
+            // Calculate mask batch offset based on broadcasting (using unpadded mask dimensions):
+            // - If batch is broadcasted [1 x ...]: always use batch=0, so offset = 0
+            // - If batch is not broadcasted [b x ...]: use actual batch nb
+            uint32_t mask_batch_offset = 0;
+            if constexpr (!broadcast_provided_mask_batch) {
+                if constexpr (broadcast_provided_mask_heads) {
+                    // [b x 1 x s x s]: batch offset without head factor
+                    mask_batch_offset = nb * valid_Sqt * valid_Skt;
+                } else {
+                    // [b x h x s x s]: batch offset with all heads
+                    mask_batch_offset = nb * valid_Sqt * valid_Skt * NQH;
+                }
+            }
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
                 // Read attention sink for this Q chunk if enabled
                 if constexpr (use_attention_sink) {
@@ -235,30 +282,38 @@ void kernel_main() {
                         }
 
                         if constexpr (use_provided_mask) {
-                            // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
-                            // Q-range = [q_low, q_high)
-                            // K-range = [k_low, k_high)
-                            // does_overlap = not (q_low >= k_high or k_low >= q_high)
-                            // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional
-                            // check Read mask chunk When a mask is provided, there will be no padding on q or kv.
                             cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                             uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
                             barrier_count = 0;
-                            mask_tile_id = mask_batch_offset + q_chunk * Sq_chunk_t * Skt /*row_offset*/ +
-                                           k_chunk * Sk_chunk_t /*col_offset*/;
+
+                            uint32_t mask_row_start = mask_batch_offset + q_chunk * Sq_chunk_t * valid_Skt;
+                            if constexpr (!broadcast_provided_mask_heads) {
+                                mask_row_start += nq * valid_Sqt * valid_Skt;
+                            }
+
+                            uint32_t tile_idx = 0;
                             for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
+                                const uint32_t global_q_tile = q_chunk * Sq_chunk_t + row;
+                                const bool q_valid = !use_padded_mask || (global_q_tile < valid_Sqt);
                                 for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-                                    noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
-                                    mask_tile_id += 1;
+                                    const uint32_t global_k_tile = k_chunk * Sk_chunk_t + col;
+                                    const bool k_valid = !use_padded_mask || (global_k_tile < valid_Skt);
+                                    if (q_valid && k_valid) {
+                                        noc_async_read_tile(
+                                            mask_row_start + global_k_tile, mask_reader, mask_write_ptr);
+                                    } else {
+                                        fill_neginf_tile<mask_tile_bytes>(cb_mask_in, tile_idx);
+                                    }
                                     mask_write_ptr += mask_tile_bytes;
+                                    tile_idx++;
                                     if (++barrier_count == barrier_threshold) {
                                         noc_async_read_barrier();
                                         barrier_count = 0;
                                     }
                                 }
-                                // Strid along columns to get to next row
-                                mask_tile_id -= Sk_chunk_t;
-                                mask_tile_id += Skt;
+                                if (q_valid) {
+                                    mask_row_start += valid_Skt;
+                                }
                             }
                             noc_async_read_barrier();
                             cb_push_back(cb_mask_in, mask_chunk_tiles);
@@ -298,9 +353,9 @@ void kernel_main() {
                 }
             }
 
-        if constexpr (is_chunked) {
-            cb_pop_front(cb_id_page_table, 1);
-        }
+            if constexpr (is_chunked) {
+                cb_pop_front(cb_id_page_table, 1);
+            }
         }
     }
 }

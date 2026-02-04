@@ -103,7 +103,7 @@ std::optional<CoreRange> CoreRange::merge(const CoreRange& cr) const {
                 {this->end_coord.x, std::max(this->end_coord.y, cr.end_coord.y)});
         }
 
-        else if (this->start_coord.y == cr.start_coord.y && this->end_coord.y == cr.end_coord.y) {
+        if (this->start_coord.y == cr.start_coord.y && this->end_coord.y == cr.end_coord.y) {
             return CoreRange(
                 {std::min(this->start_coord.x, cr.start_coord.x), this->start_coord.y},
                 {std::max(this->end_coord.x, cr.end_coord.x), this->end_coord.y});
@@ -309,7 +309,8 @@ bool CoreRangeSet::contains(const CoreRange& other) const {
     uint32_t num_remaining_cores = other.size();
     if (num_remaining_cores == 0) {
         return true;
-    } else if (this->num_cores() < num_remaining_cores) {
+    }
+    if (this->num_cores() < num_remaining_cores) {
         return false;
     }
     for (const auto& cr : this->ranges_) {
@@ -329,7 +330,8 @@ bool CoreRangeSet::contains(const CoreRangeSet& other) const {
     uint32_t num_remaining_cores = other.num_cores();
     if (num_remaining_cores == 0) {
         return true;
-    } else if (this->num_cores() < num_remaining_cores) {
+    }
+    if (this->num_cores() < num_remaining_cores) {
         return false;
     }
     for (const auto& local_cr : this->ranges_) {
@@ -358,9 +360,8 @@ std::string CoreRangeSet::str() const {
         core_range_set_str[core_range_set_str.length() - 2] = '}';
         core_range_set_str.pop_back();
         return core_range_set_str;
-    } else {
-        return "{}";
     }
+    return "{}";
 }
 
 uint32_t CoreRangeSet::num_cores() const {
@@ -608,9 +609,9 @@ std::vector<CoreCoord> corerange_to_cores(const CoreRangeSet& crs, std::optional
                 uint32_t num_cores_to_add = *max_cores - all_cores.size();
                 all_cores.insert(all_cores.end(), cores.begin(), cores.begin() + num_cores_to_add);
                 break;
-            } else {
-                all_cores.insert(all_cores.end(), cores.begin(), cores.end());
             }
+            all_cores.insert(all_cores.end(), cores.begin(), cores.end());
+
         } else {
             all_cores.insert(all_cores.end(), cores.begin(), cores.end());
         }
@@ -670,7 +671,7 @@ namespace std {
 
 using tt::tt_metal::RelativeCoreCoord;
 
-std::size_t hash<RelativeCoreCoord>::operator()(RelativeCoreCoord const& o) const {
+std::size_t hash<RelativeCoreCoord>::operator()(const RelativeCoreCoord& o) const {
     std::size_t seed = 0;
     seed = std::hash<std::size_t>()(o.x) ^ std::hash<std::size_t>()(o.y) << 1;
     return seed;
@@ -731,3 +732,8 @@ CoreRangeSet from_json_t<CoreRangeSet>::operator()(const nlohmann::json& json) n
 }
 
 }  // namespace ttsl::json
+
+std::ostream& operator<<(std::ostream& os, const CoreRangeSet& core_range_set) {
+    tt::stl::reflection::operator<<(os, core_range_set);
+    return os;
+}

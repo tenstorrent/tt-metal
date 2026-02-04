@@ -129,6 +129,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
@@ -149,6 +151,10 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_fused.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.cpp
@@ -163,8 +169,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/sequential_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp
@@ -183,6 +189,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.hpp
 )
 
 # Manually select only specific files from metal ops
@@ -194,6 +202,7 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/dataflow_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/compute_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/program_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/const_utils.hpp
     # RMSNorm
     # RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
@@ -274,6 +283,19 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
+    # SDPA Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.cpp
     # SGD Fused Optimizer
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.cpp
@@ -290,6 +312,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
+    # AdamW Optimizer (consolidated: supports both half and full precision)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -300,36 +330,46 @@ if(NOT TARGET TT::Metalium)
     find_package(TT-NN)
 
     if(NOT TT-NN_FOUND)
-        if("$ENV{TT_METAL_HOME}" STREQUAL "")
-            message(FATAL_ERROR "TT_METAL_HOME is not set")
+        # Try to get TT_METAL_HOME from environment, otherwise infer from directory structure
+        if(DEFINED ENV{TT_METAL_HOME})
+            set(TT_METAL_HOME "$ENV{TT_METAL_HOME}")
+            message(STATUS "Using TT_METAL_HOME from environment: ${TT_METAL_HOME}")
+        else()
+            # Infer tt-metal repository layout from directory structure (tt-metal/tt-train)
+            # From tt-train/sources/ttml/, go up THREE levels to reach the repository root
+            set(TT_METAL_HOME "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
+            if(EXISTS "${TT_METAL_HOME}/tt_metal/CMakeLists.txt")
+                message(STATUS "Inferred tt-metal location: ${TT_METAL_HOME}")
+            else()
+                message(FATAL_ERROR "Failed to infer tt-metal location from ${TT_METAL_HOME}")
+            endif()
         endif()
 
         set(METALIUM_INCLUDE_DIRS
             # Metalium
-            "$ENV{TT_METAL_HOME}"
-            "$ENV{TT_METAL_HOME}/tt_metal"
-            "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
-            "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/blackhole"
-            "$ENV{TT_METAL_HOME}/tt_metal/api/"
-            "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
-            "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
-            "$ENV{TT_METAL_HOME}/tt_metal/include"
-            "$ENV{TT_METAL_HOME}/tt_stl"
+            "${TT_METAL_HOME}"
+            "${TT_METAL_HOME}/tt_metal"
+            "${TT_METAL_HOME}/tt_metal/third_party/umd"
+            "${TT_METAL_HOME}/tt_metal/third_party/tracy/public"
+            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole"
+            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines"
+            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/blackhole"
+            "${TT_METAL_HOME}/tt_metal/api/"
+            "${TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
+            "${TT_METAL_HOME}/tt_metal/hostdevcommon/api"
+            "${TT_METAL_HOME}/tt_metal/include"
+            "${TT_METAL_HOME}/tt_stl"
             # TTNN
             "$ENV{TT_METAL_HOME}/ttnn"
             "$ENV{TT_METAL_HOME}/ttnn/api"
             "$ENV{TT_METAL_HOME}/ttnn/cpp"
-            "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
             "${reflect_SOURCE_DIR}"
         )
 
         message(STATUS "Metalium not found, attempting to locate")
 
         # Define the path to look for the library
-        set(METALIUM_LIB_PATH "$ENV{TT_METAL_HOME}/build/lib")
+        set(METALIUM_LIB_PATH "${TT_METAL_HOME}/build/lib")
 
         # Try to find the library
         find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
@@ -345,7 +385,7 @@ if(NOT TARGET TT::Metalium)
                     IMPORTED_LOCATION
                         "${TT_STL_LIBRARY}"
                     INTERFACE_INCLUDE_DIRECTORIES
-                        "$ENV{TT_METAL_HOME}/tt_stl"
+                        "${TT_METAL_HOME}/tt_stl"
             )
             message(STATUS "Successfully found libtt_stl.so at ${TT_STL_LIBRARY}")
         else()
@@ -393,6 +433,9 @@ else()
     message(STATUS "Metalium targets already exists")
 endif()
 
+# Include helper functions for flatbuffer generation
+include(flatbuffers)
+
 add_library(ttml STATIC ${SOURCES})
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
@@ -409,6 +452,9 @@ find_package(
 foreach(lib ${BoostPackages})
     target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()
+
+# Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
+target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
 target_link_libraries(
     ttml
@@ -430,14 +476,46 @@ target_link_libraries(
         Boost::container
         tt-logger
         simde::simde
+        FlatBuffers::FlatBuffers
 )
+
+# Add include directory for TTNN::Core's generated flatbuffer headers
+# These are needed because tensor_flatbuffer.hpp includes tensor_generated.h
+if(TARGET TTNN::Core)
+    # Building with tt-metal from source - get binary directory
+    get_target_property(TTNN_CORE_BINARY_DIR TTNN::Core BINARY_DIR)
+    if(TTNN_CORE_BINARY_DIR)
+        target_include_directories(ttml SYSTEM PRIVATE ${TTNN_CORE_BINARY_DIR}/flatbuffers)
+        message(STATUS "Added TTNN::Core flatbuffers directory: ${TTNN_CORE_BINARY_DIR}/flatbuffers")
+    endif()
+else()
+    # Building with installed tt-metal
+    # Try to get include directories from TTNN::TTNN which should include the flatbuffers path
+    # If the generated headers are installed, they should be in the include directories
+    get_target_property(TTNN_INCLUDES TTNN::TTNN INTERFACE_INCLUDE_DIRECTORIES)
+    if(TTNN_INCLUDES)
+        # Check if any of the include directories contain flatbuffers
+        # This is a fallback - ideally the headers should be in a standard location
+        message(STATUS "TTNN::Core not found, checking TTNN::TTNN include directories for flatbuffers")
+        # Note: If headers are not found, this may indicate an installation issue with tt-metal
+    endif()
+endif()
+
+# Generate flatbuffer header for ttml_metadata.fbs
+# Must be done after target_link_libraries so ttml has access to TTNN::TTNN's include directories
+set(FLATBUFFERS_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/serialization/ttml_metadata.fbs)
+set(FLATBUFFER_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/serialization)
+
+GENERATE_FBS_HEADER(${FLATBUFFERS_SCHEMA} TARGET ttml OUTPUT_DIR ${FLATBUFFER_GENERATED_DIR})
+
+# Add generated header to target sources and include directory
+target_sources(ttml PRIVATE ${FBS_GENERATED_HEADER_FILE})
+target_include_directories(ttml PUBLIC ${FLATBUFFER_GENERATED_DIR})
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
 message(STATUS "xtl_SOURCE_DIR: ${xtl_SOURCE_DIR}")
 message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 
-message(STATUS "msgpack_SOURCE_DIR: ${msgpack_SOURCE_DIR}")
-target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)
 message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 
@@ -516,20 +594,11 @@ target_link_libraries(
         Python3::Python
         ttml
 )
-target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
-install(
-    TARGETS
-        _ttml
-    LIBRARY
-        DESTINATION ttml
-        COMPONENT ttml
-)
-
 # Install Python source files
 install(
     DIRECTORY
         ${CMAKE_CURRENT_SOURCE_DIR}/ttml
-    DESTINATION ttml
+    DESTINATION .
     COMPONENT ttml
     FILES_MATCHING
     PATTERN
@@ -538,6 +607,16 @@ install(
     "__pycache__"
         EXCLUDE
 )
+
+install(
+    TARGETS
+        _ttml
+    LIBRARY
+        DESTINATION ttml
+        COMPONENT ttml
+)
+
+target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
 # CPack configuration for creating ttml deb package
 set(CPACK_GENERATOR "DEB")

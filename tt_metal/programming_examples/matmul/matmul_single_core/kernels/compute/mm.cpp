@@ -9,7 +9,6 @@
 
 using std::uint32_t;
 
-namespace NAMESPACE {
 /**
  * @brief Main kernel function for batched matrix multiplication (BMM).
  *
@@ -37,7 +36,7 @@ namespace NAMESPACE {
  * Assumes that input tiles are provided in the correct order and that the reader is responsible for supplying
  * the appropriate tiles for each output tile computation.
  */
-void MAIN {
+void kernel_main() {
     const uint32_t Mt = get_compile_time_arg_val(0);
     const uint32_t Kt = get_compile_time_arg_val(1);
     const uint32_t Nt = get_compile_time_arg_val(2);
@@ -62,7 +61,7 @@ void MAIN {
 
                 // Perform the matrix multiplication for the current tile.
                 // NOTE: This function also accumulates the result into the destination tile.
-                matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false);
+                matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
 
                 // Mark the input tiles as used by popping them from the front of the circular buffers.
                 cb_pop_front(cb_in0, 1);
@@ -85,4 +84,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

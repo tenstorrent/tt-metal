@@ -25,11 +25,11 @@ void math_main() {
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
 
     llk_math_pack_sync_init<DST_ACCUM_MODE>();
-    llk_math_hw_configure_disaggregated(0, 1);
+    llk_math_hw_configure<DST_ACCUM_MODE>(0, 1);
     for (uint32_t block = 0; block < per_core_num_blocks; block++) {
         for (uint32_t r = 0; r < per_core_block_r_tiles; r++) {
             // Untilize
-            llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0, 0);
+            llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0);
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_math_wait_for_dest_available();
                 llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0);
@@ -58,8 +58,7 @@ void unpack_main() {
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
 
-    llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(0, 1);
-    // llk_unpack_untilize_hw_configure_disaggregated(0);
+    llk_unpack_hw_configure<DST_ACCUM_MODE>(0, 1);
 
     // llk_unpack_untilize_init(0);
     for (uint32_t block = 0U; block < per_core_num_blocks; ++block) {
@@ -67,7 +66,11 @@ void unpack_main() {
             llk_unpack_untilize_init(0);
             llk_wait_tiles(0, per_core_block_c_tiles);
             llk_unpack_untilize(0, per_core_block_c_tiles);
+#ifdef ARCH_BLACKHOLE
             llk_unpack_untilize_uninit(0);
+#else
+            llk_unpack_untilize_uninit();
+#endif
             llk_pop_tiles(0, per_core_block_c_tiles);
             llk_pop_tiles(1, per_core_block_c_tiles);
 
@@ -94,7 +97,7 @@ void pack_main() {
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
     llk_pack_init();
-    llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16);
+    llk_pack_hw_configure<DST_ACCUM_MODE>(16);
     llk_pack_dest_init<DST_ACCUM_MODE, false>();
 
     for (uint32_t block = 0; block < per_core_num_blocks; block++) {

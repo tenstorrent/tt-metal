@@ -12,8 +12,7 @@
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t in_cb = get_compile_time_arg_val(0);
     constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
@@ -60,7 +59,7 @@ void MAIN {
         mm_init_short(in_cb, trans_mat_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
-            matmul_tiles(in_cb, trans_mat_cb, j, 0, j, false);
+            matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
             pack_tile(j, rotated_in_interm_cb, j);
         }
         REL();
@@ -110,4 +109,3 @@ void MAIN {
     // Done with the transformation matrix, so remove from CB
     cb_pop_front(trans_mat_cb, onetile);
 }
-}  // namespace NAMESPACE

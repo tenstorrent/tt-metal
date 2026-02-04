@@ -27,7 +27,7 @@ void set_printoptions(TensorPrintProfile print_profile, SciMode sci_mode, int pr
     tt::tt_metal::tensor_impl::TTNN_PRINT_OPTIONS.precision = precision;
 }
 
-void segfault_handler(int sig) {
+void segfault_handler(int /*sig*/) {
     std::cerr << tt::assert::backtrace_to_string() << std::endl;
     exit(EXIT_FAILURE);
 }

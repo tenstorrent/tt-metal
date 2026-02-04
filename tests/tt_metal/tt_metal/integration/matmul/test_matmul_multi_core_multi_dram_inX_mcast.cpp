@@ -58,15 +58,15 @@ std::tuple<
     uint32_t,
     uint32_t>
 create_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
     int num_cores_c,
     int mcast_xy_offset,
     int mcast_yx_offset,
-    int M,
-    int N,
+    int /*M*/,
+    int /*N*/,
     int K,
     int in0_block_w,
     int out_subblock_h,
@@ -478,9 +478,9 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCast) {
         GTEST_SKIP();
     }
 
-    for (unsigned int id = 0; id < devices_.size(); id++) {
+    for (const auto& device : devices_) {
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_multi_dram_inX_mcast::
-                        matmul_multi_core_multi_dram_inX_mcast(devices_.at(id), 0));
+                        matmul_multi_core_multi_dram_inX_mcast(device, 0));
     }
 }
 
@@ -490,9 +490,9 @@ TEST_F(MeshDispatchFixture, TensixMatmulMultiCoreMultiDRAMIn1MCast) {
         GTEST_SKIP();
     }
 
-    for (unsigned int id = 0; id < devices_.size(); id++) {
+    for (const auto& device : devices_) {
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_multi_dram_inX_mcast::
-                        matmul_multi_core_multi_dram_inX_mcast(devices_.at(id), 1));
+                        matmul_multi_core_multi_dram_inX_mcast(device, 1));
     }
 }
 

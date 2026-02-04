@@ -8,7 +8,6 @@
 
 using std::uint32_t;
 
-namespace NAMESPACE {
 /**
  * @brief Main kernel function for multi-core matrix multiplication (BMM).
  *
@@ -35,7 +34,7 @@ namespace NAMESPACE {
  * Assumes that input tiles are provided in the correct order and that the reader is responsible for supplying
  * the appropriate tiles for each output tile computation.
  */
-void MAIN {
+void kernel_main() {
     uint32_t num_output_tiles = get_arg_val<uint32_t>(0);  // number of output tiles to produce
     uint32_t Kt = get_arg_val<uint32_t>(1);                // number of tiles in K dimension for dot product
 
@@ -59,7 +58,7 @@ void MAIN {
 
             // Perform the matrix multiplication for the current tile.
             // NOTE: This function also accumulates the result into the destination tile.
-            matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false);
+            matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
 
             // Mark the input tiles as used by popping them from the front of the circular buffers.
             cb_pop_front(cb_in0, 1);
@@ -81,4 +80,3 @@ void MAIN {
         tile_regs_release();
     }
 }
-}  // namespace NAMESPACE

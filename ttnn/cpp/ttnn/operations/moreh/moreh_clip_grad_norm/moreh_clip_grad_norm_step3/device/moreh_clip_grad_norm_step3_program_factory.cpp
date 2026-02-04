@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <vector>
 
 #include "moreh_clip_grad_norm_step3_device_operation.hpp"
@@ -20,12 +21,13 @@ std::tuple<uint32_t, float, bool> get_p_decimal_p_is_negative(float ord) {
     if (p_is_negative) {
         p = -p;
     }
-    return std::make_tuple(static_cast<uint32_t>(p), decimal, p_is_negative);
+    // Pass p as float bits (IEEE 754 format) since power_tile expects float bits
+    return std::make_tuple(std::bit_cast<uint32_t>(p), decimal, p_is_negative);
 }
 
 MorehClipGradNormStep3Operation::ProgramFactory::cached_program_t
 MorehClipGradNormStep3Operation::ProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& inputs) {
     const auto& clip_coef_clamped = tensor_args.clip_coef_clamped;
@@ -137,7 +139,7 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
 
 void MorehClipGradNormStep3Operation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& inputs) {
     auto& program = cached_program.program;

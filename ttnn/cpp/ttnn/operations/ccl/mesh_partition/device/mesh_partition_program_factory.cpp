@@ -4,6 +4,7 @@
 
 #include "mesh_partition_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tuple>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -26,7 +27,7 @@ uint32_t get_cluster_axis_index(
 
 namespace {
 
-using SliceOp = ttnn::operations::data_movement::slice::SliceDeviceOperation;
+using SliceOp = ttnn::prim::SliceDeviceOperation;
 
 // Helper function to compute slice parameters for a given mesh coordinate
 auto compute_slice_parameters(
@@ -45,7 +46,7 @@ auto compute_slice_parameters(
         cluster_index,
         cluster_size);
 
-    auto input_shape = input_tensor.logical_shape();
+    auto input_shape = input_tensor.padded_shape();
     uint32_t dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
     auto partitioned_dim_size = input_shape[dim] / cluster_size;
@@ -82,7 +83,25 @@ auto compute_slice_parameters(
         ends,
         strides);
 
-    return SliceOp::invoke(
+    auto slice_arg_func =
+        [](auto input, auto slice_start, auto slice_end, auto step, auto output_mem_config, auto use_tensor_args) {
+            return std::make_tuple(
+                SliceOp::operation_attributes_t{
+                    .slice_start = std::move(slice_start),
+                    .slice_end = std::move(slice_end),
+                    .step = std::move(step),
+                    .output_mem_config = std::move(output_mem_config),
+                    .use_tensor_args = use_tensor_args,
+                    .slice_dim = std::nullopt,
+                    .num_devices = std::nullopt,
+                    .sub_core_grids = std::nullopt},
+                SliceOp::tensor_args_t{
+                    .input = std::move(input),
+                    .start_tensor = std::nullopt,
+                    .end_tensor = std::nullopt,
+                    .preallocated_output = std::nullopt});
+        };
+    return slice_arg_func(
         tensor_args.input_tensor,
         begins,
         ends,

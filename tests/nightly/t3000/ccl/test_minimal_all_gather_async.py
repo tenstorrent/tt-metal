@@ -229,6 +229,9 @@ def run_all_gather_impl(
                 num_links=num_links,
                 memory_config=mem_config_ag,
                 topology=all_gather_topology,
+                chunks_per_sync=chunks_per_sync,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
                 subdevice_id=worker_sub_device_id,
                 sub_core_grids=sub_core_grids,
             )
@@ -334,9 +337,19 @@ def run_all_gather_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers",
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers, pcc_threshold",
     [
-        ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, True),  # perf, barrier_with_persistent
+        (
+            [1, 1, 1024, 5120],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            10,
+            True,
+            True,
+            1.0,
+        ),  # perf, barrier_with_persistent
         (
             [8, 1, 512, 512],
             0,
@@ -346,6 +359,7 @@ def run_all_gather_impl(
             1,
             True,
             False,
+            1.0,
         ),  # check, barrier_without_persistent
         (
             [1, 1, 1024, 1024],
@@ -356,10 +370,53 @@ def run_all_gather_impl(
             10,
             False,
             True,
+            1.0,
         ),  # perf, no_barrier_with_persistent
-        ([1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, True),  # check, barrier_with_persistent
+        (
+            [1, 1, 1024, 1024],
+            -1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            10,
+            False,
+            True,
+            1.0,
+        ),  # perf, no_barrier_with_persistent
+        (
+            [1, 1, 48, 1024],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            1,
+            True,
+            True,
+            1.0,
+        ),  # check, barrier_with_persistent
+        (
+            [1, 1, 48, 1024],
+            -1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            1,
+            True,
+            True,
+            1.0,
+        ),  # check, barrier_with_persistent
         # Composite-AG tests
-        ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, False),  # perf, barrier_without_persistent
+        (
+            [1, 1, 1, 8],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            10,
+            True,
+            False,
+            1.0,
+        ),  # perf, barrier_without_persistent
         (
             [1, 16, 32, 32],
             1,
@@ -369,15 +426,30 @@ def run_all_gather_impl(
             1,
             False,
             True,
+            1.0,
         ),  # check, no_barrier_with_persistent
+        (
+            [1, 1, 1024, 5120],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            False,
+            1,
+            True,
+            True,
+            0.9999,
+        ),  # perf, barrier_with_persistent
     ],
     ids=[
         "sd35_spatial-perf-barrier_with_persistent",
         "gather_dim_0-check-barrier_without_persistent",
         "gather_dim_2-perf-no_barrier_with_persistent",
+        "gather_dim_negative_2-perf-no_barrier_with_persistent",
         "gather_dim_3_padded_dim_2-check-barrier_with_persistent",
+        "gather_dim_negative_1_padded_dim_2-check-barrier_with_persistent",
         "composite_ag_test_two-perf-barrier_without_persistent",
         "composite_ag_test_four-check-no_barrier_with_persistent",
+        "sd35_spatial-perf-barrier_with_persistent_bfloat8_b",
     ],
 )
 @pytest.mark.parametrize(
@@ -412,6 +484,7 @@ def test_all_gather_async(
     mem_config_input,
     mem_config_ag,
     all_gather_topology,
+    pcc_threshold,
 ):
     run_all_gather_impl(
         mesh_device,
@@ -429,6 +502,7 @@ def test_all_gather_async(
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,
         use_semaphore_free_all_gather_impl=False,
+        allowed_pcc=pcc_threshold,
     )
 
 
@@ -436,15 +510,15 @@ def test_all_gather_async(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, chunks_per_sync, num_workers_per_link, num_buffers_per_channel,",
     [
-        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # perf
-        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # check
-        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # perf
-        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # check
+        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
+        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 2, 2, 8),  # check
         # Composite-AG tests
-        ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10),  # perf
-        ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # check
+        ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, None, None, None),  # perf
+        ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, None, None, None),  # check
     ],
     ids=[
         "dit_shape-perf",  # this one triggers the default chunks_per_sync
@@ -482,6 +556,9 @@ def test_ttnn_all_gather(
     ag_input_dtype,
     enable_trace,
     num_iters,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
     mem_config_input,
     mem_config_ag,
     all_gather_topology,
@@ -499,6 +576,9 @@ def test_ttnn_all_gather(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
         use_semaphore_free_all_gather_impl=True,
     )
 

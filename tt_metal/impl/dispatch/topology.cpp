@@ -392,6 +392,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = 
 };
 // clang-format on
 
+// TODO: Move into MetalContext or DeviceManager.
 std::vector<FDKernel*> node_id_to_kernel;
 detail::ProgramCompileGroup command_queue_compile_group;
 std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores;
@@ -427,15 +428,12 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<ChipId>& device_id
     auto populate_single_device = [&]() {
         if (num_hw_cqs == 1) {
             return single_chip_arch_1cq;
-        } else {
-            // TODO: determine whether dispatch_s is inserted at this level, instead of inside
-            // Device::dispatch_s_enabled().
-            if (MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type() == CoreType::WORKER) {
-                return single_chip_arch_2cq_dispatch_s;
-            } else {
-                return single_chip_arch_2cq;
-            }
+        }  // TODO: determine whether dispatch_s is inserted at this level, instead of inside
+           // Device::dispatch_s_enabled().
+        if (MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type() == CoreType::WORKER) {
+            return single_chip_arch_2cq_dispatch_s;
         }
+        return single_chip_arch_2cq;
     };
 
     if (remote_devices.empty()) {
@@ -565,8 +563,8 @@ void populate_fd_kernels(const std::set<ChipId>& device_ids, uint32_t num_hw_cqs
 void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     // If we already had nodes from a previous run, clear them (since we could have a different # of devices or CQs).
     if (!node_id_to_kernel.empty()) {
-        for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-            delete node_id_to_kernel[idx];
+        for (auto& kernel : node_id_to_kernel) {
+            delete kernel;
         }
         node_id_to_kernel.clear();
         command_queue_compile_group.clear();
@@ -786,9 +784,9 @@ void configure_dispatch_cores(IDevice* device) {
         }
     }
     // Configure cores for all nodes corresponding to this device
-    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-        if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
-            node_id_to_kernel[idx]->ConfigureCore();
+    for (auto& kernel : node_id_to_kernel) {
+        if (kernel->GetDeviceId() == device->id()) {
+            kernel->ConfigureCore();
         }
     }
 }
@@ -816,8 +814,8 @@ const std::unordered_set<TerminationInfo>& get_registered_termination_cores(Chip
 
 void reset_topology_state() {
     // TODO: https://github.com/tenstorrent/tt-metal/issues/24439
-    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-        delete node_id_to_kernel[idx];
+    for (auto& kernel : node_id_to_kernel) {
+        delete kernel;
     }
     node_id_to_kernel.clear();
     command_queue_compile_group.clear();

@@ -14,14 +14,14 @@
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt_stl/tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class IDevice;
 class Program;
@@ -203,8 +203,7 @@ protected:
     std::vector<uint32_t> runtime_args_;
 };
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace std {
 template <>

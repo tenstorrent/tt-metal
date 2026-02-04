@@ -5,15 +5,16 @@
 #include "attn_matmul_device_operation.hpp"
 #include "attn_matmul_program_factory.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::matmul::attn_matmul {
+namespace ttnn::experimental::prim {
 
 AttnMatmulDeviceOperation::program_factory_t AttnMatmulDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return program::AttnMatmulProgramFactory{};
+    return AttnMatmulProgramFactory{};
 }
 
 void AttnMatmulDeviceOperation::validate_on_program_cache_hit(
@@ -137,8 +138,11 @@ tt::stl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
         tensor_args.input_tensor_b.memory_config());
 }
 
-std::tuple<AttnMatmulDeviceOperation::operation_attributes_t, AttnMatmulDeviceOperation::tensor_args_t>
-AttnMatmulDeviceOperation::invoke(
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+Tensor attn_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
@@ -148,10 +152,12 @@ AttnMatmulDeviceOperation::invoke(
     std::optional<const uint32_t> num_tokens,
     std::optional<const bool> transpose_hw,
     std::optional<Tensor> optional_output_tensor) {
+    using OperationType = ttnn::experimental::prim::AttnMatmulDeviceOperation;
+
     auto arch = input_tensor_a.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
 
-    operation_attributes_t attributes{
+    auto operation_attributes = ttnn::experimental::prim::AttnMatmulParams{
         num_tokens,
         transpose_hw,
         compute_with_storage_grid_size,
@@ -159,9 +165,10 @@ AttnMatmulDeviceOperation::invoke(
         output_dtype.value_or(input_tensor_a.dtype()),
         kernel_config_val};
 
-    tensor_args_t tensor_args{input_tensor_a, input_tensor_b, std::move(optional_output_tensor)};
+    auto tensor_args =
+        ttnn::experimental::prim::AttnMatmulInputs{input_tensor_a, input_tensor_b, std::move(optional_output_tensor)};
 
-    return {attributes, tensor_args};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::operations::experimental::matmul::attn_matmul
+}  // namespace ttnn::prim

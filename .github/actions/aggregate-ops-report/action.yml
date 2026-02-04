@@ -1,0 +1,34 @@
+name: 'Aggregate Operations Report'
+description: 'Aggregates Tracy profiler CSV reports and generates a summary of device operations by model'
+
+inputs:
+  reports-path:
+    description: 'Path to directory containing Tracy CSV reports (searches recursively for ops_perf_results_*.csv)'
+    required: true
+  output-path:
+    description: 'Path to output directory for aggregated reports'
+    required: false
+    default: 'aggregated_ops'
+
+outputs:
+  json-report:
+    description: 'Path to the JSON report file'
+    value: ${{ steps.aggregate.outputs.json-report }}
+  text-report:
+    description: 'Path to the text report file'
+    value: ${{ steps.aggregate.outputs.text-report }}
+  operations-count:
+    description: 'Total number of unique operations found'
+    value: ${{ steps.aggregate.outputs.operations-count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Aggregate operations from Tracy reports
+      id: aggregate
+      shell: bash
+      env:
+        REPORTS_PATH: ${{ inputs.reports-path }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+      run: |
+        python3 ${{ github.action_path }}/aggregate_ops.py

@@ -1,44 +1,239 @@
-name: Bug report
-description: File a bug or issue
+name: Bug Report
+description: Report a functional bug or unexpected behavior with a minimal repro.
+title: "[area]: brief summary"
 labels: ["bug"]
+assignees: []
+
 body:
+
   - type: markdown
     attributes:
       value: |
-        :star2: Thanks for taking the time to report this issue! :star2:
-  - type: textarea
-    id: describe-bug
+        ⭐ Thanks for taking the time to report this issue! ⭐
+
+  ################################################
+  # Required – Issue Metadata
+  ################################################
+  - type: markdown
     attributes:
-      label: Describe the bug
-      description: |
-        A clear and concise description of what the bug is and how to reproduce it.
-      placeholder: Tell us what you see! Copy/paste/link to any relevant log output.
+      value: |
+        ## Issue Metadata
+
+
+  - type: input
+    id: area
+    attributes:
+      label: Component / Area
+      description: Which subsystem does this issue belong to? Helps route to the correct team.
+      placeholder: e.g., ops, model, sys, compiler, runtime, kernels, tt-metal API, unknown
     validations:
       required: true
-  - type: textarea
-    id: reproduce-bug
+
+  - type: dropdown
+    id: issue_type
     attributes:
-      label: Steps to reproduce the issue
-      description: |
-        When possible/applicable, include the commands that you ran.
+      label: Issue Type (optional)
+      description: Optional classification of the failure mode.
+      options:
+        - Deterministic Hang
+        - Non-Deterministic Hang
+        - Bad Outputs
+        - Runtime Crash
+        - Out of Memory
+        - Other
+    validations:
+      required: false
+
+
+  ################################################
+  # Required – Issue Description
+  ################################################
+  - type: markdown
+    attributes:
       value: |
-        1. Go to '...'
-        2. Click on '....'
-        3. Scroll down to '....'
-        4. See error
+        ## Issue Description
+
   - type: textarea
-    id: behavior
+    id: observed
     attributes:
-      label: Expected behavior
-      description: A clear and concise description of what you expected to happen.
-  - type: textarea
-    id: environment-info
-    attributes:
-      label: Please complete the following environment information
-      description: |
-        Details about your issue.
+      label: Observed
+      description: Describe what happened.
       placeholder: |
-        - OS version (e.g. Ubuntu 22.04)
-        - Python version
-        - Framework version (e.g. JAX version)
-        - Version of software (e.g. release wheel or commit ID if you built from source)
+        Observed:
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: Describe what should have happened.
+      placeholder: |
+        Expected:
+    validations:
+      required: true
+
+
+  ################################################
+  # Required – Steps to Reproduce
+  ################################################
+  - type: markdown
+    attributes:
+      value: |
+        ## Steps to Reproduce the Issue
+
+
+  # 1. Exact commands
+  - type: textarea
+    id: repro_steps
+    attributes:
+      label: 1. Steps (exact commands)
+      description: Provide the exact commands or actions used to trigger the issue.
+      placeholder: |
+        Steps to reproduce:
+    validations:
+      required: true
+
+
+  # 2. Input data
+  - type: textarea
+    id: repro_input
+    attributes:
+      label: 2. Input data / link or description
+      description: Include dataset names, file paths, configs, or URLs required to reproduce.
+      placeholder: |
+        Input data needed:
+    validations:
+      required: true
+
+
+  # 3. Frequency
+  - type: textarea
+    id: repro_frequency
+    attributes:
+      label: 3. Frequency
+      description: Indicate whether the issue happens consistently or intermittently.
+      placeholder: |
+        e.g., Always / 3 out of 10 runs / intermittent / only after warm-up
+    validations:
+      required: true
+
+
+  ################################################
+  # Required – System Details
+  ################################################
+  - type: markdown
+    attributes:
+      value: |
+        ## System Details
+
+  - type: textarea
+    id: software_versions
+    attributes:
+      label: 1. Software Versions
+      description: Provide all software components involved in reproducing the issue.
+      placeholder: |
+        OS version (e.g., Ubuntu 22.04):
+        Software / firmware release version:
+    validations:
+      required: true
+
+  - type: textarea
+    id: hardware_details
+    attributes:
+      label: 2. Hardware Details
+      description: Specify the hardware platform used.
+      placeholder: |
+        Product (e.g., Blackhole, Wormhole):
+        Card/System (e.g., N150, P150, Loudbox, Quietbox, Galaxy, etc.):
+    validations:
+      required: true
+
+
+
+  ################################################
+  # Optional – Regression Info
+  ################################################
+  - type: markdown
+    attributes:
+      value: |
+        ## Regression Info (Optional)
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Is this a regression?
+      options: ["Unknown", "Yes", "No"]
+      default: 0
+    validations:
+      required: false
+
+  - type: textarea
+    id: regression_info
+    attributes:
+      label: Regression Details
+      description: Fill out if the issue is a regression or if you know the history of when it started failing.
+      placeholder: |
+        First bad version:
+        Last known good version:
+        Git bisect status:
+    validations:
+      required: false
+
+
+
+  ################################################
+  # Optional – Logs & Diagnostics
+  ################################################
+  - type: markdown
+    attributes:
+      value: |
+        ## Logs & Diagnostics (Optional)
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Logs & Diagnostics
+      description: Provide relevant logs, stack traces, or error output.
+      placeholder: Error/stack trace OR logs excerpt
+    validations:
+      required: false
+
+
+  ################################################
+  # Optional – Impact & Priority
+  ################################################
+  - type: markdown
+    attributes:
+      value: |
+        ## Impact & Priority (Optional)
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: |
+        P0 = Blocking
+        P1 = High
+        P2 = Medium
+        P3 = Low
+
+        ⭐ After submitting, please add the matching label (P0–P3). Thanks! ⭐
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
+    validations:
+      required: false
+
+  - type: textarea
+    id: optional_impact
+    attributes:
+      label: Impact
+      description: Affected workflows or users (who/what is blocked).
+      placeholder: |
+        Affected workflows:
+        Release or date risk:
+    validations:
+      required: false

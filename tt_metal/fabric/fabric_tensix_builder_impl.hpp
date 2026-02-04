@@ -369,7 +369,7 @@ private:
     MuxConnectionInfo get_mux_connection_info(
         const std::pair<uint32_t, uint32_t>* noc_coords,
         uint32_t mux_channel_id,
-        uint32_t mux_idx,
+        uint32_t connection_region_idx,
         uint32_t stream_id) const;
 
     // Number of mux connections: [0]=local, [1]=downstream_en, [2]=downstream_ws
@@ -402,6 +402,12 @@ private:
     static constexpr size_t udm_memory_pool_num_slots_ = 8;
     size_t udm_memory_pool_slot_size_ = 0;
     MemoryRegion udm_memory_pool_region_{};
+
+    // Response pool for tracking pending responses
+    // Size of RegisteredResponse is 32 bytes (defined in udm_registered_response_pool.hpp)
+    static constexpr size_t udm_registered_response_slot_size_ = 32;
+    size_t udm_registered_response_num_slots_ = 0;
+    MemoryRegion udm_registered_response_pool_region_{};
 };
 
 /**

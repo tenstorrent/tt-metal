@@ -24,17 +24,18 @@ Note that the core coordinates are logical coordinates, so worker cores and ethe
     export TT_METAL_DPRINT_CORES=0,0                    # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
     export TT_METAL_DPRINT_ETH_CORES=0,0                # optional, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
     export TT_METAL_DPRINT_CHIPS=0                      # optional, comma separated list of chips OR all. Default is all.
+    export TT_METAL_DPRINT_NODES="(M0,D0),(M0,D1)"      # optional, comma separated list of `FabricNodeId` nodes (unique node identifiers in format (Mn,Dn), where M is mesh ID and D is device ID) OR all. Default is all. Cannot specify both TT_METAL_DPRINT_CHIPS and TT_METAL_DPRINT_NODES at the same time.
     export TT_METAL_DPRINT_RISCVS=BR                    # optional, default is all RISCs. Use a subset of BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*
     export TT_METAL_DPRINT_FILE=log.txt                 # optional, default is to print to the screen
     export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0   # optional, enabled by default. Prepends prints with <device id>:(<core x>, <core y>):<RISC>:.
     export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1          # optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE and disables TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC.
 
-To generate kernel debug prints on the device, include the ``debug/dprint.h`` header and use the APIs defined there.
+To generate kernel debug prints on the device, include the ``api/debug/dprint.h`` header and use the APIs defined there.
 An example with the different features available is shown below:
 
 .. code-block:: c++
 
-    #include "debug/dprint.h"  // required in all kernels using DPRINT
+    #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 
     void kernel_main() {
         // Direct printing is supported for const char*/char/uint32_t/float
@@ -93,7 +94,7 @@ formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16
 
 .. code-block:: c++
 
-    #include "debug/dprint.h"  // required in all kernels using DPRINT
+    #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 
     void kernel_main() {
         // Assuming the tile we want to print from CBIndex::c_25 is from the front the CB, print must happen after

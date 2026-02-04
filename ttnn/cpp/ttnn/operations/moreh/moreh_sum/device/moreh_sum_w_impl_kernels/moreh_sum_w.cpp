@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api/matmul.h"
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
@@ -48,7 +47,7 @@ void MAIN {
                     reconfig_data_format(cb_input, cb_scaler);
 #endif
                     mm_init_short(cb_input, cb_scaler, false);
-                    matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);
+                    matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
 
                     cb_pop_front(cb_input, onetile);
                 }
@@ -104,7 +103,7 @@ void MAIN {
             reconfig_data_format(cb_input, cb_scaler);
 #endif
             mm_init_short(cb_input, cb_scaler, false);
-            matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);
+            matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);
@@ -128,4 +127,3 @@ void MAIN {
     }
     cb_pop_front(cb_scaler, onetile);
 }
-}  // namespace NAMESPACE

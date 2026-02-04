@@ -14,17 +14,17 @@
 #include "embeddings_rm_program_factory.hpp"
 #include "embeddings_tilized_indices_program_factory.hpp"
 
-namespace ttnn::operations::embedding {
+namespace ttnn::prim {
 
 struct EmbeddingsDeviceOperation {
-    using operation_attributes_t = embedding::operation_attributes_t;
-    using tensor_args_t = embedding::tensor_args_t;
-    using spec_return_value_t = embedding::spec_return_value_t;
-    using tensor_return_value_t = embedding::tensor_return_value_t;
+    using operation_attributes_t = EmbeddingParams;
+    using tensor_args_t = EmbeddingInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        program::EmbeddingsFusedProgramFactory,
-        program::EmbeddingsRMProgramFactory,
-        program::EmbeddingsTilizedIndicesProgramFactory
+        EmbeddingsFusedProgramFactory,
+        EmbeddingsRMProgramFactory,
+        EmbeddingsTilizedIndicesProgramFactory
     >;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -36,20 +36,15 @@ struct EmbeddingsDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor_arg,
-        const Tensor& weight_arg,
-        bool tilized,
-        EmbeddingsType embeddings_type,
-        const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<uint32_t>& pad_token = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-}  // namespace ttnn::operations::embedding
+Tensor embedding(
+    const Tensor& input_tensor_arg,
+    const Tensor& weight_arg,
+    bool tilized,
+    EmbeddingsType embeddings_type,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<uint32_t>& pad_token = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-namespace ttnn::prim {
-constexpr auto embedding =
-    ttnn::register_operation<"ttnn::prim::embedding", ttnn::operations::embedding::EmbeddingsDeviceOperation>();
 }  // namespace ttnn::prim

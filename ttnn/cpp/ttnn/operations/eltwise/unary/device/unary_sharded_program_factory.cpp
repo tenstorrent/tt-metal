@@ -11,7 +11,10 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
-namespace ttnn::operations::unary::program {
+namespace ttnn::prim {
+
+using ttnn::operations::unary::UnaryOpType;
+namespace utils = ttnn::operations::unary::utils;
 
 static const std::string compute_root_sharded = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/";
 
@@ -19,7 +22,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const UnaryParams& args, const UnaryInputs& tensor_args, Tensor& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -85,7 +88,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     // tmp sharded CB
     uint32_t tmp_cb_id = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT ||
+        ops_chain[0].type() == UnaryOpType::LOGIT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
                 .set_page_size(tmp_cb_id, in_cb_pagesize);
@@ -156,11 +160,26 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
                 break;
+            case UnaryOpType::LOGIT: {
+                float value1 = *ops_chain[0].get_param_if<float>(0);
+                float value2 = 1.0f - value1;
+                packed_scalar1 = utils::pack_scalar_runtime_arg_impl(value1, input.dtype());
+                packed_scalar2 = utils::pack_scalar_runtime_arg_impl(value2, input.dtype());
+                if (value1 > 0.5f) {
+                    const char* data_format = (input.dtype() == DataType::FLOAT32) ? "Float32" : "Float16_b";
+                    unary_defines["WHERE"] = fmt::format("where_tile<DataFormat::{0}>", data_format);
+                    unary_defines["CLAMP"] = "clamp_tile";
+                } else if (value1 >= 0.0f) {
+                    unary_defines["CLAMP"] = "clamp_tile";
+                }
+                break;
+            }
             default: break;
         }
     }
 
-    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root_sharded, input.dtype());
+    auto path =
+        fmt::format("{}/{}", compute_root_sharded, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
@@ -190,9 +209,9 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
 void UnaryShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const UnaryParams& /*operation_attributes*/,
+    const UnaryInputs& tensor_args,
+    Tensor& output) {
     auto& program = cached_program.program;
     const auto& cb_src0 = cached_program.shared_variables.cb_src0;
     const auto& out_cb = cached_program.shared_variables.out_cb;
@@ -203,4 +222,4 @@ void UnaryShardedProgramFactory::override_runtime_arguments(
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }
 
-}  // namespace ttnn::operations::unary::program
+}  // namespace ttnn::prim

@@ -3,7 +3,6 @@
 
 #include <cstdint>
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -20,6 +19,51 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_ty
         case DataType::INVALID:
         default: return os << "Invalid";
     }
+}
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::NdShardSpec& spec) {
+    os << "{";
+    os << "\"shard_shape\":[";
+
+    // Format shard_shape as array
+    const auto& shape = spec.shard_shape;
+    for (size_t i = 0; i < shape.size(); ++i) {
+        os << shape[i];
+        if (i < shape.size() - 1) {
+            os << ", ";
+        }
+    }
+    os << "],";
+
+    os << "\"grid\":[";
+
+    const auto& ranges = spec.grid.ranges();
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        const auto& range = ranges[i];
+        os << R"({"start":{"x":)" << range.start_coord.x << ",\"y\":" << range.start_coord.y << "},";
+        os << R"("end":{"x":)" << range.end_coord.x << ",\"y\":" << range.end_coord.y << "}}";
+        if (i < ranges.size() - 1) {
+            os << ", ";
+        }
+    }
+    os << "],";
+
+    os << R"("orientation":")";
+    switch (spec.orientation) {
+        case ShardOrientation::ROW_MAJOR: os << "ShardOrientation::ROW_MAJOR"; break;
+        case ShardOrientation::COL_MAJOR: os << "ShardOrientation::COL_MAJOR"; break;
+    }
+    os << "\",";
+
+    os << R"("shard_distribution_strategy":")";
+    switch (spec.shard_distribution_strategy) {
+        case ShardDistributionStrategy::ROUND_ROBIN_1D: os << "ShardDistributionStrategy::ROUND_ROBIN_1D"; break;
+        case ShardDistributionStrategy::GRID_2D: os << "ShardDistributionStrategy::GRID_2D"; break;
+    }
+    os << "\"";
+
+    os << "}";
+    return os;
 }
 
 bool is_floating_point(DataType dtype) {

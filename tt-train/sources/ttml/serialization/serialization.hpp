@@ -14,26 +14,26 @@ namespace ttml::optimizers {
 class OptimizerBase;
 }
 namespace ttml::serialization {
-class MsgPackFile;
+class FlatBufferFile;
 
-void write_ttnn_tensor(MsgPackFile& file, std::string_view name, const tt::tt_metal::Tensor& tensor);
-void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Tensor& tensor);
+void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const tt::tt_metal::Tensor& tensor);
+void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, tt::tt_metal::Tensor& tensor);
 
 void write_autograd_tensor(
-    MsgPackFile& file, std::string_view name, const ttml::autograd::TensorPtr& tensor, bool save_grads = false);
-void read_autograd_tensor(MsgPackFile& file, std::string_view name, ttml::autograd::TensorPtr& tensor);
+    FlatBufferFile& file, std::string_view name, const ttml::autograd::TensorPtr& tensor, bool save_grads = false);
+void read_autograd_tensor(FlatBufferFile& file, std::string_view name, ttml::autograd::TensorPtr& tensor);
 
 void write_named_parameters(
-    MsgPackFile& file, std::string_view name, const ttml::serialization::NamedParameters& params);
-void read_named_parameters(MsgPackFile& file, std::string_view name, ttml::serialization::NamedParameters& params);
+    FlatBufferFile& file, std::string_view name, const ttml::serialization::NamedParameters& params);
+void read_named_parameters(FlatBufferFile& file, std::string_view name, ttml::serialization::NamedParameters& params);
 
-void write_optimizer(MsgPackFile& file, std::string_view name, const optimizers::OptimizerBase* optimizer);
-void read_optimizer(MsgPackFile& file, std::string_view name, optimizers::OptimizerBase* optimizer);
+void write_optimizer(FlatBufferFile& file, std::string_view name, const optimizers::OptimizerBase* optimizer);
+void read_optimizer(FlatBufferFile& file, std::string_view name, optimizers::OptimizerBase* optimizer);
 
-void write_module(MsgPackFile& file, std::string_view name, const modules::ModuleBase* module);
-void read_module(MsgPackFile& file, std::string_view name, modules::ModuleBase* module);
+void write_module(FlatBufferFile& file, std::string_view name, const modules::ModuleBase* module);
+void read_module(FlatBufferFile& file, std::string_view name, modules::ModuleBase* module);
 
-void write_state_dict(MsgPackFile& file, std::string_view name, const serialization::StateDict& state_dict);
-void read_state_dict(MsgPackFile& file, std::string_view name, serialization::StateDict& state_dict);
+void write_state_dict(FlatBufferFile& file, std::string_view name, const serialization::StateDict& state_dict);
+void read_state_dict(FlatBufferFile& file, std::string_view name, serialization::StateDict& state_dict);
 
 }  // namespace ttml::serialization

@@ -21,6 +21,9 @@ namespace ckernel {
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
  *
+ * @tparam data_format Template argument specifying the data type.
+ * Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
+ *
  * Return value: None
  *
  * | Argument              | Description                                                           | Type     | Valid Range                                           | Required |
@@ -30,13 +33,17 @@ namespace ckernel {
  * | odst                  | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void mul_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_mul_int<APPROX, 8>(idst0, idst1, odst)));
+template <DataFormat data_format>
+ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_mul_int<APPROX, data_format>(idst0, idst1, odst)));
 }
 
 /**
- * Please refer to documentation for mul_uint16_tile_init.
+ * Please refer to documentation for mul_int_tile.
  */
-ALWI void mul_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_mul_int_init<APPROX>())); }
+template <DataFormat data_format>
+ALWI void mul_int_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_mul_int_init<APPROX, data_format>()));
+}
 
 }  // namespace ckernel

@@ -87,6 +87,12 @@ def parse_diff_for_removed_lines(diff_output: str, pattern_matcher) -> List[Tupl
     return results
 
 
+def get_merge_base(ref1: str, ref2: str = "HEAD") -> str:
+    """Get the merge-base (common ancestor) between two refs."""
+    output = run_git(["git", "merge-base", ref1, ref2])
+    return output.strip()
+
+
 def get_changed_file_paths(base_ref: str, head_ref: str = "HEAD") -> List[str]:
     """List of changed files (paths) (includes deleted ones and staged changes)."""
     committed = run_git(["git", "diff", "--name-only", base_ref, head_ref])

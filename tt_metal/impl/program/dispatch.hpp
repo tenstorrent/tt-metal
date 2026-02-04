@@ -25,9 +25,7 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class Program;
 class Semaphore;
@@ -35,6 +33,11 @@ class SystemMemoryManager;
 enum class ProgramBinaryStatus : uint8_t;
 struct KernelGroup;
 struct ProgramCommandSequence;
+
+namespace distributed {
+class MeshWorkloadImpl;
+class MeshDevice;
+}  // namespace distributed
 
 namespace program_dispatch {
 
@@ -199,12 +202,15 @@ void set_core_go_message_mapping_on_device(
     SystemMemoryManager& manager,
     uint8_t cq_id);
 
-template <typename WorkloadType, typename DeviceType>
+// ProgramImpl version - does not support CQs
+uint32_t program_base_addr_on_core(detail::ProgramImpl& program, IDevice* device, HalProgrammableCoreType core_type);
+
+// MeshWorkloadImpl version - supports both CQs and not having CQs
 uint32_t program_base_addr_on_core(
-    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
+    distributed::MeshWorkloadImpl& mesh_workload,
+    distributed::MeshDevice* mesh_device,
+    HalProgrammableCoreType core_type);
 
 }  // namespace program_dispatch
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

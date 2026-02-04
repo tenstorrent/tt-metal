@@ -9,9 +9,7 @@
 
 namespace ttnn {
 
-namespace operations {
-
-namespace embedding {
+namespace operations::embedding {
 
 struct EmbeddingOperation {
     static ttnn::Tensor invoke(
@@ -19,14 +17,13 @@ struct EmbeddingOperation {
         const Tensor& weight_arg,
         const std::optional<int>& pad_token = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
-        EmbeddingsType embeddings_type = EmbeddingsType::GENERIC,
+        ttnn::prim::EmbeddingsType embeddings_type = ttnn::prim::EmbeddingsType::GENERIC,
         std::optional<const DataType> dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-}  // namespace embedding
-}  // namespace operations
+}  // namespace operations::embedding
 
 constexpr auto embedding =
     ttnn::register_operation<"ttnn::embedding", ttnn::operations::embedding::EmbeddingOperation>();

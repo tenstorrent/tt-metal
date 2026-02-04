@@ -7,8 +7,8 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace data_movement {
+
+namespace operations::data_movement {
 
 struct SliceOperation {
     template <typename T>
@@ -68,8 +68,7 @@ struct SliceOperation {
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
-}  // namespace data_movement
-}  // namespace operations
+}  // namespace operations::data_movement
 
 constexpr auto slice = ttnn::register_operation<"ttnn::slice", ttnn::operations::data_movement::SliceOperation>();
 

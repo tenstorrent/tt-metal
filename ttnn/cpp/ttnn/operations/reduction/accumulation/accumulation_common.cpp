@@ -46,9 +46,8 @@ Tensor preprocess_input_tensor(
         permutation[final_cum_axis] = accumulation_axis;
 
         return ttnn::permute(processed_tensor, permutation, processed_tensor.memory_config());
-    } else {
-        accumulation_axis = cum_axis;
     }
+    accumulation_axis = cum_axis;
 
     return processed_tensor;
 }
@@ -86,7 +85,7 @@ Tensor accumulation_invoke(
     std::optional<Tensor> optional_out,
     const bool& reverse_order,
     const std::optional<MemoryConfig>& memory_config,
-    AccumulationOp op) {
+    ttnn::prim::AccumulationOp op) {
     const auto& input_shape = input_tensor.logical_shape();
     const int32_t& input_rank = input_shape.rank();
 

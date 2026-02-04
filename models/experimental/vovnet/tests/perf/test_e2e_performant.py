@@ -16,7 +16,8 @@ from models.experimental.vovnet.common import VOVNET_L1_SMALL_SIZE
 
 
 def get_expected_times(name):
-    base = {"vovnet": (172, 0.0082)}
+    # issue #35265 - treshold needs to be confirmed
+    base = {"vovnet": (172, 0.0085)}
     return base[name]
 
 

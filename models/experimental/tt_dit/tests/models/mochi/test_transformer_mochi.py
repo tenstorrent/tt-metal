@@ -157,9 +157,9 @@ def test_mochi_transformer_block(
         rope_cos.unsqueeze(0).permute(0, 2, 1, 3), rope_sin.unsqueeze(0).permute(0, 2, 1, 3)
     )
 
-    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), chunk_size_lcm=512, num_devices=sp_factor)
-    rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, chunk_size_lcm=512, num_devices=sp_factor)
-    rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, chunk_size_lcm=512, num_devices=sp_factor)
+    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), num_devices=sp_factor)
+    rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, num_devices=sp_factor)
+    rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, num_devices=sp_factor)
 
     # Sequence fractured spatial
     tt_spatial = bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
@@ -236,6 +236,10 @@ def test_mochi_transformer_block(
 
 
 @pytest.mark.parametrize(
+    "dit_unit_test",
+    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
+)
+@pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links",
     [
         [(2, 2), 0, 1, 1],
@@ -281,6 +285,7 @@ def test_mochi_transformer_model(
     prompt_seq: int,
     load_cache: bool,
     test_attention_mask: bool,
+    dit_unit_test: bool,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -302,9 +307,13 @@ def test_mochi_transformer_model(
     MIN_PCC = 0.992_000
     MIN_RMSE = 0.14
 
-    torch_model = TorchMochiTransformer3DModel.from_pretrained(
-        f"genmo/mochi-1-preview", subfolder="transformer", torch_dtype=torch_dtype
-    )
+    if dit_unit_test:
+        torch_model = TorchMochiTransformer3DModel(num_layers=1)
+        num_layers = torch_model.config.num_layers
+    else:
+        torch_model = TorchMochiTransformer3DModel.from_pretrained(
+            f"genmo/mochi-1-preview", subfolder="transformer", torch_dtype=torch_dtype
+        )
     torch_model.eval()
 
     # Create CCL manager
@@ -364,7 +373,7 @@ def test_mochi_transformer_model(
         logger.info(f"Time taken to load cached state dict: {end - start} seconds")
     else:
         start = time.time()
-        tt_model.load_state_dict(torch_model.state_dict())
+        tt_model.load_torch_state_dict(torch_model.state_dict())
         end = time.time()
         logger.info(f"Time taken to load state dict: {end - start} seconds")
 
@@ -494,7 +503,7 @@ def test_mochi_transformer_model_caching(
         is_fsdp=True,
     )
     start = time.time()
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 

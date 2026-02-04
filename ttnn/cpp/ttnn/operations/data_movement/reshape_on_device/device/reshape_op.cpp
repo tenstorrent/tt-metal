@@ -3,23 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reshape_op.hpp"
+#include "reshape_on_device/device/reshape_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::reshape_on_device {
+namespace ttnn::prim {
 
 ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
         return ReshapeRMProgramFactory{};
-    } else {
-        return ReshapeTileProgramFactory{};
     }
+    return ReshapeTileProgramFactory{};
 }
 
 void ReshapeDeviceOperation::validate_on_program_cache_miss(
@@ -100,15 +102,14 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
         input_tensor.padded_shape());
 }
 
-std::tuple<ReshapeDeviceOperation::operation_attributes_t, ReshapeDeviceOperation::tensor_args_t>
-ReshapeDeviceOperation::invoke(
+tt::tt_metal::Tensor reshape_on_device(
     const Tensor& input_tensor,
-    const ttnn::Shape& logical_output_shape,
-    const ttnn::Shape& padded_output_shape,
+    const tt::tt_metal::Shape& logical_output_shape,
+    const tt::tt_metal::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
-    return {
-        operation_attributes_t{logical_output_shape, padded_output_shape, output_mem_config},
-        tensor_args_t{input_tensor}};
+    return ttnn::device_operation::launch<ReshapeDeviceOperation>(
+        ReshapeOnDeviceParams{logical_output_shape, padded_output_shape, output_mem_config},
+        ReshapeOnDeviceInputs{input_tensor});
 }
 
-}  // namespace ttnn::operations::data_movement::reshape_on_device
+}  // namespace ttnn::prim

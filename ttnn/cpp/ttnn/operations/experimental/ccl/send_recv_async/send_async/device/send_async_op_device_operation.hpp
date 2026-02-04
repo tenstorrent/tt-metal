@@ -10,13 +10,13 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::ccl::send_async {
+namespace ttnn::experimental::prim {
 
 struct SendAsyncDeviceOperation {
-    using operation_attributes_t = send_async::operation_attributes_t;
-    using tensor_args_t = send_async::tensor_args_t;
-    using spec_return_value_t = send_async::spec_return_value_t;
-    using tensor_return_value_t = send_async::tensor_return_value_t;
+    using operation_attributes_t = SendAsyncParams;
+    using tensor_args_t = Tensor;
+    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<SendAsyncMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -30,15 +30,13 @@ struct SendAsyncDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor&, const tt::tt_metal::distributed::MeshSocket&);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::send_async
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-constexpr auto send_async = ttnn::register_operation<
-    "ttnn::prim::send_async",
-    ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation>();
+
+ttnn::experimental::prim::SendAsyncDeviceOperation::tensor_return_value_t send_async(
+    const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
+
 }  // namespace ttnn::prim

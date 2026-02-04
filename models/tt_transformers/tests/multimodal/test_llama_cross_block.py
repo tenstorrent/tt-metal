@@ -3,13 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 
-import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 import pytest
 import torch
 from loguru import logger
+from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers.cache_utils import DynamicCache
+from transformers.models.mllama.modeling_mllama import MllamaCrossAttentionDecoderLayer
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.tt_transformers.tests.multimodal.utils import load_partial_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
@@ -48,17 +51,25 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "text_model.cross_attention_layers.0."
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-
     dim = model_args.dim
     head_dim = model_args.head_dim
     n_heads = model_args.n_heads
     n_kv_heads = model_args.n_kv_heads
-    reference_model = llama_reference_mod.CrossAttentionTransformerBlock(args=model_args, layer_id=0, no_ffn=False)
-    reference_model.load_state_dict(partial_state_dict)
 
+    # Initialization of HF subclass parameters
+    hf_weights_repo_name = os.getenv("HF_MODEL")
+    past_key_values = DynamicCache()
+    config = AutoConfig.from_pretrained(hf_weights_repo_name)
+    config.text_config._attn_implementation = "sdpa"
+
+    # the layer id of the first cross-attention branch that occurs in the nnet needed for cache allocation id
+    layer_idx = config.text_config.cross_attention_layers[0]
+    reference_model = MllamaCrossAttentionDecoderLayer(config.text_config, layer_idx=layer_idx)
+    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
+    partial_state_dict = load_partial_weights(
+        AutoModelForVision2Seq, hf_weights_repo_name, f"model.language_model.layers.{layer_idx}."
+    )
+    reference_model.load_state_dict(partial_state_dict)
     num_chunks = 4
     vision_seq_len = num_chunks * nearest_32(model_args.vision_chunk_ntok)
 
@@ -79,15 +90,18 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
     pt_xattn_tokens = (torch.rand(batch, vision_seq_len, dim) * 2) - 1
     tt_xattn_tokens = pt_xattn_tokens.clone()
 
-    """
-    Test compute_xattn_kv_cache
-    """
-    pt_xattn_cache = reference_model.compute_xattn_kv_cache(pt_xattn_tokens)
-    pt_xattn_cache_chunks = torch.chunk(pt_xattn_cache, 2, dim=0)
-    pt_xattn_cache_chunks = [
-        x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache
-    ]
-
+    # Initially the cache functionality of HF is used with a placeholder tensor of torch.ones to compute and store the Key and Value projections in memory
+    # see link on how the cache is used: https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/models/mllama/modeling_mllama.py#L484-L496
+    reference_model.forward(
+        torch.ones(batch, 1, dim),
+        pt_xattn_tokens,
+        cross_attention_mask=None,
+        past_key_value=past_key_values,
+        full_text_row_masked_out_mask=None,
+        attention_mask=None,
+    )
+    # tt_model expects a list of Key and Value projections
+    pt_xattn_cache_chunks = [past_key_values.key_cache[layer_idx], past_key_values.value_cache[layer_idx]]
     # Preallocate K and V caches
     tt_xattn_cache = [
         ttnn.from_torch(
@@ -140,8 +154,16 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
         full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
 
         pt_out = reference_model.forward(
-            pt_x, xattn_mask=xattn_mask, full_text_row_masked_out_mask=full_text_mask, xattn_cache=pt_xattn_cache
-        )
+            pt_x,
+            None,
+            past_key_value=past_key_values,
+            cross_attention_mask=xattn_mask,
+            cache_position=[layer_idx],
+            full_text_row_masked_out_mask=full_text_mask,
+            attention_mask=None,
+        )[
+            0
+        ]  # 0 element is the actual feature map/hidden state needed for comparison
 
         if mode == "prefill":
             full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)

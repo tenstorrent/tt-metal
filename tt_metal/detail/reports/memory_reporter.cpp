@@ -1,26 +1,25 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <allocator.hpp>
-#include <device.hpp>
-#include <memory_reporter.hpp>
-#include <stdint.h>
+#include "tt_metal/detail/reports/memory_reporter.hpp"
+
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <memory>
 #include <utility>
 #include <enchantum/enchantum.hpp>
 
-#include "buffer_types.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/detail/reports/report_utils.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 
 namespace fs = std::filesystem;
 
-namespace tt::tt_metal {
-
-namespace detail {
+namespace tt::tt_metal::detail {
 
 using bank_to_statistics = std::map<uint32_t, Statistics>;
 
@@ -188,6 +187,4 @@ MemoryReporter& MemoryReporter::inst() {
 void EnableMemoryReports() { MemoryReporter::toggle(true); }
 void DisableMemoryReports() { MemoryReporter::toggle(false); }
 
-}  // namespace detail
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::detail

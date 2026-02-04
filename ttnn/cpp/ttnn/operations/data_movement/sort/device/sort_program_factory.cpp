@@ -11,11 +11,11 @@
 #include <cmath>
 #include <cstdint>
 
-namespace ttnn::operations::data_movement::sort::program {
+namespace ttnn::prim {
 
 // Single row - single core
 SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingleRowSingleCore::create(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    const SortParams& attributes, const SortInputs& tensor_args, std::vector<Tensor>& output_tensors) {
     // Program config
     tt::tt_metal::Program program{};
 
@@ -247,9 +247,9 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
 
 void SortProgramFactorySingleRowSingleCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const SortParams& /*attributes*/,
+    const SortInputs& tensor_args,
+    std::vector<Tensor>& output_tensors) {
     auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
     auto* value_tensor_buffer = output_tensors.at(0).buffer();
     auto* index_tensor_buffer = output_tensors.at(1).buffer();
@@ -290,7 +290,7 @@ void SortProgramFactorySingleRowSingleCore::override_runtime_arguments(
 // SortProgramFactoryCrossCoreDataExchange - single row, multi core with processing multiple tiles on one core with
 // cross core data exchange
 SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCrossCoreDataExchange::create(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    const SortParams& attributes, const SortInputs& tensor_args, std::vector<Tensor>& output_tensors) {
     // Program config
     tt::tt_metal::Program program{};
 
@@ -607,9 +607,9 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
 
 void SortProgramFactoryCrossCoreDataExchange::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const SortParams& /*attributes*/,
+    const SortInputs& tensor_args,
+    std::vector<Tensor>& output_tensors) {
     auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();
     auto* const value_tensor_buffer = output_tensors.at(0).buffer();
     auto* const index_tensor_buffer = output_tensors.at(1).buffer();
@@ -655,8 +655,13 @@ uint32_t SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
     CrossCoreDataExchangeSortSlicingStrategy slicing_strategy) {
     switch (slicing_strategy) {
         case CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES: {
+            // Minimum of 2 tiles per core is required because the LLK (Low-Level Kernel) needs at least two tiles per
+            // core to perform sorting operations. Maximum is capped at 128 tiles (power of 2) based on hardware memory
+            // constraints, ensuring that tiles can fit into a single core's available memory.
             constexpr uint32_t MIN_TILES_PER_CORE = 2;
-            return std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
+            constexpr uint32_t MAX_TILES_PER_CORE = 128;
+            const auto max_val = std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
+            return std::min(MAX_TILES_PER_CORE, max_val);
         }
         case CrossCoreDataExchangeSortSlicingStrategy::FILL_CORES_FIRST:
         default: {
@@ -680,7 +685,7 @@ uint32_t SortProgramFactoryCrossCoreDataExchange::rounddown_pow2(uint32_t n) {
 
 // Single row - multi core
 SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleRowMultiCore::create(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    const SortParams& attributes, const SortInputs& tensor_args, std::vector<Tensor>& output_tensors) {
     // Program config
     tt::tt_metal::Program program{};
 
@@ -950,9 +955,9 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
 
 void SortProgramFactorySingleRowMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    const SortParams& /*attributes*/,
+    const SortInputs& tensor_args,
+    std::vector<Tensor>& output_tensors) {
     auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();
     auto* const value_tensor_buffer = output_tensors.at(0).buffer();
     auto* const index_tensor_buffer = output_tensors.at(1).buffer();
@@ -979,4 +984,4 @@ void SortProgramFactorySingleRowMultiCore::override_runtime_arguments(
         }  // core loop
     }  // core_range loop
 }
-}  // namespace ttnn::operations::data_movement::sort::program
+}  // namespace ttnn::prim

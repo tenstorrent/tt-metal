@@ -19,6 +19,7 @@ on:
       - completed
     branches:
       - main
+      - stable
 
 jobs:
   auto-retry:

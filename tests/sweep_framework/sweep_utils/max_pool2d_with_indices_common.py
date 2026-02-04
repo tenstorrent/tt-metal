@@ -129,6 +129,8 @@ def run_max_pool2d_with_indices(
     ceil_mode=False,
     memory_config=None,
     run_twice=False,
+    dram_slice_config=None,
+    config_tensor_in_dram=False,
 ):
     kernel_size = [kernel_h, kernel_w]
     stride = [stride_h, stride_w]
@@ -187,6 +189,8 @@ def run_max_pool2d_with_indices(
         deallocate_input=False,
         reallocate_halo_output=True,
         return_indices=True,
+        dram_slice_config=dram_slice_config,
+        config_tensor_in_dram=config_tensor_in_dram,
     )
 
     if run_twice:
@@ -207,6 +211,7 @@ def run_max_pool2d_with_indices(
             deallocate_input=False,
             reallocate_halo_output=True,
             return_indices=True,
+            config_tensor_in_dram=config_tensor_in_dram,
         )
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output)

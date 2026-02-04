@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common_globals.h"
+#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -28,17 +29,22 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void copy_tile_to_dst_init_short(
-    uint32_t cbid, uint32_t transpose = 0, uint32_t transpose_within_16x16_face = false) {
+    uint32_t cbid,
+    uint32_t transpose = 0,
+    uint32_t transpose_within_16x16_face = false,
+    uint32_t call_line = __builtin_LINE()) {
+    state_configure(cbid, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, transpose_within_16x16_face, cbid)));
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, cbid)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
 }
 /**
  * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
  * registers.
  */
-ALWI void copy_tile_init(uint32_t cbid) { copy_tile_to_dst_init_short(cbid); }
+ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+    copy_tile_to_dst_init_short(cbid, 0, false, call_line);
+}
 
 // clang-format off
 /**
@@ -50,7 +56,7 @@ ALWI void copy_tile_init(uint32_t cbid) { copy_tile_to_dst_init_short(cbid); }
  * | new_cbid       | The identifier of the new input circular buffer (CB) to SrcA      | uint32_t | 0 to 31                                           | True     |
  * | transpose      | Flag to perform transpose on SrcA                                 | uint32_t | Any positive value will indicate tranpose is set  | False    |
  */
- // clang-format on
+// clang-format on
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
@@ -90,7 +96,7 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
 ALWI void copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        in_cb_id, start_in_tile_index, ntiles, false)));
+        in_cb_id, start_in_tile_index, ntiles)));
     MATH((llk_math_eltwise_unary_datacopy_block<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         start_dst_tile_index, ntiles, in_cb_id)));
 }

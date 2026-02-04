@@ -9,9 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn {
-namespace experimental {
-namespace ccl {
+namespace ttnn::experimental::ccl {
 
 void AllGatherFusedOpSignaler::init_fused_op(
     const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
@@ -434,15 +432,17 @@ void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_mm(
     }
 }
 
-bool MatmulFusedOpSignaler::is_all_gather() { return fused_op_type == MatmulFusedOpSignalerType::ALL_GATHER; }
+bool MatmulFusedOpSignaler::is_all_gather() const { return fused_op_type == MatmulFusedOpSignalerType::ALL_GATHER; }
 
-bool MatmulFusedOpSignaler::is_reduce_scatter() { return fused_op_type == MatmulFusedOpSignalerType::REDUCE_SCATTER; }
+bool MatmulFusedOpSignaler::is_reduce_scatter() const {
+    return fused_op_type == MatmulFusedOpSignalerType::REDUCE_SCATTER;
+}
 
-bool MatmulFusedOpSignaler::is_llama_reduce_scatter() {
+bool MatmulFusedOpSignaler::is_llama_reduce_scatter() const {
     return fused_op_type == MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER;
 }
 
-bool MatmulFusedOpSignaler::is_llama_all_gather() {
+bool MatmulFusedOpSignaler::is_llama_all_gather() const {
     return fused_op_type == MatmulFusedOpSignalerType::LLAMA_ALL_GATHER;
 }
 
@@ -526,6 +526,4 @@ void MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[2]));
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental::ccl

@@ -19,6 +19,10 @@ struct SGDFusedConfig {
 
 class SGDFused : public OptimizerBase {
 public:
+    [[nodiscard]] std::string get_name() const override {
+        return "SGDFused";
+    }
+
     explicit SGDFused(ttml::serialization::NamedParameters parameters, const SGDFusedConfig& config);
 
     void zero_grad() override;

@@ -12,8 +12,7 @@ using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t i = 0;
 
     uint32_t has_work_for_q_heads = get_arg_val<uint32_t>(i++);
@@ -92,7 +91,7 @@ void MAIN {
                                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                         uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                         uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
+                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index);
                                         in1_index_inner_dim_offset += in1_per_core_w;
                                     }
                                     dst_index++;
@@ -109,7 +108,7 @@ void MAIN {
                                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                         uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                         uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
+                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index);
                                         in1_index_inner_dim_offset += in1_per_core_w;
                                     }
                                     dst_index++;
@@ -172,4 +171,3 @@ void MAIN {
     }  // batch
 
 }
-} // NAMESPACE

@@ -9,7 +9,6 @@ import os
 import ttnn
 from ...layers.conv3d import ContextParallelConv3d as TtContextParallelConv3d
 from genmo.mochi_preview.vae.models import ContextParallelConv3d as RefContextParallelConv3d
-from models.utility_functions import skip_for_grayskull
 from ...utils.check import assert_quality
 
 # Common test configurations
@@ -55,7 +54,6 @@ def validate_outputs(tt_output, ref_output, test_name):
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride",
     [

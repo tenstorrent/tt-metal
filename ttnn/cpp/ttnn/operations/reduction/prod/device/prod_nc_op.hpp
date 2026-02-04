@@ -3,18 +3,14 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <optional>
 #include <utility>
 #include <vector>
 
-namespace tt {
-
-namespace operations {
-
-namespace primary {
+namespace tt::operations::primary {
 
 using namespace tt_metal;
 
@@ -24,8 +20,4 @@ Tensor prod_nc(
     ttnn::SmallVector<int64_t>& dims,
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-}  // namespace primary
-
-}  // namespace operations
-
-}  // namespace tt
+}  // namespace tt::operations::primary

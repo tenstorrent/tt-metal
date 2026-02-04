@@ -8,12 +8,10 @@
 #include <memory>
 #include <variant>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Buffer;
-class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+class HWCommandQueue;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
 
@@ -29,13 +27,13 @@ namespace tt::tt_metal {
  *
  * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                    |                                        | Yes      |
  * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
  * | dst            | The memory where the result will be stored, if provided                           | void*                               |                                        | No       |
  */
 // clang-format on
 void LightMetalCompareToCapture(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* dst = nullptr);
 
@@ -48,14 +46,14 @@ void LightMetalCompareToCapture(
  *
  * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                    |                                        | Yes      |
  * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
  * | golden_data    | User supplied expected/golden data for buffer                                     | void*                               |                                        | Yes      |
  */
 // clang-format on
 
 void LightMetalCompareToGolden(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* golden_data);
 

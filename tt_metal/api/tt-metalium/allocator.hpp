@@ -11,9 +11,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 struct Statistics {
     size_t total_allocatable_size_bytes = 0;
@@ -72,6 +70,4 @@ DeviceAddr calculate_bank_size_spread(
 
 }  // namespace detail
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

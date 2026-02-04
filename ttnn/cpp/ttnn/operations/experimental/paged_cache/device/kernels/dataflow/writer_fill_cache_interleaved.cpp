@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 // Define the sentinel value for a page table entry that indicates a skip.
 constexpr uint32_t SKIP_PAGE_TABLE_ENTRY = (uint32_t)-1;
@@ -29,13 +29,6 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
 }
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t page_table_addr = get_arg_val<uint32_t>(1);
-    uint32_t start_row_num = get_arg_val<uint32_t>(2);
-    uint32_t num_rows = get_arg_val<uint32_t>(3);
-    // Arg 4 is either batch_idx_tensor_addr or batch_idx_fallback scalar
-    uint32_t batch_arg = get_arg_val<uint32_t>(4);
-
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_page_table = get_compile_time_arg_val(1);
     constexpr uint32_t num_heads = get_compile_time_arg_val(2);
@@ -50,6 +43,18 @@ void kernel_main() {
     constexpr uint32_t cb_id_batch_idx = get_compile_time_arg_val(9);  // CB for reading from batch_idx_tensor
     constexpr uint32_t batch_idx_stick_size =
         get_compile_time_arg_val(10);  // Expected to be small (e.g., 4 for uint32)
+
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t page_table_addr = get_arg_val<uint32_t>(1);
+    uint32_t start_row_num = get_arg_val<uint32_t>(2);
+    uint32_t num_rows = get_arg_val<uint32_t>(3);
+    // Arg 4 is either batch_idx_tensor_addr or batch_idx_fallback scalar
+    uint32_t batch_arg = get_arg_val<uint32_t>(4);
+    uint32_t noop = get_arg_val<uint32_t>(5);
+
+    if (noop == 1) {
+        return;  // Early exit, no work done
+    }
 
     constexpr auto s0_args = TensorAccessorArgs<11>();
     constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();

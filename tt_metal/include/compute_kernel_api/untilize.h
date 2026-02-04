@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/sentinel/compute_kernel_sentinel.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #endif
@@ -29,9 +30,9 @@ namespace ckernel {
  * | Function   | icb  | The identifier of the circular buffer (CB) for input data | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void untilize_init(uint32_t icb) {
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+ALWI void untilize_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    state_configure(icb, call_line);
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     UNPACK((llk_unpack_untilize_init(icb)));
 }
 
@@ -99,6 +100,12 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
  * | Function   | icb  | The identifier of the circular buffer (CB) for input data | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void untilize_uninit(uint32_t icb) { UNPACK((llk_unpack_untilize_uninit(icb))); }
+ALWI void untilize_uninit(uint32_t icb) {
+#ifdef ARCH_BLACKHOLE
+    UNPACK((llk_unpack_untilize_uninit(icb)));
+#else
+    UNPACK((llk_unpack_untilize_uninit()));
+#endif
+}
 
 }  // namespace ckernel

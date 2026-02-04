@@ -1055,6 +1055,9 @@ class TT_CCL:
             assert buffer_key is not None, "buffer_key is None"
             persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
+        barrier_semaphore = None
+        if persistent_buffer is None:
+            barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
         semaphores = (
             self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
             if self.use_ring_ag_prefill
@@ -1071,6 +1074,7 @@ class TT_CCL:
             topology=topology,
             multi_device_global_semaphore=semaphores,
             persistent_output_tensor=persistent_buffer,
+            barrier_semaphore=barrier_semaphore,
             num_links=num_links,
             memory_config=memory_config,
             subdevice_id=self.worker_sub_device_id,
@@ -1226,7 +1230,8 @@ def tt_distributed_rmsnorm(
     compute_kernel_config,
     tt_ccl=None,
 ):
-    use_2d_grid = inp.shape[-2] == 128 and not tt_ccl.is_qwen
+    # TODO: remove this once we have a proper 2D grid implementation, currently we see bad outputs
+    use_2d_grid = False
 
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(
@@ -1273,7 +1278,7 @@ def tt_sharded_distributed_rmsnorm(
     cluster_axis = 1
     semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
     persistent_buffer = tt_ccl.all_gather_buffers.get("LAYERNORM", None)
-    tt_out = ttnn.fused_rms_1_1_32_8192(
+    tt_out = ttnn.fused_rms_minimal(
         inp,
         ln_sharded_progcfg,
         cluster_axis,

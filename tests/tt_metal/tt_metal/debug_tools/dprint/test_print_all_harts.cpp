@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
+#include <cstdint>
 #include <memory>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>

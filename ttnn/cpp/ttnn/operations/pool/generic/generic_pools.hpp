@@ -8,16 +8,15 @@
 #include <optional>
 #include <variant>
 #include <vector>
-#include "ttnn/core.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/decorators.hpp"
-
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 namespace ttnn {
 namespace operations::pool {
+
+using op_slicing::Op2DSliceConfig;
 
 struct MaxPoolWithIndicesResult {
     Tensor output;
@@ -37,12 +36,14 @@ struct MaxPool2DOp {
         std::array<uint32_t, 2> dilation,
         bool ceil_mode = false,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Op2DSliceConfig>& dram_slice_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         bool deallocate_input = false,
         bool reallocate_halo_output = true,
         bool return_indices = false,
         DataType dtype = DataType::BFLOAT16,
-        Layout output_layout = Layout::ROW_MAJOR);
+        Layout output_layout = Layout::ROW_MAJOR,
+        bool config_tensor_in_dram = false);
 };
 struct AvgPool2DOp {
     static Tensor invoke(
@@ -58,12 +59,14 @@ struct AvgPool2DOp {
         bool count_include_pad = true,
         std::optional<int32_t> divisor_override = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Op2DSliceConfig>& dram_slice_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
         bool deallocate_input = false,
         bool reallocate_halo_output = true,
         DataType dtype = DataType::BFLOAT16,
-        Layout output_layout = Layout::ROW_MAJOR);
+        Layout output_layout = Layout::ROW_MAJOR,
+        bool config_tensor_in_dram = false);
 };
 
 }  // namespace operations::pool

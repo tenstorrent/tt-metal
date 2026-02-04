@@ -96,8 +96,6 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         ), "start_latent_seed must be an integer or None"
 
         # Encode image to latents (standard img2img case)
-        if start_latent_seed is not None:
-            torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed)
         add_noise = True if denoising_start is None else False
         img_latents = prepare_image_latents(
             self.torch_pipeline,
@@ -112,6 +110,8 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
             False,  # No max strength path in ref img2img implementation
             add_noise,
             None,  # passed in latents
+            start_latent_seed,
+            fixed_seed_for_batch,
         )
 
         if isinstance(img_latents, ttnn.Tensor):

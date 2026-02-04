@@ -2,11 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Dummy/test models for vLLM integration testing.
-These models are not production models but are used for testing infrastructure.
-"""
-
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -74,3 +69,6 @@ class DummyT3000MultiProcessModel:
 
     def allocate_kv_cache(self, *args, **kwargs):
         return None
+
+    def warmup_model_prefill(self, *args, **kwargs):
+        pass

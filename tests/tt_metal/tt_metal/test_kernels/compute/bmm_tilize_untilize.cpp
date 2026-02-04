@@ -97,8 +97,7 @@ inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles
     cb_push_back(cb_id, out_subblock_num_tiles);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);             // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);       // outer row block size (in inner row blocks)
     uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);     // out_subblock_h*in0_block_w*in0_num_subblocks;
@@ -182,8 +181,8 @@ void MAIN {
                                         in1_cb_id,                                                   // in1_cb
                                         in0_index_subblock_offset + in0_index_h_offset + inner_dim,  // in0 tile
                                         in1_index_subblock_offset + in1_index_inner_dim_offset + w,  // in1 tile
-                                        dst_index,                                                   // dst
-                                        false);
+                                        dst_index                                                    // dst
+                                    );
                                     in1_index_inner_dim_offset += in1_block_w;
                                 }  // for in0_block_w
                                 ++dst_index;
@@ -270,4 +269,3 @@ void MAIN {
         }  // for in1_num_blocks_w
     }  // for in0_num_blocks_h
 }  // MAIN
-}  // namespace NAMESPACE

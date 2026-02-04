@@ -13,6 +13,8 @@
 
 namespace ttnn::operations::conv::conv1d {
 
+using ttnn::prim::Conv2dSliceConfig;
+
 Result Conv1dOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -36,21 +38,21 @@ Result Conv1dOperation::invoke(
     // reshape input tensor to 4D, if it is not already
     const ttnn::Tensor& input_tensor_4d =
         (input_tensor.logical_shape().rank() < 4)
-            ? ttnn::reshape(input_tensor, Shape({batch_size, input_length, 1, in_channels}))
+            ? ttnn::reshape(input_tensor, Shape({batch_size, 1, input_length, in_channels}))
             : input_tensor;
 
     // padding for conv2d based on conv1d padding
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> conv2d_padding;
     if (std::holds_alternative<uint32_t>(padding)) {
-        conv2d_padding = std::array<uint32_t, 2>{std::get<uint32_t>(padding), 0};
+        conv2d_padding = std::array<uint32_t, 2>{0, std::get<uint32_t>(padding)};
     } else {
         std::array<uint32_t, 2> padding_lr = std::get<std::array<uint32_t, 2>>(padding);
 
         conv2d_padding = std::array<uint32_t, 4>{
-            padding_lr[0],  // up
-            padding_lr[1],  // down
-            0,              // left
-            0               // right
+            0,              // up
+            0,              // down
+            padding_lr[0],  // left
+            padding_lr[1]   // right
         };
     };
 
@@ -62,33 +64,33 @@ Result Conv1dOperation::invoke(
             in_channels,
             out_channels,
             batch_size,
-            input_length,
-            1,  // input_width
-            std::array<uint32_t, 2>{kernel_size, 1},
-            std::array<uint32_t, 2>{stride, 1},
+            1,             // input_height
+            input_length,  // input_width
+            std::array<uint32_t, 2>{1, kernel_size},
+            std::array<uint32_t, 2>{1, stride},
             conv2d_padding,
-            std::array<uint32_t, 2>{dilation, 1},
+            std::array<uint32_t, 2>{1, dilation},
             groups,
             dtype,
             bias_tensor,
             conv_config,
             compute_config,
             memory_config,
-            conv2d::Conv2dSliceConfig{
-                .slice_type =
-                    conv2d::Conv2dSliceConfig::SliceType::L1_FULL},  // Conv1D doesn't support DRAM Slicing. Only L1
+            Conv2dSliceConfig{
+                .slice_type = Conv2dSliceConfig::SliceType::L1_FULL},  // Conv1D doesn't support DRAM Slicing. Only L1
             true,
             true));
 
     if (return_output_dim && return_weights_and_bias) {
-        return Result(std::tuple(output_tensor, std::get<0>(output_dimensions), weights_and_bias));
-    } else if (return_output_dim) {
-        return Result(std::tuple(output_tensor, std::get<0>(output_dimensions)));
-    } else if (return_weights_and_bias) {
+        return Result(std::tuple(output_tensor, std::get<1>(output_dimensions), weights_and_bias));
+    }
+    if (return_output_dim) {
+        return Result(std::tuple(output_tensor, std::get<1>(output_dimensions)));
+    }
+    if (return_weights_and_bias) {
         return Result(std::tuple(output_tensor, weights_and_bias));
-    } else {
-        return Result(output_tensor);
-    };
+    }
+    return Result(output_tensor);
 }
 
 }  // namespace ttnn::operations::conv::conv1d

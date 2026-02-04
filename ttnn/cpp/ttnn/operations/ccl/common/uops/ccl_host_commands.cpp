@@ -9,13 +9,12 @@
 #include <tt_stl/overloaded.hpp>
 
 #include <variant>
-namespace ttnn::ccl::cmd {
 
 // This file defines commands that are resolved on a per worker level. This is the lowest level of
 // command description (Intermediate Representation if you will) before being lowered directly to
 // Ccl Command Process KernelCommands
 
-namespace uops {
+namespace ttnn::ccl::cmd::uops {
 
 CclHostLowLevelWorkerCommand read_tensor_slice_to_cb_for_eventual_fabric_write(
     ttnn::ccl::v2::TensorSlice const& slice, size_t cb_id) {
@@ -384,8 +383,8 @@ static std::vector<HostNocTransferBurstGrouping> densely_pack_noc_transfers(tt::
 
     size_t group_size_bytes = 0;
     transfer_burst_groupings.push_back({});
-    for (size_t i = 0; i < transfer_infos.size(); i++) {
-        group_size_bytes += transfer_infos[i].noc_transfer_size_bytes;
+    for (const auto& transfer_info : transfer_infos) {
+        group_size_bytes += transfer_info.noc_transfer_size_bytes;
         bool create_new_group = group_size_bytes >= cb_size_bytes;
         if (create_new_group) {
             transfer_burst_groupings.push_back({});
@@ -399,7 +398,7 @@ static std::vector<HostNocTransferBurstGrouping> densely_pack_noc_transfers(tt::
         }
 
         group.num_transfers_per_packet++;
-        group.transfer_infos.push_back(transfer_infos[i]);
+        group.transfer_infos.push_back(transfer_info);
     }
 
     return transfer_burst_groupings;
@@ -487,6 +486,4 @@ CclHostLowLevelWorkerCommand fabric_multicast_noc_write_burst_from_cb(
     );
 }
 
-}  // namespace uops
-
-}  // namespace ttnn::ccl::cmd
+}  // namespace ttnn::ccl::cmd::uops

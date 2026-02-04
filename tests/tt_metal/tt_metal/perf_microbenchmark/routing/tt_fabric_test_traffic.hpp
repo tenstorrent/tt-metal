@@ -10,8 +10,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_fabric_test_common_types.hpp"  // For SenderCreditInfo
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 struct SenderMetadataFields {
     SenderMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size) :
@@ -258,6 +257,7 @@ struct TestTrafficConfig {
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
     uint32_t link_id = 0;  // Link ID for multi-link tests
+    std::optional<tt::tt_metal::NOC> noc_id;
 
     // Credit info (copied from pattern if populated by allocator)
     std::optional<SenderCreditInfo> sender_credit_info;
@@ -292,11 +292,17 @@ struct TestTrafficSenderConfig {
     uint32_t dst_noc_encoding;  // TODO: decide if we should keep it here or not
     uint32_t payload_buffer_size;  // Add payload buffer size field
     uint32_t link_id = 0;          // Link ID for multi-link tests
+    std::optional<tt::tt_metal::NOC> noc_id;
 
     // Credit flow info (when enable_flow_control is true)
     std::optional<SenderCreditInfo> sender_credit_info;
 
     std::vector<uint32_t> get_args(bool is_sync_config = false) const;
+};
+
+struct TestTrafficSyncConfig {
+    uint32_t sync_val;
+    TestTrafficSenderConfig sender_config;
 };
 
 struct TestTrafficReceiverConfig {
@@ -565,5 +571,4 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
     return args;
 }
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

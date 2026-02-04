@@ -11,15 +11,11 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-
-namespace operations {
-
-namespace core {
+namespace ttnn::operations::core {
 
 struct ToLayout {
     static Tensor invoke(
@@ -30,6 +26,4 @@ struct ToLayout {
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
-}  // namespace core
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::core

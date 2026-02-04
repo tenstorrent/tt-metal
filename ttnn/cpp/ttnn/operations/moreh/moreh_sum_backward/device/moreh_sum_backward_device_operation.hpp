@@ -45,7 +45,7 @@ struct MorehSumBackwardOperation {
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
@@ -56,19 +56,17 @@ struct MorehSumBackwardOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& output_grad,
-        const std::optional<Tensor>& input,
-        tt::stl::Span<const int64_t> dims,
-        bool keepdim,
-        const std::optional<Tensor>& input_grad,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
+
 }  // namespace ttnn::operations::moreh::moreh_sum_backward
 
 namespace ttnn::prim {
-constexpr auto moreh_sum_backward = ttnn::register_operation<
-    "ttnn::prim::moreh_sum_backward",
-    ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation>();
+ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation::tensor_return_value_t moreh_sum_backward(
+    const Tensor& output_grad,
+    const std::optional<Tensor>& input,
+    tt::stl::Span<const int64_t> dims,
+    bool keepdim,
+    const std::optional<Tensor>& input_grad,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 }  // namespace ttnn::prim

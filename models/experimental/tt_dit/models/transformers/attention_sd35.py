@@ -8,10 +8,21 @@ from ...layers.normalization import RMSNorm
 from ...layers.linear import ColParallelLinear
 from ...utils.substate import substate
 from ...utils.padding import pad_weight_tensor
+from ...layers.module import Module
+from models.common.utility_functions import is_blackhole
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
-class SD35JointAttention:
+class SD35JointAttention(Module):
+    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
+    sdpa_chunk_size_map = {
+        (False, 2, 2): (256, 512),
+        (False, 4, 4): (256, 512),
+        (True, 2, 2): (256, 512),
+        (True, 4, 4): (128, 512),
+    }
+    default_sdpa_chunk_size = (256, 512)
+
     def __init__(
         self,
         query_dim,
@@ -27,6 +38,8 @@ class SD35JointAttention:
         parallel_config=None,
         padding_config=None,
     ):
+        super().__init__()
+
         self.query_dim = query_dim
         self.head_dim = head_dim
         self.heads = heads
@@ -97,10 +110,18 @@ class SD35JointAttention:
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
+        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
+            (
+                is_blackhole(),
+                self.parallel_config.sequence_parallel.factor,
+                self.parallel_config.tensor_parallel.factor,
+            ),
+            self.default_sdpa_chunk_size,
+        )
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=128,
-            k_chunk_size=512,
+            q_chunk_size=ring_sdpa_chunk_size[0],
+            k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -165,7 +186,7 @@ class SD35JointAttention:
         if self.context_pre_only is not None and not self.context_pre_only:
             self.to_add_out.from_cached_state_dict(substate(cache_dict, "to_add_out"))
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         def reshape_and_merge_qkv(q_state, k_state, v_state):
             # Rearrange QKV projections such column-fracturing shards the heads
             def _merge_tensors(q, k, v):
@@ -220,7 +241,7 @@ class SD35JointAttention:
         self.norm_added_q.load_torch_state_dict(substate(state_dict, "norm_added_q"))
         self.norm_added_k.load_torch_state_dict(substate(state_dict, "norm_added_k"))
 
-    def __call__(self, spatial_1BND, prompt_1BLD, N):
+    def forward(self, spatial_1BND, prompt_1BLD, N):
         """
         Inputs are replicated
         Outputs are width-fractured

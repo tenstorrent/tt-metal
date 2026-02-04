@@ -12,8 +12,7 @@
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // TODO: Add back early return? Currently, running out of code size in TRISC2 by 4B
     // const bool has_work = get_arg_val<uint32_t>(0);
     // if (!has_work) {
@@ -69,7 +68,7 @@ void MAIN {
         mm_init_short(in_cb, trans_mat_cb);
         ACQ();
 
-        matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0, false);
+        matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
         pack_tile(0, rotated_in_interm_cb, 0);
 
         REL();
@@ -107,4 +106,3 @@ void MAIN {
         cb_pop_front(cos_interm_cb, Wt);
     }
 }
-}  // namespace NAMESPACE

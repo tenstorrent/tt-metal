@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
+pytestmark = pytest.mark.use_module_device
+
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
