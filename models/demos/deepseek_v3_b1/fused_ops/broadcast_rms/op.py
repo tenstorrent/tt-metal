@@ -248,45 +248,6 @@ class BroadcastRMSNorm:
                     ("rmsnorm_rsqrt_fast_approx", 1 if rsqrt_fast_approx else 0),
                 ]
 
-                # Reader runtime args
-                reader_rt_args = ttnn.RuntimeArgs()
-
-                reader_rt_args[worker_core.x][worker_core.y] = [
-                    int(input_tensor_device.buffer_address()),  # tensor_address0
-                    tile_id_start,  # tile_id_start
-                    input_num_pages,  # tile_id_end
-                ]
-
-                # Writer runtime args
-                writer_rt_args = ttnn.RuntimeArgs()
-                if skip_ccl:
-                    # Single-device mode: no writer args needed
-                    writer_rt_args[worker_core.x][worker_core.y] = []
-                else:
-                    # Multi-device mode: CCL writer args
-                    wait_output_semaphore = is_secondary_sender or is_receiver
-                    reset_global_semaphore = is_secondary_sender or is_receiver
-                    out_ready_sem_wait_value = 1 * num_links
-
-                    writer_rt_args[worker_core.x][worker_core.y] = [
-                        int(intermediate_tensor_device.buffer_address()),  # tensor_address0
-                        int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                        tile_id_start,  # tile_id_start
-                        input_num_pages,  # tile_id_end
-                        int(wait_output_semaphore),  # wait_output_semaphore
-                        int(reset_global_semaphore),  # reset_global_semaphore
-                        core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
-                        core_noc_y,  # out_ready_sem_noc0_y
-                        out_ready_sem_wait_value,  # out_ready_sem_wait_value
-                        int(barrier_sem_addr),  # barrier_sem
-                        core_noc_x,  # barrier_sem_noc0_x
-                        core_noc_y,  # barrier_sem_noc0_y
-                        ring_index,
-                        int(secondary_sync_sem_addr),  # secondary_sync_sem
-                    ]
-
-                # Determine fabric connections and append num_connections BEFORE creating program
-                # (must match order in original op.py)
                 fabric_node_id = None
                 dst_nodes = []
                 num_connections = 0
@@ -313,7 +274,48 @@ class BroadcastRMSNorm:
                         dst_nodes.append(mesh_device.get_fabric_node_id(sender_coord_back))
 
                     num_connections = len(dst_nodes)
-                    writer_rt_args[worker_core.x][worker_core.y].append(int(num_connections))
+
+                # Common runtime args for reader (broadcast args shared across cores)
+                reader_common_rt_args = [
+                    int(input_tensor_device.buffer_address()),  # tensor_address0
+                    tile_id_start,  # tile_id_start
+                    input_num_pages,  # tile_id_end
+                ]
+
+                # Per-core reader runtime args are empty - broadcast args moved to common
+                reader_rt_args = ttnn.RuntimeArgs()
+                reader_rt_args[worker_core.x][worker_core.y] = []
+
+                # Common runtime args for writer (broadcast args shared across cores)
+                writer_common_rt_args = []
+                if not skip_ccl:
+                    # Multi-device mode: CCL writer args
+                    wait_output_semaphore = is_secondary_sender or is_receiver
+                    reset_global_semaphore = is_secondary_sender or is_receiver
+                    out_ready_sem_wait_value = 1 * num_links
+
+                    writer_common_rt_args = [
+                        int(intermediate_tensor_device.buffer_address()),  # tensor_address0
+                        int(out_ready_sem_addr),  # out_ready_sem_bank_addr
+                        tile_id_start,  # tile_id_start
+                        input_num_pages,  # tile_id_end
+                        int(wait_output_semaphore),  # wait_output_semaphore
+                        int(reset_global_semaphore),  # reset_global_semaphore
+                        core_noc_x,  # out_ready_sem_noc0_x (drain_sync_core)
+                        core_noc_y,  # out_ready_sem_noc0_y
+                        out_ready_sem_wait_value,  # out_ready_sem_wait_value
+                        int(barrier_sem_addr),  # barrier_sem
+                        core_noc_x,  # barrier_sem_noc0_x
+                        core_noc_y,  # barrier_sem_noc0_y
+                        ring_index,
+                        int(secondary_sync_sem_addr),  # secondary_sync_sem
+                        int(num_connections),  # num_connections
+                    ]
+
+                # Per-core writer runtime args are empty - broadcast args moved to common
+                # Fabric args will be appended later
+                writer_rt_args = ttnn.RuntimeArgs()
+                writer_rt_args[worker_core.x][worker_core.y] = []
 
                 # Create tile descriptor for proper tile dimensions
                 tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
@@ -382,8 +384,10 @@ class BroadcastRMSNorm:
                 # kernels ordering: [ncrisc_reader, brisc_writer, trisc_compute]
                 if len(program.kernels) >= 1:
                     program.kernels[0].runtime_args = reader_rt_args
+                    program.kernels[0].common_runtime_args = reader_common_rt_args
                 if len(program.kernels) >= 2:
                     program.kernels[1].runtime_args = writer_rt_args
+                    program.kernels[1].common_runtime_args = writer_common_rt_args
 
                 if len(program.kernels) >= 3:
                     compute_rt_args = ttnn.RuntimeArgs()

@@ -1469,6 +1469,71 @@ class PreSDPA:
                     initial_value=0,
                 )
 
+                # ================================================================
+                # CCL Broadcast common runtime args (computed before UnifiedKernelDescriptor)
+                # These are common to all cores since only one core participates in CCL
+                # ================================================================
+                if skip_ccl:
+                    # Single-device mode: empty broadcast args
+                    ncrisc_bcast_common_args = []
+                    brisc_bcast_common_args = []
+                    dst_nodes = []
+                    fabric_node_id = None
+                else:
+                    # Multi-device mode: CCL broadcast runtime args
+                    wait_output_semaphore = is_secondary_sender or is_receiver
+                    reset_global_semaphore = is_secondary_sender or is_receiver
+                    out_ready_sem_wait_value = 1 * num_links
+
+                    # Build dst_nodes first to compute num_connections = len(dst_nodes)
+                    fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                    dst_nodes = []
+
+                    # Primary axis connections (forward and backward in column)
+                    if num_targets_forward > 0:
+                        forward_coord = ttnn.MeshCoordinate(row + 1, col)
+                        dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
+
+                    if num_targets_backward > 0:
+                        backward_coord = ttnn.MeshCoordinate(row - 1, col)
+                        dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
+
+                    # Secondary axis connection (for sender to secondary sender)
+                    if has_secondary_target:
+                        secondary_coord = ttnn.MeshCoordinate(row, 1)
+                        dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
+
+                    # Reverse secondary connection
+                    if has_reverse_secondary_connection and not using_persistent_buffers:
+                        sender_coord_back = ttnn.MeshCoordinate(sender_row, sender_col)
+                        dst_nodes.append(mesh_device.get_fabric_node_id(sender_coord_back))
+
+                    num_connections = len(dst_nodes)
+
+                    ncrisc_bcast_common_args = [
+                        int(input_tensor_device.buffer_address()),  # tensor_address0
+                        tile_id_start,  # tile_id_start
+                        bcast_num_pages,  # tile_id_end
+                    ]
+
+                    brisc_bcast_common_args = [
+                        int(intermediate_tensor_device.buffer_address()),  # tensor_address0
+                        int(out_ready_sem_addr),  # out_ready_sem_bank_addr
+                        tile_id_start,  # tile_id_start
+                        bcast_num_pages,  # tile_id_end
+                        int(wait_output_semaphore),
+                        int(reset_global_semaphore),
+                        core_noc_x,  # out_ready_sem_noc0_x
+                        core_noc_y,  # out_ready_sem_noc0_y
+                        out_ready_sem_wait_value,
+                        int(barrier_sem_addr),
+                        core_noc_x,  # barrier_sem_noc0_x
+                        core_noc_y,  # barrier_sem_noc0_y
+                        ring_index,
+                        int(secondary_sync_sem_addr),
+                        num_connections,
+                    ]
+
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/pre_sdpa/kernels/pre_sdpa_kernel.cpp",
                     core_ranges=full_device_grid,
@@ -1488,11 +1553,8 @@ class PreSDPA:
                     + kv_rmsnorm_ncrisc_named_compile_time_args
                     + dkv_gather_sender_named_compile_time_args
                     + krope_ncrisc_named_compile_time_args,
-                    # NCRISC common runtime args: scalar + scalar2
-                    ncrisc_common_runtime_args=[
-                        scalar_packed,
-                        scalar2_packed,  # scalar for rmsnorm2 (1/sqrt(1536))
-                    ],
+                    # NCRISC common runtime args:
+                    ncrisc_common_runtime_args=ncrisc_bcast_common_args,
                     # BRISC named compile-time args: bcast + rmsnorm reader (for gamma setup) + mcast sender + matmul + gather receiver + matmul2 + mcast2 + matmul3 + qrope + gather_heads + dkv_matmul + dkv_gather_receiver + kv_rmsnorm
                     brisc_named_compile_time_args=bcast_brisc_named_compile_time_args
                     + rmsnorm_reader_named_compile_time_args
@@ -1507,6 +1569,8 @@ class PreSDPA:
                     + dkv_gather_receiver_named_compile_time_args
                     + kv_rmsnorm_brisc_named_compile_time_args
                     + krope_brisc_named_compile_time_args,
+                    # BRISC common runtime args: bcast args
+                    brisc_common_runtime_args=brisc_bcast_common_args,
                     # TRISC named compile-time args: rmsnorm compute + matmul + rmsnorm2 + matmul2 + matmul3 + dkv_matmul + kv_rmsnorm
                     trisc_named_compile_time_args=bcast_trisc_named_compile_time_args
                     + rmsnorm_compute_named_compile_time_args
@@ -1606,67 +1670,8 @@ class PreSDPA:
                 reader_rt_args = ttnn.RuntimeArgs()
                 writer_rt_args = ttnn.RuntimeArgs()
 
-                if skip_ccl:
-                    # Single-device mode: no broadcast runtime args
-                    reader_rt_args[worker_core.x][worker_core.y] = []
-                    writer_rt_args[worker_core.x][worker_core.y] = []
-                else:
-                    # Multi-device mode: CCL broadcast runtime args
-                    reader_rt_args[worker_core.x][worker_core.y] = [
-                        int(input_tensor_device.buffer_address()),  # tensor_address0
-                        tile_id_start,  # tile_id_start
-                        bcast_num_pages,  # tile_id_end
-                    ]
-
-                    wait_output_semaphore = is_secondary_sender or is_receiver
-                    reset_global_semaphore = is_secondary_sender or is_receiver
-                    out_ready_sem_wait_value = 1 * num_links
-
-                    writer_rt_args[worker_core.x][worker_core.y] = [
-                        int(intermediate_tensor_device.buffer_address()),  # tensor_address0
-                        int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                        tile_id_start,  # tile_id_start
-                        bcast_num_pages,  # tile_id_end
-                        int(wait_output_semaphore),
-                        int(reset_global_semaphore),
-                        core_noc_x,  # out_ready_sem_noc0_x
-                        core_noc_y,  # out_ready_sem_noc0_y
-                        out_ready_sem_wait_value,
-                        int(barrier_sem_addr),
-                        core_noc_x,  # barrier_sem_noc0_x
-                        core_noc_y,  # barrier_sem_noc0_y
-                        ring_index,
-                        int(secondary_sync_sem_addr),
-                    ]
-
-                # Determine fabric connections
-                fabric_node_id = None
-                dst_nodes = []
-                num_connections = 0
-                if not skip_ccl:
-                    fabric_node_id = mesh_device.get_fabric_node_id(coord)
-
-                    # Primary axis connections (forward and backward in column)
-                    if num_targets_forward > 0:
-                        forward_coord = ttnn.MeshCoordinate(row + 1, col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
-
-                    if num_targets_backward > 0:
-                        backward_coord = ttnn.MeshCoordinate(row - 1, col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
-
-                    # Secondary axis connection (for sender to secondary sender)
-                    if has_secondary_target:
-                        secondary_coord = ttnn.MeshCoordinate(row, 1)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-
-                    # Reverse secondary connection
-                    if has_reverse_secondary_connection and not using_persistent_buffers:
-                        sender_coord_back = ttnn.MeshCoordinate(sender_row, sender_col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(sender_coord_back))
-
-                    num_connections = len(dst_nodes)
-                    writer_rt_args[worker_core.x][worker_core.y].append(int(num_connections))
+                reader_rt_args[worker_core.x][worker_core.y] = []
+                writer_rt_args[worker_core.x][worker_core.y] = []
 
                 # ================================================================
                 # Create program descriptor

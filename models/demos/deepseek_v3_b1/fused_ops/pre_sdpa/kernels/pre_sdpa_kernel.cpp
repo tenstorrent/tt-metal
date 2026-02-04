@@ -80,9 +80,9 @@ void kernel_main() {
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
     if constexpr (!Core::skip_ccl) {
         bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
-            get_arg_val<uint32_t>(0),  // tensor_address0
-            get_arg_val<uint32_t>(1),  // tile_id_start
-            get_arg_val<uint32_t>(2),  // tile_id_end
+            get_common_arg_val<uint32_t>(0),  // tensor_address0
+            get_common_arg_val<uint32_t>(1),  // tile_id_start
+            get_common_arg_val<uint32_t>(2),  // tile_id_end
         };
     }
 
@@ -220,21 +220,21 @@ void kernel_main() {
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
     if constexpr (!Core::skip_ccl) {
         bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
-            get_arg_val<uint32_t>(0),   // tensor_address0
-            get_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-            get_arg_val<uint32_t>(2),   // tile_id_start
-            get_arg_val<uint32_t>(3),   // tile_id_end
-            get_arg_val<uint32_t>(4),   // wait_output_semaphore
-            get_arg_val<uint32_t>(5),   // reset_global_semaphore
-            get_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
-            get_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
-            get_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
-            get_arg_val<uint32_t>(9),   // barrier_sem
-            get_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
-            get_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
-            get_arg_val<uint32_t>(12),  // ring_index
-            get_arg_val<uint32_t>(13),  // secondary_sync_sem
-            get_arg_val<uint32_t>(14),  // num_connections
+            get_common_arg_val<uint32_t>(0),   // tensor_address0
+            get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
+            get_common_arg_val<uint32_t>(2),   // tile_id_start
+            get_common_arg_val<uint32_t>(3),   // tile_id_end
+            get_common_arg_val<uint32_t>(4),   // wait_output_semaphore
+            get_common_arg_val<uint32_t>(5),   // reset_global_semaphore
+            get_common_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
+            get_common_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
+            get_common_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
+            get_common_arg_val<uint32_t>(9),   // barrier_sem
+            get_common_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
+            get_common_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
+            get_common_arg_val<uint32_t>(12),  // ring_index
+            get_common_arg_val<uint32_t>(13),  // secondary_sync_sem
+            get_common_arg_val<uint32_t>(14),  // num_connections (computed from len(dst_nodes))
         };
     }
     // CTArgs type aliases (required for Op templates)
