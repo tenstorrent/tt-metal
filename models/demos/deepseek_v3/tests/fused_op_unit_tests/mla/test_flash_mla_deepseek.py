@@ -173,7 +173,6 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     )
 
     # Create position indices (current position for each user)
-    cache_size = num_blocks * block_size
     position_idxs = np.linspace(0, max_seq_len // 2, num_users, dtype=np.int32)
 
     # Convert Q to ttnn with L1 interleaved first
