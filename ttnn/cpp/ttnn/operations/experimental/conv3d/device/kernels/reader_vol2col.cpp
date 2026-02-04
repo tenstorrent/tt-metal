@@ -151,8 +151,22 @@ void kernel_main() {
                                                         static_cast<uint32_t>(t_idx) * H_in_W_in +
                                                         static_cast<uint32_t>(h_idx) * W_in +
                                                         static_cast<uint32_t>(w_idx);
-                                                    const uint64_t in_noc_addr = in_reader.get_noc_addr(
-                                                        in_page_idx, c_in_offset_bytes /*offset*/);
+                                                    // For width/block sharded RowMajor tensors, a "row" is split into
+                                                    // multiple pages of size in_row_size_bytes. TensorAccessor expects
+                                                    // page_id to be flattened over (row_idx, col_page_idx).
+                                                    //
+                                                    // For interleaved/height-sharded layouts, col_page_idx is always 0
+                                                    // and the channel selection is done via offset.
+                                                    uint32_t in_page_id = in_page_idx;
+                                                    uint32_t in_offset_bytes = c_in_offset_bytes;
+                                                    if constexpr (in_args.is_sharded) {
+                                                        // Compute which column-page this C_in_block lives in.
+                                                        const uint32_t col_page_idx = c_in_offset_bytes / in_row_size_bytes;
+                                                        in_offset_bytes = c_in_offset_bytes - (col_page_idx * in_row_size_bytes);
+                                                        const uint32_t width_in_pages = in_reader.dspec().tensor_shape()[1];
+                                                        in_page_id = in_page_idx * width_in_pages + col_page_idx;
+                                                    }
+                                                    const uint64_t in_noc_addr = in_reader.get_noc_addr(in_page_id, in_offset_bytes);
                                                     noc_async_read(in_noc_addr, cb_write_addr, C_in_block_bytes);
 
                                                     cb_write_addr += C_in_block_bytes;
