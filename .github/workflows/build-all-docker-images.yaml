@@ -191,7 +191,7 @@ jobs:
           cache-to: type=inline
           pull: true
           outputs: |
-            type=image,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
         id: build-ci-test
         uses: docker/build-push-action@v6
@@ -205,7 +205,7 @@ jobs:
           cache-to: type=inline
           pull: true
           outputs: |
-            type=image,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
         id: build-dev
         uses: docker/build-push-action@v6
@@ -219,7 +219,7 @@ jobs:
           cache-to: type=inline
           pull: true
           outputs: |
-            type=image,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
         id: build-basic-dev
         uses: docker/build-push-action@v6
@@ -233,7 +233,7 @@ jobs:
           cache-to: type=inline
           pull: true
           outputs: |
-            type=image,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
         id: build-basic-ttnn-runtime
         uses: docker/build-push-action@v6
@@ -247,7 +247,7 @@ jobs:
           cache-to: type=inline
           pull: true
           outputs: |
-            type=image,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build Ubuntu 24.04 images
   build-ubuntu-2404:
@@ -280,7 +280,7 @@ jobs:
           cache-to: type=inline
           pull: true
           outputs: |
-            type=image,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
         id: build-ci-test
         uses: docker/build-push-action@v6
@@ -294,7 +294,7 @@ jobs:
           cache-to: type=inline
           pull: true
           outputs: |
-            type=image,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
         id: build-dev
         uses: docker/build-push-action@v6
@@ -308,7 +308,7 @@ jobs:
           cache-to: type=inline
           pull: true
           outputs: |
-            type=image,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
         id: build-basic-dev
         uses: docker/build-push-action@v6
@@ -322,7 +322,7 @@ jobs:
           cache-to: type=inline
           pull: true
           outputs: |
-            type=image,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
         id: build-basic-ttnn-runtime
         uses: docker/build-push-action@v6
@@ -336,7 +336,7 @@ jobs:
           cache-to: type=inline
           pull: true
           outputs: |
-            type=image,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build ManyLinux image
   build-manylinux:
@@ -367,7 +367,7 @@ jobs:
           cache-to: type=inline
           pull: true
           outputs: |
-            type=image,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
   # Update latest tags on main
   tag-latest:
     name: "🔄 Update latest tags"
