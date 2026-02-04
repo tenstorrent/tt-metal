@@ -374,45 +374,65 @@ constexpr FORCE_INLINE auto init_receiver_channel_response_credit_senders()
     return init_receiver_channel_response_credit_senders_impl<ReceiverChannelResponseCreditSender>::template init<
         NUM_RECEIVER_CHANNELS>();
 }
+// Members container for SenderChannelFromReceiverCounterBasedCreditsReceiver
+// Packed mode (enable_first_level_ack=true): only ack tracking
+template <bool enable_first_level_ack>
+struct SenderChannelFromReceiverCounterBasedCreditsReceiverMembers {
+    volatile uint32_t* acks_received_counter_ptr;
+    uint32_t acks_received_and_processed;
+    // No completion tracking in packed mode
+};
+
+// Unpacked mode (enable_first_level_ack=false): ack tracking + completion tracking
+template <>
+struct SenderChannelFromReceiverCounterBasedCreditsReceiverMembers<false> {
+    volatile uint32_t* acks_received_counter_ptr;
+    uint32_t acks_received_and_processed;
+    volatile uint32_t* completions_received_counter_ptr;
+    uint32_t completions_received_and_processed;
+};
+
 template <bool enable_first_level_ack>
 struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
+    SenderChannelFromReceiverCounterBasedCreditsReceiverMembers<enable_first_level_ack> m;
+
     SenderChannelFromReceiverCounterBasedCreditsReceiver() = default;
-    SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t sender_channel_index) :
-        acks_received_counter_ptr(reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)),
-        acks_received_and_processed(0) {
-        *acks_received_counter_ptr = 0;
+    SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t sender_channel_index) {
+        m.acks_received_counter_ptr = reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address);
+        m.acks_received_and_processed = 0;
+        *m.acks_received_counter_ptr = 0;
 
         // Initialize completion tracking for unpacked mode
         if constexpr (!enable_first_level_ack) {
-            completions_received_counter_ptr =
+            m.completions_received_counter_ptr =
                 reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address) +
                 sender_channel_index;
-            completions_received_and_processed = 0;
+            m.completions_received_and_processed = 0;
         }
     }
 
-    FORCE_INLINE void increment_num_processed_acks(size_t num_acks) { acks_received_and_processed += num_acks; }
+    FORCE_INLINE void increment_num_processed_acks(size_t num_acks) { m.acks_received_and_processed += num_acks; }
 
     // Completion tracking methods (only for unpacked mode where !enable_first_level_ack)
     template <bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
         if constexpr (!enable_first_level_ack) {
             router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-            return *completions_received_counter_ptr - completions_received_and_processed;
+            return *m.completions_received_counter_ptr - m.completions_received_and_processed;
         }
         return 0;  // Won't be called when enable_first_level_ack=true, but satisfies compiler
     }
 
     FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
         if constexpr (!enable_first_level_ack) {
-            completions_received_and_processed += num_completions;
+            m.completions_received_and_processed += num_completions;
         }
     }
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
         if constexpr (!enable_first_level_ack) {
-            return *acks_received_counter_ptr - acks_received_and_processed;
+            return *m.acks_received_counter_ptr - m.acks_received_and_processed;
         } else {
             router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
 
@@ -420,9 +440,9 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
             // This extracts only the target channel's byte and subtracts with correct wraparound
             using PackingType = tt::tt_fabric::CreditPacking<NUM_SENDER_CHANNELS, 8>;  // 8-bit credits
 
-            uint32_t raw_value = *acks_received_counter_ptr;
+            uint32_t raw_value = *m.acks_received_counter_ptr;
             auto raw_packed = PackingType::PackedValueType{raw_value};
-            auto processed_packed = PackingType::PackedValueType{acks_received_and_processed};
+            auto processed_packed = PackingType::PackedValueType{m.acks_received_and_processed};
 
             // Safe diff: extracts bytes, subtracts with uint8_t wrap
             // Performance: ~3 instructions (2 extractions + 1 subtraction)
@@ -441,36 +461,22 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
             // Use safe CreditPacking helper to add to single channel without carries
             using PackingType = tt::tt_fabric::CreditPacking<NUM_SENDER_CHANNELS, 8>;  // 8-bit credits
 
-            auto current = PackingType::PackedValueType{acks_received_and_processed};
+            auto current = PackingType::PackedValueType{m.acks_received_and_processed};
             auto updated = PackingType::template add_to_channel<sender_channel_index>(
                 current,
                 static_cast<uint8_t>(packed_num_acks)
             );
 
-            acks_received_and_processed = updated.get();
+            m.acks_received_and_processed = updated.get();
             // Performance: ~5 instructions (Zbb optimized), fully inlined
         } else {
             // For counter-based (BH), ack counters are 8-bit and wrap at 256
             // Must use uint8_t semantics to match receiver's wraparound behavior
-            uint32_t old_val = acks_received_and_processed;
-            acks_received_and_processed = static_cast<uint32_t>(
-                static_cast<uint8_t>(acks_received_and_processed) + static_cast<uint8_t>(packed_num_acks)
-            );
+            uint32_t old_val = m.acks_received_and_processed;
+            m.acks_received_and_processed = static_cast<uint32_t>(
+                static_cast<uint8_t>(m.acks_received_and_processed) + static_cast<uint8_t>(packed_num_acks));
         }
     }
-
-    // Completion methods removed - now in OutboundReceiverChannelPointers
-
-    volatile uint32_t* acks_received_counter_ptr;
-    uint32_t acks_received_and_processed = 0;
-
-    // Conditionally include completion tracking (only for unpacked mode where !enable_first_level_ack)
-    // When enable_first_level_ack=true, completions are tracked in OutboundReceiverChannelPointers instead
-    using CompletionPtrType = std::conditional_t<!enable_first_level_ack, volatile uint32_t*, std::monostate>;
-    using CompletionCounterType = std::conditional_t<!enable_first_level_ack, uint32_t, std::monostate>;
-
-    [[no_unique_address]] CompletionPtrType completions_received_counter_ptr;
-    [[no_unique_address]] CompletionCounterType completions_received_and_processed;
 };
 
 template <bool enable_first_level_ack>
