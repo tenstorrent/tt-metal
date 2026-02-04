@@ -11,7 +11,8 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     dprint/test_print_before_finish.cpp
     dprint/test_print_prepend_device_core_risc.cpp
     dprint/test_print_tensix_dest.cpp
-    dprint/test_print_tiles.cpp
+    dprint/test_print_tile.cpp
+    dprint/test_print_tiles_multiple.cpp
     dprint/test_print_config_register.cpp
     watcher/test_assert.cpp
     watcher/test_link_training.cpp
