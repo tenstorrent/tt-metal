@@ -10,6 +10,24 @@ import ttnn
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
+def row_major_reshape(tensor: ttnn.Tensor, shape: ttnn.Shape) -> ttnn.Tensor:
+    """Reshape a tensor to row major layout.
+
+    Args:
+        tensor: Input tensor
+        shape: New shape
+
+    Returns:
+    """
+    tensor_is_tile = tensor.layout == ttnn.TILE_LAYOUT
+    if tensor_is_tile:
+        tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.reshape(tensor, shape)
+    if tensor_is_tile:
+        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+    return out
+
+
 def create_tt_model(
     mesh_device,
     max_batch_size,

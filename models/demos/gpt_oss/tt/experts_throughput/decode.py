@@ -17,6 +17,7 @@ The MoE forward pass flow is:
 from math import prod
 
 import ttnn
+from models.demos.gpt_oss.tt.common import row_major_reshape
 
 from .config import AllToAllCombineConfig, AllToAllDispatchConfig, ThroughputExpertConfig, ThroughputProgramConfig
 from .weights import ThroughputExpertWeights
@@ -124,7 +125,8 @@ def decode_forward(
     tokens_per_device = input_shape[0] * input_shape[2]  # B * S
 
     # Reshape hidden states: put all tokens on dim -2
-    hidden_states = ttnn.reshape(hidden_states, (1, 1, tokens_per_device, config.hidden_size))
+    # hidden_states = ttnn.reshape(hidden_states, (1, 1, tokens_per_device, config.hidden_size))
+    hidden_states = row_major_reshape(hidden_states, (1, 1, tokens_per_device, config.hidden_size))
 
     # typecast creates new tensors - safe to deallocate originals
     topk_expert_indices_orig = topk_expert_indices
@@ -132,11 +134,13 @@ def decode_forward(
     ttnn.deallocate(topk_expert_indices_orig)
 
     # Reshape indices: put all tokens on dim -2
-    topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens_per_device, config.num_experts_per_tok))
+    # topk_expert_indices = ttnn.reshape(topk_expert_indices, (1, 1, tokens_per_device, config.num_experts_per_tok))
+    topk_expert_indices = row_major_reshape(topk_expert_indices, (1, 1, tokens_per_device, config.num_experts_per_tok))
     topk_expert_indices_u32 = topk_expert_indices
     topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
     ttnn.deallocate(topk_expert_indices_u32)
-    topk_expert_weights = ttnn.reshape(topk_expert_weights, (1, 1, tokens_per_device, config.num_experts_per_tok))
+    # topk_expert_weights = ttnn.reshape(topk_expert_weights, (1, 1, tokens_per_device, config.num_experts_per_tok))
+    topk_expert_weights = row_major_reshape(topk_expert_weights, (1, 1, tokens_per_device, config.num_experts_per_tok))
 
     num_dispatch_devices = (
         mesh_device.shape[dispatch_config.cluster_axis]
@@ -154,12 +158,14 @@ def decode_forward(
     hidden_rm = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(hidden_states)
     # Shape is already [1, 1, tokens_per_device, H], just ensure it's correct
-    hidden_rm = ttnn.reshape(hidden_rm, shape=(1, 1, tokens_per_device, config.hidden_size))
+    # hidden_rm = ttnn.reshape(hidden_rm, shape=(1, 1, tokens_per_device, config.hidden_size))
+    hidden_rm = row_major_reshape(hidden_rm, (1, 1, tokens_per_device, config.hidden_size))
 
     # Expert indices: [1, 1, tokens_per_device, K]
     topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(topk_expert_indices)
-    topk_indices_rm = ttnn.reshape(topk_indices_rm, shape=(1, 1, tokens_per_device, config.num_experts_per_tok))
+    # topk_indices_rm = ttnn.reshape(topk_indices_rm, shape=(1, 1, tokens_per_device, config.num_experts_per_tok))
+    topk_indices_rm = row_major_reshape(topk_indices_rm, (1, 1, tokens_per_device, config.num_experts_per_tok))
 
     # ==========================================================================
     # STEP 2: ALL_TO_ALL_DISPATCH - Route tokens to expert devices
@@ -197,7 +203,8 @@ def decode_forward(
     # -> repeat to [1, dispatch_rows, tokens_per_device, num_experts]
     # -> reshape to [1, 1, total_tokens, num_experts] to match dispatch_metadata batch/seq dims
     remap_mask = ttnn.repeat(remap_topk_mask, ttnn.Shape((1, 1, tokens_per_device, 1)))
-    remap_mask = ttnn.reshape(remap_mask, (1, 1, total_tokens, config.num_experts))
+    # remap_mask = ttnn.reshape(remap_mask, (1, 1, total_tokens, config.num_experts))
+    remap_mask = row_major_reshape(remap_mask, (1, 1, total_tokens, config.num_experts))
     # moe_expert_token_remap returns:
     #   - mapping: [D, tokens, 1, experts_per_device] - local expert activation weights
     #   - sparsity: [D, 1, tokens/reduction_size, experts_per_device] - which blocks are active
@@ -222,7 +229,8 @@ def decode_forward(
     # The sparse matmul operates on blocks of tokens, with sparsity indicating
     # which (token_block, expert) pairs need computation.
     # Note: reshape returns view, but to_layout creates new tensor
-    post_dispatch = ttnn.reshape(dispatch_output, shape=(1, 1, total_tokens, config.hidden_size))
+    # post_dispatch = ttnn.reshape(dispatch_output, shape=(1, 1, total_tokens, config.hidden_size))
+    post_dispatch = row_major_reshape(dispatch_output, (1, 1, total_tokens, config.hidden_size))
     post_dispatch_rm = post_dispatch
     post_dispatch = ttnn.to_layout(post_dispatch, ttnn.TILE_LAYOUT)
     ttnn.deallocate(post_dispatch_rm)  # This deallocates dispatch_output via the view
@@ -230,7 +238,8 @@ def decode_forward(
     # Reshape to sparse block format for matmul
     # Note: reshape returns a view - don't deallocate post_dispatch separately
     num_sparse_blocks = total_tokens // config.sparsity_block_size
-    expert_input = ttnn.reshape(
+    # expert_input = ttnn.reshape(
+    expert_input = row_major_reshape(
         post_dispatch,
         shape=(1, num_sparse_blocks, config.sparsity_block_size, config.hidden_size),
     )
@@ -328,7 +337,8 @@ def decode_forward(
     ttnn.deallocate(expert_output_sparse)
     # Note: reshape returns a view, to_layout creates new tensor
     # With tokens on dim -2: [experts_per_device, 1, total_tokens, H]
-    expert_output = ttnn.reshape(
+    # expert_output = ttnn.reshape(
+    expert_output = row_major_reshape(
         expert_output,
         shape=(config.num_experts_per_device, 1, total_tokens, config.hidden_size),
     )

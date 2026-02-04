@@ -11,6 +11,7 @@ transformation followed by top-k selection to assign tokens to experts.
 """
 
 import ttnn
+from models.demos.gpt_oss.tt.common import row_major_reshape
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 
@@ -146,7 +147,8 @@ class TopKRouter:
         # )
         mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-        hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
+        # hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
+        hidden_states = row_major_reshape(hidden_states, (-1, self.hidden_dim))
         router_logits = ttnn.linear(
             hidden_states,
             self.weight,

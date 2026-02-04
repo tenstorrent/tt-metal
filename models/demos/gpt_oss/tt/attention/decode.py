@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.demos.gpt_oss.tt.common import row_major_reshape
 
 from .config import AttentionConfig, ProgramConfig
 from .operations import apply_allreduce, apply_rope
@@ -160,7 +161,8 @@ def decode_forward(
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
-    tt_out = ttnn.reshape(
+    # tt_out = ttnn.reshape(
+    tt_out = row_major_reshape(
         tt_out,
         (1, 1, batch_size, hidden_size),
         (1, 1, 32, hidden_size),
