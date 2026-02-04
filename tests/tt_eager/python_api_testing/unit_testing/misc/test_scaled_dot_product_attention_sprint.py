@@ -28,8 +28,233 @@ def fa_rand(*shape):
     return normal_1 + normal_2 * bernoulli
 
 
+def create_sdpa_configs(device_or_mesh, q_chunk_size, k_chunk_size, is_mesh_device=False):
+    """Create program and compute kernel configs for SDPA operations"""
+    if is_mesh_device:
+        # For mesh device, use reduced grid size for CCL
+        compute_grid_size = device_or_mesh.compute_with_storage_grid_size()
+        sdpa_compute_grid = (compute_grid_size.x, compute_grid_size.y - 1)
+    else:
+        # For single device, use full grid
+        sdpa_compute_grid = device_or_mesh.compute_with_storage_grid_size()
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_compute_grid,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    return program_config, compute_kernel_config
+
+
+def generate_sdpa_tensors(b, nh, nkv, sq, d, dtype):
+    """Generate Q, K, V tensors for SDPA testing"""
+    Q = fa_rand(b, nh, sq, d)
+    K = fa_rand(b, nkv, sq, d)  # nkv instead of nh for GQA support
+    V = fa_rand(b, nkv, sq, d)
+    return Q, K, V
+
+
+def expand_kv_for_gqa(K, V, nh, nkv, b, sq, d):
+    """Expand K, V tensors for Group Query Attention if needed"""
+    if nkv > 1 and nkv != nh:
+        assert nh % nkv == 0
+        K_expanded = K.reshape(b, nkv, 1, sq, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sq, d)
+        V_expanded = V.reshape(b, nkv, 1, sq, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sq, d)
+        return K_expanded, V_expanded
+    return K, V
+
+
+def validate_sdpa_output(gt, tt_back, pcc_threshold, rmse_threshold=None):
+    """Validate SDPA output against ground truth"""
+    out_pass, out_pcc = comp_pcc(gt, tt_back, pcc_threshold)
+    logger.debug(f"SDPA vs PyTorch: {out_pcc}")
+
+    rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
+    logger.debug(f"rmse: {rmse}")
+
+    if rmse_threshold is not None:
+        assert rmse < rmse_threshold, f"RMSE {rmse} >= {rmse_threshold}"
+
+    assert out_pass, f"PCC {out_pcc} < {pcc_threshold}"
+
+
 def is_watcher_enabled():
     return os.environ.get("TT_METAL_WATCHER") is not None
+
+
+def run_ring_attention_noncausal(
+    mesh_device,
+    b,
+    nh,
+    nkv,
+    sq,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    sk=None,
+    pcc_threshold=0.9998,
+    rmse_threshold=None,
+    do_check=True,
+):
+    """Run Ring Attention on MeshDevice (1D Ring)"""
+    # Common setup
+    torch.manual_seed(1234)
+    if sk is None:
+        sk = sq
+
+    # Get number of devices for 1D Ring
+    num_devices = mesh_device.get_num_devices()
+    ring_size = num_devices
+
+    # Multiply sequence length by number of devices for Ring Attention
+    total_seq_len = sq * num_devices
+    logger.info(f"Ring Attention: {num_devices} devices, base seq_len={sq}, total seq_len={total_seq_len}")
+
+    # Setup 1D Ring submesh
+    current_shape = (mesh_device.shape[0], mesh_device.shape[1])  # (height, width)
+    if current_shape == (ring_size, 1):
+        submesh = mesh_device.create_submesh(ttnn.MeshShape(ring_size, 1))
+        cluster_axis = 0  # Ring along height
+    elif current_shape == (1, ring_size):
+        submesh = mesh_device.create_submesh(ttnn.MeshShape(1, ring_size))
+        cluster_axis = 1  # Ring along width
+    else:
+        mesh_device.reshape(ttnn.MeshShape(1, ring_size))
+        submesh = mesh_device.create_submesh(ttnn.MeshShape(1, ring_size))
+        cluster_axis = 1  # Ring along width
+
+    # Setup sub-device management for CCL operations
+    compute_grid_size = submesh.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
+
+    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
+    submesh.load_sub_device_manager(sub_device_manager)
+    submesh.set_sub_device_stall_group(sub_device_stall_group)
+
+    # Create global semaphore handles for CCL
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(submesh, ccl_sub_device_crs, 0) for _ in range(2)]
+    ccl_core_grid_offset = (0, compute_grid_size.y - 1)
+
+    # Create shared configs
+    program_config, compute_kernel_config = create_sdpa_configs(
+        submesh, q_chunk_size, k_chunk_size, is_mesh_device=True
+    )
+
+    # Generate input tensors with total sequence length
+    Q, K, V = generate_sdpa_tensors(b, nh, nkv, total_seq_len, d, dtype)
+
+    # Create persistent output buffers for Ring Attention AllGather
+    persistent_output_buffers = [
+        ttnn.from_torch(
+            torch.zeros((b, nh, total_seq_len, d)),
+            device=submesh,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=[None, None]),
+        )
+        for _ in range(2)  # K, V buffers
+    ]
+
+    # Shard tensors across ring devices (shard on sequence dimension)
+    shard_dims = [None, None]
+    shard_dims[cluster_axis] = 2  # Shard sequence dimension along cluster axis
+
+    tt_Q = ttnn.from_torch(
+        Q,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        pad_value=0.0,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=shard_dims),
+    )
+    tt_K = ttnn.from_torch(
+        K,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        pad_value=0.0,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=shard_dims),
+    )
+    tt_V = ttnn.from_torch(
+        V,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        pad_value=0.0,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=shard_dims),
+    )
+
+    # Use Ring Joint SDPA but with empty joint tensors (just regular Ring Attention)
+    empty_joint_shape = (b, nh, 0, d)  # Empty joint tensors
+    tt_joint_Q = ttnn.from_torch(torch.zeros(empty_joint_shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=submesh)
+    tt_joint_K = ttnn.from_torch(torch.zeros(empty_joint_shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=submesh)
+    tt_joint_V = ttnn.from_torch(torch.zeros(empty_joint_shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=submesh)
+
+    # Run Ring Attention
+    tt_out, tt_joint_out, tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        tt_joint_Q,
+        tt_joint_K,
+        tt_joint_V,
+        persistent_output_buffer_k=persistent_output_buffers[0],
+        persistent_output_buffer_v=persistent_output_buffers[1],
+        joint_strategy="rear",
+        logical_n=total_seq_len,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        dim=2,
+        multi_device_global_semaphore=ccl_semaphore_handles,
+        num_links=1,
+        cluster_axis=cluster_axis,
+        mesh_device=submesh,
+        topology=ttnn.Topology.Linear,
+        subdevice_id=worker_sub_device_id,
+        ccl_core_grid_offset=ccl_core_grid_offset,
+    )
+
+    if not do_check:
+        # Clean up and return
+        submesh.reset_sub_device_stall_group()
+        submesh.clear_loaded_sub_device_manager()
+        return
+
+    # Convert back to torch for validation
+    output_dims = [None, None]
+    output_dims[cluster_axis] = 2  # Concatenate along sequence dimension
+
+    tt_back = ttnn.to_torch(
+        tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=output_dims)
+    )
+
+    # Slice out any tile-padding
+    tt_back = tt_back[:, :, :total_seq_len, :]
+
+    # Expand K, V for GQA and validate
+    K_expanded, V_expanded = expand_kv_for_gqa(K, V, nh, nkv, b, total_seq_len, d)
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K_expanded, V_expanded, is_causal=False)
+    validate_sdpa_output(gt, tt_back, pcc_threshold, rmse_threshold)
+
+    # Clean up sub-device management
+    submesh.reset_sub_device_stall_group()
+    submesh.clear_loaded_sub_device_manager()
 
 
 def run_sdpa_noncausal(
@@ -47,32 +272,26 @@ def run_sdpa_noncausal(
     rmse_threshold=None,
     do_check=True,
 ):
-    # Ensure same seed, reproducibility
+    """Run standard SDPA on single device"""
+    # Common setup
     torch.manual_seed(1234)
     if sk is None:
         sk = sq
 
-    program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
+    # Create shared configs
+    program_config, compute_kernel_config = create_sdpa_configs(
+        device, q_chunk_size, k_chunk_size, is_mesh_device=False
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
+    # Generate input tensors
+    Q, K, V = generate_sdpa_tensors(b, nh, nkv, sq, d, dtype)
 
-    Q = fa_rand(b, nh, sq, d)
-    K = fa_rand(b, nkv, sk, d)
-    V = fa_rand(b, nkv, sk, d)
-
+    # Convert to TT tensors
     tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+
+    # Run standard SDPA
     tt_back = ttnn.transformer.scaled_dot_product_attention(
         tt_Q,
         tt_K,
@@ -85,25 +304,14 @@ def run_sdpa_noncausal(
     if not do_check:
         return
 
+    # Convert back to torch and slice out padding
     tt_back = ttnn.to_torch(tt_back)
-    # Slice out any tile-padding
     tt_back = tt_back[:, :, :sq, :]
 
-    if nkv > 1 and nkv != nh:
-        assert nh % nkv == 0
-        K = K.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
-        V = V.reshape(b, nkv, 1, sk, d).repeat(1, 1, nh // nkv, 1, 1).reshape(b, nh, sk, d)
-
-    gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False)
-
-    out_pass, out_pcc = comp_pcc(gt, tt_back, pcc_threshold)
-    logger.debug(f"python vs pytorch: {out_pcc}")
-    rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
-    logger.debug(f"rmse: {rmse}")
-    if rmse_threshold is not None:
-        assert rmse < rmse_threshold
-
-    assert out_pass
+    # Expand K, V for GQA and validate
+    K_expanded, V_expanded = expand_kv_for_gqa(K, V, nh, nkv, b, sq, d)
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K_expanded, V_expanded, is_causal=False)
+    validate_sdpa_output(gt, tt_back, pcc_threshold, rmse_threshold)
 
 
 def run_sdpa_determinism(
@@ -123,29 +331,20 @@ def run_sdpa_determinism(
     Run SDPA multiple times with the same inputs and return all outputs.
     Efficient: creates inputs once and reuses them for all iterations.
     """
+    # Common setup
     torch.manual_seed(1234)
     if sk is None:
         sk = sq
 
-    program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
+    # Create shared configs
+    program_config, compute_kernel_config = create_sdpa_configs(
+        device, q_chunk_size, k_chunk_size, is_mesh_device=False
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
+    # Generate input tensors once
+    Q, K, V = generate_sdpa_tensors(b, nh, nkv, sq, d, dtype)
 
-    # Create inputs once
-    Q = fa_rand(b, nh, sq, d)
-    K = fa_rand(b, nkv, sk, d)
-    V = fa_rand(b, nkv, sk, d)
-
+    # Convert to TT tensors
     tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
@@ -178,8 +377,43 @@ INPUT_IDS = [
     "wan_4xGLX_analog",
 ]
 
+# Ring Attention shapes - base seq_len (will be multiplied by num_devices in the test)
+RING_INPUT_SHAPES = [
+    # batch, num_heads, base_sequence_length (will be multiplied by device count), head_dim
+    [1, 10, 9472, 128],  # Total will be 9472 * num_devices
+    [1, 10, 2368, 128],  # Total will be 2368 * num_devices
+]
+RING_INPUT_IDS = [
+    "ring_wan_1xGLX_analog",
+    "ring_wan_4xGLX_analog",
+]
+
 Q_CHUNK_SIZES = [64, 128, 256, 512]
 K_CHUNK_SIZES = [128, 256, 512]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4), (1, 8)], indirect=True)  # 1D Ring with 4 or 8 devices
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", Q_CHUNK_SIZES, ids=[f"q{s}" for s in Q_CHUNK_SIZES])
+@pytest.mark.parametrize("k_chunk_size", K_CHUNK_SIZES, ids=[f"k{s}" for s in K_CHUNK_SIZES])
+@pytest.mark.parametrize(
+    "b, nh, s, d",
+    RING_INPUT_SHAPES,
+    ids=RING_INPUT_IDS,
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+)
+def test_ring_attention_sweep_perf_impl(mesh_device, b, nh, s, d, q_chunk_size, k_chunk_size, dtype):
+    """Ring Attention performance test on MeshDevice (1D Ring)
+
+    Note: The sequence length 's' represents the base sequence length.
+    The total distributed sequence length will be s * num_devices across all devices.
+
+    Works with both 4 and 8 device configurations (BH QB: 4 devices, other systems: 8 devices).
+    """
+    # nkv = nh for non-GQA case
+    run_ring_attention_noncausal(mesh_device, b, nh, nh, s, d, q_chunk_size, k_chunk_size, dtype, do_check=False)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
