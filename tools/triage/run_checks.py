@@ -202,8 +202,8 @@ class RunChecks:
         }
         # Pre-compute unique_id to device mapping for fast lookup
         self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
-        self._devices_to_skip: set[Device] = set()
-        self._cores_to_skip: set[tuple[OnChipCoordinate, str]] = set()
+        self._broken_devices: set[Device] = set()
+        self._broken_cores: set[tuple[OnChipCoordinate, str]] = set()
         self._skip_lock = threading.Lock()
 
     def get_device_by_unique_id(self, unique_id: int) -> Device | None:
@@ -239,16 +239,16 @@ class RunChecks:
                 for device in self.devices:
                     # Skipping broken devices
                     with self._skip_lock:
-                        if device in self._devices_to_skip:
+                        if device in self._broken_devices:
                             continue
                     try:
                         check_result = check(device)
-                    except TimeoutDeviceRegisterError as e:
+                    except TimeoutDeviceRegisterError:
                         with self._skip_lock:
-                            self._devices_to_skip.add(device)
+                            self._broken_devices.add(device)
                             if device.is_local:
                                 for remote_device in device.remote_devices:
-                                    self._devices_to_skip.add(remote_device)
+                                    self._broken_devices.add(remote_device)
                         continue
                     # Use the common result collection helper
                     self._collect_results(
@@ -304,8 +304,13 @@ class RunChecks:
         check: Callable[[OnChipCoordinate, CoreType], object],
         block_filter: list[str] | str | None = None,
         core_filter: list[str] | str | None = None,
+        skip_broken_cores: bool = True,
     ) -> list[PerCoreCheckResult] | None:
-        """Run a check function on each RISC core in each block location, collecting results."""
+        """Run a check function on each RISC core in each block location, collecting results.
+
+        When skip_broken_cores is False, RiscHaltError cores are not added to the skip list,
+        allowing other scripts to re-check them.
+        """
 
         # Filtering cores to check
         cores_to_check = (
@@ -329,15 +334,16 @@ class RunChecks:
                 if risc_name not in cores_to_check:
                     continue
 
-                # Skipping broken cores
-                with self._skip_lock:
-                    if (location, risc_name) in self._cores_to_skip:
-                        continue
+                # Skipping broken cores (optional, can be disabled per script)
+                if skip_broken_cores:
+                    with self._skip_lock:
+                        if (location, risc_name) in self._broken_cores:
+                            continue
                 try:
                     check_result = check(location, risc_name)
                 except RiscHaltError as e:
                     with self._skip_lock:
-                        self._cores_to_skip.add((location, risc_name))
+                        self._broken_cores.add((location, risc_name))
                     continue
 
                 # Use the common result collection helper
