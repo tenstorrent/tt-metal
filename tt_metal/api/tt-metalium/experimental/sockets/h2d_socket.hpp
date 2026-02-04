@@ -67,6 +67,14 @@ public:
         H2DMode h2d_mode);
 
     /**
+     * @brief Destroys the H2DSocket.
+     *
+     * Frees the pinned memory allocated for the socket.
+     * Also issues a barrier to wait for the device to acknowledge all data over the socket.
+     */
+    ~H2DSocket() noexcept;
+
+    /**
      * @brief Returns the currently configured page size.
      */
     uint32_t get_page_size() const { return page_size_; }
@@ -106,17 +114,11 @@ public:
      *
      * Waits until `bytes_acked` equals `bytes_sent`, indicating the device has
      * consumed all data in the FIFO.
-     */
-    void barrier();
-
-    /**
-     * @brief Returns the host-side buffer used for tracking device acknowledgements.
      *
-     * The device writes to this pinned memory location to signal data consumption.
+     * @param timeout_ms Optional timeout in milliseconds. If specified, the function will throw an exception if the
+     * barrier is not met within the timeout.
      */
-    std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> get_bytes_acked_buffer() const {
-        return bytes_acked_buffer_;
-    }
+    void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
 
 private:
     // Helper struct for pinned buffer NOC address info
@@ -128,7 +130,9 @@ private:
 
     // Initialization helpers
     PinnedBufferInfo init_bytes_acked_buffer(
-        const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinateRangeSet& device_range);
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoordinateRangeSet& device_range,
+        uint32_t pcie_alignment);
 
     PinnedBufferInfo init_host_data_buffer(
         const std::shared_ptr<MeshDevice>& mesh_device,
@@ -159,11 +163,9 @@ private:
     uint32_t fifo_curr_size_ = 0;
     uint32_t aligned_data_buf_start_ = 0;
     tt::umd::TlbWindow* receiver_core_tlb_ = nullptr;
-    std::unique_ptr<tt::tt_metal::experimental::PinnedMemory> bytes_acked_pinned_memory_ = nullptr;
-    std::unique_ptr<tt::tt_metal::experimental::PinnedMemory> data_pinned_memory_ = nullptr;
-    std::shared_ptr<tt::tt_metal::vector_aligned<uint32_t>> bytes_acked_buffer_ = nullptr;
-    std::shared_ptr<uint32_t[]> host_data_buffer_ = nullptr;
-    size_t host_data_buffer_size_ = 0;
+    std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
+    std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
+    uint32_t* bytes_acked_ptr_ = nullptr;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer = nullptr;
     H2DMode h2d_mode_ = H2DMode::HOST_PUSH;
 };

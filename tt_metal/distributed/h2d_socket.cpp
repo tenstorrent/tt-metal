@@ -15,18 +15,26 @@
 namespace tt::tt_metal::distributed {
 
 H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
-    const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinateRangeSet& device_range) {
-    bytes_acked_buffer_ = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(1, 0);
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoordinateRangeSet& device_range,
+    uint32_t pcie_alignment) {
+    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc): aligned_alloc required for dynamic alignment
+    void* aligned_ptr = std::aligned_alloc(pcie_alignment, sizeof(uint32_t));
+    TT_FATAL(aligned_ptr != nullptr, "Failed to allocate aligned memory for host data buffer.");
+    std::memset(aligned_ptr, 0, sizeof(uint32_t));
+    host_buffer_ = std::shared_ptr<uint32_t[]>(
+        static_cast<uint32_t*>(aligned_ptr), [](uint32_t* p) { std::free(p); });  // NOLINT(cppcoreguidelines-no-malloc)
     tt::tt_metal::HostBuffer bytes_acked_buffer_view(
-        tt::stl::Span<uint32_t>(bytes_acked_buffer_->data(), bytes_acked_buffer_->size()),
-        tt::tt_metal::MemoryPin(bytes_acked_buffer_));
-    bytes_acked_pinned_memory_ =
+        tt::stl::Span<uint32_t>(host_buffer_.get(), 1), tt::tt_metal::MemoryPin(host_buffer_));
+    pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, bytes_acked_buffer_view, true);
 
-    const auto& noc_addr =
-        bytes_acked_pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
+    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
     TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for bytes_acked pinned memory.");
-
+    TT_FATAL(
+        noc_addr.value().device_id == mesh_device->get_device(recv_core_.device_coord)->id(),
+        "Pinned Memory used for H2D sockets must be mapped to the same device as the receiver core. H2D Sockets cannot "
+        "communicate with remote devices");
     return PinnedBufferInfo{
         .pcie_xy_enc = noc_addr.value().pcie_xy_enc,
         .addr_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull),
@@ -37,21 +45,23 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
     uint32_t pcie_alignment) {
-    host_data_buffer_size_ = fifo_size_ / sizeof(uint32_t);
+    // Allocate 1 extra word at the end to store the bytes_acked value, which will be udpated by the
+    // receiver core.
+    uint32_t host_buffer_size_bytes = fifo_size_ + sizeof(uint32_t);
+    uint32_t host_buffer_size_words = host_buffer_size_bytes / sizeof(uint32_t);
     // NOLINTNEXTLINE(cppcoreguidelines-no-malloc): aligned_alloc required for dynamic alignment
-    void* aligned_ptr = std::aligned_alloc(pcie_alignment, fifo_size_);
+    void* aligned_ptr = std::aligned_alloc(pcie_alignment, host_buffer_size_bytes);
     TT_FATAL(aligned_ptr != nullptr, "Failed to allocate aligned memory for host data buffer.");
-    std::memset(aligned_ptr, 0, fifo_size_);
-    host_data_buffer_ = std::shared_ptr<uint32_t[]>(
+    std::memset(aligned_ptr, 0, host_buffer_size_bytes);
+    host_buffer_ = std::shared_ptr<uint32_t[]>(
         static_cast<uint32_t*>(aligned_ptr), [](uint32_t* p) { std::free(p); });  // NOLINT(cppcoreguidelines-no-malloc)
 
-    tt::tt_metal::HostBuffer host_data_buffer_view(
-        tt::stl::Span<uint32_t>(host_data_buffer_.get(), host_data_buffer_size_),
-        tt::tt_metal::MemoryPin(host_data_buffer_));
-    data_pinned_memory_ =
-        tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_data_buffer_view, true);
+    tt::tt_metal::HostBuffer host_buffer_view(
+        tt::stl::Span<uint32_t>(host_buffer_.get(), host_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
+    pinned_memory_ =
+        tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 
-    const auto& noc_addr = data_pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
+    const auto& noc_addr = pinned_memory_->get_noc_addr(mesh_device->get_device(recv_core_.device_coord)->id());
     TT_FATAL(noc_addr.has_value(), "Failed to get NOC address for data pinned memory.");
 
     return PinnedBufferInfo{
@@ -170,8 +180,7 @@ H2DSocket::H2DSocket(
     recv_core_(recv_core),
     buffer_type_(buffer_type),
     fifo_size_(fifo_size),
-    bytes_acked_pinned_memory_(nullptr),
-    data_pinned_memory_(nullptr),
+    pinned_memory_(nullptr),
     h2d_mode_(h2d_mode) {
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
@@ -180,14 +189,24 @@ H2DSocket::H2DSocket(
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIE-aligned.");
     TT_FATAL(buffer_type_ == BufferType::L1, "H2D sockets currently only support data buffers in SRAM.");
 
-    auto bytes_acked_info = init_bytes_acked_buffer(mesh_device, recv_device_range_set);
-
+    PinnedBufferInfo bytes_acked_info = {};
     PinnedBufferInfo data_info = {};
     if (h2d_mode_ == H2DMode::DEVICE_PULL) {
+        // Allocate host data buffer and bytes_acked buffer in the same pinned memory.
         data_info = init_host_data_buffer(mesh_device, recv_device_range_set, pcie_alignment);
+        bytes_acked_info = data_info;
+        // Bytes acked buffer is located after the data buffer in the same pinned memory.
+        auto bytes_acked_addr = (static_cast<uint64_t>(data_info.addr_hi) << 32 | data_info.addr_lo) + fifo_size_;
+        bytes_acked_info.addr_hi = static_cast<uint32_t>(bytes_acked_addr >> 32);
+        bytes_acked_info.addr_lo = static_cast<uint32_t>(bytes_acked_addr & 0xFFFFFFFFull);
+        bytes_acked_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
         TT_FATAL(
             bytes_acked_info.pcie_xy_enc == data_info.pcie_xy_enc,
             "Bytes_acked and data pinned memory must be mapped to the same PCIe core.");
+    } else {
+        // Dedicate a separate pinned memory for the bytes_acked buffer.
+        bytes_acked_info = init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment);
+        bytes_acked_ptr_ = host_buffer_.get();
     }
 
     init_config_buffer(mesh_device);
@@ -196,11 +215,20 @@ H2DSocket::H2DSocket(
     init_receiver_tlb(mesh_device);
 }
 
+H2DSocket::~H2DSocket() noexcept {
+    // Wait for 1000ms for the device to acknowledge all data over the socket.
+    // This may need to be tuned in future, depending on the application and
+    // the amount of data being sent.
+    // Realistically a hang should not be seen here since most user workloads
+    // synchronize with the device before the application exits and destructors are called.
+    barrier(1000);
+}
+
 void H2DSocket::reserve_bytes(uint32_t num_bytes) {
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
     while (bytes_free < num_bytes) {
         tt_driver_atomics::mfence();
-        volatile uint32_t bytes_acked_value = bytes_acked_buffer_->at(0);
+        volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
         bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
         bytes_acked_ = bytes_acked_value;
     }
@@ -239,11 +267,24 @@ void H2DSocket::set_page_size(uint32_t page_size) {
     fifo_curr_size_ = fifo_page_aligned_size;
 }
 
-void H2DSocket::barrier() {
-    volatile uint32_t bytes_acked_value = bytes_acked_buffer_->at(0);
+void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
+    volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+    auto start_time = std::chrono::high_resolution_clock::now();
     while (bytes_sent_ - bytes_acked_value != 0) {
         tt_driver_atomics::mfence();
-        bytes_acked_value = bytes_acked_buffer_->at(0);
+        bytes_acked_value = bytes_acked_ptr_[0];
+        if (timeout_ms.has_value()) {
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::high_resolution_clock::now() - start_time)
+                                  .count();
+            if (elapsed_ms > timeout_ms.value()) {
+                TT_THROW(
+                    "Timeout waiting for device to send acknowledgement over H2D socket. Bytes sent: {}, Bytes "
+                    "acknowledged: {}",
+                    bytes_sent_,
+                    bytes_acked_value);
+            }
+        }
     }
 }
 
@@ -258,7 +299,7 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
-        uint32_t* data_ptr = host_data_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
+        uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
     }
     this->push_bytes(num_bytes);
