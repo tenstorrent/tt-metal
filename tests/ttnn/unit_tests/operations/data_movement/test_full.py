@@ -76,6 +76,9 @@ def test_full_float(device, input_shape, fill_value, tt_dtype):
     assert torch.equal(torch_output, tt_output_cpu)
 
 
+# TODO (issue #16579): Add program cache test when ttnn.full is run on device
+
+
 @pytest.mark.parametrize("fill_value", [1])
 @pytest.mark.parametrize("tt_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("tensor_shape", [[2, 2, 256, 512]])
@@ -87,26 +90,39 @@ def test_full_float(device, input_shape, fill_value, tt_dtype):
     ],
 )
 @pytest.mark.parametrize(
-    "shard_core_grid",
+    "buffer_type,shard_core_grid",
     [
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-        ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
-                ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(7, 2)),
-            }
+        (ttnn.BufferType.L1, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})),
+        (
+            ttnn.BufferType.L1,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(7, 2)),
+                }
+            ),
         ),
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        (ttnn.BufferType.L1, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})),
+        (ttnn.BufferType.L1, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})),
+        (
+            ttnn.BufferType.DRAM,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+                }
+            ),
+        ),
     ],
 )
-def test_full_nd_sharded(device, tensor_shape, fill_value, tt_dtype, shard_orientation, shard_core_grid):
+def test_full_nd_sharded(device, tensor_shape, fill_value, tt_dtype, shard_orientation, shard_core_grid, buffer_type):
     torch_dtype = tt_dtype_to_torch_dtype[tt_dtype]
     torch_output = torch.full(tensor_shape, fill_value, dtype=torch_dtype)
+    import logging
 
     shard_dims = list(range(len(tensor_shape) - 2, len(tensor_shape)))  # shard last two dims
+    logging.info(f"shard_dims: {shard_dims}")
     tensor_spec = ttnn.TensorSpec(
-        shape=tensor_shape, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        shape=tensor_shape, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, buffer_type=buffer_type
     ).sharded_across_dims(shard_dims, shard_core_grid, shard_orientation)
 
     assert tensor_spec.memory_config.nd_shard_spec is not None
@@ -125,4 +141,66 @@ def test_full_nd_sharded(device, tensor_shape, fill_value, tt_dtype, shard_orien
     assert torch.equal(torch_output, tt_output_cpu)
 
 
-# TODO (issue #16579): Add program cache test when ttnn.full is run on device
+@pytest.mark.parametrize("fill_value", [1])
+@pytest.mark.parametrize("tt_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardOrientation.COL_MAJOR,
+    ],
+)
+@pytest.mark.parametrize(
+    "tensor_shape,shard_shape,buffer_type,shard_core_grid",
+    [
+        (
+            [2, 2, 256, 512],
+            [32, 32],
+            ttnn.BufferType.L1,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+        (
+            [8192, 512],
+            [32, 32],
+            ttnn.BufferType.DRAM,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
+        ),
+        (
+            [32, 32],
+            [512, 512],
+            ttnn.BufferType.L1,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+    ],
+)
+def test_full_nd_sharded_manual_sharding(
+    device,
+    tensor_shape,
+    shard_shape,
+    fill_value,
+    tt_dtype,
+    shard_orientation,
+    shard_core_grid,
+    buffer_type,
+):
+    torch_dtype = tt_dtype_to_torch_dtype[tt_dtype]
+    torch_output = torch.full(tensor_shape, fill_value, dtype=torch_dtype)
+
+    memory_config = ttnn.MemoryConfig(buffer_type, ttnn.NdShardSpec(shard_shape, shard_core_grid, shard_orientation))
+
+    tt_output = ttnn.full(
+        tensor_shape,
+        fill_value,
+        dtype=tt_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+
+    assert tt_output.memory_config().nd_shard_spec is not None
+    assert tt_output.memory_config().is_sharded()
+    assert ttnn.is_tensor_storage_on_device(tt_output)
+
+    tt_output_cpu = ttnn.to_torch(tt_output)
+
+    assert torch.equal(torch_output, tt_output_cpu)
