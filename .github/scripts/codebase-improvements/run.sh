@@ -253,29 +253,70 @@ implement_fix() {
     # Save current branch
     OLD_BRANCH=$(git branch --show-current)
 
+    # Stash any uncommitted changes (including info.json)
+    log_info "Stashing uncommitted changes..."
+    STASH_NAME="auto-fix-stash-$(date +%s)"
+    git stash push -u -m "$STASH_NAME" || {
+        log_warning "No changes to stash or stash failed"
+    }
+
     # Create branch off main
+    log_info "Checking out main branch..."
     git checkout main
+
+    log_info "Pulling latest changes from origin/main..."
     git pull origin main
+
+    log_info "Creating fix branch: $FIX_BRANCH"
     git checkout -b "$FIX_BRANCH"
 
     log_success "Created branch $FIX_BRANCH from main"
 
-    # Cherry-pick the test
-    log_info "Cherry-picking reproduction test..."
-    TEST_COMMIT=$(git log "$OLD_BRANCH" --oneline --all-match --grep "Add reproduction test" | head -1 | awk '{print $1}')
+    # Copy the test to the fix branch
+    if [ -n "$EXISTING_TEST_PATH" ]; then
+        # Using existing test - just copy the files
+        log_info "Copying existing test to fix branch..."
 
-    if [ -z "$TEST_COMMIT" ]; then
-        log_error "Could not find test commit on $OLD_BRANCH"
-        exit 1
+        # Get the test directory structure
+        TEST_DIR=$(dirname "$EXISTING_TEST_PATH")
+        PARENT_DIR=$(dirname "$TEST_DIR")
+
+        # Copy the entire test directory structure
+        if [ -d "$PARENT_DIR" ]; then
+            mkdir -p "$PARENT_DIR"
+            cp -r "$SCRIPT_DIR/$PARENT_DIR"/* "$PARENT_DIR/" 2>/dev/null || true
+
+            git add "$PARENT_DIR"
+            git commit -m "Add reproduction test for testing
+
+Test location: $EXISTING_TEST_PATH
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>" || {
+                log_warning "No changes to commit (test may already exist)"
+            }
+            log_success "Test copied to fix branch"
+        else
+            log_error "Test directory not found: $PARENT_DIR"
+            exit 1
+        fi
+    else
+        # Cherry-pick the test from the reproduction branch
+        log_info "Cherry-picking reproduction test..."
+        TEST_COMMIT=$(git log "$OLD_BRANCH" --oneline --all-match --grep "Add reproduction test" | head -1 | awk '{print $1}')
+
+        if [ -z "$TEST_COMMIT" ]; then
+            log_error "Could not find test commit on $OLD_BRANCH"
+            exit 1
+        fi
+
+        git cherry-pick "$TEST_COMMIT" || {
+            log_error "Failed to cherry-pick test commit"
+            git cherry-pick --abort
+            exit 1
+        }
+
+        log_success "Test copied to fix branch"
     fi
-
-    git cherry-pick "$TEST_COMMIT" || {
-        log_error "Failed to cherry-pick test commit"
-        git cherry-pick --abort
-        exit 1
-    }
-
-    log_success "Test copied to fix branch"
 
     # Create task file for implementation
     cat > "$SCRIPT_DIR/.impl_task.md" <<EOF
@@ -336,7 +377,18 @@ EOF
     fi
 
     # Return to original branch
+    log_info "Returning to original branch: $OLD_BRANCH"
     git checkout "$OLD_BRANCH"
+
+    # Restore stashed changes if they exist
+    log_info "Restoring stashed changes..."
+    if git stash list | grep -q "$STASH_NAME"; then
+        git stash pop || {
+            log_warning "Could not restore stash automatically. Use 'git stash list' to find your changes."
+        }
+    else
+        log_info "No stash to restore"
+    fi
 
     export FIX_BRANCH
 }
@@ -475,6 +527,19 @@ main() {
 
     # Phase 0: Parse configuration
     parse_info_json
+
+    # Check if we're on main branch (common in CI)
+    CURRENT_BRANCH=$(git branch --show-current)
+    if [ "$CURRENT_BRANCH" = "main" ]; then
+        log_warning "Running on main branch (common in CI)"
+        log_info "Will create a temporary branch for reproduction test"
+
+        # Create a temporary branch for the reproduction phase
+        TEMP_BRANCH="auto-fix-temp-$(date +%s)"
+        git checkout -b "$TEMP_BRANCH"
+        export CURRENT_BRANCH="$TEMP_BRANCH"
+        log_info "Created temporary branch: $TEMP_BRANCH"
+    fi
 
     # Check if using existing test (skip reproduction)
     if [ -n "$EXISTING_TEST_PATH" ]; then
