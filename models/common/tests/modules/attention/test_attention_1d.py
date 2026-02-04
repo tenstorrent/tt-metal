@@ -34,6 +34,7 @@ from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
 from models.common.modules.tt_ccl import TT_CCL
 from models.common.tensor_utils import get_rot_transformation_mat
+from models.common.tests.utils import stable_model_seed
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 
 # =============================================================================
@@ -501,17 +502,21 @@ def _init_weight_scaled_normal(param: torch.Tensor, name: str) -> torch.Tensor:
 
     For 2D weights (linear layers): Uses normal with std = 0.02
     For 1D weights (biases, norms): Uses appropriate initialization
+
+    NOTE: Uses torch.randn() instead of torch.randn_like() to ensure
+    the global RNG state (set via torch.manual_seed) is respected.
+    torch.randn_like() may not use the global RNG consistently.
     """
     if param.dim() >= 2:
         # Linear layer weights: scaled normal initialization
         # std=0.02 matches typical pretrained transformer weights
-        return torch.randn_like(param) * 0.02
+        return torch.randn(param.shape, dtype=param.dtype, device=param.device) * 0.02
     elif "norm" in name.lower() or "weight" in name.lower():
         # Norm weights (e.g., q_norm.weight, k_norm.weight): use ones
         return torch.ones_like(param)
     else:
         # Biases: use small random values
-        return torch.randn_like(param) * 0.01
+        return torch.randn(param.shape, dtype=param.dtype, device=param.device) * 0.01
 
 
 def _get_or_init_attn_weights(model_name: str, reference_attn) -> None:
@@ -522,15 +527,15 @@ def _get_or_init_attn_weights(model_name: str, reference_attn) -> None:
     activation magnitudes through the attention computation.
 
     NOTE: Uses a deterministic seed per model to ensure reproducible weights
-    regardless of test execution order. This prevents flaky tests where PCC
-    varies based on which tests ran first.
+    regardless of test execution order or Python process hash randomization.
+    This prevents flaky tests where PCC varies based on which tests ran first.
     """
     if model_name not in _CACHED_ATTN_WEIGHTS:
         logger.info(f"\033[33m[cache miss]\033[0m Initializing weights for {model_name}")
         _CACHED_ATTN_WEIGHTS[model_name] = {}
         # Use deterministic seed based on model name to ensure reproducible weights
         # regardless of test execution order
-        seed = hash(model_name) % (2**32)
+        seed = stable_model_seed(model_name)
         rng_state = torch.get_rng_state()
         torch.manual_seed(seed)
         with torch.no_grad():
@@ -851,17 +856,15 @@ def _list_test_cases() -> list[pytest.param]:
     "mesh_shape,seq_len,mode,act_dtype,wqkv_dtype,hf_model_name,pcc",
     _list_test_cases(),
 )
-# todo)) maybe we can combine the following two parameters
 @pytest.mark.parametrize(
-    "paged_attention,chunked_prefill",
+    "paged_attention,chunk_size",
     [
-        (False, False),  # non-paged, non-chunked
-        (True, False),  # paged, non-chunked
-        (True, True),  # paged + chunked (chunked requires paged)
+        (False, None),  # standard (non-paged, non-chunked)
+        (True, None),  # paged only (non-chunked)
+        (True, 4096),  # paged + chunked
     ],
-    ids=["non-paged", "paged", "paged-chunked"],
+    ids=["standard", "paged", "paged-chunked"],
 )
-@pytest.mark.parametrize("chunk_size", [4096], ids=["chunk4k"])
 def test_attention_1d_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
     mesh_shape,
@@ -872,7 +875,6 @@ def test_attention_1d_vs_reference(
     hf_model_name,
     pcc,
     paged_attention,
-    chunked_prefill,
     chunk_size,
 ):
     """
@@ -896,6 +898,7 @@ def test_attention_1d_vs_reference(
         pytest.skip(f"Test requires {mesh_shape} mesh, got {device_shape}")
 
     # Chunked prefill only applies to prefill mode
+    chunked_prefill = chunk_size is not None
     if chunked_prefill and mode != "prefill":
         pytest.skip("Chunked prefill only applies to prefill mode")
 
@@ -969,10 +972,11 @@ def test_attention_1d_vs_reference(
     )
 
     # Create LazyWeights with caching enabled
-    # Cache keys include model name to ensure uniqueness across different models
+    # Cache keys include model name + seed to avoid mismatched cached weights across runs
     ttnn.SetDefaultDevice(ttnn_mesh_device)
     cache_dir = Path(os.getenv("TT_CACHE_PATH", "model_cache/attention_1d"))
-    model_cache_prefix = hf_model_name.replace("/", "_").replace("-", "_")
+    model_seed = stable_model_seed(hf_model_name)
+    model_cache_prefix = f"{hf_model_name.replace('/', '_').replace('-', '_')}_seed{model_seed:08x}"
 
     # QKV weight: shard on dim=-1
     lazy_wqkv = LazyWeight(
