@@ -6,6 +6,7 @@ import os
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
@@ -182,6 +183,8 @@ def test_decoder_inference(
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
         rot_mats_local = None if rope_setup_local is None else rope_setup_local.get_rot_mats(current_pos)
+
+        signpost("start")
         # Run TT model
         tt_out = tt_model(
             decode_input,
@@ -191,6 +194,8 @@ def test_decoder_inference(
             mode="decode",
             page_table=page_table_tt,
         )
+        signpost("stop")
+
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
