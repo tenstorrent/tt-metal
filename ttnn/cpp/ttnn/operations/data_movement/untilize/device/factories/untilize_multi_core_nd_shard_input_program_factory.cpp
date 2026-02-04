@@ -70,7 +70,7 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     uint32_t num_blocks_per_shard_plane =
         input_shard_height /
         tile_height;  // Note: a "shard plane" here refers to a 2D plane the size of the last 2 dimensions of the shard.
-                      // For eaxmple, a shard of shape [b, c, h, w] has b * c planes each of shapr [h, w].
+                      // For example, a shard of shape [b, c, h, w] has b * c planes each of shape [h, w].
     const auto& shard_shape = nd_shard_spec.shard_shape;
     size_t num_planes_per_shard = 1;
     if (shard_shape.rank() > 2) {
