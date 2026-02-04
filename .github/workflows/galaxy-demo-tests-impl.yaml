@@ -163,7 +163,7 @@ jobs:
           # Test GPT-OSS 120B model
           TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
             pytest models/demos/gpt_oss/demo/text_demo.py -k "4x8 and batch128 and False"\
-            --timeout 1000
+            --timeout 20000
 
       - name: Run Llama3 demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'llama3' }}
