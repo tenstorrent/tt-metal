@@ -721,17 +721,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         slice_Ht = M_tiles / slice_B;
         input_tensor_Ht = slice_Ht;
     }
-    log_debug(
-        tt::LogOp,
-        "Input Tensor Shape: {}, Output Tensor Shape = {}, normalized_dim = {}, input_tensor_B,C = {}, {}, \
-        input_tensor_Ht = {}, input_tensor_Wt = {}",
-        input_tensor_shape,
-        output_tensor.padded_shape(),
-        normalized_dim,
-        input_tensor_B,
-        input_tensor_C,
-        input_tensor_Ht,
-        input_tensor_Wt);
 
     if (normalized_dim == 0) {
         slice_B /= ring_size;
@@ -746,9 +735,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             false, "reduce_scatter_minimal_async ring implementation only supports scattering on dim 0, 1, 2, or 3");
     }
 
-    log_debug(
-        tt::LogOp, "slice_B = {}, slice_C = {}, slice_Ht = {}, slice_WT = {}", slice_B, slice_C, slice_Ht, slice_Wt);
-
     TT_FATAL(
         !(fuse_op && normalized_dim == 0),
         "reduce_scatter_minimal_async ring implementation can't be fused with matmul when scattering on dim 0");
@@ -760,16 +746,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
     const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
-    log_debug(
-        tt::LogOp,
-        "input_tensor_num_pages = {}, output_tensor_num_pages = {}, input_batch_num_pages = {}, output_batch_num_pages "
-        "= {}, input_channel_num_pages = {}, output_channel_num_pages = {},",
-        input_tensor_num_pages,
-        output_tensor_num_pages,
-        input_batch_num_pages,
-        output_batch_num_pages,
-        input_channel_num_pages,
-        output_channel_num_pages);
     // scatter-write currently only supports 2 distinct noc addresses
     uint32_t max_target_noc_addresses_per_packet = 2;
 
@@ -813,6 +789,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
     if (input_is_sharded) {
         reader_compute_defines["INPUT_IS_SHARDED"] = "1";
+    }
+    if (fuse_op && fused_op_signaler->is_minimal_matmul) {
+        reader_compute_defines["FUSED_MINIMAL_MATMUL"] = "1";
     }
     if (intermediate_is_sharded) {
         reader_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
@@ -1033,26 +1012,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         input_tensor_Wt,
                         normalized_dim);
 
-                log_debug(
-                    tt::LogOp,
-                    "get_tile_offsets args: worker_id: {}, num_workers: {}, output_batch_num_pages: {}, "
-                    "output_channel_num_pages: {}, slice_Wt: {}, input_tensor_Wt: {}, normalized_dim: {}",
-                    worker_id,
-                    num_workers,
-                    output_batch_num_pages,
-                    output_channel_num_pages,
-                    slice_Wt,
-                    input_tensor_Wt,
-                    normalized_dim);
-                log_debug(
-                    tt::LogOp,
-                    "Core: {}, start_tiles_read: {}, start_tiles_to_read: {}, "
-                    "start_pages_read_in_row: {}, start_row_offset: {}",
-                    core,
-                    start_tiles_read,
-                    start_tiles_to_read,
-                    start_pages_read_in_row,
-                    start_row_offset);
                 // for dim 0 scatters we process each slice in batches
                 // for all other dims we process each slice in channels
                 uint32_t tiles_to_process_per_slice =
@@ -1401,13 +1360,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                                          : operations::experimental::ccl::detail::map_nd_to_4d(input_tensor_shape, dim);
     const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
-    log_debug(
-        tt::LogOp,
-        "Input Tensor Shape: {}, normalized_dim = {}, input_tensor_B,C = {}, {}",
-        input_tensor_shape,
-        normalized_dim,
-        input_tensor_B,
-        input_tensor_C);
+
     uint32_t slice_B = input_tensor_B;
     uint32_t slice_C = input_tensor_C;
     uint32_t slice_Ht = input_tensor_Ht;

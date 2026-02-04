@@ -188,8 +188,6 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
             /*global_cb=*/std::nullopt},
         {});
 
-    log_info(tt::LogOp, "Initial Matmul params = {}", matmul_struct);
-
     // Not using persistent buffers not currently supported by the RSMM API
     bool using_persistent_buffers = true;
 

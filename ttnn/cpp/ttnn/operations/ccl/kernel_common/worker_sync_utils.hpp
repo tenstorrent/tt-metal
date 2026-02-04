@@ -130,20 +130,6 @@ struct OpSignaler {
             is_master(master_worker_noc_x, master_worker_noc_y, curr_worker_noc_x, curr_worker_noc_y);
 
         this->initialized = true;
-        // DPRINT << "OpSignaler initialized. curr_worker_is_master = " << this->curr_worker_is_master << ENDL();
-        // DPRINT << "  num_workers_to_sync = " << this->num_workers_to_sync << "curr_worker_index = " <<
-        // curr_worker_index
-        //        << " worker_sync_sem_addr = " << this->worker_sync_sem_addr << "master_noc_x = " <<
-        //        master_worker_noc_x
-        //        << " master_noc_y = " << master_worker_noc_y << " curr_worker_noc_x = " << curr_worker_noc_x
-        //        << " curr_worker_noc_y = " << curr_worker_noc_y << ENDL();
-        // DPRINT << "  num_fused_op_cores_to_signal = " << this->num_fused_op_cores_to_signal
-        //        << " signal_op_sem_addr = " << this->signal_op_sem_addr << " mcast_signal_op_cores = "
-        //        << (int)this->mcast_signal_op_cores << ENDL();
-        // for(uint32_t i = 0; i < this->num_fused_op_cores_to_signal; i++) {
-        //     DPRINT <<"core to signal, index = " << i << " : " << this->signal_op_cores_noc_coords[i*2] << "," <<
-        //     this->signal_op_cores_noc_coords[i*2+1] << ENDL();
-        // }
     }
 
     void synchronize_workers_and_signal_op(uint32_t fused_op_core_idx) {
