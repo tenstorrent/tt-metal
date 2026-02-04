@@ -993,19 +993,19 @@ def register_python_operation(
             # Wrap function before attaching documentation to avoid errors
             if doc is not None:
 
-                def doc_decorator(func):
-                    @wraps(func)
+                def doc_decorator(function):
+                    @wraps(function)
                     def wrapper(*args, **kwargs):
-                        return func(*args, **kwargs)
+                        return function(*args, **kwargs)
 
                     return wrapper
 
-                wrapped_function = doc_decorator(function)
-                wrapped_function.__doc__ = doc
+                function = doc_decorator(function)
+                function.__doc__ = doc
 
         operation = operation_class(
             python_fully_qualified_name=python_fully_qualified_name,
-            function=wrapped_function,
+            function=function,
             golden_function=golden_function,
             preprocess_golden_function_inputs=preprocess_golden_function_inputs,
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,
