@@ -38,18 +38,19 @@ namespace ckernel {
  * | kt_dim         | The inner dim of the input matrices in tiles                  | uint32_t | 1 to 128 per MOP call, chunked if larger        | False    |
  */
 // clang-format on
+template <bool fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void custom_mm_block_init(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, const uint32_t transpose = 0, uint32_t kt_dim = 1) {
-    UNPACK((llk_unpack_AB_custom_mm_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    UNPACK((llk_unpack_AB_custom_mm_hw_configure_disaggregated<fp32_dest_acc_en>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_custom_mm_init(in0_cb_id, in1_cb_id, transpose, kt_dim)));
 
     MATH((llk_math_custom_mm_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, kt_dim)));
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
+    MATH((llk_math_hw_configure<fp32_dest_acc_en>(in0_cb_id, in1_cb_id)));
 
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
+    PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<false, false>(out_cb_id)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+    PACK((llk_pack_dest_init<fp32_dest_acc_en, false>()));
 }
 
 // clang-format off

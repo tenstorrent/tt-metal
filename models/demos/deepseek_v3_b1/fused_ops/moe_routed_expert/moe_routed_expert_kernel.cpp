@@ -402,7 +402,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("gate_proj_subblock_w"),
         get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
         get_named_compile_time_arg_val("gate_proj_tile_r_dim"),
-        get_named_compile_time_arg_val("gate_proj_fuse_silu")>;
+        get_named_compile_time_arg_val("gate_proj_fuse_silu"),
+        get_named_compile_time_arg_val("gate_proj_fp32_dest_acc_en")>;
 
     // ------------------------------------------------------------------------
     // up_proj Matmul (compute) - writes to intermediate CB (before mul)
@@ -416,7 +417,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("up_proj_subblock_w"),
         get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
         get_named_compile_time_arg_val("up_proj_tile_r_dim"),
-        get_named_compile_time_arg_val("up_proj_fuse_silu")>;
+        get_named_compile_time_arg_val("up_proj_fuse_silu"),
+        get_named_compile_time_arg_val("up_proj_fp32_dest_acc_en")>;
 
     // ------------------------------------------------------------------------
     // Mul (compute): up_proj_mm_out (as 16x16) * gate_proj_out (as 16x16) -> final output
@@ -452,7 +454,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("down_proj_subblock_w"),
         get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
         get_named_compile_time_arg_val("down_proj_tile_r_dim"),
-        get_named_compile_time_arg_val("down_proj_fuse_silu")>;
+        get_named_compile_time_arg_val("down_proj_fuse_silu"),
+        get_named_compile_time_arg_val("down_proj_fp32_dest_acc_en")>;
 #endif
 
     // ============================================================================
