@@ -145,6 +145,12 @@ def decode_forward(
     )
     total_tokens = tokens_per_device * num_dispatch_devices  # Global tokens across dispatch axis
 
+    # Debug: bypass all_to_all_dispatch only.
+    disable_dispatch = True
+    if disable_dispatch:
+        num_dispatch_devices = 1
+        total_tokens = tokens_per_device
+
     # ==========================================================================
     # STEP 1: PREPARE INPUTS FOR ALL_TO_ALL_DISPATCH
     # ==========================================================================
@@ -174,14 +180,18 @@ def decode_forward(
     # With output_concat_dim=2, outputs have seq_len scaled:
     #   - dispatch_output: [D, 1, total_tokens, H] - tokens scattered to expert devices
     #   - dispatch_metadata: [D, 1, total_tokens, K] - expert indices (for combine routing)
-    dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
-        hidden_rm,
-        topk_indices_rm,
-        expert_mapping_tensors,
-        **dispatch_config.as_dict(),
-    )
-    ttnn.deallocate(hidden_rm)
-    ttnn.deallocate(topk_indices_rm)
+    if disable_dispatch:
+        dispatch_output = hidden_rm
+        dispatch_metadata = topk_indices_rm
+    else:
+        dispatch_output, dispatch_metadata = ttnn.all_to_all_dispatch(
+            hidden_rm,
+            topk_indices_rm,
+            expert_mapping_tensors,
+            **dispatch_config.as_dict(),
+        )
+        ttnn.deallocate(hidden_rm)
+        ttnn.deallocate(topk_indices_rm)
 
     # ==========================================================================
     # STEP 3: MOE_EXPERT_TOKEN_REMAP - Create sparsity pattern
@@ -195,7 +205,14 @@ def decode_forward(
     # -> repeat to [1, dispatch_rows, tokens_per_device, num_experts]
     # -> reshape to [1, 1, total_tokens, num_experts] to match dispatch_metadata batch/seq dims
     remap_mask = ttnn.repeat(remap_topk_mask, ttnn.Shape((1, 1, tokens_per_device, 1)))
-    remap_mask = ttnn.reshape(remap_mask, (1, 1, total_tokens, config.num_experts))
+    if disable_dispatch:
+        remap_mask = ttnn.slice(
+            remap_mask,
+            [0, 0, 0, 0],
+            [1, 1, tokens_per_device, config.num_experts],
+        )
+    else:
+        remap_mask = ttnn.reshape(remap_mask, (1, 1, total_tokens, config.num_experts))
     # moe_expert_token_remap returns:
     #   - mapping: [D, tokens, 1, experts_per_device] - local expert activation weights
     #   - sparsity: [D, 1, tokens/reduction_size, experts_per_device] - which blocks are active
@@ -370,6 +387,13 @@ def decode_forward(
     topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 2, 0))
     topk_weights_reshaped = ttnn.to_layout(topk_weights_rm, ttnn.TILE_LAYOUT)
     ttnn.deallocate(topk_weights_rm)
+
+    if topk_weights_reshaped.shape[2] != post_combine.shape[2]:
+        topk_weights_reshaped = ttnn.slice(
+            topk_weights_reshaped,
+            [0, 0, 0, 0],
+            [topk_weights_reshaped.shape[0], 1, post_combine.shape[2], 1],
+        )
 
     # Weighted sum: sum_k(expert_output_k * routing_weight_k)
     weighted_output = ttnn.mul(post_combine, topk_weights_reshaped, memory_config=memory_config)
