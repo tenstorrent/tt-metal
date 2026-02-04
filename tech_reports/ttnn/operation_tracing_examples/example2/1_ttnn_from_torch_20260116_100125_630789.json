@@ -1,5 +1,5 @@
 {
-  "operation_number": 1,
+  "operation_id": 1,
   "operation_name": "ttnn.from_torch",
   "timestamp": "20260116_100125_630789",
   "args": [

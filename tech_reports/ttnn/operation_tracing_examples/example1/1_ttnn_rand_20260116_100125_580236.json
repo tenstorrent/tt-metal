@@ -1,5 +1,5 @@
 {
-  "operation_number": 1,
+  "operation_id": 1,
   "operation_name": "ttnn.rand",
   "timestamp": "20260116_100125_580236",
   "args": [],

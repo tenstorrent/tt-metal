@@ -1,5 +1,5 @@
 {
-  "operation_number": 2,
+  "operation_id": 2,
   "operation_name": "ttnn.to_device",
   "timestamp": "20260116_100125_631376",
   "args": [

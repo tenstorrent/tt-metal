@@ -13,7 +13,7 @@ import pathlib
 import sys
 from datetime import datetime
 from functools import wraps
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 from loguru import logger
 import ttnn
 
@@ -36,6 +36,37 @@ _SERIALIZE_TENSOR_VALUES = False
 
 # Command-line flag constant
 _TRACE_PARAMS_FLAG = "--trace-params"
+
+
+def enable_tracing(enable: bool = True) -> None:
+    """Enable or disable operation parameter tracing.
+
+    When enabled, all ttnn operations will have their parameters and return values
+    serialized to JSON files for debugging and analysis.
+
+    Args:
+        enable: If True, tracing is enabled. If False, tracing is disabled.
+
+    Example:
+        import ttnn.operation_tracer
+
+        # Enable tracing
+        ttnn.operation_tracer.enable_tracing(True)
+
+        # Disable tracing
+        ttnn.operation_tracer.enable_tracing(False)
+    """
+    global _ENABLE_TRACE
+    _ENABLE_TRACE = enable
+
+
+def is_tracing_enabled() -> bool:
+    """Check if operation parameter tracing is currently enabled.
+
+    Returns:
+        True if tracing is enabled, False otherwise.
+    """
+    return _is_tracing_enabled()
 
 
 def enable_tensor_value_serialization(enable: bool = True) -> None:
@@ -69,6 +100,103 @@ def _is_tracing_enabled() -> bool:
         _TRACE_PARAMS_IN_ARGV = _TRACE_PARAMS_FLAG in sys.argv
 
     return _ENABLE_TRACE or _TRACE_PARAMS_IN_ARGV
+
+
+def _serialize_ttnn_tensor(value: Any, serialize_values: bool) -> Dict[str, Any]:
+    """Serialize a ttnn.Tensor to a dictionary.
+
+    Args:
+        value: The ttnn.Tensor to serialize
+        serialize_values: If True, include tensor values. If False, only metadata.
+
+    Returns:
+        Dictionary containing tensor metadata and optionally values.
+    """
+    import torch
+
+    tensor_data: Dict[str, Any] = {
+        "type": "ttnn.Tensor",
+        "original_shape": list(value.shape) if hasattr(value, "shape") else None,
+        "original_dtype": str(value.dtype) if hasattr(value, "dtype") else None,
+    }
+
+    if serialize_values:
+        # Move tensor to CPU and convert to numpy for human-readable format
+        cpu_tensor = value
+        if hasattr(ttnn, "from_device"):
+            cpu_tensor = ttnn.from_device(value)
+        elif hasattr(value, "cpu"):
+            cpu_tensor = value.cpu()
+
+        # Convert to torch then to numpy for readable values
+        torch_tensor = ttnn.to_torch(cpu_tensor)
+        # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
+        if torch_tensor.dtype == torch.bfloat16:
+            torch_tensor = torch_tensor.float()
+        numpy_array = torch_tensor.numpy()
+
+        tensor_data["shape"] = list(numpy_array.shape)
+        tensor_data["dtype"] = str(numpy_array.dtype)
+        tensor_data["values"] = numpy_array.tolist()
+    else:
+        # Only include shape and dtype metadata without values
+        if hasattr(value, "shape"):
+            tensor_data["shape"] = list(value.shape)
+        if hasattr(value, "dtype"):
+            tensor_data["dtype"] = str(value.dtype)
+
+    # Get layout if available (check if it's a property or method)
+    if hasattr(value, "layout"):
+        layout_attr = getattr(value, "layout", None)
+        if callable(layout_attr):
+            layout_value = layout_attr()
+        else:
+            layout_value = layout_attr
+        if layout_value is not None:
+            tensor_data["layout"] = str(layout_value)
+
+    # Get storage type if available (it's a method)
+    if hasattr(value, "storage_type"):
+        storage_type_value = value.storage_type()
+        if storage_type_value is not None:
+            tensor_data["storage_type"] = str(storage_type_value)
+
+    return tensor_data
+
+
+def _serialize_torch_tensor(value: Any, serialize_values: bool) -> Dict[str, Any]:
+    """Serialize a torch.Tensor to a dictionary.
+
+    Args:
+        value: The torch.Tensor to serialize
+        serialize_values: If True, include tensor values. If False, only metadata.
+
+    Returns:
+        Dictionary containing tensor metadata and optionally values.
+    """
+    import torch
+
+    tensor_data: Dict[str, Any] = {
+        "type": "torch.Tensor",
+    }
+
+    if serialize_values:
+        # Convert torch tensor to numpy for serialization
+        # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
+        if value.dtype == torch.bfloat16:
+            numpy_array = value.detach().cpu().float().numpy()
+        else:
+            numpy_array = value.detach().cpu().numpy()
+
+        tensor_data["shape"] = list(numpy_array.shape)
+        tensor_data["dtype"] = str(numpy_array.dtype)
+        tensor_data["values"] = numpy_array.tolist()
+    else:
+        # Only include shape and dtype metadata without values
+        tensor_data["shape"] = list(value.shape)
+        tensor_data["dtype"] = str(value.dtype)
+
+    return tensor_data
 
 
 def serialize_operation_parameters(
@@ -118,88 +246,14 @@ def serialize_operation_parameters(
             import torch
 
             if isinstance(value, ttnn.Tensor):
-                # Store tensor data directly in metadata (not as separate file)
-                tensor_data: Dict[str, Any] = {
-                    "type": "ttnn.Tensor",
-                    "original_shape": list(value.shape) if hasattr(value, "shape") else None,
-                    "original_dtype": str(value.dtype) if hasattr(value, "dtype") else None,
-                }
-
-                # Only serialize tensor values if requested
-                if serialize_tensor_values:
-                    # Move tensor to CPU and convert to numpy for human-readable format
-                    cpu_tensor = value
-                    if hasattr(ttnn, "from_device"):
-                        cpu_tensor = ttnn.from_device(value)
-                    elif hasattr(value, "cpu"):
-                        cpu_tensor = value.cpu()
-
-                    # Convert to torch then to numpy for readable values
-                    torch_tensor = ttnn.to_torch(cpu_tensor)
-                    # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
-                    if torch_tensor.dtype == torch.bfloat16:
-                        torch_tensor = torch_tensor.float()
-                    numpy_array = torch_tensor.numpy()
-
-                    # Convert numpy array to nested lists for JSON serialization
-                    values = numpy_array.tolist()
-
-                    tensor_data["shape"] = list(numpy_array.shape)
-                    tensor_data["dtype"] = str(numpy_array.dtype)
-                    tensor_data["values"] = values
-                else:
-                    # Only include shape and dtype metadata without values
-                    if hasattr(value, "shape"):
-                        tensor_data["shape"] = list(value.shape)
-                    if hasattr(value, "dtype"):
-                        tensor_data["dtype"] = str(value.dtype)
-
-                # Get layout if available (check if it's a property or method)
-                if hasattr(value, "layout"):
-                    layout_attr = getattr(value, "layout", None)
-                    if callable(layout_attr):
-                        layout_value = layout_attr()
-                    else:
-                        layout_value = layout_attr
-                    if layout_value is not None:
-                        tensor_data["layout"] = str(layout_value)
-
-                # Get storage type if available (it's a method)
-                if hasattr(value, "storage_type"):
-                    storage_type_value = value.storage_type()
-                    if storage_type_value is not None:
-                        tensor_data["storage_type"] = str(storage_type_value)
-
                 tensor_counter += 1
-                return tensor_data
+                return _serialize_ttnn_tensor(value, serialize_tensor_values)
 
-            # Handle torch.Tensor objects (e.g., passed to from_torch)
             if isinstance(value, torch.Tensor):
-                tensor_data: Dict[str, Any] = {
-                    "type": "torch.Tensor",
-                }
-
-                # Only serialize tensor values if requested
-                if serialize_tensor_values:
-                    # Convert torch tensor to numpy for serialization
-                    # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
-                    if value.dtype == torch.bfloat16:
-                        numpy_array = value.detach().cpu().float().numpy()
-                    else:
-                        numpy_array = value.detach().cpu().numpy()
-
-                    tensor_data["shape"] = list(numpy_array.shape)
-                    tensor_data["dtype"] = str(numpy_array.dtype)
-                    tensor_data["values"] = numpy_array.tolist()
-                else:
-                    # Only include shape and dtype metadata without values
-                    tensor_data["shape"] = list(value.shape)
-                    tensor_data["dtype"] = str(value.dtype)
-
                 tensor_counter += 1
-                return tensor_data
+                return _serialize_torch_tensor(value, serialize_tensor_values)
 
-            elif isinstance(value, (int, float, bool, str, type(None))):
+            if isinstance(value, (int, float, bool, str, type(None))):
                 # Simple types that can be JSON serialized
                 return value
 
@@ -232,7 +286,7 @@ def serialize_operation_parameters(
 
         # Create complete operation data JSON
         operation_data = {
-            "operation_number": _OPERATION_COUNTER,
+            "operation_id": _OPERATION_COUNTER,
             "operation_name": operation_name,
             "timestamp": timestamp,
             "args": serialized_args,
@@ -267,8 +321,9 @@ def wrap_function_for_tracing(original_function: Any, operation_name: str) -> An
     Returns:
         A wrapped function that checks _ENABLE_TRACE at call time
     """
-    # Check if function is already wrapped or is an Operation instance to avoid recursion
-    if hasattr(original_function, "__wrapped__") or hasattr(original_function, "decorated_function"):
+    # Check if function is an Operation instance to avoid recursion
+    # (Don't check __wrapped__ as that's set by functools.wraps and is too common)
+    if hasattr(original_function, "decorated_function"):
         return original_function
 
     # Store original function in closure to avoid recursion
@@ -280,7 +335,7 @@ def wrap_function_for_tracing(original_function: Any, operation_name: str) -> An
         # Call the original function first (use closure variable)
         return_value = _original_func(*function_args, **function_kwargs)
 
-        # Check if tracing is enabled (uses cached sys.argv check)
+        # Check if tracing is enabled (uses helper with cached sys.argv check)
         if _is_tracing_enabled():
             # Determine log directory - use config if available, otherwise default
             log_dir = None
