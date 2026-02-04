@@ -858,7 +858,7 @@ def test_all_to_all_dispatch_trace(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("batches_per_device", [32])
+@pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
@@ -909,8 +909,8 @@ def test_decode_perf(
         num_iters,
         warmup_iters,
         trace_mode,
-        n8m_links=num_links,
-        scheme="worst_congestion",
+        num_links=num_links,
+        scheme="worst_perf",
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
@@ -952,7 +952,7 @@ def test_decode_perf(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_prefill_perf(
     mesh_device,
-    worst_perfmode,
+    trace_mode,
     mesh_shape,
     cluster_axis,
     batches_per_device,
