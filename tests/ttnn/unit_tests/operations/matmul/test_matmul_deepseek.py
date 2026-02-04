@@ -514,7 +514,6 @@ def test_matmul_batched_dram_sharded(device, test_case):
     # Shapes with padded dimensions: [1, B_padded, M_padded, K_padded] x [1, B_padded, K_padded, N_padded] = [1, B_padded, M_padded, N_padded]
     in0_shape_padded = [1, batch_padded, m_padded, k_padded]
     in1_shape_padded = [1, batch_padded, k_padded, n_padded]
-    # out_shape_padded = [1, batch_padded, m_padded, n_padded]
 
     # Create random input data at original size
     in0_orig = torch.randn([1, batch, m, k], dtype=torch.bfloat16)
