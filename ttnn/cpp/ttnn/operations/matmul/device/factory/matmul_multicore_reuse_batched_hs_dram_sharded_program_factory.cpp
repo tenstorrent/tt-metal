@@ -144,6 +144,37 @@ create_program_batch_sharded(
         num_workers,
         num_workers);
 
+    // Verify that storage cores match worker cores in the same order.
+    // The factory maps worker[i] -> input_storage[i] -> output_storage[i].
+    // If the orderings don't match, data gets misrouted to the wrong cores/batches
+    for (uint32_t i = 0; i < num_workers; ++i) {
+        TT_FATAL(
+            input_storage_cores_ordered[i] == all_worker_cores_ordered[i],
+            "Input storage core ordering mismatch at index {}! "
+            "Storage core ({}, {}) != Worker core ({}, {}). "
+            "The L1 shard grid must use the same core ordering as "
+            "device.get_optimal_dram_bank_to_logical_worker_assignment(). "
+            "Using e.g. a simple rectangular CoreRange will cause data misrouting.",
+            i,
+            input_storage_cores_ordered[i].x,
+            input_storage_cores_ordered[i].y,
+            all_worker_cores_ordered[i].x,
+            all_worker_cores_ordered[i].y);
+
+        TT_FATAL(
+            output_storage_cores_ordered[i] == all_worker_cores_ordered[i],
+            "Output storage core ordering mismatch at index {}! "
+            "Storage core ({}, {}) != Worker core ({}, {}). "
+            "The L1 shard grid must use the same core ordering as "
+            "device.get_optimal_dram_bank_to_logical_worker_assignment(). "
+            "Using e.g. a simple rectangular CoreRange will cause data misrouting.",
+            i,
+            output_storage_cores_ordered[i].x,
+            output_storage_cores_ordered[i].y,
+            all_worker_cores_ordered[i].x,
+            all_worker_cores_ordered[i].y);
+    }
+
     // Build NOC coordinate vectors for input and output storage cores
     std::vector<uint32_t> input_storage_noc_x, input_storage_noc_y;
     std::vector<uint32_t> output_storage_noc_x, output_storage_noc_y;
