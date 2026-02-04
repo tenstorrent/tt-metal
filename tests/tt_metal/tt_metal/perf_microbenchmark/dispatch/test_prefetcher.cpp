@@ -1341,13 +1341,20 @@ public:
 
 // Combined fixture for CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H:
 // Inherits multi-chip setup from PrefetchRelayLinearHTestFixture
-// and packed command building from PrefetcherLinearPackedReadTestFixture
-class PrefetcherLinearPackedHTestFixture : public PrefetchRelayLinearHTestFixture,
-                                           public PrefetcherLinearPackedReadTestFixture {
+class PrefetcherLinearPackedHTestFixture : public PrefetchRelayLinearHTestFixture {
 protected:
-    void SetUp() override {
-        // Call the base setup to initialize multi-chip environment
-        PrefetchRelayLinearHTestFixture::SetUp();
+    // Helper method to build sub-commands (same as PrefetcherLinearPackedReadTestFixture)
+    std::vector<CQPrefetchRelayLinearPackedSubCmd> build_sub_cmds(
+        const std::vector<uint64_t>& lengths, const std::vector<uint64_t>& addresses) {
+        std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds;
+        sub_cmds.reserve(lengths.size());
+        for (uint32_t i = 0; i < lengths.size(); i++) {
+            CQPrefetchRelayLinearPackedSubCmd sub_cmd{};
+            sub_cmd.addr = addresses[i];
+            sub_cmd.length = lengths[i];
+            sub_cmds.push_back(sub_cmd);
+        }
+        return sub_cmds;
     }
 
 public:
