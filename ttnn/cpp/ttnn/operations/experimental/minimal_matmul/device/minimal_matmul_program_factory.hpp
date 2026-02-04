@@ -77,4 +77,13 @@ void override_runtime_arguments_common(
     uint32_t in3_addr,
     const std::vector<uint32_t>& output_addrs);
 
+void override_runtime_arguments_common(
+    tt::tt_metal::Program& program,
+    const MinimalMatmulProgramFactory::shared_variables_t& override_variables,
+    uint32_t in0_addr,
+    uint32_t in1_addr,
+    uint32_t in2_addr,
+    uint32_t in3_addr,
+    const std::vector<uint32_t>& output_addrs);
+
 }  // namespace ttnn::experimental::prim

@@ -766,6 +766,18 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
 
 // Common helper for override_runtime_arguments - works with both single and multiple output tensors
 void override_runtime_arguments_common(
+    MinimalMatmulProgramFactory::cached_program_t& cached_program,
+    uint32_t in0_addr,
+    uint32_t in1_addr,
+    uint32_t in2_addr,
+    uint32_t in3_addr,
+    const std::vector<uint32_t>& output_addrs) {
+    auto& program = cached_program.program;
+    auto& override_variables = cached_program.shared_variables;
+    override_runtime_arguments_common(
+        program, override_variables, in0_addr, in1_addr, in2_addr, in3_addr, output_addrs);
+}
+void override_runtime_arguments_common(
     tt::tt_metal::Program& program,
     const MinimalMatmulProgramFactory::shared_variables_t& override_variables,
     uint32_t in0_addr,
