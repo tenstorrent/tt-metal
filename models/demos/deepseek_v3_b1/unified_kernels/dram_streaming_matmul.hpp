@@ -94,7 +94,8 @@ struct DRAMStreamingMatmul {
         uint32_t subblock_w_,
         uint32_t num_subblocks_k_,
         uint32_t tile_r_dim_,
-        uint32_t fuse_silu_>
+        uint32_t fuse_silu_,
+        uint32_t fp32_dest_acc_en_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -105,6 +106,7 @@ struct DRAMStreamingMatmul {
         static constexpr uint32_t num_subblocks_k = num_subblocks_k_;
         static constexpr uint32_t tile_r_dim = tile_r_dim_;
         static constexpr bool fuse_silu = fuse_silu_ == 1;
+        static constexpr bool fp32_dest_acc_en = fp32_dest_acc_en_ == 1;
     };
 
     // ========================================================================
@@ -228,7 +230,6 @@ struct DRAMStreamingMatmul {
             // ================================================================
             // TRISC: Matmul compute with optional fused SiLU
             // ================================================================
-            constexpr uint32_t transpose = false;
             constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_w;
             constexpr uint32_t num_tiles_k = CTArgs::subblock_k * CTArgs::num_subblocks_k;
 
@@ -236,7 +237,9 @@ struct DRAMStreamingMatmul {
                 PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
             }
 
-            custom_mm_block_init(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out, transpose, CTArgs::subblock_k);
+            // template params: transpose=false, split_acc=true, dense_packing=false, fp32_dest_acc_en
+            custom_mm_block_init<false, true, false, CTArgs::fp32_dest_acc_en>(
+                CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
 
             for (uint32_t sb_n = 0; sb_n < num_subblocks_n; sb_n++) {
@@ -255,7 +258,6 @@ struct DRAMStreamingMatmul {
                                 sb_k * CTArgs::subblock_k,
                                 0,
                                 0,
-                                transpose,
                                 CTArgs::subblock_k);
                             cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                         }
@@ -266,7 +268,6 @@ struct DRAMStreamingMatmul {
                             (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,
                             0,
                             0,
-                            transpose,
                             CTArgs::subblock_k);
                         cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
 
@@ -305,7 +306,6 @@ struct DRAMStreamingMatmul {
                                 sb_k * CTArgs::subblock_k,
                                 0,
                                 w,
-                                transpose,
                                 CTArgs::subblock_k);
                             cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                         }
@@ -316,7 +316,6 @@ struct DRAMStreamingMatmul {
                             (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,
                             0,
                             w,
-                            transpose,
                             CTArgs::subblock_k);
                         cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                     }

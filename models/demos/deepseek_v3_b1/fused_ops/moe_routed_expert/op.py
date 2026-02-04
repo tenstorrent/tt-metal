@@ -149,8 +149,8 @@ def setup_dram_matmul(
     core_ranges,
     cb_in1_index,
     cb_out_index,
-    fp32_dest_acc_en=False,
-    num_subblocks_k=4,
+    fp32_dest_acc_en,
+    num_subblocks_k,
 ):
     """
     Set up parameters and CB descriptors for a DRAM streaming matmul operation.
@@ -163,7 +163,7 @@ def setup_dram_matmul(
         cb_in1_index: CB index for weights working buffer
         cb_out_index: CB index for output
         fp32_dest_acc_en: Whether FP32 dest accumulation is enabled
-        num_subblocks_k: Number of K subblocks (default 4)
+        num_subblocks_k: Number of K subblocks
 
     Returns:
         Dictionary with all computed parameters and CB descriptors
@@ -679,8 +679,6 @@ class MoeRoutedExpert:
         Returns:
             Tuple of (gate_output_scores_tensor, gate_output_indices_tensor, down_proj_output_tensor)
         """
-        # Hardcoded parameters
-        fp32_dest_acc_en = False  # Gate transpose doesn't support fp32
         # Get tensor properties
         input_shape = input_tensor.shape
         data_format = input_tensor.dtype
@@ -842,7 +840,8 @@ class MoeRoutedExpert:
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=gate_proj_cb_in1,
             cb_out_index=gate_proj_cb_out,
-            fp32_dest_acc_en=fp32_dest_acc_en,
+            fp32_dest_acc_en=True,
+            num_subblocks_k=4,
         )
         gate_proj_cb_in1_descriptor = gate_proj_params["cb_in1_descriptor"]
         gate_proj_cb_out_descriptor = gate_proj_params["cb_out_descriptor"]
@@ -855,7 +854,8 @@ class MoeRoutedExpert:
             core_ranges=gate_proj_core_ranges,  # Same cores as gate_proj
             cb_in1_index=up_proj_cb_in1,
             cb_out_index=up_proj_cb_mm_out,  # Write to intermediate CB
-            fp32_dest_acc_en=fp32_dest_acc_en,
+            fp32_dest_acc_en=True,
+            num_subblocks_k=4,
         )
         up_proj_cb_in1_descriptor = up_proj_params["cb_in1_descriptor"]
         up_proj_cb_mm_out_descriptor = up_proj_params["cb_out_descriptor"]
@@ -930,7 +930,8 @@ class MoeRoutedExpert:
             core_ranges=gate_proj_core_ranges,  # Same cores as gate_proj/up_proj
             cb_in1_index=down_proj_cb_in1,
             cb_out_index=down_proj_cb_out,
-            fp32_dest_acc_en=fp32_dest_acc_en,
+            fp32_dest_acc_en=True,  # Use FP32 accumulation for down_proj
+            num_subblocks_k=2,
         )
         down_proj_cb_in1_descriptor = down_proj_params["cb_in1_descriptor"]
         down_proj_cb_out_descriptor = down_proj_params["cb_out_descriptor"]
@@ -1109,6 +1110,7 @@ class MoeRoutedExpert:
             ("gate_proj_num_subblocks_k", gate_proj_params["num_subblocks_k"]),
             ("gate_proj_tile_r_dim", gate_proj_params["tile_r_dim"]),
             ("gate_proj_fuse_silu", 1),  # Always use SiLU for expert computation
+            ("gate_proj_fp32_dest_acc_en", 1),  # Use FP32 accumulation for gate_proj
             # up_proj matmul compute args (compute cores) - writes to intermediate CB
             ("up_proj_cb_in0", gate_mm_params["in0_cb"]),  # Reuses mcasted input (same as gate_proj)
             ("up_proj_cb_in1", up_proj_cb_in1),
@@ -1118,6 +1120,7 @@ class MoeRoutedExpert:
             ("up_proj_num_subblocks_k", up_proj_params["num_subblocks_k"]),
             ("up_proj_tile_r_dim", up_proj_params["tile_r_dim"]),
             ("up_proj_fuse_silu", 0),  # No SiLU for up_proj
+            ("up_proj_fp32_dest_acc_en", 1),  # Use FP32 accumulation for up_proj
             ("up_proj_cb_mm_out", up_proj_cb_mm_out),  # Intermediate output for up_proj (before mul)
             # Mul compute args (up_proj * gate_proj -> fused output)
             ("mul_cb_in0", mul_cb_in0),  # up_proj output aliased as 16x16
@@ -1135,6 +1138,7 @@ class MoeRoutedExpert:
             ("down_proj_num_subblocks_k", down_proj_params["num_subblocks_k"]),
             ("down_proj_tile_r_dim", down_proj_params["tile_r_dim"]),
             ("down_proj_fuse_silu", 0),  # No SiLU for down_proj
+            ("down_proj_fp32_dest_acc_en", 1),  # Use FP32 accumulation for down_proj
             # Testing flag: use hardcoded expert index 0 instead of gate output
             ("use_hardcoded_expert_index", 1 if use_hardcoded_expert_index else 0),
         ]
