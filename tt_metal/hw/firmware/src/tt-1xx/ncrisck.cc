@@ -33,7 +33,6 @@ uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 uint32_t noc_posted_writes_num_issued[NUM_NOCS];
-uint32_t noc_posted_atomics_num_issued[NUM_NOCS];
 
 #if defined(ARCH_WORMHOLE)
 extern "C" uint32_t kernel_launch(uint32_t offset) {
