@@ -14,6 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.micro_ops.gather.op import GatherSingleCore
 
 # =============================================================================
@@ -40,7 +41,7 @@ def create_input_tensor(device, torch_input, gather_grid, shard_shape, tile):
     )
 
 
-def create_output_tensor(device, output_shape, gather_core, tile):
+def create_output_tensor(device, output_shape, gather_core, tile, dtype=ttnn.bfloat16):
     """Create a sharded output tensor on the gather core."""
     output_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(gather_core, gather_core)}),
@@ -52,7 +53,7 @@ def create_output_tensor(device, output_shape, gather_core, tile):
     torch_output = torch.zeros(output_shape, dtype=torch.bfloat16)
     return ttnn.from_torch(
         torch_output,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=output_mem_config,
@@ -60,7 +61,7 @@ def create_output_tensor(device, output_shape, gather_core, tile):
     )
 
 
-def create_scattered_input_tensor(device, torch_input, sender_cores, shard_shape, tile):
+def create_scattered_input_tensor(device, torch_input, sender_cores, shard_shape, tile, dtype=ttnn.bfloat16):
     """Create a sharded input tensor on scattered (non-rectangular) cores."""
     core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in sender_cores])
     input_shard_spec = ttnn.ShardSpec(
@@ -72,7 +73,7 @@ def create_scattered_input_tensor(device, torch_input, sender_cores, shard_shape
 
     return ttnn.from_torch(
         torch_input,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=input_mem_config,
@@ -346,7 +347,8 @@ def get_gate_up_core_assignment():
     return a_cores, b_cores
 
 
-def test_gather_gate_up_parallel_pattern(device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_gather_gate_up_parallel_pattern(device, dtype):
     """
     Test two parallel gathers from the Gate/Up A/B split pattern.
 
@@ -358,6 +360,9 @@ def test_gather_gate_up_parallel_pattern(device):
 
     This test verifies that the per-core compile args correctly handle
     the complex scattered pattern where A and B cores are interleaved.
+
+    The dtype parametrization validates tile-based size calculation for BFP formats
+    (bfloat8_b, bfloat4_b) which have exponent headers.
     """
     device_grid_x = device.compute_with_storage_grid_size().x
     device_grid_y = device.compute_with_storage_grid_size().y
@@ -371,7 +376,7 @@ def test_gather_gate_up_parallel_pattern(device):
     m_core = ttnn.CoreCoord(12, 9)  # Mcast/Reduce core
 
     logger.info("=" * 70)
-    logger.info("Test: Gate/Up Parallel Gather (A/B Split Pattern)")
+    logger.info(f"Test: Gate/Up Parallel Gather (A/B Split Pattern) with dtype={dtype}")
     logger.info("=" * 70)
     logger.info(f"A (Gate) cores: {len(a_cores)}")
     logger.info(f"B (Up) cores: {len(b_cores)}")
@@ -415,17 +420,22 @@ def test_gather_gate_up_parallel_pattern(device):
     # ========================================================================
     # Create sharded tensors on A and B cores
     # ========================================================================
-    ttnn_a_input = create_scattered_input_tensor(device, torch_a_input, a_cores, a_shard_shape, tile)
-    ttnn_b_input = create_scattered_input_tensor(device, torch_b_input, b_cores, b_shard_shape, tile)
+    ttnn_a_input = create_scattered_input_tensor(device, torch_a_input, a_cores, a_shard_shape, tile, dtype)
+    ttnn_b_input = create_scattered_input_tensor(device, torch_b_input, b_cores, b_shard_shape, tile, dtype)
 
-    logger.info(f"Created Gate input sharded across {len(a_cores)} A cores")
-    logger.info(f"Created Up input sharded across {len(b_cores)} B cores")
+    # For BFP formats, get the expected values after quantization (round-trip through dtype)
+    if dtype != ttnn.bfloat16:
+        torch_a_expected = ttnn.to_torch(ttnn_a_input)
+        torch_b_expected = ttnn.to_torch(ttnn_b_input)
+
+    logger.info(f"Created Gate input sharded across {len(a_cores)} A cores with dtype={dtype}")
+    logger.info(f"Created Up input sharded across {len(b_cores)} B cores with dtype={dtype}")
 
     # ========================================================================
     # Create output tensors (both gather to M core)
     # ========================================================================
-    ttnn_a_output = create_output_tensor(device, a_output_shape, m_core, tile)
-    ttnn_b_output = create_output_tensor(device, b_output_shape, m_core, tile)
+    ttnn_a_output = create_output_tensor(device, a_output_shape, m_core, tile, dtype)
+    ttnn_b_output = create_output_tensor(device, b_output_shape, m_core, tile, dtype)
 
     # ========================================================================
     # Run Gate (A) gather
@@ -436,8 +446,13 @@ def test_gather_gate_up_parallel_pattern(device):
     output_a_torch = ttnn.to_torch(ttnn_a_result)
 
     # Verify Gate gather
-    assert torch.equal(output_a_torch, torch_a_expected), "Gate (A) gather failed"
-    logger.info("Gate (A) gather: PASSED")
+    # Exact match against round-tripped expected (verifies gather preserved data exactly)
+    assert torch.equal(output_a_torch, torch_a_expected), f"Gate (A) gather data mismatch with dtype={dtype}"
+    # PCC against original input (verifies dtype quantization is within acceptable range)
+    passing, pcc_msg = comp_pcc(torch_a_input, output_a_torch, 0.99)
+    logger.info(f"Gate (A) {pcc_msg}")
+    assert passing, f"Gate (A) PCC check failed with dtype={dtype}: {pcc_msg}"
+    logger.info(f"Gate (A) gather with dtype={dtype}: PASSED")
 
     # ========================================================================
     # Run Up (B) gather
@@ -448,14 +463,19 @@ def test_gather_gate_up_parallel_pattern(device):
     output_b_torch = ttnn.to_torch(ttnn_b_result)
 
     # Verify Up gather
-    assert torch.equal(output_b_torch, torch_b_expected), "Up (B) gather failed"
-    logger.info("Up (B) gather: PASSED")
+    # Exact match against round-tripped expected (verifies gather preserved data exactly)
+    assert torch.equal(output_b_torch, torch_b_expected), f"Up (B) gather data mismatch with dtype={dtype}"
+    # PCC against original input (verifies dtype quantization is within acceptable range)
+    passing, pcc_msg = comp_pcc(torch_b_input, output_b_torch, 0.99)
+    logger.info(f"Up (B) {pcc_msg}")
+    assert passing, f"Up (B) PCC check failed with dtype={dtype}: {pcc_msg}"
+    logger.info(f"Up (B) gather with dtype={dtype}: PASSED")
 
     # ========================================================================
     # Summary
     # ========================================================================
     logger.info("=" * 70)
-    logger.info("SUCCESS: Both Gate and Up gathers completed correctly!")
+    logger.info(f"SUCCESS: Both Gate and Up gathers completed correctly with dtype={dtype}!")
     logger.info(f"  Gate (A): Gathered {a_total_width} elements from {len(a_cores)} scattered cores")
     logger.info(f"  Up (B):   Gathered {b_total_width} elements from {len(b_cores)} scattered cores")
     logger.info("=" * 70)

@@ -6,22 +6,12 @@
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor
 
-# Dtype to element size mapping (in bytes)
-_DTYPE_SIZES = {
-    ttnn.bfloat16: 2,
-    ttnn.bfloat8_b: 1,
-    ttnn.bfloat4_b: 0.5,
-    ttnn.float32: 4,
-    ttnn.uint16: 2,
-    ttnn.uint32: 4,
-}
 
-
-def _get_element_size(dtype):
-    """Get element size in bytes for a given dtype."""
-    if dtype not in _DTYPE_SIZES:
-        raise ValueError(f"Unsupported dtype: {dtype}. Supported: {list(_DTYPE_SIZES.keys())}")
-    return _DTYPE_SIZES[dtype]
+def _get_shard_size_bytes(shard_shape, tile, dtype):
+    """Get shard size in bytes for a given shard shape, tile, and dtype."""
+    tile_h, tile_w = tile.tile_shape
+    num_tiles = (shard_shape[0] // tile_h) * (shard_shape[1] // tile_w)
+    return num_tiles * tile.get_tile_size(dtype)
 
 
 def _validate_gather_inputs(input_tensor, output_tensor, sender_cores=None):
@@ -129,9 +119,7 @@ class GatherSingleCore:
         # Calculate data size
         shard_spec = input_memory_config.shard_spec
         shard_shape = shard_spec.shape
-        total_elements = shard_shape[0] * shard_shape[1]
-        element_size = _get_element_size(input_tensor.dtype)
-        total_size = int(total_elements * element_size)
+        total_size = _get_shard_size_bytes(shard_shape, input_tensor.tile, input_tensor.dtype)
 
         # Create CoreRangeSets
         input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in sender_cores])
