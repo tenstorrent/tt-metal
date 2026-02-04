@@ -32,6 +32,7 @@
 #include "../../unified_kernels/gather.hpp"
 #include "../../unified_kernels/deepseek_moe_gate.hpp"
 #include "../../unified_kernels/dram_streaming_matmul.hpp"
+#include "../../unified_kernels/eltwise_mul.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
@@ -107,6 +108,11 @@ void kernel_main() {
     using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs;
 
     // ------------------------------------------------------------------------
+    // Mul (reader - setup gate_proj_output as mul_in1 in 16x16 format)
+    // ------------------------------------------------------------------------
+    using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
+
+    // ------------------------------------------------------------------------
     // Setup sharded persistent buffers
     // ------------------------------------------------------------------------
     if constexpr (Core::is_sender_core) {
@@ -126,6 +132,12 @@ void kernel_main() {
         constexpr uint32_t gate_mm_k_num_tiles = get_named_compile_time_arg_val("gate_mm_k_num_tiles");
         constexpr uint32_t gate_mm_out_w = get_named_compile_time_arg_val("gate_mm_out_w");
         unified_kernels::setup_sharded_buffer(gate_mm_in1, gate_mm_k_num_tiles * gate_mm_out_w);
+    }
+    if constexpr (Core::is_gate_proj_core) {
+        // Setup mul_in1: gate_proj_output viewed as 16x16 tiles for element-wise multiply
+        constexpr uint32_t mul_cb_in1 = get_named_compile_time_arg_val("mul_cb_in1");
+        constexpr uint32_t mul_num_tiles = get_named_compile_time_arg_val("mul_num_tiles");
+        unified_kernels::setup_sharded_buffer(mul_cb_in1, mul_num_tiles);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -218,11 +230,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("gate_proj_index_offset")>;
 
     // ------------------------------------------------------------------------
-    // up_proj Matmul (writer)
+    // up_proj Matmul (writer) - writes to intermediate CB, not final output
     // ------------------------------------------------------------------------
     using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs<
         get_named_compile_time_arg_val("up_proj_cb_in1"),
-        get_named_compile_time_arg_val("up_proj_cb_out"),
+        get_named_compile_time_arg_val("up_proj_cb_mm_out"),  // Intermediate output (before mul)
         get_named_compile_time_arg_val("up_proj_in1_tensor_addr"),
         get_named_compile_time_arg_val("up_proj_in1_page_size"),
         get_named_compile_time_arg_val("up_proj_in1_num_pages"),
@@ -236,6 +248,12 @@ void kernel_main() {
         1,  // enable_indexing = true
         get_named_compile_time_arg_val("up_proj_cb_index"),
         get_named_compile_time_arg_val("up_proj_index_offset")>;
+
+    // ------------------------------------------------------------------------
+    // Mul (writer) - waits for final output after mul
+    // ------------------------------------------------------------------------
+    using MulCTArgs = deepseek_b1_ops::EltwiseMul::
+        WriterCTArgs<get_named_compile_time_arg_val("mul_cb_out"), get_named_compile_time_arg_val("mul_num_tiles")>;
 
 #elif defined(COMPILE_FOR_TRISC)
     // ------------------------------------------------------------------------
@@ -295,18 +313,30 @@ void kernel_main() {
         get_named_compile_time_arg_val("gate_proj_fuse_silu")>;
 
     // ------------------------------------------------------------------------
-    // up_proj Matmul (compute)
+    // up_proj Matmul (compute) - writes to intermediate CB (before mul)
     // ------------------------------------------------------------------------
     using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
         get_named_compile_time_arg_val("up_proj_cb_in0"),
         get_named_compile_time_arg_val("up_proj_cb_in1"),
-        get_named_compile_time_arg_val("up_proj_cb_out"),
+        get_named_compile_time_arg_val("up_proj_cb_mm_out"),  // Intermediate output (before mul)
         get_named_compile_time_arg_val("up_proj_subblock_k"),
         get_named_compile_time_arg_val("up_proj_per_core_n"),
         get_named_compile_time_arg_val("up_proj_subblock_w"),
         get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
         get_named_compile_time_arg_val("up_proj_tile_r_dim"),
         get_named_compile_time_arg_val("up_proj_fuse_silu")>;
+
+    // ------------------------------------------------------------------------
+    // Mul (compute): up_proj_mm_out (as 16x16) * gate_proj_out (as 16x16) -> final output
+    // cb_in0_wait: wait on up_proj_mm_out (1x32 tiles) before reading aliased 16x16 CB
+    // ------------------------------------------------------------------------
+    using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
+        get_named_compile_time_arg_val("mul_cb_in0"),           // up_proj output aliased as 16x16
+        get_named_compile_time_arg_val("mul_cb_in1"),           // gate_proj output aliased as 16x16
+        get_named_compile_time_arg_val("mul_cb_out"),           // final output (16x16)
+        get_named_compile_time_arg_val("mul_num_tiles"),        // number of 16x16 tiles
+        get_named_compile_time_arg_val("up_proj_cb_mm_out"),    // wait on this CB before reading mul_cb_in0
+        get_named_compile_time_arg_val("up_proj_per_core_n")>;  // number of tiles in mm_out format
 #endif
 
     // ============================================================================
@@ -377,11 +407,22 @@ void kernel_main() {
     // ========================================================================
     // 7. up_proj Matmul: Expert computation on DRAM matmul cores (no SiLU)
     //    PopIn0=true to release input after use
+    //    Writes to intermediate CB (up_proj_cb_mm_out)
     // ========================================================================
     {
         DeviceZoneScopedN("UP_PROJ");
         deepseek_b1_ops::DRAMStreamingMatmul::Op<UpProjCTArgs, Core::is_gate_proj_core, true> up_proj;
         up_proj();
+    }
+
+    // ========================================================================
+    // 8. Mul: Element-wise multiply up_proj_mm_out * gate_proj_out -> final output
+    //    Both inputs viewed as 16x16 tiles (CB aliasing)
+    // ========================================================================
+    {
+        DeviceZoneScopedN("MUL");
+        deepseek_b1_ops::EltwiseMul::Op<MulCTArgs, Core::is_gate_proj_core> mul_op;
+        mul_op();
     }
 
     // Only need one teardown since both mcasts reuse the same semaphores
