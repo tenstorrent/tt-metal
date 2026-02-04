@@ -380,6 +380,47 @@ Key points:
   * Less contention and overhead on the NOC command FIFOs.
   * Simpler synchronization, because all receivers observe the same sequence of operations.
 
+TODO: Explain Why ``noc_async_write_multicast`` needs ``num_dests`` parameter?
+Why isn't that automatically calculated from ``dst_noc_addr_multicast``, which encodes the range of destinations?
+
+TODO: document limitations of ``noc_async_write_multicast``:
+
+In short:
+
+They **cannot** be an arbitrary set of cores.
+
+For `noc_async_write_multicast` the documented and implemented constraints are:
+
+1. **Rectangular grid only (base API)**
+   The targets must be all Tensix worker cores in a **contiguous rectangle** `[x_start..x_end] × [y_start..y_end]` on the NoC, all at the same L1 address.
+   The docs say explicitly:
+
+   - “The destination nodes can only be a set of Tensix cores + L1 memory address.”
+   - “The destination nodes must form a **rectangular grid**.”
+
+   So: not “same row” or “same column” only; but **any axis‑aligned rectangle** is fine.
+
+2. **L‑shaped variant = rectangle minus rectangle**
+   There is a separate API (multicast with exclude region) where you specify a rectangle and then subtract a rectangular “exclusion zone” to get an **L‑shaped** pattern, but even that is *“rect grid minus sub‑rect grid”*, not an arbitrary subset.
+
+3. **Same L1 address on all destinations**
+   All destination cores must use the **same L1 address**; the multicast NOC address encodes one local address plus the rectangular coord range, not per‑core offsets.
+
+4. **Sender cannot be in the destination set (for this API)**
+   The base `noc_async_write_multicast` excludes the sender core; if you want the sender included you must use the `*_loopback_src` variant.
+
+5. **Cardinality is otherwise unconstrained**
+   Aside from “non‑zero” and “<= number of cores − 1”, the number of destinations can be as large as “full chip rectangle.”
+
+So if you need to hit an **arbitrary set of scattered cores** (e.g. “this triangle” or a few disjoint islands), you have to implement that as:
+
+- multiple multicast calls to different rectangles / L‑shapes, or
+- fall back to multiple unicast writes.
+
+A single `noc_async_write_multicast` call always targets a **rectangular (or L‑shaped via the exclude API) contiguous region**, not an arbitrary mask of cores.
+
+
+
 Ordering with `noc_async_writes_flushed`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -415,6 +456,10 @@ Why is it safe to send the semaphore update before the transfers complete?
      noc_async_write_barrier();
 
   before popping the CB slot, ensuring that the tile transfer has completed before the sender reuses the CB memory location.
+
+TODO: Explain that this is a simplified view of the reality and that for optimal performance on some architectures we may do things differently.
+Also, NOC is customizable and may behave differently if customizations are made.
+
 
 `get_noc_multicast_addr` and CB address synchronization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -453,6 +498,9 @@ In general, there is no direct way for receivers to "tell" the sender which exac
 * Because CB sizes and page sizes are identical, the CB write pointer for a given tile index is the same on the sender and all receivers.
 * This makes it possible for the sender to use its own CB write pointer as the destination address in `get_noc_multicast_addr`.
 
+TODO: Example code still has variables like sender_sem_ptr, receiver_sem_ptr, and receiver_sem_mcast_addr, rather than referenceing receivers_ready and tile_sent semaphore names.
+
+
 Exercise 1: Extending the standalone multicast example
 ------------------------------------------------------
 
@@ -476,8 +524,6 @@ You should see output similar to:
 
 .. code-block:: text
 
-   Multicast example: 640x640 tensor (400 tiles) to 3 receivers
-   ...
    [PASS] Receiver 1 received correct tensor (400 tiles)
    [PASS] Receiver 2 received correct tensor (400 tiles)
    [PASS] Receiver 3 received correct tensor (400 tiles)
@@ -491,30 +537,50 @@ Currently the sender core:
 
 * Reads tiles from DRAM into input CB `c_in0`.
 * Multicasts tiles to receivers.
-* Does not pass these tiles through the compute and writeback pipeline.
+* Does not pass these tiles to the compute kernel on the sender core.
 
 Your goal is to modify the program so that:
 
 * The sender core also runs the **same compute and writer kernels** as receivers (copying tiles and writing them to its own region in the output tensor).
-* After the change, there will be 4 output regions in DRAM:
-  * 1 from the sender core.
-  * 3 from the receiver cores.
+* After the change, output of the program will be a tensor that contains four copies of the input tensor; one from the sender core and three from the receiver cores.
 
-Suggested steps:
+The simplest way to achieve this is for the sender core to run the same compute kernel as the receivers.
+This means that it will use the same CB that all other cores use for input tiles, which is `c_0`.
+Observe that this is the same CB that is used by the sender as a source of data for multicast.
+The `mcast_sender` kernel code can stay largely the same, with one key difference: it should not
+perform any `cb_wait_front` or `cb_pop_front` operations, because the compute kernel will be doing this work.
 
-1. Update the host program to:
+
+ already configured to multicast tiles from `c_0` to the receiver cores.
+
+TODO: A figure would come handy here!!!
+
+The main required change to achieve the objective of this exercise is to update the host program to include the sender
+core in the core range when creating the compute and writer kernels and pass the appropriate runtime arguments.
+The writer kernel itslef does not need to change at all.
+Circular buffers are already created on all cores, so there is no change required to the circular buffer setup.
+The existing semaphore protocol already supports sending tiles from sender to receivers.
+The sender acting as a "local receiver" for compute does **not** require introduction of additional semaphores.
+This is because the sender already knows when a tile is in its local CB (right after the DRAM read completes).
+     * The compute kernel on the sender simply waits for tiles in `c_in0` in the same way as receivers.
+
+
+
+
+Follow these steps to complete the exercise:
+
+#. Update the host program to:
    * Include the sender core in the core range when creating the compute and writer kernels.
-   * Assign a new receiver index for the sender.
+   * Include the sender core in the core range when setting up the runtime arguments for the writer kernel.
+   * Update `output_data` and related variables to account for the additional copy from the sender core.
+     Make sure that each core writes to a unique region of the output tensor.
+   * If you created a new folder for this exercise, make sure to update `CreateKernel` with paths to kernels in the new folder.
 
-   For example, if the sender is logical `(0,0)` and you previously had receivers `(1,0)` through `(3,0)` with indices `0..2`, you can:
+#. Update the `mcast_sender` kernel code to not perform any `cb_wait_front` or `cb_pop_front` operations.
+   Since the code won't perform `cb_wait_front`, this also means that it cannot call `get_read_ptr`.
+   Instead, the source address for multicast should be the same address that was used for writing the tile to the CB.
 
-   * Treat the sender as an additional "receiver" with index 0.
-   * Shift existing receiver indices by 1.
-   * Or assign the sender index 3 and keep receiver indices 0..2.
-
-   The key requirement is that **each core writes to a unique region of the output tensor**.
-
-2. Ensure that the sender core's CB usage matches receivers:
+#. Ensure that the sender core's CB usage matches receivers:
    * The sender already uses `c_in0` to hold input tiles.
    * For the compute and writer kernels, ensure they are created to run on:
      * All cores that should produce output (including the sender).
@@ -540,7 +606,7 @@ High level pseudocode for host side changes:
    for each core in all_compute_cores:
        assign a unique receiver_idx (0..3) for write_tiles runtime args
 
-3. Adjust semaphores:
+#. Adjust semaphores:
    * The existing semaphore protocol already supports sending tiles from sender to receivers.
    * The sender acting as a "local receiver" for compute does **not** need additional semaphores:
      * The sender already knows when a tile is in its local CB (right after the DRAM read completes).
