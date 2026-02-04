@@ -335,16 +335,26 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>" || {
     cat > "$SCRIPT_DIR/.impl_task.md" <<EOF
 # Task: Implement Fix
 
-Read the AI_PROMPT.md in implementing-features/ and implement a fix for this failure.
+Read the AI_PROMPT.md at:
+$SCRIPT_DIR/implementing-features/AI_PROMPT.md
+
+And implement a fix for this failure.
 
 ## User Prompt
 $PROMPT
 
 ## Reproduction Test
-$TEST_FILE
+- **Test file**: $TEST_FILE
+- **Test directory**: $(dirname "$TEST_FILE")
+- **Parent directory**: $(dirname "$(dirname "$TEST_FILE")")
+- **Bash runner**: $(dirname "$(dirname "$TEST_FILE")")/run_test.sh
 
-## Error Information
+## Error Information (from raw-logs)
+\`\`\`
 $RAW_LOGS
+\`\`\`
+
+This is the error you need to fix. Analyze it to understand the root cause.
 
 ## Current Branch
 $FIX_BRANCH (created from main)
@@ -354,14 +364,16 @@ $OLD_BRANCH
 
 ## CRITICAL INSTRUCTIONS
 
-1. **Build Metal first**: Run ./build_metal.sh before testing
-2. **Use bash script**: Run tests via ./run_test.sh (in test parent dir)
-3. **Rebuild after changes**: Run ./build_metal.sh after EVERY code change
+1. **Build Metal first**: Run /tt-metal/build_metal.sh before testing
+2. **Use bash script**: Run tests via ./run_test.sh
+   - Navigate to: $(dirname "$(dirname "$TEST_FILE")")
+   - Run: ./run_test.sh
+3. **Rebuild after changes**: Run /tt-metal/build_metal.sh after EVERY code change
 4. **Test multiple times**: Verify stability with $([ "$DETERMINISTIC" = "true" ] && echo "2" || echo "5") consecutive successful runs (deterministic=$DETERMINISTIC)
 5. **DO NOT create PR**: Push branch and write PR description, but don't run gh pr create
-6. **Write report**: Document everything in outputs/
+6. **Write report**: Document everything in $SCRIPT_DIR/outputs/
 
-Note: The bash script (run_test.sh) was copied to the fix branch along with the test.
+The bash script (run_test.sh) was copied to the fix branch along with the test.
 
 ## Expected Output
 1. Analyze root cause from error information above
@@ -390,7 +402,10 @@ EOF
     log_info "Created implementation task: $SCRIPT_DIR/.impl_task.md"
     log_info ""
     log_info "📋 MANUAL STEP REQUIRED:"
-    log_info "   Invoke Claude with: Read implementing-features/AI_PROMPT.md and complete .impl_task.md"
+    log_info "   Invoke Claude with:"
+    log_info "   "
+    log_info "   Read $SCRIPT_DIR/implementing-features/AI_PROMPT.md and complete $SCRIPT_DIR/.impl_task.md"
+    log_info "   "
     log_info ""
     log_warning "Press ENTER after Claude has completed the implementation..."
     read
