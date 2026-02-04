@@ -374,11 +374,32 @@ EOF
     else
         log_warning "No PR found for branch $FIX_BRANCH"
         log_info "Claude may have documented why PR was not created"
+
+        # If no PR was created, offer to clean up the branch
+        log_warning "Fix branch was created but no PR resulted"
+        log_info "Cleaning up abandoned fix branch..."
+
+        # Return to original branch first
+        log_info "Returning to original branch: $OLD_BRANCH"
+        git checkout "$OLD_BRANCH"
+
+        # Delete the abandoned fix branch
+        git branch -D "$FIX_BRANCH" 2>/dev/null && {
+            log_success "Deleted abandoned branch: $FIX_BRANCH"
+        } || {
+            log_warning "Could not delete branch $FIX_BRANCH (may not exist locally)"
+        }
+
+        export PR_URL=""
+        # Continue to restore stash
     fi
 
-    # Return to original branch
-    log_info "Returning to original branch: $OLD_BRANCH"
-    git checkout "$OLD_BRANCH"
+    # Return to original branch (if not already there)
+    CURRENT=$(git branch --show-current)
+    if [ "$CURRENT" != "$OLD_BRANCH" ]; then
+        log_info "Returning to original branch: $OLD_BRANCH"
+        git checkout "$OLD_BRANCH"
+    fi
 
     # Restore stashed changes if they exist
     log_info "Restoring stashed changes..."
