@@ -15,7 +15,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "image_resolution, input_shape, temb_shape, residuals, block_id",
+    "image_resolution, input_shape, temb_shape, residuals, block_id, pcc",
     [
         # 1024x1024 image resolution
         (
@@ -24,6 +24,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             (1, 1280),
             ((1, 320, 128, 128), (1, 320, 128, 128), (1, 320, 128, 128)),
             2,
+            0.996,
         ),
         # 512x512 image resolution
         (
@@ -32,6 +33,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             (1, 1280),
             ((1, 320, 64, 64), (1, 320, 64, 64), (1, 320, 64, 64)),
             2,
+            0.992,
         ),
     ],
 )
@@ -43,6 +45,7 @@ def test_upblock(
     temb_shape,
     residuals,
     block_id,
+    pcc,
     debug_mode,
     is_ci_env,
     reset_seeds,
@@ -103,5 +106,5 @@ def test_upblock(
     del unet
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.992)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is: {pcc_message}")

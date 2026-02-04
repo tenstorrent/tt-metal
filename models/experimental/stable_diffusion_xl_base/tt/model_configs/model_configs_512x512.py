@@ -488,7 +488,7 @@ class ModelOptimisations512x512:
                 "2D_RESNET_CONV_320_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
-                    per_core_M=16,
+                    per_core_M=4,
                     per_core_N=4,
                     out_subblock_h=2,
                     out_subblock_w=4,
@@ -499,7 +499,7 @@ class ModelOptimisations512x512:
                 "2D_RESNET_CONV_640_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=4,
-                    per_core_M=4,
+                    per_core_M=1,
                     per_core_N=8,
                     out_subblock_h=1,
                     out_subblock_w=8,
@@ -509,7 +509,7 @@ class ModelOptimisations512x512:
                 "2D_RESNET_CONV_2560_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
-                    per_core_M=4,
+                    per_core_M=1,
                     per_core_N=8,
                     out_subblock_h=1,
                     out_subblock_w=8,
@@ -519,7 +519,7 @@ class ModelOptimisations512x512:
                 "2D_RESNET_CONV_1920_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=5,
-                    per_core_M=4,
+                    per_core_M=1,
                     per_core_N=8,
                     out_subblock_h=1,
                     out_subblock_w=8,
@@ -530,7 +530,7 @@ class ModelOptimisations512x512:
                 "2D_RESNET_CONV_1920_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=3,
-                    per_core_M=16,
+                    per_core_M=4,
                     per_core_N=4,
                     out_subblock_h=2,
                     out_subblock_w=4,
@@ -540,7 +540,7 @@ class ModelOptimisations512x512:
                 "2D_RESNET_CONV_1280_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=1,
-                    per_core_M=16,
+                    per_core_M=4,
                     per_core_N=4,
                     out_subblock_h=2,
                     out_subblock_w=4,
@@ -550,7 +550,7 @@ class ModelOptimisations512x512:
                 "2D_RESNET_CONV_960_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(5, 8),
                     in0_block_w=2,
-                    per_core_M=16,
+                    per_core_M=4,
                     per_core_N=4,
                     out_subblock_h=1,
                     out_subblock_w=4,

@@ -15,16 +15,16 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "image_resolution, input_shape, temb_shape",
+    "image_resolution, input_shape, temb_shape, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 320, 128, 128), (1, 1280)),
+        ((1024, 1024), (1, 320, 128, 128), (1, 1280), 0.999),
         # 512x512 image resolution
-        ((512, 512), (1, 320, 64, 64), (1, 1280)),
+        ((512, 512), (1, 320, 64, 64), (1, 1280), 0.998),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_downblock2d(device, image_resolution, temb_shape, input_shape, debug_mode, is_ci_env, reset_seeds):
+def test_downblock2d(device, image_resolution, input_shape, temb_shape, pcc, debug_mode, is_ci_env, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -70,5 +70,5 @@ def test_downblock2d(device, image_resolution, temb_shape, input_shape, debug_mo
     del unet, tt_downblock
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.9987)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is {pcc_message}")

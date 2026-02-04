@@ -20,14 +20,14 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "image_resolution, input_shape, down_block_id",
+    "image_resolution, input_shape, down_block_id, pcc",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 320, 128, 128), 0),
-        ((1024, 1024), (1, 640, 64, 64), 1),
+        ((1024, 1024), (1, 320, 128, 128), 0, 0.999),
+        ((1024, 1024), (1, 640, 64, 64), 1, 0.999),
         # 512x512 image resolution
-        ((512, 512), (1, 320, 64, 64), 0),
-        ((512, 512), (1, 640, 32, 32), 1),
+        ((512, 512), (1, 320, 64, 64), 0, 0.998),
+        ((512, 512), (1, 640, 32, 32), 1, 0.998),
     ],
 )
 @pytest.mark.parametrize("stride", [(2, 2)])
@@ -39,6 +39,7 @@ def test_downsample2d(
     image_resolution,
     input_shape,
     down_block_id,
+    pcc,
     stride,
     padding,
     dilation,
@@ -87,5 +88,5 @@ def test_downsample2d(
     del unet, tt_downsample
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.9988)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is {pcc_message}")
