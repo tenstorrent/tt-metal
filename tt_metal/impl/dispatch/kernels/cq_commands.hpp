@@ -33,6 +33,7 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET = 13,  // Set an offset in the ringbuffer for later reads.
     CQ_PREFETCH_CMD_RELAY_RINGBUFFER = 14,       // Relay data from the ringbuffer to the dispatcher
     CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED = 15,    // relay linear data from multiple srcs to dispatcher
+    CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H = 16,  // relay linear data from multiple srcs on prefetch_h chip to dispatcher. Must be only command in fetchq entry.
     CQ_PREFETCH_CMD_MAX_COUNT,                   // for checking legal IDs
 };
 
