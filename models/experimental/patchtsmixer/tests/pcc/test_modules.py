@@ -92,7 +92,6 @@ def test_patchtsmixer_positional_encoding(device, reset_seeds, pe_type):
     torch_out = torch_pe(x)
 
     base = "pos_enc"
-    sd = torch_pe.state_dict()
 
     parameters = preprocess_positional_encoding(torch_pe.state_dict(), base, device=device)
 

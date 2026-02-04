@@ -99,7 +99,7 @@ def preprocess_linear(state_dict, path: str, device=None, dtype=ttnn.bfloat16):
     Converts a torch nn.Linear at `path` into TTNN
     Expects:
         state_dict[f"weight] shape (out, in)
-        state_dict[f"bias] shape (out, in)
+        state_dict[f"bias] shape (out, )
     Produces:
         weight: (1, 1, in, out) TILE
         bias: (1, 1, 1, out) TILE
@@ -178,41 +178,6 @@ def preprocess_feature_mixer_block(state_dict: dict, path: str, device, *, norm_
         }
         gate_params = preprocess_gated_attention(gate_state_dict, f"{path}.gate", device=device)
         parameters.update(gate_params)
-
-    return parameters
-
-
-def patchtsmixer_preprocessor(device, state_dict):
-    parameters = {}
-
-    gated_paths = [
-        # Add more as we implement modules
-        "mixer_block.layers.0.feature_mixer.gate",
-        "mixer_bloc.layers.0.patch_mixer.gate",
-    ]
-
-    for path in gated_paths:
-        w, b = preprocess_gated_attention(state_dict, path, device=device)
-        parameters[f"{path}.attn_layer.weight"] = w
-        parameters[f"{path}.attn_layer.bias"] = b
-
-    # --- positional encoding ---
-    pos_enc_path = "pos_enc"
-    parameters[f"{pos_enc_path}.pe"] = preprocess_positional_encoding(state_dict, pos_enc_path, device=device)
-
-    # Batch normalization
-    batchnorm_path = "bn"
-    w, b, m, v = preprocess_norm_layer_batchnorm(state_dict, batchnorm_path, device=device)
-    parameters[f"{batchnorm_path}.norm.weight"] = w
-    parameters[f"{batchnorm_path}.norm.bias"] = b
-    parameters[f"{batchnorm_path}.norm.running_mean"] = m
-    parameters[f"{batchnorm_path}.norm.running_var"] = v
-
-    # Layer Normalization
-    layernorm_path = "ln"
-    g, b = preprocess_layernorm(state_dict, layernorm_path, device=device)
-    parameters[f"{batchnorm_path}.norm.weight"] = g
-    parameters[f"{batchnorm_path}.norm.bias"] = b
 
     return parameters
 

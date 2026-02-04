@@ -280,9 +280,9 @@ def make_1d_mcast_prog_config_for_height_sharded(
     fuse_batch: bool = True,
     # fused_activation = None,
     mcast_in0: bool = False,
-    in0_block_w_tiles: int = 1,
+    in0_block_w_tiles: int | None = None,
     out_subblock_h: int = 1,
-    out_subblock_w: int = 1,
+    out_subblock_w: int | None = None,
 ):
     # shard_shape is [rows, cols] in elements, already tile-aligned
     shard_rows_elems, shard_cols_elems = shard_shape
@@ -299,6 +299,12 @@ def make_1d_mcast_prog_config_for_height_sharded(
     # Start with full chip grid and let corerangeset handle selection.
 
     compute_grid = ttnn.CoreCoord(WORMHOLE_GRID[0], WORMHOLE_GRID[1])
+
+    if in0_block_w_tiles is None:
+        in0_block_w_tiles = _pick_divisor_at_most(K_tiles, min(4, K_tiles))
+
+    if out_subblock_w is None:
+        out_subblock_w = min(4, per_core_N)
 
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=compute_grid,

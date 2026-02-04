@@ -289,9 +289,7 @@ class TtPatchTSMixerMLP:
                 nc=kwargs["nc"],
                 shard_shape=kwargs["shard_shape"],
                 out_k=kwargs["out_k"],
-                in0_block_w_tiles=1,
                 out_subblock_h=1,
-                out_subblock_w=1,
             ),
             fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
         )
