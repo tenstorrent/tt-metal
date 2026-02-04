@@ -263,8 +263,7 @@ jobs:
         timeout-minutes: 30
         run: |
           # Run pytest with parallel execution and skip list
-          # Use eval to properly handle quoted arguments in skip_args
-          eval "${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}"
+          ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
