@@ -359,26 +359,8 @@ fi
 
 # Bundle Python interpreter into the venv if requested
 if [[ "$BUNDLE_PYTHON" == "true" ]]; then
-    echo "Bundling Python interpreter into venv..."
-
-    # Get the real path to the Python interpreter
-    REAL_PYTHON_PATH=$(readlink -f "$PYTHON_ENV_DIR/bin/python")
-    echo "  Python interpreter: $REAL_PYTHON_PATH"
-
-    # Extract the cpython installation directory (parent of bin/python)
-    # Path is in form: <prefix>/python/cpython<version>/bin/python
-    CPYTHON_DIR=$(dirname "$(dirname "$REAL_PYTHON_PATH")")
-    echo "  CPython directory: $CPYTHON_DIR"
-
-    # Remove python symlinks in venv (they may not match the interpreter's structure)
-    echo "  Removing venv python symlinks..."
-    rm -f "$PYTHON_ENV_DIR/bin/python"*
-
-    # Copy the cpython directory contents into the venv
-    echo "  Copying Python interpreter files into venv..."
-    cp -r "$CPYTHON_DIR"/* "$PYTHON_ENV_DIR/"
-
-    echo "  Python interpreter bundled successfully"
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    "${SCRIPT_DIR}/scripts/bundle_python_into_venv.sh" "$PYTHON_ENV_DIR" --force
 fi
 
 # Compile bytecode at the end to take advantage of parallelism

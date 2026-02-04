@@ -299,8 +299,8 @@ tt-run --rank-binding config.yaml [--mpi-args "<mpi_args>"] <program> [args...]
 Common options:
 - `--dry-run`: Preview generated MPI command without execution
 - `--verbose`: Enable detailed logging
-- `--multihost`: tag-output and tcp
-- `--tcp-interface: restricts interface. Implies --multihost.
+- `--multihost`: Enable tag-output and TCP byte transfer layer for multi-host clusters
+- `--tcp-interface`: Restrict to specific network interface. Implies `--multihost`.
 - `--mpi-args`: Pass additional MPI arguments (rankfiles, network options, etc.)
 
 #### 2.4.3 Usage Patterns

@@ -17,7 +17,7 @@ run_quad_galaxy_unit_tests() {
   local mpi_args="$mpi_host $mpi_args_base"
 
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
-  local mpirun_args="$mpi_host $mpi_run_args_base"
+  local mpirun_args="$mpi_host $mpirun_args_base"
 
   local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
   local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
@@ -44,6 +44,7 @@ setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export HOSTS="g05glx01,g05glx02"
     export RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
+    export TCP_INTERFACE="cnx1"
     mkdir -p logs
     mkdir -p generated/artifacts
 
@@ -66,10 +67,11 @@ run_quad_galaxy_deepseekv3_module_tests() {
     fail=0
     setup_dual_galaxy_env
 
+    local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     local TEST_CASE="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/tests"
 
-    tt-run --rank-binding "$RANK_BINDING_YAML" \
-        --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
+    tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
+        --mpi-args "$MPI_ARGS" \
         bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
@@ -82,10 +84,11 @@ run_quad_galaxy_teacher_forced_test() {
     fail=0
     setup_dual_galaxy_env
 
+    local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     local TEST_TEACHER_FORCED="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/teacher_forced_output.log"
 
-    tt-run --rank-binding "$RANK_BINDING_YAML" \
-        --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
+    tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
+        --mpi-args "$MPI_ARGS" \
         bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_TEACHER_FORCED" ; fail+=$?
 
     # Extract accuracy metrics from logs and save to artifact file
@@ -105,10 +108,11 @@ run_quad_galaxy_dual_demo_test() {
     fail=0
     setup_dual_galaxy_env
 
+    local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     local TEST_DEMO="source ./python_env/bin/activate && pytest -svvv 'models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual[full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log"
 
-    tt-run --rank-binding "$RANK_BINDING_YAML" \
-        --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
+    tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
+        --mpi-args "$MPI_ARGS" \
         bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_DEMO" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
@@ -121,10 +125,11 @@ run_quad_galaxy_dual_demo_stress_test() {
     fail=0
     setup_dual_galaxy_env
 
+    local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     local TEST_DEMO_STRESS="source ./python_env/bin/activate && pytest -svvv 'models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual[stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log"
 
-    tt-run --rank-binding "$RANK_BINDING_YAML" \
-        --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
+    tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
+        --mpi-args "$MPI_ARGS" \
         bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_DEMO_STRESS" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then

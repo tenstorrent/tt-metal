@@ -28,6 +28,50 @@ PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 ORIGINAL_CWD = Path.cwd().resolve()
 
 
+def get_local_network_interfaces() -> List[str]:
+    """Get list of network interface names on the local host.
+
+    Returns:
+        List of interface names (e.g., ['lo', 'eth0', 'cnx1'])
+    """
+    try:
+        # /sys/class/net contains symlinks to all network interfaces
+        net_path = Path("/sys/class/net")
+        if net_path.exists():
+            return [p.name for p in net_path.iterdir()]
+    except (OSError, PermissionError):
+        pass
+    return []
+
+
+def validate_network_interface(interface: str, verbose: bool = False) -> None:
+    """Warn if the specified network interface doesn't exist on the local host.
+
+    This is a best-effort check - we can only validate the local host, not remote
+    MPI hosts. The warning helps catch typos and misconfiguration early.
+
+    Args:
+        interface: Network interface name to validate (e.g., 'eth0', 'cnx1')
+        verbose: If True, log additional diagnostic information
+    """
+    local_interfaces = get_local_network_interfaces()
+
+    if not local_interfaces:
+        # Can't determine interfaces (non-Linux or permission issue), skip check
+        if verbose:
+            logger.debug(f"{TT_RUN_PREFIX} Unable to enumerate network interfaces, skipping validation")
+        return
+
+    if interface not in local_interfaces:
+        logger.warning(
+            f"{TT_RUN_PREFIX} Network interface '{interface}' not found on local host. "
+            f"Available interfaces: {', '.join(sorted(local_interfaces))}. "
+            f"Note: This check only validates the local host; the interface may exist on remote MPI hosts."
+        )
+    elif verbose:
+        logger.info(f"{TT_RUN_PREFIX} Network interface '{interface}' found on local host")
+
+
 class RankBinding(BaseModel):
     """Binding between MPI rank to target MeshId and MeshHostRankId as defined in the mesh graph descriptor."""
 
@@ -686,6 +730,8 @@ def main(
     # --tcp-interface implies --multihost
     if tcp_interface:
         multihost = True
+        # Validate the interface exists on the local host (best-effort check)
+        validate_network_interface(tcp_interface, verbose=verbose)
 
     effective_mpi_args = list(mpi_args) if mpi_args else []
 

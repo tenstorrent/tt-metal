@@ -122,13 +122,19 @@ runs:
           ${{ inputs.device }}
           -w ${{ github.workspace }}
         run: |
-          set -eo pipefail
+          # Note: -u (nounset) is safe and recommended - it catches unset variable bugs.
+          # The -x flag (xtrace) would print commands and could leak secrets, but we don't use it.
+          set -euo pipefail
 
           install_wheel=${{ inputs.install_wheel }}
           if [ "${install_wheel,,}" == "true" ]; then
-            WHEEL_FILENAME=$(ls -1 *.whl)
-            if uv pip install "$WHEEL_FILENAME"; then
-              echo "INFO: Successfully installed wheel into /opt/venv"
+            WHEEL_FILENAME=$(ls -1 *.whl 2>/dev/null || true)
+            if [ -z "$WHEEL_FILENAME" ]; then
+              echo "::warning::No .whl file found in workspace. Skipping wheel installation."
+            elif uv pip install "$WHEEL_FILENAME"; then
+              echo "INFO: Successfully installed wheel '$WHEEL_FILENAME' into /opt/venv"
+            else
+              echo "::warning::Failed to install wheel '$WHEEL_FILENAME'. Continuing anyway."
             fi
           fi
 
