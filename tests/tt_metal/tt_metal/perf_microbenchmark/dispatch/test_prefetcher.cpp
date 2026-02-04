@@ -1420,11 +1420,29 @@ public:
 
             const std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses);
 
-            HostMemDeviceCommand cmd =
-                CommandBuilder::build_prefetch_relay_linear_packed_h<flush_prefetch_, inline_data_>(
-                    sub_cmds, src_noc_xy, dst_noc_xy, dram_dest_addr, total_length);
+            // Command 1: Dispatch write linear (RELAY_INLINE_NOFLUSH) - sent as separate fetchQ entry
+            DeviceCommandCalculator calc1;
+            calc1.add_dispatch_write_linear<flush_prefetch_, inline_data_>(total_length);
+            const uint32_t dispatch_cmd_size = calc1.write_offset_bytes();
 
-            commands_per_iteration.push_back(std::move(cmd));
+            HostMemDeviceCommand cmd1(dispatch_cmd_size);
+            cmd1.add_dispatch_write_linear<flush_prefetch_, inline_data_>(
+                0,              // num_mcast_dests
+                dst_noc_xy,     // NOC coordinates for DESTINATION (dispatcher writes here)
+                dram_dest_addr, // destination address
+                total_length,   // data size
+                nullptr         // payload data
+            );
+            commands_per_iteration.push_back(std::move(cmd1));
+
+            // Command 2: Relay linear packed H - must be standalone entry in fetchQ
+            DeviceCommandCalculator calc2;
+            calc2.add_prefetch_relay_linear_packed_h(sub_cmds.size());
+            const uint32_t relay_cmd_size = calc2.write_offset_bytes();
+
+            HostMemDeviceCommand cmd2(relay_cmd_size);
+            cmd2.add_prefetch_relay_linear_packed_h(src_noc_xy, total_length, sub_cmds, sub_cmds.size());
+            commands_per_iteration.push_back(std::move(cmd2));
 
             // Update expected data: L1 on MMIO device is pre-populated with sequential values [0, 1, 2, ...]
             // Prefetcher reads from MMIO L1 addresses and dispatcher writes sequentially to remote DRAM
@@ -2378,9 +2396,25 @@ TEST_P(PrefetcherLinearPackedHTestFixture, RelayLinearPackedHTest) {
     const uint32_t l1_base = mmio_device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
     const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
+    // Get valid DRAM base for DeviceData (even though we read from L1, not DRAM)
+    auto mmio_dram_base = mmio_device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
+
     // Source: L1 on MMIO Device - prepopulate with sequential test data
+    // Pass 0 for dram_data_size_words since we read from L1, not DRAM
     Common::DeviceData mmio_device_data(
-        mmio_device_, worker_range, l1_base, 0 /* no dram */, nullptr, false, dram_data_size_words, cfg_);
+        mmio_device_, worker_range, l1_base, mmio_dram_base, nullptr, false, 0 /* don't prepopulate DRAM */, cfg_);
+
+    // Prepopulate L1 with sequential test data [0, 1, 2, ...]
+    {
+        const uint32_t l1_data_size_words = DEVICE_DATA_SIZE / sizeof(uint32_t);
+        std::vector<uint32_t> l1_data(l1_data_size_words);
+        for (uint32_t i = 0; i < l1_data_size_words; i++) {
+            l1_data[i] = i;
+        }
+        const CoreCoord phys_worker_core = mmio_device_->worker_core_from_logical_core(first_worker);
+        MetalContext::instance().get_cluster().write_core(mmio_device_->id(), phys_worker_core, l1_data, l1_base);
+        MetalContext::instance().get_cluster().l1_barrier(mmio_device_->id());
+    }
 
     // Destination: Remote Device DRAM - this is what we'll validate
     auto remote_dram_base = remote_device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);

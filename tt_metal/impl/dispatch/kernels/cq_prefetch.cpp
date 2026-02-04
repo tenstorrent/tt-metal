@@ -1923,7 +1923,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
 // Used in prefetch_h upstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H command.
 // Combines packed linear reads (multiple sub-commands) with H-variant relay to remote device.
 uint32_t process_relay_linear_packed_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr, uint32_t* l1_cache) {
-    volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQPrefetchCmd tt_l1_ptr* cmd =
+        (volatile CQPrefetchCmd tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
     uint32_t noc_xy_addr = cmd->relay_linear_packed.noc_xy_addr;
     uint32_t total_length = cmd->relay_linear_packed.total_length;
     uint32_t sub_cmds_length = cmd->relay_linear_packed.count * sizeof(CQPrefetchRelayLinearPackedSubCmd);
@@ -1931,7 +1932,7 @@ uint32_t process_relay_linear_packed_h_cmd(uint32_t cmd_ptr, uint32_t& downstrea
     ASSERT(total_length > 0);
 
     // Copy sub-commands into L1 cache (same pattern as process_relay_linear_packed_cmd)
-    uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
+    uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader) + sizeof(CQPrefetchCmd);
     uint32_t amt = sub_cmds_length / sizeof(uint32_t);
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
         (volatile uint32_t tt_l1_ptr*)(data_ptr), amt, l1_cache);
@@ -2246,10 +2247,13 @@ void kernel_main_h() {
         uint32_t cmd_id = cmd->base.cmd_id;
         // Infer that an exec_buf command is to be executed based on the stall state.
         bool is_exec_buf = (stall_state == STALLED);
+        DPRINT << "cmd_id: " << cmd_id << ENDL();
         if (cmd_id == CQ_PREFETCH_CMD_RELAY_LINEAR_H) {
             cmd_ptr += process_relay_linear_h_cmd(cmd_ptr, downstream_data_ptr);
         } else if (cmd_id == CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H) {
+            DPRINT << "relay linear packed h" << ENDL();
             cmd_ptr += process_relay_linear_packed_h_cmd(cmd_ptr, downstream_data_ptr, l1_cache);
+            DPRINT << "relay linear packed h done" << ENDL();
         } else {
             cmd_ptr = process_relay_inline_all(cmd_ptr, fence, is_exec_buf);
         }
