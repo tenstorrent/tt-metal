@@ -98,7 +98,9 @@ void loop_and_wait_with_timeout(
             }
 
             // Sleep briefly to avoid busy-waiting
-            std::this_thread::yield();
+            // Use a small fixed sleep instead of yield for more predictable polling,
+            // especially important for large data transfers (e.g., wide tensors)
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
         }
     } else {
         do {
