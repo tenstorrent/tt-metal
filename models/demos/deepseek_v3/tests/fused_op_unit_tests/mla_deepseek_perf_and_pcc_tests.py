@@ -451,13 +451,13 @@ def test_to_memory_config_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("kv_rope_permute_pre", 10, 7.45),
+        ("kv_rope_permute_pre", 10, 5.52),
         ("kv_rope_permute_post", 10, 1.30),
         ("kvpe_permute", 10, 30.95),
         ("q_nope_permute_pre_linear", 10, 6.23),
-        ("q_nope_permute_post_linear", 10, 23.40),
+        ("q_nope_permute_post_linear", 10, 16.47),
         ("q_rope_permute", 10, 1.62),
-        ("attn_out_permute_pre_linear", 10, 70.29),
+        ("attn_out_permute_pre_linear", 10, 31.94),
         ("v_out_permute", 10, 7.61),
     ],
 )
@@ -918,7 +918,7 @@ def test_mesh_partition_deepseek_perf(
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("flash_mla_decode", 10, 192.56),  # Target based on typical flash attention performance
+        ("flash_mla_decode", 10, 110.05),  # Target based on typical flash attention performance
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -1000,7 +1000,7 @@ def test_wq_kv_a_sequence_deepseek_perf(
     5. Slice kv_nope: 1.26 µs
     6. Slice kv_rope: 0.95 µs
 
-    Total expected: 146.36 µs
+    Total expected: 146.17 µs
     """
     subdir = "fused_op_unit_tests/mla"
     command = f"pytest models/demos/deepseek_v3/tests/{subdir}/test_wq_kv_a_sequence_deepseek.py -k {step_name}"
@@ -1067,7 +1067,7 @@ def test_wq_kv_a_sequence_deepseek_perf(
             "norm_and_rope_sequence",
             10,
             120.72,
-        ),  # Sum: q_norm(7.33) + kv_norm(6.68) + to_mem(0.75) + permute(7.45) + reshard(1.04) + rope(4.18) + reshard(1.19) + permute(1.30) + concat(1.32) + pad(41.25) + permute(30.95) + reshard(2.83)
+        ),  # Sum: q_norm(7.33) + kv_norm(6.68) + to_mem(0.75) + permute(5.52) + reshard(1.04) + rope(4.18) + reshard(1.19) + permute(1.30) + concat(1.32) + pad(41.25) + permute(30.95) + reshard(2.83)
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -1145,7 +1145,7 @@ def test_norm_and_rope_sequence_deepseek_perf(
         (
             "wkv_b2_sequence",
             10,
-            224.72,
+            185.33,
         ),  # Sum: reshard(3.89) + permute(70.29) + linear(141.68) + permute(7.61)
     ],
 )
@@ -1161,11 +1161,11 @@ def test_wkv_b2_sequence_deepseek_perf(
 
     This test measures the end-to-end performance of the operation sequence:
     1. Reshard (flash_mla_out_reshard): 3.89 µs
-    2. Permute (attn_out_permute_pre_linear): 70.29 µs
+    2. Permute (attn_out_permute_pre_linear): 31.94 µs
     3. Linear (wkv_b2): 141.68 µs
     4. Permute (v_out_permute): 7.61 µs
 
-    Total expected: 224.86 µs
+    Total expected: 185.12 µs
     """
     subdir = "fused_op_unit_tests/mla"
     command = f"pytest models/demos/deepseek_v3/tests/{subdir}/test_wkv_b2_sequence_deepseek.py -k {step_name}"
@@ -1231,8 +1231,8 @@ def test_wkv_b2_sequence_deepseek_perf(
         (
             "fwd_decode_q_rope_nope",
             10,
-            184.16,
-        ),  # Sum: linear(57.11) + reshape(38.74) + slice(2.27+1.84) + permute(6.23) + linear(35.62) + permute(23.40) + permute(1.62) + rotary(4.16) + to_mem(1.19) + concat(8.01)
+            176.96,
+        ),  # Sum: linear(57.11) + reshape(38.74) + slice(2.27+1.84) + permute(6.23) + linear(35.62) + permute(16.47) + permute(1.62) + rotary(4.16) + to_mem(1.19) + concat(8.01)
     ],
 )
 # 33uS slower than sum of unit tests
@@ -1253,13 +1253,13 @@ def test_fwd_decode_q_rope_nope_deepseek_perf(
     4. Slice tt_q_rope: 1.84 µs
     5. Permute tt_q_nope: 6.23 µs
     6. Linear projection (wkv_b1): 35.62 µs
-    7. Permute tt_q_nope: 23.40 µs
+    7. Permute tt_q_nope: 16.47 µs
     8. Permute tt_q_rope: 1.62 µs
     9. Rotary embedding tt_q_rope: 4.16 µs
     10. To memory config: 1.19 µs
     11. Concat tt_q_nope and tt_q_rope: 8.01 µs
 
-    Total expected: 180.19 µs
+    Total expected: 173.26 µs
     """
     subdir = "fused_op_unit_tests/mla"
     command = f"pytest models/demos/deepseek_v3/tests/{subdir}/test_fwd_decode_q_rope_nope_deepseek.py -k {step_name}"

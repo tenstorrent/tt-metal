@@ -34,7 +34,7 @@ def galaxy_type():
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("rms_norm", 10, 16.2),
+        ("rms_norm", 10, 16.27),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
