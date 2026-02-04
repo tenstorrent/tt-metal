@@ -16,8 +16,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 def create_paged_kvpe_cache(device, num_users, max_seq_len, head_dim, num_blocks, block_size, mapping):
     """Create a paged KVPE cache for testing."""
-    # Cache is organized as [num_users, 1, num_blocks * block_size, head_dim]
-    cache_shape = (num_users, 1, max_seq_len, head_dim)
+    # Per-user sequence length must match paging: num_blocks * block_size total slots, num_users -> (num_blocks * block_size) // num_users per user
+    seq_len_per_user = (num_blocks * block_size) // num_users
+    assert (
+        seq_len_per_user == max_seq_len
+    ), f"Paging invariant: (num_blocks * block_size) // num_users must equal max_seq_len; got {seq_len_per_user} vs {max_seq_len}"
+    cache_shape = (num_users, 1, seq_len_per_user, head_dim)
     cache = torch.randn(cache_shape, dtype=torch.bfloat16) * 0.1
 
     paged_cache = cache.reshape(num_users, 1, -1, block_size, head_dim)
@@ -25,9 +29,6 @@ def create_paged_kvpe_cache(device, num_users, max_seq_len, head_dim, num_blocks
     paged_cache = paged_cache.reshape(num_blocks, 1, block_size, head_dim)
     inverse_mapping = torch.argsort(mapping.view(-1))
     paged_cache = paged_cache[inverse_mapping]
-
-    print(cache)
-    print(paged_cache)
 
     # Convert to ttnn with DRAM memory (matching model configuration)
     tt_cache = ttnn.from_torch(
@@ -98,9 +99,9 @@ def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_
             [1, 4, 128, 576],  # Q shape after all-to-all: [1, bsz_local, num_heads, kv_lora_rank + qk_rope_head_dim]
             {
                 "num_users": 4,  # Per device: 32 users / 8 devices = 4
-                "max_seq_len": 2048,
+                "max_seq_len": 1024,
                 "head_dim": 576,  # kv_lora_rank + qk_rope_head_dim
-                "num_blocks": 256,
+                "num_blocks": 128,  # (num_blocks * block_size) // num_users == max_seq_len; 128*32//4 == 1024
                 "block_size": 32,
                 "kv_lora_rank": 512,
             },
@@ -244,7 +245,9 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     # Compile run
     logger.info(f"Compiling flash MLA operation: {op_name}")
     logger.info(f"  Q shape: {q_shape}")
-    logger.info(f"  Cache shape: [{num_users}, 1, {num_blocks * block_size}, {head_dim}]")
+    logger.info(
+        f"  Cache shape: [{num_users}, 1, {max_seq_len}, {head_dim}] (num_blocks={num_blocks}, block_size={block_size})"
+    )
     logger.info(f"  Output shape: {output_shape}")
     logger.info(f"  Q shard shape: {shard_shape}")
     logger.info(f"  Output shard shape: {output_shard_shape}")
