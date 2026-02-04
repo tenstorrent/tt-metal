@@ -67,11 +67,9 @@ Each trace file contains:
 |-------|-------------|
 | `operation_id` | Sequential ID (1, 2, 3, ...) |
 | `operation_name` | e.g., `"ttnn.add"` |
-| `timestamp` | When the operation executed |
 | `args` | Positional arguments with `position` and `value` |
 | `kwargs` | Keyword arguments |
 | `return_value` | Serialized return value |
-| `num_tensors` | Count of tensor objects |
 
 ### Tensor Fields
 

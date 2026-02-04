@@ -1,7 +1,6 @@
 {
   "operation_id": 2,
   "operation_name": "ttnn.to_device",
-  "timestamp": "20260116_100125_631376",
   "args": [
     {
       "position": 0,
@@ -44,7 +43,6 @@
       "value": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     }
   },
-  "num_tensors": 2,
   "return_value": {
     "type": "ttnn.Tensor",
     "shape": [

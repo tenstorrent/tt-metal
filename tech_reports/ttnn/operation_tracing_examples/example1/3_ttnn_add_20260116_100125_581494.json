@@ -1,7 +1,6 @@
 {
   "operation_id": 3,
   "operation_name": "ttnn.add",
-  "timestamp": "20260116_100125_581494",
   "args": [
     {
       "position": 0,
@@ -101,7 +100,6 @@
     }
   ],
   "kwargs": {},
-  "num_tensors": 3,
   "return_value": {
     "type": "ttnn.Tensor",
     "shape": [

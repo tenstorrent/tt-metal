@@ -1,7 +1,6 @@
 {
   "operation_id": 1,
   "operation_name": "ttnn.from_torch",
-  "timestamp": "20260116_100125_630789",
   "args": [
     {
       "position": 0,
@@ -37,7 +36,6 @@
       "repr": "Layout.TILE"
     }
   },
-  "num_tensors": 2,
   "return_value": {
     "type": "ttnn.Tensor",
     "shape": [

@@ -1,7 +1,6 @@
 {
   "operation_id": 2,
   "operation_name": "ttnn.rand",
-  "timestamp": "20260116_100125_580882",
   "args": [],
   "kwargs": {
     "shape": [
@@ -21,7 +20,6 @@
       "value": "MeshDevice(1x1 grid, 1 devices)"
     }
   },
-  "num_tensors": 1,
   "return_value": {
     "type": "ttnn.Tensor",
     "shape": [

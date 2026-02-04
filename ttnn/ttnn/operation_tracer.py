@@ -236,21 +236,16 @@ def serialize_operation_parameters(
 
         # Serialize arguments
         serialized_args = []
-        tensor_counter = 0
 
         def serialize_value(value: Any, name_prefix: str = "") -> Any:
             """Recursively serialize a value, handling tensors specially."""
-            nonlocal tensor_counter
-
             # Lazy import torch to avoid global import validation errors
             import torch
 
             if isinstance(value, ttnn.Tensor):
-                tensor_counter += 1
                 return _serialize_ttnn_tensor(value, serialize_tensor_values)
 
             if isinstance(value, torch.Tensor):
-                tensor_counter += 1
                 return _serialize_torch_tensor(value, serialize_tensor_values)
 
             if isinstance(value, (int, float, bool, str, type(None))):
@@ -288,10 +283,8 @@ def serialize_operation_parameters(
         operation_data = {
             "operation_id": _OPERATION_COUNTER,
             "operation_name": operation_name,
-            "timestamp": timestamp,
             "args": serialized_args,
             "kwargs": serialized_kwargs,
-            "num_tensors": tensor_counter,
         }
 
         # Add return value if available

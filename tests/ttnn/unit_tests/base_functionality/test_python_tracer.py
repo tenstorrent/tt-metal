@@ -125,7 +125,6 @@ def test_operation_parameter_tracing(tmp_path, device, shape_a, shape_b, dtype):
     assert shape_value == shape_a, f"Expected shape {shape_a}, got {shape_value}"
 
     # Note: ttnn.rand doesn't have tensor parameters (it creates and returns a tensor)
-    # So num_tensors will be 0 for rand operations
 
     # Check the second rand operation trace
     rand_file_2 = rand_files[1]
@@ -151,9 +150,6 @@ def test_operation_parameter_tracing(tmp_path, device, shape_a, shape_b, dtype):
 
     assert arg_0["type"] == "ttnn.Tensor", f"Expected tensor type, got {arg_0.get('type')}"
     assert arg_1["type"] == "ttnn.Tensor", f"Expected tensor type, got {arg_1.get('type')}"
-
-    # Verify tensor data is embedded directly in the JSON
-    assert operation_data_add["num_tensors"] >= 2, "Expected at least 2 tensors for add operation"
 
     # Verify tensor data contains correct information
     for i, tensor_data in enumerate([arg_0, arg_1]):
