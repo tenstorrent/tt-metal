@@ -967,7 +967,7 @@ protected:
 
         // Handle Seeding
         std::random_device rd;
-        pgcfg.seed = 1131331985;
+        pgcfg.seed = rd();
 
         // Initialize Generator
         payload_generator_ = std::make_unique<DispatchPayloadGenerator>(pgcfg);
