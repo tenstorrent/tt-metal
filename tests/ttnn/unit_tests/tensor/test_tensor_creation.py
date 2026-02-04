@@ -1314,12 +1314,20 @@ def test_from_numpy_ml_dtypes_with_device(shape, device):
 # ============================================================================
 
 
-@pytest.mark.parametrize("tt_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("tt_dtype", [ttnn.int32, ttnn.uint32, ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 def test_to_numpy_auto_device_to_host(shape, tt_dtype, device):
-    """Test to_numpy automatically moves device tensor to host"""
+    """Test to_numpy automatically moves device tensor to host for all supported dtypes"""
+    if tt_dtype == ttnn.bfloat16:
+        pytest.importorskip("ml_dtypes")
+
     np.random.seed(0)
-    np_tensor = np.random.random(shape).astype(np.float32)
+
+    # Create appropriate numpy source data
+    if tt_dtype in [ttnn.float32, ttnn.bfloat16]:
+        np_tensor = np.random.random(shape).astype(np.float32)
+    else:
+        np_tensor = np.random.randint(0, 100, size=shape, dtype=np.int32)
 
     # Create tensor on device
     tt_tensor = ttnn.Tensor.from_numpy(np_tensor, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -1330,7 +1338,7 @@ def test_to_numpy_auto_device_to_host(shape, tt_dtype, device):
 
     assert list(result.shape) == list(shape)
     # Values should be close (allowing for bfloat16 precision loss)
-    assert np.allclose(np_tensor, result.astype(np.float32), rtol=1e-2)
+    assert np.allclose(np_tensor.astype(np.float32), result.astype(np.float32), rtol=1e-2)
 
 
 @pytest.mark.parametrize("target_dtype", [ttnn.int32, ttnn.float32, ttnn.bfloat16])
@@ -1359,3 +1367,162 @@ def test_to_numpy_auto_device_to_host_with_dtype(shape, target_dtype, device):
     elif target_dtype == ttnn.bfloat16:
         ml_dtypes = pytest.importorskip("ml_dtypes")
         assert result.dtype == ml_dtypes.bfloat16
+
+
+# ============================================================================
+# Value round-trip verification tests
+# ============================================================================
+
+
+@pytest.mark.parametrize("tt_dtype", [ttnn.int32, ttnn.uint32, ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_from_numpy_to_numpy_value_roundtrip(shape, tt_dtype):
+    """Test that values are preserved through from_numpy -> to_numpy round trip"""
+    if tt_dtype == ttnn.bfloat16:
+        pytest.importorskip("ml_dtypes")
+
+    np.random.seed(42)
+
+    # Create appropriate numpy source data
+    if tt_dtype in [ttnn.float32, ttnn.bfloat16]:
+        np_tensor = np.random.random(shape).astype(np.float32)
+    elif tt_dtype == ttnn.int32:
+        np_tensor = np.random.randint(-100, 100, size=shape, dtype=np.int32)
+    else:  # uint32
+        np_tensor = np.random.randint(0, 200, size=shape, dtype=np.uint32)
+
+    # Round trip: numpy -> ttnn -> numpy
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, dtype=tt_dtype)
+    result = tt_tensor.to_numpy()
+
+    # Verify values are preserved (with tolerance for float types)
+    if tt_dtype == ttnn.bfloat16:
+        # bfloat16 has lower precision
+        assert np.allclose(np_tensor.astype(np.float32), result.astype(np.float32), rtol=1e-2, atol=1e-2)
+    elif tt_dtype == ttnn.float32:
+        assert np.allclose(np_tensor, result, rtol=1e-5)
+    else:
+        # Integer types should be exact
+        assert np.array_equal(np_tensor.astype(result.dtype), result)
+
+
+@pytest.mark.parametrize("tt_dtype", [ttnn.int32, ttnn.uint32, ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_from_numpy_to_numpy_device_value_roundtrip(shape, tt_dtype, device):
+    """Test that values are preserved through from_numpy(device) -> to_numpy round trip"""
+    if tt_dtype == ttnn.bfloat16:
+        pytest.importorskip("ml_dtypes")
+
+    np.random.seed(42)
+
+    # Create appropriate numpy source data
+    if tt_dtype in [ttnn.float32, ttnn.bfloat16]:
+        np_tensor = np.random.random(shape).astype(np.float32)
+    elif tt_dtype == ttnn.int32:
+        np_tensor = np.random.randint(-100, 100, size=shape, dtype=np.int32)
+    else:  # uint32
+        np_tensor = np.random.randint(0, 200, size=shape, dtype=np.uint32)
+
+    # Round trip: numpy -> ttnn (on device) -> numpy
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    assert tt_tensor.storage_type() == ttnn.StorageType.DEVICE
+
+    result = tt_tensor.to_numpy()
+
+    # Verify values are preserved (with tolerance for float types)
+    if tt_dtype == ttnn.bfloat16:
+        assert np.allclose(np_tensor.astype(np.float32), result.astype(np.float32), rtol=1e-2, atol=1e-2)
+    elif tt_dtype == ttnn.float32:
+        assert np.allclose(np_tensor, result, rtol=1e-5)
+    else:
+        # Integer types should be exact
+        assert np.array_equal(np_tensor.astype(result.dtype), result)
+
+
+# ============================================================================
+# Backward compatibility tests
+# ============================================================================
+
+
+@pytest.mark.parametrize("np_dtype", [np.float32, np.int32, np.uint32, "bfloat16"])
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_from_numpy_without_device_creates_host_tensor(shape, np_dtype):
+    """Test that from_numpy without device parameter creates tensor on host (backward compatibility)"""
+    np.random.seed(0)
+
+    if np_dtype == "bfloat16":
+        ml_dtypes = pytest.importorskip("ml_dtypes")
+        np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
+    elif np_dtype == np.float32:
+        np_tensor = np.random.random(shape).astype(np_dtype)
+    else:
+        np_tensor = np.random.randint(0, 100, size=shape, dtype=np_dtype)
+
+    # Create tensor without device parameter
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor)
+
+    # Should be on host
+    assert tt_tensor.storage_type() == ttnn.StorageType.HOST
+    assert list(tt_tensor.shape) == list(shape)
+
+
+@pytest.mark.parametrize("tt_dtype", [ttnn.int32, ttnn.uint32, ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_to_numpy_backward_compatibility(shape, tt_dtype):
+    """Test that to_numpy without arguments works as before (backward compatibility)"""
+    if tt_dtype == ttnn.bfloat16:
+        ml_dtypes = pytest.importorskip("ml_dtypes")
+
+    np.random.seed(0)
+
+    # Create appropriate numpy source data
+    if tt_dtype in [ttnn.float32, ttnn.bfloat16]:
+        np_tensor = np.random.random(shape).astype(np.float32)
+    elif tt_dtype == ttnn.int32:
+        np_tensor = np.random.randint(-100, 100, size=shape, dtype=np.int32)
+    else:  # uint32
+        np_tensor = np.random.randint(0, 200, size=shape, dtype=np.uint32)
+
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, dtype=tt_dtype)
+
+    # Old-style call without any arguments
+    result = tt_tensor.to_numpy()
+
+    assert list(result.shape) == list(shape)
+
+    # Verify dtype matches expected output
+    if tt_dtype == ttnn.int32:
+        assert result.dtype == np.int32
+    elif tt_dtype == ttnn.uint32:
+        assert result.dtype == np.uint32
+    elif tt_dtype == ttnn.float32:
+        assert result.dtype == np.float32
+    elif tt_dtype == ttnn.bfloat16:
+        assert result.dtype == ml_dtypes.bfloat16
+
+    # Verify values
+    if tt_dtype == ttnn.bfloat16:
+        assert np.allclose(np_tensor.astype(np.float32), result.astype(np.float32), rtol=1e-2)
+    elif tt_dtype == ttnn.float32:
+        assert np.allclose(np_tensor, result)
+    else:
+        assert np.array_equal(np_tensor.astype(result.dtype), result)
+
+
+# ============================================================================
+# Error handling tests
+# ============================================================================
+
+
+@pytest.mark.parametrize("unsupported_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
+def test_to_numpy_unsupported_dtype_error(shape, unsupported_dtype):
+    """Test that to_numpy raises error for unsupported target dtypes"""
+    np.random.seed(0)
+    np_tensor = np.random.random(shape).astype(np.float32)
+
+    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, dtype=ttnn.float32)
+
+    # Should raise an error for unsupported dtype
+    with pytest.raises(Exception):
+        tt_tensor.to_numpy(dtype=unsupported_dtype)
