@@ -7,6 +7,7 @@
 #include <vector>
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
+#include <tt-metalium/allocator.hpp>
 #include "experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
@@ -143,6 +144,9 @@ public:
     // Hang detection
     void on_dispatch_timeout_detected();
 
+    /// Regenerate L1 bank-to-NOC table from device allocator so kernel table matches host allocator.
+    void regenerate_device_l1_bank_to_noc_table(ChipId device_id, const Allocator& allocator);
+
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
@@ -170,7 +174,7 @@ private:
 
     // Functions used to init/run firmware on devices
     CoreCoord virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord);
-    void generate_device_bank_to_noc_tables(ChipId device_id);
+    void generate_device_bank_to_noc_tables(ChipId device_id, uint8_t num_hw_cqs);
     void generate_worker_logical_to_virtual_map(ChipId device_id);
     void initialize_device_bank_to_noc_tables(
         ChipId device_id,

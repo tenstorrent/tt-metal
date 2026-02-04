@@ -201,27 +201,25 @@ const core_descriptor_t& get_core_descriptor_config(
     size_t end_y = compute_with_storage_end[1].as<size_t>();
     size_t start_x = compute_with_storage_start[0].as<size_t>();
     size_t start_y = compute_with_storage_start[1].as<size_t>();
-    // When slow dispatch is on, expand compute grid to full grid (use freed row/col). No YAML change.
+    // When slow dispatch is on, expand compute grid by reclaiming the dispatch column/row
+    // The YAML already accounts for harvesting, so we just expand by 1 in the dispatch axis
     if (!fast_dispatch) {
-        CoreCoord full_grid =
-            tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-        size_t full_end_x = full_grid.x - 1;
-        size_t full_end_y = full_grid.y - 1;
-        if (dispatch_core_config.get_dispatch_core_axis() == tt_metal::DispatchCoreAxis::COL && end_x < full_end_x) {
+        if (dispatch_core_config.get_dispatch_core_axis() == tt_metal::DispatchCoreAxis::COL) {
+            // Expand by 1 column (reclaim dispatch column)
+            end_x += 1;
             log_info(
                 tt::LogDevice,
-                "Slow dispatch mode: Expanding compute grid x-end from {} to {}",
-                end_x,
-                full_end_x);
-            end_x = full_end_x;
-        }
-        if (dispatch_core_config.get_dispatch_core_axis() == tt_metal::DispatchCoreAxis::ROW && end_y < full_end_y) {
+                "Slow dispatch mode: Expanding grid by 1 column to ({}, {})",
+                (end_x - start_x) + 1,
+                (end_y - start_y) + 1);
+        } else {
+            // Expand by 1 row (reclaim dispatch row)
+            end_y += 1;
             log_info(
                 tt::LogDevice,
-                "Slow dispatch mode: Expanding compute grid y-end from {} to {}",
-                end_y,
-                full_end_y);
-            end_y = full_end_y;
+                "Slow dispatch mode: Expanding grid by 1 row to ({}, {})",
+                (end_x - start_x) + 1,
+                (end_y - start_y) + 1);
         }
     }
     CoreCoord compute_grid_size((end_x - start_x) + 1, (end_y - start_y) + 1);
@@ -292,12 +290,15 @@ const core_descriptor_t& get_core_descriptor_config(
         [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
 
     std::vector<CoreCoord> logical_dispatch_cores;
-    logical_dispatch_cores.reserve(dispatch_cores.size());
-    std::transform(
-        dispatch_cores.cbegin(),
-        dispatch_cores.cend(),
-        std::back_inserter(logical_dispatch_cores),
-        [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
+    // In slow dispatch mode, no cores are reserved for dispatch
+    if (fast_dispatch) {
+        logical_dispatch_cores.reserve(dispatch_cores.size());
+        std::transform(
+            dispatch_cores.cbegin(),
+            dispatch_cores.cend(),
+            std::back_inserter(logical_dispatch_cores),
+            [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
+    }
 
     // Convert fabric mux cores to logical coordinates
     std::vector<CoreCoord> logical_fabric_mux_cores;

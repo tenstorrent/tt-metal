@@ -8,6 +8,7 @@
 
 // clang-format off
 #undef PROFILE_NOC_EVENTS
+#include "api/debug/dprint.h"
 #include "risc_common.h"
 #include "tensix.h"
 #include "tensix_types.h"
@@ -84,6 +85,7 @@ uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 uint8_t prev_noc_mode = DM_DEDICATED_NOC;
+uint8_t prev_dispatch_mode = 0xFF;  // Invalid value to force reload on first kernel
 
 // These arrays are used to store the worker logical to virtual coordinate mapping
 // Round up to nearest multiple of 4 to ensure uint32_t alignment for L1 to local copies
@@ -429,6 +431,17 @@ int main() {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+
+            // Re-read the bank-to-NOC table from L1 only when dispatch mode changes
+            // (e.g., transitioning from fast dispatch to slow dispatch where compute grid expands)
+            uint8_t dispatch_mode = launch_msg_address->kernel_config.mode;
+            if (dispatch_mode != prev_dispatch_mode) {
+                invalidate_l1_cache();
+                noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+                noc_worker_logical_to_virtual_map_init(MEM_LOGICAL_TO_VIRTUAL_SCRATCH);
+                prev_dispatch_mode = dispatch_mode;
+            }
+
             uint32_t enables = launch_msg_address->kernel_config.enables;
             // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
             if (enables &

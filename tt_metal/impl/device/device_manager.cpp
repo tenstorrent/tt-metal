@@ -557,6 +557,7 @@ void DeviceManager::activate_device(ChipId id) {
             completion_queue_reader_core,
             this->worker_l1_size_);
         devices_.emplace_back(std::unique_ptr<Device>(device));
+        tt::tt_metal::MetalContext::instance().regenerate_device_l1_bank_to_noc_table(id, *device->allocator());
     } else {
         log_debug(tt::LogMetal, "DeviceManager re-initialize device {}", id);
         if (not device->is_initialized()) {
@@ -566,6 +567,7 @@ void DeviceManager::activate_device(ChipId id) {
                 this->trace_region_size_,
                 this->worker_l1_size_,
                 this->l1_bank_remap_);
+            tt::tt_metal::MetalContext::instance().regenerate_device_l1_bank_to_noc_table(id, *device->allocator());
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
         }
