@@ -260,6 +260,49 @@ def compute_expert_activation_golden(expert_indices, expert_scores, expert_mappi
     return golden_activation, experts_per_device
 
 
+def compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis):
+    """
+    Compute the golden e_t (expert-to-token) tensor for each device.
+
+    For each device and each local expert, this builds a list of token IDs that
+    activate that expert. The list is stored in sequential order as tokens are
+    processed, and is terminated with a -1 sentinel.
+
+    Returns:
+        golden_e_t: dict[device_idx] -> dict[local_expert_idx] -> list of token_ids
+    """
+    num_devices = mesh_shape[0] * mesh_shape[1]
+    if cluster_axis == 1:
+        num_dispatch_devices = mesh_shape[1]
+    elif cluster_axis == 0:
+        num_dispatch_devices = mesh_shape[0]
+    else:
+        num_dispatch_devices = num_devices
+
+    tokens_per_device = expert_indices.shape[1]
+    selected_experts_k = expert_indices.shape[2]
+    experts = expert_mapping.shape[1]
+    experts_per_device = experts // num_devices
+
+    # Build e_t lists for each device and each local expert
+    # golden_e_t[device][local_expert] = [token_id_0, token_id_1, ...]
+    golden_e_t = {d: {e: [] for e in range(experts_per_device)} for d in range(num_devices)}
+
+    for src_device in range(num_dispatch_devices):
+        for t in range(tokens_per_device):
+            global_token_id = src_device * tokens_per_device + t
+
+            for k in range(selected_experts_k):
+                expert_id = expert_indices[src_device, t, k].item()
+                target_device = expert_mapping[src_device, expert_id].item()
+                local_expert_idx = expert_id % experts_per_device
+
+                # Each token selects K unique experts, so no duplicate tracking needed
+                golden_e_t[target_device][local_expert_idx].append(global_token_id)
+
+    return golden_e_t, experts_per_device
+
+
 def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     """
     Create an L1 sharded memory config for a tensor to be completely on specified cores.
@@ -790,5 +833,122 @@ def test_moe(
 
     logger.info(f"\nExpert Activation Verification: {'PASSED' if activation_all_passed else 'FAILED'}")
 
+    # ========== Per Expert Total Tokens Tensor Validation ==========
+    logger.info(f"\n========== Per Expert Total Tokens Tensor Validation ==========")
+
+    # L1 alignment constant (16 bytes)
+    l1_alignment = 16
+
+    # Convert per_expert_total_tokens tensor to torch
+    # Shape per device: [1, aligned_elements] as uint32
+    per_expert_total_tokens_torch = ttnn.to_torch(
+        per_expert_total_tokens_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    )
+    logger.info(f"Per expert total tokens torch shape: {per_expert_total_tokens_torch.shape}")
+
+    # Validate shape: [num_devices, aligned_row_elements]
+    # Row is experts_per_device uint32s, aligned to 16 bytes
+    per_expert_row_bytes = ((experts_per_device * 4 + l1_alignment - 1) // l1_alignment) * l1_alignment
+    per_expert_row_elements = per_expert_row_bytes // 4
+    expected_per_expert_shape = (num_devices, per_expert_row_elements)
+    assert per_expert_total_tokens_torch.shape == expected_per_expert_shape, (
+        f"per_expert_total_tokens shape mismatch: expected {expected_per_expert_shape}, "
+        f"got {per_expert_total_tokens_torch.shape}"
+    )
+
+    per_expert_tokens_all_passed = True
+    for device_idx in range(num_devices):
+        device_counts = per_expert_total_tokens_torch[device_idx].flatten()
+
+        for local_exp_idx in range(experts_per_device):
+            expected_count = expert_token_counts[device_idx, local_exp_idx].item()
+            actual_count = device_counts[local_exp_idx].item()
+
+            if actual_count != expected_count:
+                logger.warning(
+                    f"  Device {device_idx}, Expert {local_exp_idx}: "
+                    f"count mismatch - expected {expected_count}, got {actual_count}"
+                )
+                per_expert_tokens_all_passed = False
+            else:
+                logger.info(f"  Device {device_idx}, Expert {local_exp_idx}: count={actual_count} PASSED")
+
+    logger.info(f"\nPer Expert Total Tokens Verification: {'PASSED' if per_expert_tokens_all_passed else 'FAILED'}")
+
+    # ========== E-T (Expert-to-Token) Tensor Validation ==========
+    logger.info(f"\n========== E-T (Expert-to-Token) Tensor Validation ==========")
+
+    # Compute golden e_t
+    golden_e_t, _ = compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
+
+    # Convert e_t tensor to torch
+    # Shape per device: [experts_per_device, e_t_row_elements] as uint32
+    e_t_torch = ttnn.to_torch(e_t_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    logger.info(f"E-T torch shape: {e_t_torch.shape}")
+
+    # Each entry is 16B aligned (4 uint32s per token ID)
+    e_t_entry_size_bytes = ((4 + l1_alignment - 1) // l1_alignment) * l1_alignment  # align sizeof(uint32_t) to 16B
+    e_t_entry_elements = e_t_entry_size_bytes // 4  # elements per entry (4 for 16B alignment)
+
+    # Validate shape: [num_devices * experts_per_device, e_t_row_elements]
+    # Each expert has (total_tokens + 1) entries (tokens + sentinel), each entry is 16B aligned
+    e_t_row_elements = (total_tokens + 1) * e_t_entry_elements
+    expected_e_t_shape = (num_devices * experts_per_device, e_t_row_elements)
+    assert (
+        e_t_torch.shape == expected_e_t_shape
+    ), f"e_t shape mismatch: expected {expected_e_t_shape}, got {e_t_torch.shape}"
+
+    e_t_all_passed = True
+    for device_idx in range(num_devices):
+        for local_exp_idx in range(experts_per_device):
+            expected_tokens = golden_e_t[device_idx][local_exp_idx]
+            num_expected_tokens = len(expected_tokens)
+
+            # Get the row for this expert from this device
+            # Each device has experts_per_device rows in the tensor
+            row_idx = device_idx * experts_per_device + local_exp_idx
+            device_expert_row = e_t_torch[row_idx].flatten().to(torch.int64)
+
+            # Validate each token in the e_t list
+            tokens_match = True
+            for i, expected_token_id in enumerate(expected_tokens):
+                # Each entry is at 16B (e_t_entry_elements) offset
+                actual_token_id = device_expert_row[i * e_t_entry_elements].item()
+
+                if actual_token_id != expected_token_id:
+                    logger.warning(
+                        f"  Device {device_idx}, Expert {local_exp_idx}, Entry {i}: "
+                        f"token_id mismatch - expected {expected_token_id}, got {actual_token_id}"
+                    )
+                    tokens_match = False
+                    e_t_all_passed = False
+
+            # Validate sentinel (-1) at end of list
+            sentinel_idx = num_expected_tokens * e_t_entry_elements
+            if sentinel_idx < len(device_expert_row):
+                sentinel_value = device_expert_row[sentinel_idx].item()
+                is_sentinel = (sentinel_value == -1) or (sentinel_value == 0xFFFFFFFF)
+
+                if not is_sentinel:
+                    logger.warning(
+                        f"  Device {device_idx}, Expert {local_exp_idx}: "
+                        f"sentinel mismatch - expected -1, got {sentinel_value}"
+                    )
+                    e_t_all_passed = False
+                elif tokens_match:
+                    logger.info(
+                        f"  Device {device_idx}, Expert {local_exp_idx}: "
+                        f"{num_expected_tokens} tokens validated, sentinel PASSED"
+                    )
+            else:
+                logger.warning(
+                    f"  Device {device_idx}, Expert {local_exp_idx}: " f"sentinel index {sentinel_idx} out of bounds"
+                )
+                e_t_all_passed = False
+
+    logger.info(f"\nE-T Tensor Verification: {'PASSED' if e_t_all_passed else 'FAILED'}")
+
     # assert all_passed, f"Tilized output verification failed! Accuracy: {accuracy:.2f}%"
     assert activation_all_passed, "Expert activation tensor verification failed!"
+    assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"
+    assert e_t_all_passed, "E-T tensor verification failed!"
