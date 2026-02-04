@@ -98,6 +98,11 @@ CATEGORIES = {
     ),
     "dram_failure": (r"DRAM training failed|gddr issue", "RED", "DRAM training failures", True),
     "arc_timeout": (r"ARC.*[Tt]imeout|ARC message timed out", "YELLOW", "ARC timeout"),
+    "aiclk_timeout": (
+        r"Waiting for AICLK value to settle failed on timeout",
+        "RED",
+        "AICLK timeout",
+    ),
     # Connectivity issues
     "mpi_error": (r"PRTE has lost communication|MPI_ABORT", "RED", "MPI error"),
     "ssh_error": (r"Permission denied \(publickey\)", "YELLOW", "SSH error"),
@@ -491,6 +496,7 @@ def print_summary(analyses: list[LogAnalysis], show_files: bool = True) -> None:
         "workload_timeout",
         "dram_failure",
         "arc_timeout",
+        "aiclk_timeout",
         "mpi_error",
         "ssh_error",
         "inconclusive",
@@ -783,6 +789,18 @@ def _recommend_arc_timeout(cats: dict, total: int, analyses: list[LogAnalysis]) 
     return [f"- {Colors.YELLOW}ARC timeout:{Colors.NC} ARC communication issues detected. Report statistics to Syseng."]
 
 
+@register_recommendation("aiclk_timeout")
+def _recommend_aiclk_timeout(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
+    """Generate recommendations for AICLK timeout."""
+    if not cats.get("aiclk_timeout"):
+        return []
+    count = cats["aiclk_timeout"]
+    return [
+        f"- {Colors.RED}AICLK timeout:{Colors.NC} AICLK failed to settle ({count} occurrence(s)). "
+        f"Could indicate bad Firmware or Hardware state. Escalate to Systems Engineering."
+    ]
+
+
 @register_recommendation("mpi_error")
 def _recommend_mpi_error(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
     """Generate recommendations for MPI errors."""
@@ -842,6 +860,7 @@ def print_recommendations(analyses: list[LogAnalysis]) -> None:
         "workload_timeout",
         "dram_failure",
         "arc_timeout",
+        "aiclk_timeout",
         "mpi_error",
         "ssh_error",
         "unhealthy",
@@ -910,6 +929,8 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
             icons.append(("⏱", Colors.YELLOW))
         elif "arc_timeout" in a.categories:
             icons.append(("A", Colors.YELLOW))
+        elif "aiclk_timeout" in a.categories:
+            icons.append(("C", Colors.RED))
         elif "ssh_error" in a.categories:
             icons.append(("S", Colors.YELLOW))
         elif "missing_ports" in a.categories:
@@ -938,6 +959,7 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
         f"{Colors.YELLOW}⏱{Colors.NC}=timeout "
         f"{Colors.RED}!{Colors.NC}=dram "
         f"{Colors.YELLOW}A{Colors.NC}=arc "
+        f"{Colors.RED}C{Colors.NC}=aiclk "
         f"{Colors.RED}M{Colors.NC}=mpi "
         f"{Colors.YELLOW}S{Colors.NC}=ssh "
         f"{Colors.CYAN}?{Colors.NC}=inconclusive "
