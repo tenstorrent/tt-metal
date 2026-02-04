@@ -1,20 +1,20 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import json
-import time
 import argparse
 import csv
-import urllib
+import json
+import os
 import subprocess
+import time
+import urllib
 from pathlib import Path
+
 from loguru import logger
 from PIL import Image
 
 from ..clip_encoder import CLIPEncoder
 from ..fid_score import calculate_fid_score
-
 
 COCO_CAPTIONS_DOWNLOAD_PATH = (
     "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/"

@@ -4,16 +4,17 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Callable
 
 import torch
-import ttnn
-import math
 
-from ...layers.normalization import GroupNorm
+import ttnn
+
 from ...layers.conv3d import ContextParallelConv3d
-from ...utils.tensor import bf16_tensor
+from ...layers.normalization import GroupNorm
 from ...parallel.config import vae_all_gather, vae_neighbor_pad, vae_slice_reshard
+from ...utils.tensor import bf16_tensor
 
 if TYPE_CHECKING:
     pass

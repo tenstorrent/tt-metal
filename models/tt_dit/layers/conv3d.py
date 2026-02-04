@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-
 from typing import Tuple
 
+import torch
 from loguru import logger
+
+import ttnn
+
 from ..parallel.config import vae_neighbor_pad
 
 

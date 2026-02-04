@@ -4,8 +4,9 @@
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 
 def test_mochi_diffusers_pipeline():
@@ -138,8 +139,8 @@ def test_tt_mochi_pipeline(
     This uses the TT transformer instead of the diffusers one.
     """
     try:
-        from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
         from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
+        from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
     except ImportError as e:
         pytest.skip(f"Required TT modules not available: {e}")
 

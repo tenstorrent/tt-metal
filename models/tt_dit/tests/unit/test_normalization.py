@@ -5,13 +5,14 @@
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
-from ...utils.tensor import bf16_tensor
-from ...utils.check import assert_quality
-from ...layers.normalization import RMSNorm, LayerNorm, DistributedLayerNorm, GroupNorm, DistributedRMSNorm
+import ttnn
+
+from ...layers.normalization import DistributedLayerNorm, DistributedRMSNorm, GroupNorm, LayerNorm, RMSNorm
 from ...parallel.manager import CCLManager
+from ...utils.check import assert_quality
+from ...utils.tensor import bf16_tensor
 
 
 class TorchRMSNorm(torch.nn.Module):

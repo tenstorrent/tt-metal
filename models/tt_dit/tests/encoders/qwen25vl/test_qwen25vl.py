@@ -7,8 +7,9 @@ import pytest
 import torch
 import transformers
 import transformers.models.qwen2_5_vl.modeling_qwen2_5_vl
-import ttnn
 from loguru import logger
+
+import ttnn
 
 from ....encoders.qwen25vl.encoder_pair import Qwen25VlTokenizerEncoderPair
 from ....encoders.qwen25vl.model_qwen25vl import (

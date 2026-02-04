@@ -8,8 +8,9 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
 
-import ttnn
 from typing_extensions import deprecated
+
+import ttnn
 
 from ..utils import tensor
 from ..utils.substate import pop_substate

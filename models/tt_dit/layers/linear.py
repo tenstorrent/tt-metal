@@ -5,10 +5,11 @@
 import math
 
 import torch
+
 import ttnn
 
-from .module import Module, Parameter
 from ..utils.matmul import get_matmul_config
+from .module import Module, Parameter
 
 
 class Linear(Module):

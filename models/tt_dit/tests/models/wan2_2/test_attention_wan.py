@@ -5,18 +5,19 @@
 
 import pytest
 import torch
-import ttnn
+from diffusers import WanTransformer3DModel
 from loguru import logger
 
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from ....utils.check import assert_quality
+import ttnn
+
 from ....models.transformers.wan2_2.attention_wan import WanAttention
-from ....parallel.manager import CCLManager
 from ....parallel.config import DiTParallelConfig, ParallelFactor
-from ....utils.padding import pad_vision_seq_parallel
+from ....parallel.manager import CCLManager
+from ....utils.check import assert_quality
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
-from ....utils.test import ring_params, line_params
-from diffusers import WanTransformer3DModel
+from ....utils.padding import pad_vision_seq_parallel
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(

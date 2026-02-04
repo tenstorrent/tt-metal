@@ -6,10 +6,11 @@ import itertools
 import os
 
 import pytest
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
+
 from ....pipelines.motif.pipeline_motif import MotifPipeline
 
 

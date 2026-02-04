@@ -1,22 +1,22 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import csv
+import json
 
 # must be the very first lines!
 import os
-import urllib
-import torch
-import time
-from loguru import logger
 import statistics
-import json
+import time
+import urllib
+
+import pytest
+import torch
+from diffusers import StableDiffusion3Pipeline
+from loguru import logger
 
 from ..clip_encoder import CLIPEncoder
 from ..fid_score import calculate_fid_score
-
-from diffusers import StableDiffusion3Pipeline
 
 
 class SimpleProfiler:

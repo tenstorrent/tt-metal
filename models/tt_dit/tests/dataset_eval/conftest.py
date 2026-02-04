@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 import ttnn
+
 from ...pipelines.flux1.pipeline_flux1 import Flux1Pipeline
+from ...pipelines.mochi.pipeline_mochi import MochiPipeline
 from ...pipelines.motif.pipeline_motif import MotifPipeline
 from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
-from ...pipelines.mochi.pipeline_mochi import MochiPipeline
 from ...pipelines.wan.pipeline_wan import WanPipeline
 
 targets_setup = {

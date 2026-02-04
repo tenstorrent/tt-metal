@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
 from loguru import logger
-from ...layers.normalization import RMSNorm
+
+import ttnn
+
 from ...layers.linear import Linear
-from ...utils.conv3d import _ntuple, get_conv3d_config, prepare_conv3d_weights, count_convs, aligned_channels
-from ...utils.substate import substate, indexed_substates
+from ...layers.normalization import RMSNorm
+from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
+from ...utils.substate import indexed_substates, substate
 from ...utils.tensor import bf16_tensor
 
 CACHE_T = 2

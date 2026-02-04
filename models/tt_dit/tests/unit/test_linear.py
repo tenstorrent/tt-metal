@@ -5,12 +5,13 @@
 
 import pytest
 import torch
+
 import ttnn
 
-from ...utils.tensor import bf16_tensor
-from ...utils.check import assert_quality
-from ...layers.linear import Linear, ColParallelLinear, RowParallelLinear
+from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...parallel.manager import CCLManager
+from ...utils.check import assert_quality
+from ...utils.tensor import bf16_tensor
 
 
 @pytest.mark.parametrize(

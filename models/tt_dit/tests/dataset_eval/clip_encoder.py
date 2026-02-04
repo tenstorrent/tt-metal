@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import torch.nn as nn
+from typing import List, Optional, Union
 
 import open_clip
+import torch
+import torch.nn as nn
 from PIL import Image
-from typing import Union, List, Optional
 
 
 class CLIPEncoder(nn.Module):

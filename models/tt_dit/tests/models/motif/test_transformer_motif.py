@@ -5,8 +5,9 @@
 import huggingface_hub
 import pytest
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 from ....models.transformers.transformer_motif import MotifTransformer, convert_motif_transformer_state
 from ....parallel.config import DiTParallelConfig, ParallelFactor

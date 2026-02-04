@@ -4,32 +4,33 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import List
-from PIL import Image
 
 import torch
 import tqdm
-import ttnn
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from loguru import logger
+from PIL import Image
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
-from contextlib import nullcontext
 
+import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from ...encoders.clip.model_clip import CLIPEncoder, CLIPConfig
-from ...encoders.t5.model_t5 import T5Encoder, T5Config
+
+from ...encoders.clip.model_clip import CLIPConfig, CLIPEncoder
+from ...encoders.t5.model_t5 import T5Config, T5Encoder
 
 # NOTE: SD35Transformer is the new tt-dit implementation
 from ...models.transformers.transformer_sd35 import SD35Transformer2DModel
 from ...models.vae.vae_sd35 import VAEDecoder
+from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
-from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig, ParallelFactor
-from ...utils.padding import PaddingConfig
 from ...utils import cache
+from ...utils.padding import PaddingConfig
 
 TILE_SIZE = 32
 

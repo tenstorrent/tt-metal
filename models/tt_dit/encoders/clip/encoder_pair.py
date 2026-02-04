@@ -7,9 +7,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
-import ttnn
 from loguru import logger
 from transformers import AutoTokenizer, CLIPTextModel
+
+import ttnn
 
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager

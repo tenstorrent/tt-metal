@@ -2,24 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 import torch.nn as nn
-import os
+from diffusers.models.autoencoders.autoencoder_kl_mochi import MochiDecoder3D, MochiResnetBlock3D, MochiUpBlock3D
+from loguru import logger
+
 import ttnn
 
-from ....utils.check import assert_quality
-from ....models.vae.vae_mochi import (
-    Conv1x1 as TtConv1x1,
-    ResBlock as TtResBlock,
-    CausalUpsampleBlock as TtCausalUpsampleBlock,
-    MochiVAEDecoder as TtDecoder,
-)
-from ....parallel.manager import CCLManager
+from ....models.vae.vae_mochi import CausalUpsampleBlock as TtCausalUpsampleBlock
+from ....models.vae.vae_mochi import Conv1x1 as TtConv1x1
+from ....models.vae.vae_mochi import MochiVAEDecoder as TtDecoder
+from ....models.vae.vae_mochi import ResBlock as TtResBlock
 from ....parallel.config import MochiVAEParallelConfig, ParallelFactor
-from diffusers.models.autoencoders.autoencoder_kl_mochi import MochiResnetBlock3D, MochiUpBlock3D, MochiDecoder3D
-
-from loguru import logger
+from ....parallel.manager import CCLManager
+from ....utils.check import assert_quality
 
 
 def get_padded_size(numerator, denominator):
@@ -659,6 +658,7 @@ def load_dit(
     # Load pretrained Mochi Transformer
     # First load the torch version to get the config and state dict
     from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
+
     from ....models.transformers.transformer_mochi import MochiTransformer3DModel
     from ....parallel.config import DiTParallelConfig
     from ....utils.cache import get_cache_path, load_cache_dict

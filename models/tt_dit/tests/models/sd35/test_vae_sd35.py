@@ -2,18 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import torch
-import ttnn
 import os
 
-from ....utils.check import assert_quality
-from ....models.vae import vae_sd35
-from ....parallel.manager import CCLManager
-from ....parallel.config import vae_all_gather, VAEParallelConfig, ParallelFactor
+import pytest
+import torch
 from loguru import logger
-from .test_performance_sd35 import get_expected_metrics
+
+import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
+
+from ....models.vae import vae_sd35
+from ....parallel.config import ParallelFactor, VAEParallelConfig, vae_all_gather
+from ....parallel.manager import CCLManager
+from ....utils.check import assert_quality
+from .test_performance_sd35 import get_expected_metrics
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/autoencoders/vae.py

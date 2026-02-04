@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING
 
 import ttnn
 
+from ...models.vae.vae_wan2_1 import WanDecoder
 from ...parallel.config import VAEParallelConfig
 from ...parallel.manager import CCLManager
-from ...models.vae.vae_wan2_1 import WanDecoder
-from ...utils.conv3d import conv_pad_in_channels, conv_pad_height
+from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import bf16_tensor_2dshard
 
 if TYPE_CHECKING:

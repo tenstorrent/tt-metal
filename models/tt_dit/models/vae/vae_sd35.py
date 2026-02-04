@@ -10,10 +10,10 @@ import ttnn
 
 # from .conv2d import TtConv2d, TtConv2dParameters
 from ...layers.conv2d import Conv2d
-from ...layers.normalization import GroupNorm
 from ...layers.linear import ColParallelLinear, Linear
-from ...utils.substate import substate, indexed_substates
+from ...layers.normalization import GroupNorm
 from ...parallel.config import vae_all_gather
+from ...utils.substate import indexed_substates, substate
 
 if TYPE_CHECKING:
     pass

@@ -3,14 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from ...layers.normalization import DistributedLayerNorm, LayerNorm
-from ...layers.linear import ColParallelLinear, Linear
+
+from ...layers.embeddings import PatchEmbed, SD35CombinedTimestepTextProjEmbeddings
 from ...layers.feedforward import ParallelFeedForward
-from ...layers.embeddings import SD35CombinedTimestepTextProjEmbeddings, PatchEmbed
+from ...layers.linear import ColParallelLinear, Linear
+from ...layers.module import Module
+from ...layers.normalization import DistributedLayerNorm, LayerNorm
 from ...utils.substate import substate
 from .attention_sd35 import SD35JointAttention
-from ...layers.module import Module
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py

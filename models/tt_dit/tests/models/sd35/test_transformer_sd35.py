@@ -3,21 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+import time
+
 import pytest
 import torch
-import ttnn
+from diffusers import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from loguru import logger
 
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from ....utils.check import assert_quality
-from ....models.transformers.transformer_sd35 import SD35TransformerBlock, SD35Transformer2DModel
-from ....parallel.manager import CCLManager
+import ttnn
+
+from ....models.transformers.transformer_sd35 import SD35Transformer2DModel, SD35TransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor
-from diffusers import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from ....parallel.manager import CCLManager
+from ....utils.cache import get_and_create_cache_path, get_cache_path, load_cache_dict, save_cache_dict
+from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
-from ....utils.cache import get_cache_path, get_and_create_cache_path, save_cache_dict, load_cache_dict
-import time
-import os
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 
 @pytest.mark.parametrize(

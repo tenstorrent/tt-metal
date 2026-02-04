@@ -6,11 +6,12 @@ import itertools
 import os
 
 import pytest
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from ....parallel.config import DiTParallelConfig, ParallelFactor, EncoderParallelConfig, VAEParallelConfig
+
+from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 
 

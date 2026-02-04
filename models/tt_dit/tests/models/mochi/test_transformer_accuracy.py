@@ -2,20 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import ttnn
-import torch
-import os
 import json
+import os
+
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
+import torch
+from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
 from loguru import logger
 
+import ttnn
+
 from ....models.transformers.transformer_mochi import MochiTransformer3DModel
-from ....parallel.manager import CCLManager
 from ....parallel.config import DiTParallelConfig, ParallelFactor
+from ....parallel.manager import CCLManager
 from ....utils.cache import get_cache_path, load_cache_dict
-from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
 
 
 @pytest.mark.parametrize(

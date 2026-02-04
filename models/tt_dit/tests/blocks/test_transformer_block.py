@@ -7,8 +7,9 @@ from time import time
 import diffusers.models.transformers.transformer_flux
 import pytest
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 from ...blocks.attention import Attention
 from ...blocks.transformer_block import TransformerBlock

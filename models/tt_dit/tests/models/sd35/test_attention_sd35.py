@@ -5,14 +5,15 @@
 
 import pytest
 import torch
+from diffusers import SD3Transformer2DModel as TorchSD3Transformer2DModel
+
 import ttnn
 
-from ....utils.tensor import bf16_tensor
-from ....utils.check import assert_quality
 from ....models.transformers.attention_sd35 import SD35JointAttention
 from ....parallel.manager import CCLManager
-from diffusers import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
+from ....utils.tensor import bf16_tensor
 
 
 @pytest.mark.parametrize(

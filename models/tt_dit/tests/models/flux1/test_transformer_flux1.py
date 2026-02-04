@@ -4,23 +4,22 @@
 
 # import diffusers.models.transformers.transformer_flux as reference
 import os
+from time import time
+
 import diffusers as reference
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
-from ....models.transformers.transformer_flux1 import (
-    Flux1SingleTransformerBlock,
-    Flux1Transformer,
-)
+import ttnn
+
+from ....models.transformers.transformer_flux1 import Flux1SingleTransformerBlock, Flux1Transformer
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from time import time
 
 
 @pytest.mark.parametrize(

@@ -5,8 +5,9 @@
 import math
 
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 
 def assert_quality(

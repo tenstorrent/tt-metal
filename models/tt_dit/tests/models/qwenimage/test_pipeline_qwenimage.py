@@ -6,8 +6,9 @@ import itertools
 import os
 
 import pytest
-import ttnn
 from loguru import logger
+
+import ttnn
 
 from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline
 

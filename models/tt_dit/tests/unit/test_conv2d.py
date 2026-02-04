@@ -4,12 +4,13 @@
 
 import pytest
 import torch
+
 import ttnn
 
-from ...utils.check import assert_quality
 from ...layers.conv2d import Conv2d
-from ...parallel.manager import CCLManager
 from ...parallel.config import vae_all_gather
+from ...parallel.manager import CCLManager
+from ...utils.check import assert_quality
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)

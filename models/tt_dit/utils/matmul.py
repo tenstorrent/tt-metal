@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-from loguru import logger
 import math
 
+from loguru import logger
+
+import ttnn
 
 # Track unique warning signatures to avoid stdout spam
 _warned_matmul_signatures = set()

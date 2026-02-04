@@ -7,7 +7,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
+
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ...blocks.attention import Attention
 from ...blocks.transformer_block import TransformerBlock, _chunk_time3d
@@ -16,7 +18,6 @@ from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepa
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import rename_substate
-from models.common.utility_functions import is_blackhole
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

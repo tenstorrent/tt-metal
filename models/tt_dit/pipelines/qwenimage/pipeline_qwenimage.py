@@ -12,11 +12,12 @@ import diffusers
 import numpy as np
 import torch
 import tqdm
-import ttnn
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKLQwenImage
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from loguru import logger
+
+import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ...encoders.qwen25vl.encoder_pair import Qwen25VlTokenizerEncoderPair
@@ -26,8 +27,8 @@ from ...parallel.config import (
     DiTParallelConfig,
     EncoderParallelConfig,
     ParallelFactor,
-    VAEParallelConfig,
     VaeHWParallelConfig,
+    VAEParallelConfig,
 )
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor

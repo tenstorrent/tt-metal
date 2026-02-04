@@ -6,10 +6,11 @@ import itertools
 import os
 
 import pytest
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
+
 from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
 
 

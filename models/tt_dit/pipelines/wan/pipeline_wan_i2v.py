@@ -4,19 +4,18 @@
 
 # Adapted from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/wan/pipeline_wan.py
 
-from typing import List, Optional, Union
+from typing import List, NamedTuple, Optional, Union
 
 import PIL
 import torch
-
-from .pipeline_wan import WanPipeline
+from diffusers.schedulers import UniPCMultistepScheduler
 
 import ttnn
+
 from ...models.vae.vae_wan2_1 import WanEncoder
-from diffusers.schedulers import UniPCMultistepScheduler
-from ...utils.conv3d import conv_pad_in_channels, conv_pad_height
+from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import bf16_tensor_2dshard
-from typing import NamedTuple
+from .pipeline_wan import WanPipeline
 
 
 class ImagePrompt(NamedTuple):

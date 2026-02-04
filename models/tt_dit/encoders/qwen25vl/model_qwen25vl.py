@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
+
 import ttnn
 
 from ...layers.embeddings import Embedding

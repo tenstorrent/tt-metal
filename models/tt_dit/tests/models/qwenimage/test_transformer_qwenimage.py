@@ -5,8 +5,9 @@
 import diffusers as reference
 import pytest
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 from ....models.transformers.transformer_qwenimage import QwenImageTransformer
 from ....parallel.config import DiTParallelConfig, ParallelFactor

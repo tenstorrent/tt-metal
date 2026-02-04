@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
+
 import ttnn
 
 from ..layers.linear import ColParallelLinear

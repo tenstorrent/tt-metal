@@ -6,27 +6,28 @@ import math
 
 import pytest
 import torch
-import ttnn
 from diffusers.models.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings as TorchCombinedTimestepGuidanceTextProjEmbeddings,
 )
+from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
+from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as TorchSD3Transformer2DModel
 
-from ...utils import tensor
-from ...utils.tensor import bf16_tensor
-from ...utils.check import assert_quality
-from ...utils.substate import substate
+import ttnn
+
 from ...layers.embeddings import (
+    CombinedTimestepGuidanceTextProjEmbeddings,
     Embedding,
-    TimestepEmbedding,
+    MochiPatchEmbed,
+    PatchEmbed,
     PixartAlphaTextProjection,
     SD35CombinedTimestepTextProjEmbeddings,
-    PatchEmbed,
-    MochiPatchEmbed,
+    TimestepEmbedding,
     WanPatchEmbed,
-    CombinedTimestepGuidanceTextProjEmbeddings,
 )
-from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as TorchSD3Transformer2DModel
-from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
+from ...utils import tensor
+from ...utils.check import assert_quality
+from ...utils.substate import substate
+from ...utils.tensor import bf16_tensor
 
 
 class TorchCombinedTimestepTextProjEmbeddings(torch.nn.Module):

@@ -5,6 +5,7 @@
 import diffusers.models.attention_processor
 import pytest
 import torch
+
 import ttnn
 
 from ...blocks.attention import Attention

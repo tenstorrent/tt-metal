@@ -7,16 +7,14 @@ from typing import List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin
-from diffusers.utils import logging
-from diffusers.utils.accelerate_utils import apply_forward_hook
 from diffusers.models.activations import get_activation
+from diffusers.models.autoencoders.vae import AutoencoderMixin, DecoderOutput, DiagonalGaussianDistribution
 from diffusers.models.modeling_outputs import AutoencoderKLOutput
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.autoencoders.vae import AutoencoderMixin, DecoderOutput, DiagonalGaussianDistribution
-
+from diffusers.utils import logging
+from diffusers.utils.accelerate_utils import apply_forward_hook
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 

@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 import torch
+
 import ttnn
 
 from ...layers.module import Module, Parameter

@@ -2,11 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-from loguru import logger
 import collections
 from itertools import repeat
+
+import torch
+from loguru import logger
+
+import ttnn
 
 ALIGNMENT = 32
 

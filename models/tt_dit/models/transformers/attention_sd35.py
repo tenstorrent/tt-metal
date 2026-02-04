@@ -3,13 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from ...layers.normalization import RMSNorm
-from ...layers.linear import ColParallelLinear
-from ...utils.substate import substate
-from ...utils.padding import pad_weight_tensor
-from ...layers.module import Module
 from models.common.utility_functions import is_blackhole
+
+from ...layers.linear import ColParallelLinear
+from ...layers.module import Module
+from ...layers.normalization import RMSNorm
+from ...utils.padding import pad_weight_tensor
+from ...utils.substate import substate
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py

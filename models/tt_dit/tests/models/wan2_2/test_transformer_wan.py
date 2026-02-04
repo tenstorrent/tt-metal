@@ -2,23 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import time
 import os
+import time
+
 import pytest
 import torch
-import ttnn
+from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 from loguru import logger
 
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from ....utils.check import assert_quality
-from ....models.transformers.wan2_2.transformer_wan import WanTransformerBlock, WanTransformer3DModel
-from ....parallel.manager import CCLManager
+import ttnn
+
+from ....models.transformers.wan2_2.transformer_wan import WanTransformer3DModel, WanTransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor
-from ....utils.padding import pad_vision_seq_parallel
-from ....utils.cache import get_cache_path, get_and_create_cache_path, save_cache_dict, load_cache_dict
+from ....parallel.manager import CCLManager
+from ....utils.cache import get_and_create_cache_path, get_cache_path, load_cache_dict, save_cache_dict
+from ....utils.check import assert_quality
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
-from ....utils.test import ring_params, line_params
-from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
+from ....utils.padding import pad_vision_seq_parallel
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(

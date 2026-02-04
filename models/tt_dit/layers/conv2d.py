@@ -8,6 +8,7 @@ import re
 from typing import TYPE_CHECKING
 
 import torch
+
 import ttnn
 
 from ..parallel.config import vae_all_gather

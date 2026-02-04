@@ -1,23 +1,25 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import csv
-import urllib
-import json
-import statistics
-import pytest
-import ttnn
-from loguru import logger
 import itertools
-import time
+import json
+import os
 import random
-from .clip_encoder import CLIPEncoder
+import statistics
+import time
+import urllib
+
+import pytest
+from loguru import logger
+
+import ttnn
 
 # from .fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
+from .clip_encoder import CLIPEncoder
 
 # COCO captions download path
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"

@@ -11,17 +11,18 @@ from typing import TYPE_CHECKING
 import huggingface_hub
 import torch
 import tqdm
-import ttnn
 from diffusers import AutoencoderKL
 from diffusers.image_processor import VaeImageProcessor
 from loguru import logger
+
+import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ...encoders.clip.encoder_pair import CLIPTokenizerEncoderPair
 from ...encoders.t5.encoder_pair import T5TokenizerEncoderPair
 from ...models.transformers.transformer_motif import MotifTransformer, convert_motif_transformer_state
 from ...models.vae.vae_sd35 import VAEDecoder
-from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig, ParallelFactor
+from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig

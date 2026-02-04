@@ -4,14 +4,16 @@
 
 import os
 import urllib
+
 import numpy as np
-from scipy import linalg
 import torch
-from torchvision import transforms as TF
-from PIL import Image
 from loguru import logger
-from .inception import InceptionV3
+from PIL import Image
+from scipy import linalg
 from threadpoolctl import threadpool_limits
+from torchvision import transforms as TF
+
+from .inception import InceptionV3
 
 COCO_STATISTICS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/tools/val2014.npz"
 

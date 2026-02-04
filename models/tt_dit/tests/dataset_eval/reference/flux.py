@@ -1,25 +1,26 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import csv
+import json
 
 # must be the very first lines!
 import os
+import statistics
+import time
 
 # os.environ["TRANSFORMERS_NO_TF"] = "1"     # block tensorflow backend
 # os.environ["TRANSFORMERS_NO_FLAX"] = "1"   # block flax/jax backend
 # os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"   # silence tf if it somehow loads
 import urllib
+
+import pytest
 import torch
-import time
+from diffusers import FluxPipeline
 from loguru import logger
-import statistics
-import json
 
 from ..clip_encoder import CLIPEncoder
 from ..fid_score import calculate_fid_score
-from diffusers import FluxPipeline
 
 
 class SimpleProfiler:

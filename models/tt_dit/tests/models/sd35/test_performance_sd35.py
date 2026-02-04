@@ -3,11 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import statistics
+
 import pytest
-import ttnn
 from loguru import logger
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+
+import ttnn
 from models.common.utility_functions import is_blackhole
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
 

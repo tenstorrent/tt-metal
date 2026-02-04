@@ -2,32 +2,34 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+from collections import defaultdict
+
 import pytest
 import torch
-import time
-from loguru import logger
-from collections import defaultdict
 from diffusers import AutoencoderKLWan
+from loguru import logger
 
 import ttnn
-from ....utils.check import assert_quality
+
 from ....layers.normalization import RMSNorm
 from ....models.vae.vae_wan2_1 import (
     WanAttentionBlock,
-    WanDecoder3d,
-    WanDecoder,
-    WanEncoder3D,
-    WanEncoder,
     WanCausalConv3d,
-    WanResidualBlock,
+    WanDecoder,
+    WanDecoder3d,
+    WanEncoder,
+    WanEncoder3D,
     WanMidBlock,
     WanResample,
+    WanResidualBlock,
     WanUpBlock,
 )
-from ....utils.conv3d import count_convs, conv_pad_in_channels, conv_pad_height, conv_unpad_height
-from ....utils.tensor import bf16_tensor_2dshard
+from ....parallel.config import ParallelFactor, VaeHWParallelConfig
 from ....parallel.manager import CCLManager
-from ....parallel.config import VaeHWParallelConfig, ParallelFactor
+from ....utils.check import assert_quality
+from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_unpad_height, count_convs
+from ....utils.tensor import bf16_tensor_2dshard
 
 
 def setup_hooks(model):

@@ -4,17 +4,20 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import nullcontext
 from dataclasses import dataclass
 
 import numpy as np
 import torch
 import tqdm
-import ttnn
 from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler, FluxTransformer2DModel
 from diffusers.image_processor import VaeImageProcessor
 from loguru import logger
 from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
+
+import ttnn
+from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ...encoders.clip.model_clip import CLIPConfig, CLIPEncoder
@@ -23,10 +26,8 @@ from ...models.transformers.transformer_flux1 import Flux1Transformer
 from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.padding import PaddingConfig
 from ...utils import cache
-from models.common.utility_functions import is_blackhole
-import os
+from ...utils.padding import PaddingConfig
 
 
 @dataclass

@@ -2,13 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-from loguru import logger
 import os
-import ttnn
-from ...layers.conv3d import ContextParallelConv3d as TtContextParallelConv3d
+
+import pytest
+import torch
 from genmo.mochi_preview.vae.models import ContextParallelConv3d as RefContextParallelConv3d
+from loguru import logger
+
+import ttnn
+
+from ...layers.conv3d import ContextParallelConv3d as TtContextParallelConv3d
 from ...utils.check import assert_quality
 
 # Common test configurations

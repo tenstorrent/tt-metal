@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-from typing import Optional
 import math
+from typing import Optional
+
+import torch
+
 import ttnn
 
 

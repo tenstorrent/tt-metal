@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from ....layers.normalization import DistributedRMSNorm
+from models.common.utility_functions import is_blackhole
+
 from ....layers.linear import ColParallelLinear
+from ....layers.normalization import DistributedRMSNorm
 from ....utils.substate import substate
 from ....utils.tensor import bf16_tensor
-from models.common.utility_functions import is_blackhole
 
 
 class WanAttention:
