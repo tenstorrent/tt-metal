@@ -106,4 +106,32 @@ common:
 
 wormhole_b0: []
 
-blackhole: []
+blackhole:
+  # Core tests
+  - tests/ttnn/unit_tests/base_functionality/test_untilize_bfloat8_b.py
+  - tests/ttnn/unit_tests/base_functionality/test_tilize_pad_cb.py
+  - tests/ttnn/unit_tests/base_functionality/test_to_and_from_device.py
+  - tests/ttnn/unit_tests/base_functionality/test_cpp_logging.py
+  - tests/ttnn/unit_tests/base_functionality/test_concat_issue.py
+  - tests/ttnn/unit_tests/base_functionality/test_async.py
+
+  # Conv tests
+  - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
+  - tests/ttnn/unit_tests/operations/conv/data_movement/test_convert_to_chw.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
+  - tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py
+  - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv1d.py
+
+  # Pool tests
+  - tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py
+  - tests/ttnn/unit_tests/operations/pool/test_grid_sample.py
+  - tests/ttnn/unit_tests/operations/pool/test_upsample.py
+
+  # Transformers tests
+  - tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py
+  - tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
+
+  # Reduce tests
+  - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
