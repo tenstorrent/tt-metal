@@ -303,10 +303,10 @@ FORCE_INLINE
                 }
             }
 
-            const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
             chunk_encoding = packet_encoding & CHUNK_ENCODING_MASK;
             const uint64_t final_destination_noc_address = scatter.noc_address[last_chunk_index];
             if (chunk_encoding == ENCODING_UNICAST_WRITE) {
+                const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
                 noc_async_write_one_packet_with_trid<update_counter, false>(
                     payload_start_address + offset,
                     final_destination_noc_address,
@@ -318,9 +318,14 @@ FORCE_INLINE
                 if (chunk_encoding == ENCODING_SEMINC_FLUSH) {
                     flush_write_to_noc_pipeline(rx_channel_id);
                 }
+                // If the final chunk is a semaphore increment, the increment value is found in chunk_size
+                // Other ASSERTS ensure that this chunk is not chunk 3, and therefore chunk_size is valid
+                uint16_t final_seminc_value = scatter.chunk_size[last_chunk_index];
+                ASSERT(final_seminc_value > 0);
+
                 noc_semaphore_inc<true>(
                     final_destination_noc_address,
-                    final_chunk_size,
+                    final_seminc_value,
                     tt::tt_fabric::edm_to_local_chip_noc,
                     tt::tt_fabric::forward_and_local_write_noc_vc);
             } else {

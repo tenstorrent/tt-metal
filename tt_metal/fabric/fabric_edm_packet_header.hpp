@@ -174,6 +174,16 @@ enum NocScatterWriteChunkEncoding : uint8_t {
     CHUNK_ENCODING_LAST = CHUNK_ENCODING_SEMINC_FLUSH
 };
 
+inline constexpr uint8_t expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding encoding) {
+    const uint8_t e = static_cast<uint8_t>(encoding);
+    return e | (e << 2) | (e << 4) | (e << 6);
+}
+
+inline void set_chunk_encoding(uint8_t& chunk_encoding, NocScatterWriteChunkEncoding encoding, uint32_t chunk_index) {
+    const uint8_t e = static_cast<uint8_t>(encoding);
+    chunk_encoding |= (e << (chunk_index * 2));
+}
+
 #define NOC_SCATTER_WRITE_MAX_CHUNKS 4
 static constexpr uint8_t NOC_SCATTER_WRITE_MIN_CHUNKS = 2;
 struct NocUnicastScatterCommandHeader {
@@ -232,6 +242,15 @@ struct NocUnicastScatterCommandHeader {
         }
     }
 };
+// Currently limited to 2 chunks followed by a semaphore increment
+#define NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS 2
+struct NocUnicastScatterAtomicIncFusedCommandHeader {
+    uint64_t noc_address[NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS];
+    uint64_t semaphore_noc_address;
+    uint16_t chunk_size[NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS - 1];  // last chunk size is implicit
+    uint16_t val;                                                              // Semaphore increment value
+    bool flush;
+};
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
     uint32_t value;
@@ -271,6 +290,9 @@ struct NocMulticastAtomicIncCommandHeader {
 };
 static_assert(sizeof(NocUnicastCommandHeader) == 8, "NocUnicastCommandHeader size is not 8 bytes");
 static_assert(sizeof(NocMulticastCommandHeader) == 8, "NocMulticastCommandHeader size is not 8 bytes");
+static_assert(
+    sizeof(NocUnicastScatterAtomicIncFusedCommandHeader) == 32,
+    "NocUnicastScatterAtomicIncFusedCommandHeader size is not 29 bytes");
 static_assert(
     sizeof(NocUnicastInlineWriteCommandHeader) == 16, "NocUnicastInlineWriteCommandHeader size is not 16 bytes");
 static_assert(sizeof(NocUnicastAtomicIncCommandHeader) == 16, "NocUnicastAtomicIncCommandHeader size is not 16 bytes");
@@ -548,6 +570,10 @@ public:
 
         this->command_fields.unicast_scatter_write.chunk_count = chunk_count;
 
+        // Set the chunk encoding in this packet to all unicast writes
+        this->command_fields.unicast_scatter_write.chunk_encoding =
+            expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE);
+
         for (uint8_t i = 0; i < chunk_count; i++) {
             auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address[i]);
             auto noc_addr = safe_get_noc_addr(
@@ -577,6 +603,93 @@ public:
         this->payload_size_bytes = static_cast<uint16_t>(payload_size_bytes);
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
+        return static_cast<volatile Derived*>(this);
+    }
+
+    // The fused scatter write + atomic inc is a special case where one or more chunks in the packet are used to send
+    // semaphore increment instructions. The packet still uses the standard scatter write packet header.
+    volatile Derived* to_noc_fused_unicast_scatter_write_atomic_inc(
+        const NocUnicastScatterAtomicIncFusedCommandHeader& noc_unicast_scatter_atomic_inc_fused_command_header,
+        size_t payload_size_bytes) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
+
+        // Currently we only support maximum of 2 unicast writes followed by a semaphore increment
+        // This is converted into a scatter write packet, where chunk 0 and 1 are unicast writes, and chunk 2 is a
+        // semaphore increment.
+        constexpr uint8_t unicast_write_chunk_count = NOC_SCATTER_WRITE_ATOMIC_INC_FUSED_WRITE_CHUNKS;
+        constexpr uint8_t chunk_count = unicast_write_chunk_count + 1;  // +1 for the semaphore increment chunk
+        static_assert(
+            chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS,
+            "Fused scatter write + atomic inc command header chunk count is too large");
+
+        this->command_fields.unicast_scatter_write.chunk_count = chunk_count;
+
+        // Set destination addresses for the unicast write chunks and semaphore
+        for (uint8_t i = 0; i < unicast_write_chunk_count; i++) {
+            const auto noc_address_components =
+                get_noc_address_components(noc_unicast_scatter_atomic_inc_fused_command_header.noc_address[i]);
+            const auto noc_addr = safe_get_noc_addr(
+                noc_address_components.first.x,
+                noc_address_components.first.y,
+                noc_address_components.second,
+                edm_to_local_chip_noc);
+            this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
+        }
+        const auto semaphore_noc_address_components =
+            get_noc_address_components(noc_unicast_scatter_atomic_inc_fused_command_header.semaphore_noc_address);
+        const auto semaphore_noc_addr = safe_get_noc_addr(
+            semaphore_noc_address_components.first.x,
+            semaphore_noc_address_components.first.y,
+            semaphore_noc_address_components.second,
+            edm_to_local_chip_noc);
+        this->command_fields.unicast_scatter_write.noc_address[chunk_count - 1] = semaphore_noc_addr;
+        // Set the rest of the chunks to 0
+        for (uint8_t i = chunk_count; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+            this->command_fields.unicast_scatter_write.noc_address[i] = 0;
+        }
+
+        // Set the chunk sizes for the unicast write chunks and semaphore
+        // There will always be at least 2 unicast write chunks, and the last chunk's chunk size is implicit based on
+        // payload size. (payload size does not include semaphore increment)
+        constexpr uint8_t unicast_write_chunk_size_count = unicast_write_chunk_count - 1;
+        size_t accumulated_chunk_bytes = 0;
+        for (uint8_t i = 0; i < unicast_write_chunk_size_count; i++) {
+            const uint16_t unicast_write_chunk_bytes =
+                noc_unicast_scatter_atomic_inc_fused_command_header.chunk_size[i];
+            ASSERT(unicast_write_chunk_bytes > 0);
+            accumulated_chunk_bytes += unicast_write_chunk_bytes;
+            this->command_fields.unicast_scatter_write.chunk_size[i] = unicast_write_chunk_bytes;
+        }
+        // Set the chunk size for the last unicast write chunk
+        const uint16_t last_unicast_write_chunk_bytes = payload_size_bytes - accumulated_chunk_bytes;
+        ASSERT(last_unicast_write_chunk_bytes > 0);
+        this->command_fields.unicast_scatter_write.chunk_size[unicast_write_chunk_size_count] =
+            last_unicast_write_chunk_bytes;
+        // Place the semaphore increment chunk size in the last chunk
+        this->command_fields.unicast_scatter_write.chunk_size[chunk_count - 1] =
+            noc_unicast_scatter_atomic_inc_fused_command_header.val;
+        // Set the rest of the chunks to 0
+        for (uint8_t i = chunk_count; i < (NOC_SCATTER_WRITE_MAX_CHUNKS - 1); i++) {
+            this->command_fields.unicast_scatter_write.chunk_size[i] = 0;
+        }
+
+        // Set chunk encodings for each chunk
+        uint8_t chunk_encodings = 0;
+        for (uint8_t i = 0; i < unicast_write_chunk_count; i++) {
+            set_chunk_encoding(chunk_encodings, NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE, i);
+        }
+        const NocScatterWriteChunkEncoding seminc_chunk_encoding =
+            (noc_unicast_scatter_atomic_inc_fused_command_header.flush
+                 ? NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH
+                 : NocScatterWriteChunkEncoding::CHUNK_ENCODING_SEMINC_NO_FLUSH);
+        set_chunk_encoding(chunk_encodings, seminc_chunk_encoding, chunk_count - 1);
+        this->command_fields.unicast_scatter_write.chunk_encoding = chunk_encodings;
+
+        this->payload_size_bytes = static_cast<uint16_t>(payload_size_bytes);
+#else
+        TT_THROW("Calling to_noc_fused_unicast_scatter_write_atomic_inc from host is unsupported");
 #endif
         return static_cast<volatile Derived*>(this);
     }
