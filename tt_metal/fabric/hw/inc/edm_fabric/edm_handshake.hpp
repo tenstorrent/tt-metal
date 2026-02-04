@@ -50,6 +50,7 @@ struct handshake_info_t {
     uint32_t local_value;        // Bytes 0-3: Updated by remote with MAGIC_HANDSHAKE_VALUE
     uint16_t neighbor_mesh_id;   // Bytes 4-5: Peer's mesh_id (populated via scratch[1])
     uint8_t neighbor_device_id;  // Byte 6: Peer's device_id (populated via scratch[1])
+    uint8_t padding0;            // Byte 7: Explicit padding for alignment
     uint32_t padding[2];         // Bytes 8-15: Ensures 16B alignment for scratch register
     uint32_t scratch[4];         // Bytes 16-31: TODO: Can be removed if we use a stream register for handshaking.
 };
@@ -64,8 +65,8 @@ FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     // - my_mesh_id in lower 16 bits maps to bytes 4-5 (neighbor_mesh_id)
     // - my_device_id shifted by 16 maps to byte 6 (neighbor_device_id)
     handshake_info->scratch[1] = static_cast<uint32_t>(my_mesh_id) | (static_cast<uint32_t>(my_device_id) << 16);
-    handshake_info->scratch[2] = 0;
-    handshake_info->scratch[3] = 0;
+    // Note: scratch[2] and scratch[3] are intentionally left uninitialized.
+    // They are sent to remote's padding area (bytes 8-15) which doesn't need specific values.
     return handshake_info;
 }
 
