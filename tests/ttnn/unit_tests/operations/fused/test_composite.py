@@ -973,8 +973,9 @@ def test_composite_overlapping_cores_error(device):
     # left_cores covers (0,0)-(3,3), right_cores covers (2,0)-(5,3)
     # Overlap: (2,0)-(3,3)
 
-    # Create tensor shapes
-    shape = (1, 1, 32, 512)
+    # Create tensor shapes - use enough tile rows (16) to ensure all 16 cores are used
+    # This guarantees the overlapping cores will actually be used
+    shape = (1, 1, 512, 512)  # 512/32 = 16 tile rows, uses all 16 cores per branch
     weight_shape = (1, 1, 1, 512)
 
     # Create torch tensors
