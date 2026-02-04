@@ -312,18 +312,18 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 
 struct ConvDRAMParamters {
-    uint32_t in_channels;
-    uint32_t out_channels;
-    uint32_t batch_size;
-    uint32_t input_height;
-    uint32_t input_width;
-    uint32_t output_height;
-    uint32_t output_width;
-    std::array<uint32_t, 2> kernel_size;
-    std::array<uint32_t, 2> stride;
-    std::array<uint32_t, 4> padding_n4;
-    std::array<uint32_t, 2> dilation;
-    uint32_t groups;
+    uint32_t in_channels{};
+    uint32_t out_channels{};
+    uint32_t batch_size{};
+    uint32_t input_height{};
+    uint32_t input_width{};
+    uint32_t output_height{};
+    uint32_t output_width{};
+    std::array<uint32_t, 2> kernel_size{};
+    std::array<uint32_t, 2> stride{};
+    std::array<uint32_t, 4> padding_n4{};
+    std::array<uint32_t, 2> dilation{};
+    uint32_t groups{};
     Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_kernel_config;
     CoreCoord compute_grid;
@@ -331,8 +331,8 @@ struct ConvDRAMParamters {
     DataType input_datatype;
     DataType output_datatype;
     Layout input_layout;
-    bool enable_bias;
-    bool mm_conv;
+    bool enable_bias{};
+    bool mm_conv{};
 
     bool operator<(const ConvDRAMParamters& other) const;
 
