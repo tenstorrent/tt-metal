@@ -336,16 +336,18 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
                 // Use VectorMode::None and 32 iterations to more efficiently process the tile in one shot.
+                constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 : 8;
+                constexpr int vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 MATH((_llk_math_eltwise_unary_sfpu_params_<true>(
                     ckernel::sfpu::_calculate_exponential_<
                         true /* approximate */,
                         true /* scale_en */,
-                        32 /* iterations */,
+                        iterations,
                         true /* fast_and_approx */,
                         true /* skip_positive_check */,
                         false /* clamp negative -- if false, requires packer ReLU */>,
                     j,
-                    VectorMode::None,
+                    vector_mode_exp,
                     0 /* scale set in init */)));
             }
             tile_regs_commit();
