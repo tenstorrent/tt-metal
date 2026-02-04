@@ -273,3 +273,43 @@ void pad_last_htile(uint32_t l1_write_addr) {
         fill_pad_tile<uint16_t, /*num_elements_unpadded_w=*/TILE_WIDTH, last_tile_h>(l1_write_addr, fill_value);
     }
 }
+
+/**
+ * @brief Applies width padding based on data format, dispatching to the appropriate typed function.
+ *
+ * This is a helper function that eliminates repeated if-constexpr blocks in reader kernels.
+ * It dispatches to pad_last_wtile with the correct data format type.
+ *
+ * @tparam IN_DF The input data format as uint32_t (cast of tt::DataFormat)
+ * @tparam LAST_W The unpadded width of the last tile
+ * @tparam policy The neutral value policy
+ * @param l1_write_addr The L1 memory address where the padding should be written
+ */
+template <uint32_t IN_DF, uint32_t LAST_W, NeutralPolicy policy>
+void apply_width_padding(uint32_t l1_write_addr) {
+    if constexpr (IN_DF == static_cast<uint32_t>(tt::DataFormat::Bfloat16)) {
+        pad_last_wtile<tt::DataFormat::Bfloat16, LAST_W, policy>(l1_write_addr);
+    } else {
+        pad_last_wtile<tt::DataFormat::Float32, LAST_W, policy>(l1_write_addr);
+    }
+}
+
+/**
+ * @brief Applies height padding based on data format, dispatching to the appropriate typed function.
+ *
+ * This is a helper function that eliminates repeated if-constexpr blocks in reader kernels.
+ * It dispatches to pad_last_htile with the correct data format type.
+ *
+ * @tparam IN_DF The input data format as uint32_t (cast of tt::DataFormat)
+ * @tparam LAST_H The unpadded height of the last tile
+ * @tparam policy The neutral value policy
+ * @param l1_write_addr The L1 memory address where the padding should be written
+ */
+template <uint32_t IN_DF, uint32_t LAST_H, NeutralPolicy policy>
+void apply_height_padding(uint32_t l1_write_addr) {
+    if constexpr (IN_DF == static_cast<uint32_t>(tt::DataFormat::Bfloat16)) {
+        pad_last_htile<tt::DataFormat::Bfloat16, LAST_H, policy>(l1_write_addr);
+    } else {
+        pad_last_htile<tt::DataFormat::Float32, LAST_H, policy>(l1_write_addr);
+    }
+}

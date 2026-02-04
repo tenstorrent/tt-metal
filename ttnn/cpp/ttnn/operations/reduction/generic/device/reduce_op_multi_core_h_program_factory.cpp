@@ -4,6 +4,7 @@
 
 #include "reduce_op_multi_core_h_program_factory.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -11,20 +12,7 @@
 #include <cmath>
 
 using namespace tt::constants;
-
-namespace {
-
-// Returns the neutral policy for a given reduce operation
-// 0 = Zero (for sum/mean), 1 = NegInf (for max), 2 = PosInf (for min)
-uint32_t get_neutral_policy(tt::tt_metal::ReduceOpMath math_op) {
-    switch (math_op) {
-        case tt::tt_metal::ReduceOpMath::MAX: return 1;  // NegInf
-        case tt::tt_metal::ReduceOpMath::MIN: return 2;  // PosInf
-        default: return 0;                               // Zero for SUM
-    }
-}
-
-}  // namespace
+using ttnn::operations::reduction::get_neutral_policy;
 
 namespace ttnn::prim {
 
@@ -156,7 +144,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
 
     if (use_width_sharding) {
         // Compile-time args for sharded reader:
-        // 0: src0_cb_index, 1: src1_cb_index, 2: IN_DF, 3: LAST_W, 4: LAST_H, 5: NEUTRAL_KIND, 6: scaler_cb_index
+        // 0: src0_cb_index, 1: src1_cb_index, 2: IN_DF, 3: LAST_W, 4: LAST_H, 5: NEUTRAL_POLICY, 6: scaler_cb_index
         std::vector<uint32_t> reader_compile_time_args = {
             src0_cb_index,
             src1_cb_index,
@@ -175,7 +163,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
         // Compile-time args for interleaved reader:
-        // 0: Ht, 1: Wt, 2: HtWt, 3: row_chunk, 4: IN_DF, 5: LAST_W, 6: LAST_H, 7: NEUTRAL_KIND, 8: packed_scaler_value
+        // 0: Ht, 1: Wt, 2: HtWt, 3: row_chunk, 4: IN_DF, 5: LAST_W, 6: LAST_H, 7: NEUTRAL_POLICY, 8: packed_scaler_value
         std::vector<uint32_t> reader_compile_time_args = {
             Ht,
             Wt,

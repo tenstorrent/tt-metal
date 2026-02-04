@@ -4,6 +4,7 @@
 
 #include "reduce_op_single_core_hw_program_factory.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -11,20 +12,7 @@
 #include <cmath>
 
 using namespace tt::constants;
-
-namespace {
-
-// Returns the neutral policy for a given reduce operation
-// 0 = Zero (for sum/mean), 1 = NegInf (for max), 2 = PosInf (for min)
-uint32_t get_neutral_policy(tt::tt_metal::ReduceOpMath math_op) {
-    switch (math_op) {
-        case tt::tt_metal::ReduceOpMath::MAX: return 1;  // NegInf
-        case tt::tt_metal::ReduceOpMath::MIN: return 2;  // PosInf
-        default: return 0;                               // Zero for SUM
-    }
-}
-
-}  // namespace
+using ttnn::operations::reduction::get_neutral_policy;
 
 namespace ttnn::prim {
 
@@ -102,7 +90,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
 
     // Prepare reader compile-time args with padding support
     uint32_t in_df = static_cast<uint32_t>(src0_cb_data_format);
-    uint32_t neutral_kind = get_neutral_policy(operation_attributes.math_op);
+    uint32_t neutral_policy = get_neutral_policy(operation_attributes.math_op);
     std::vector<uint32_t> reader_compile_time_args = {
         packed_scaler_value,
         Wt,
@@ -110,7 +98,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
         in_df,
         last_w,
         last_h,
-        neutral_kind
+        neutral_policy
     };
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 

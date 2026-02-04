@@ -653,3 +653,86 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
     assert torch.allclose(
         torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
     ), f"torch: {torch_result}, ttnn: {ttnn_result}"
+
+
+@pytest.mark.parametrize("input_value", [2.0])
+@pytest.mark.parametrize(
+    "input_shape,input_reshape",
+    [
+        ((32, 64), (32, 64)),  # No padding - tile aligned
+        ((32, 64), (32, 50)),  # Padding in W dimension only
+        ((32, 64), (20, 64)),  # Padding in H dimension only
+        ((32, 64), (20, 50)),  # Padding in both H and W dimensions
+        ((64, 96), (33, 65)),  # Padding with multiple tiles, 1 extra element
+        ((64, 96), (48, 80)),  # Partial tile padding
+    ],
+)
+@pytest.mark.parametrize(
+    "reduce_op,dim",
+    [
+        ("sum", -1),  # W reduction
+        ("sum", -2),  # H reduction
+        ("sum", None),  # HW reduction (full reduce)
+        ("max", -1),  # W reduction
+        ("max", -2),  # H reduction
+        ("max", None),  # HW reduction
+        ("min", -1),  # W reduction
+        ("min", -2),  # H reduction
+        ("min", None),  # HW reduction
+        ("mean", -1),  # W reduction
+        ("mean", -2),  # H reduction
+        ("mean", None),  # HW reduction
+    ],
+)
+@pytest.mark.parametrize("keepdim", [True])
+def test_reduce_with_padding(device, input_shape, input_reshape, input_value, reduce_op, dim, keepdim):
+    """
+    Test that reduction operations work correctly when the logical shape differs
+    from the padded shape. This verifies that native tile padding in reduction
+    kernels produces correct results.
+
+    The test creates a tensor with a padded shape, reshapes it to a smaller logical
+    shape (introducing tile padding), and verifies that the reduction produces the
+    same result as PyTorch operating on the logical shape.
+    """
+    torch.manual_seed(0)
+
+    # Create input tensor with the padded shape, filled with a specific value
+    input_tensor_padded = torch.full(input_shape, input_value, dtype=torch.float32)
+
+    # Create the "logical" tensor for golden reference
+    input_tensor_logical = torch.full(input_reshape, input_value, dtype=torch.float32)
+
+    # Compute golden output using PyTorch on the logical tensor
+    torch_op = getattr(torch, reduce_op)
+    if dim is not None:
+        golden_output = torch_op(input_tensor_logical, dim=dim, keepdim=keepdim)
+    else:
+        golden_output = torch_op(input_tensor_logical)
+        if keepdim:
+            golden_output = golden_output.reshape([1] * len(input_reshape))
+
+    # For min/max, extract values if it returns a named tuple
+    if isinstance(golden_output, (torch.return_types.min, torch.return_types.max)):
+        golden_output = golden_output.values
+
+    # Convert to ttnn tensor with padded shape
+    input_ttnn = ttnn.from_torch(input_tensor_padded, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Reshape to logical shape (this creates the padding scenario)
+    input_reshaped_ttnn = ttnn.reshape(input_ttnn, input_reshape, padded_shape=input_shape)
+
+    # Perform reduction
+    ttnn_op = getattr(ttnn, reduce_op)
+    if dim is not None:
+        output_ttnn = ttnn_op(input_reshaped_ttnn, dim=dim, keepdim=keepdim)
+    else:
+        output_ttnn = ttnn_op(input_reshaped_ttnn)
+
+    output = ttnn.to_torch(output_ttnn)
+
+    # Verify the output matches the golden reference
+    assert golden_output.shape == output.shape, f"Shape mismatch: expected {golden_output.shape}, got {output.shape}"
+    assert torch.allclose(
+        golden_output, output, atol=1e-2, rtol=1e-2
+    ), f"Value mismatch for {reduce_op} dim={dim}: expected {golden_output}, got {output}"

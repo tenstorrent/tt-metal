@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,8 +22,8 @@ void kernel_main() {
     constexpr uint32_t IN_DF = get_compile_time_arg_val(3);
     constexpr uint32_t LAST_W = get_compile_time_arg_val(4);
     constexpr uint32_t LAST_H = get_compile_time_arg_val(5);
-    constexpr uint32_t NEUTRAL_KIND = get_compile_time_arg_val(6);
-    constexpr NeutralPolicy NEUTRAL = static_cast<NeutralPolicy>(NEUTRAL_KIND);
+    constexpr uint32_t NEUTRAL_POLICY = get_compile_time_arg_val(6);
+    constexpr NeutralPolicy NEUTRAL = static_cast<NeutralPolicy>(NEUTRAL_POLICY);
     constexpr auto tensor_args = TensorAccessorArgs<7>();
 
     constexpr uint32_t cb_id_in2 = 2;
@@ -59,22 +59,14 @@ void kernel_main() {
         // Apply width padding to the last column of tiles
         if constexpr (LAST_W > 0) {
             if (current_col == Wt - 1) {
-                if constexpr (IN_DF == (uint32_t)tt::DataFormat::Bfloat16) {
-                    pad_last_wtile<tt::DataFormat::Bfloat16, LAST_W, NEUTRAL>(l1_write_addr);
-                } else {
-                    pad_last_wtile<tt::DataFormat::Float32, LAST_W, NEUTRAL>(l1_write_addr);
-                }
+                apply_width_padding<IN_DF, LAST_W, NEUTRAL>(l1_write_addr);
             }
         }
 
         // Apply height padding to the last row of tiles (modulo Ht for batched tensors)
         if constexpr (LAST_H > 0) {
             if ((current_row % Ht) == Ht - 1) {
-                if constexpr (IN_DF == (uint32_t)tt::DataFormat::Bfloat16) {
-                    pad_last_htile<tt::DataFormat::Bfloat16, LAST_H, NEUTRAL>(l1_write_addr);
-                } else {
-                    pad_last_htile<tt::DataFormat::Float32, LAST_H, NEUTRAL>(l1_write_addr);
-                }
+                apply_height_padding<IN_DF, LAST_H, NEUTRAL>(l1_write_addr);
             }
         }
 

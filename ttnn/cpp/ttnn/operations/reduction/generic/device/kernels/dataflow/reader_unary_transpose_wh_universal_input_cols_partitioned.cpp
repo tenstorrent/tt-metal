@@ -21,8 +21,8 @@ void kernel_main() {
     constexpr uint32_t IN_DF         = get_compile_time_arg_val(4);
     constexpr uint32_t LAST_W        = get_compile_time_arg_val(5);
     constexpr uint32_t LAST_H        = get_compile_time_arg_val(6);
-    constexpr uint32_t NEUTRAL_KIND  = get_compile_time_arg_val(7);
-    constexpr NeutralPolicy NEUTRAL = static_cast<NeutralPolicy>(NEUTRAL_KIND);
+    constexpr uint32_t NEUTRAL_POLICY = get_compile_time_arg_val(7);
+    constexpr NeutralPolicy NEUTRAL = static_cast<NeutralPolicy>(NEUTRAL_POLICY);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
@@ -72,20 +72,12 @@ void kernel_main() {
                 noc_async_read_barrier();
                 if constexpr (LAST_W > 0) {
                     if (w == Wt - 1) {
-                        if constexpr (IN_DF == (uint32_t)tt::DataFormat::Bfloat16) {
-                            pad_last_wtile<tt::DataFormat::Bfloat16, LAST_W, NEUTRAL>(l1_write_addr);
-                        } else {
-                            pad_last_wtile<tt::DataFormat::Float32,  LAST_W, NEUTRAL>(l1_write_addr);
-                        }
+                        apply_width_padding<IN_DF, LAST_W, NEUTRAL>(l1_write_addr);
                     }
                 }
                 if constexpr (LAST_H > 0) {
                     if (j == Ht - 1) {
-                        if constexpr (IN_DF == (uint32_t)tt::DataFormat::Bfloat16) {
-                            pad_last_htile<tt::DataFormat::Bfloat16, LAST_H, NEUTRAL>(l1_write_addr);
-                        } else {
-                            pad_last_htile<tt::DataFormat::Float32,  LAST_H, NEUTRAL>(l1_write_addr);
-                        }
+                        apply_height_padding<IN_DF, LAST_H, NEUTRAL>(l1_write_addr);
                     }
                 }
                 cb_push_back(cb_id_in0, onetile);

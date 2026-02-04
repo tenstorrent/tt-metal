@@ -434,8 +434,6 @@ Tensor Reduce<reduce_type>::invoke(
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     ttnn::SmallVector<int> dim = generate_reduce_dim(input_tensor_arg, dim_arg);
-    float pad_value = get_pad_value(reduce_type);
-    bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
     auto input_tensor = input_tensor_arg;
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
