@@ -204,12 +204,15 @@ main() {
     "dual_demo_stress")
       run_quad_galaxy_dual_demo_stress_test
       ;;
+    "deepseekv3_integration_tests")
+      run_dual_galaxy_deepseekv3_tests_on_quad_galaxy
+      ;;
     "all")
       run_quad_galaxy_tests
       ;;
     *)
       echo "Unknown test function: $test_function" 1>&2
-      echo "Available options: unit_tests, deepseekv3_unit_tests, deepseekv3_module_tests, teacher_forced, dual_demo, dual_demo_stress, all" 1>&2
+      echo "Available options: unit_tests, deepseekv3_unit_tests, deepseekv3_module_tests, teacher_forced, dual_demo, dual_demo_stress, deepseekv3_integration_tests, all" 1>&2
       exit 1
       ;;
   esac
