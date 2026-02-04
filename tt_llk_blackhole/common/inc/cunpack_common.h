@@ -423,7 +423,7 @@ inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, cons
 
 inline void wait_for_dest_available()
 {
-    t6_semaphore_wait_on_max<p_stall::UNPACK>(semaphore::UNPACK_TO_DEST);
+    t6_semaphore_wait_on_max<p_stall::STALL_UNPACK>(semaphore::UNPACK_TO_DEST);
 }
 
 inline void unpack_to_dest_tile_done(uint &context_id)
