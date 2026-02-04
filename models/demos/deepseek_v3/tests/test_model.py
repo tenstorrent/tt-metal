@@ -38,6 +38,7 @@ _CI_SKIP_MARK = pytest.mark.skipif(
     CI_ACTIVE,
     reason="CI runs traced coverage only.",
 )
+pytestmark = pytest.mark.timeout(1200)
 
 
 def generate_reference_io(

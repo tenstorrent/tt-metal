@@ -19,6 +19,7 @@ from models.demos.deepseek_v3.tests.pytest_utils import (
 )
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
+from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
@@ -42,6 +43,7 @@ _CI_SKIP_MARK = pytest.mark.skipif(
     CI_ACTIVE,
     reason="CI runs traced coverage only.",
 )
+pytestmark = pytest.mark.timeout(1200)
 
 
 def generate_reference_io(
@@ -97,7 +99,7 @@ def generate_reference_io(
 
 
 def run_test_forward_pass_decoder1d(
-    DecoderBlockClass: type[DecoderBlock1DBase],
+    DecoderBlockClass: type[DecoderBlockBase],
     module_path,
     reference_layer_idx,
     mode,
