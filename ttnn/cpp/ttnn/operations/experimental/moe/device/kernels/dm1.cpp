@@ -74,10 +74,18 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Ring NoC setup
     //-------------------------------------------------------------------------
-    uint32_t semaphore_addr = get_semaphore(ring_semaphore_id);
-    volatile tt_l1_ptr uint32_t* my_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
-    const uint64_t neighbor_semaphore_noc_addr =
-        get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, semaphore_addr);
+    // Use semaphore address as a regular L1 sync address for polling
+    uint32_t sync_addr = get_semaphore(ring_semaphore_id);
+    volatile tt_l1_ptr uint32_t* my_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_addr);
+    const uint64_t neighbor_sync_noc_addr = get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, sync_addr);
+
+    // Initialize sync value to 0
+    *my_sync_ptr = 0;
+
+    // Counter for tracking expected and sent values
+    // Start expected_value at 0 so first iteration passes immediately (matches original semaphore behavior)
+    uint32_t expected_value = 0;
+    uint32_t send_value = 1;
 
     // Size of each transfer in bytes
     constexpr uint32_t a2a_xfer_bytes_per_step = tiles_per_step * in2_tile_size;
@@ -95,10 +103,13 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_a2a_steps_per_iter; ++i) {
         LOCAL_BUFFER_OFFSET[i] = local_base_addr + i * a2a_xfer_bytes_per_step;
     }
-    uint32_t semaphore_value = 0;
 
-    // Set state for the writes
+    // Set state for the data writes
     noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
+
+    // Set state for the inline dw write (sync signal)
+    noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
+        neighbor_sync_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -114,7 +125,11 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_a2a_iters; ++i) {
             for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
                 // Wait for current data to be ready in cb_s2c_in2
-                noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value++);
+                // Poll the L1 sync address until it reaches the expected value
+                while (*my_sync_ptr < expected_value) {
+                    // Spin wait
+                }
+                expected_value++;
 
                 // Signal to compute core that data is ready
                 cb_reserve_back(cb_w2c_rdy, 1);
@@ -129,12 +144,16 @@ void kernel_main() {
                 noc_async_write_one_packet_with_state</*posted=*/true>(
                     local_src_addr + a2a_packet_size, neighbor_dst_addr + a2a_packet_size);
 
-                // Signal neighbor that data is ready (increment their semaphore)
-                noc_semaphore_inc</*posted=*/true>(
-                    neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+                // Signal neighbor that data is ready using inline dw write with increasing value
+                noc_inline_dw_write_with_state<
+                    /*update_addr_lo=*/false,
+                    /*update_counter=*/true,
+                    /*posted=*/true,
+                    /*update_addr_hi=*/false,
+                    /*update_val=*/true>(send_value++);
 
-                // Ensure write and semaphore have left the core before continuing
-                noc_async_posted_atomic_barrier();
+                // Ensure data write and sync signal have left the core before continuing
+                noc_async_posted_writes_flushed();
             }
         }
     }
