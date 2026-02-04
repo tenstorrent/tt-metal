@@ -233,11 +233,12 @@ jobs:
           file: dockerfile/upstream_test_images/Dockerfile-generated
           platforms: linux/amd64
           pull: true
-          push: true
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
           build-args: |
             TECHDEBT_INSTALL_TTT_REQS=${{ matrix.image-config.techdebt-install-ttt-reqs && 'true' || 'false' }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
   test-wh-6u-image:
     needs:
       - get-image-tags
