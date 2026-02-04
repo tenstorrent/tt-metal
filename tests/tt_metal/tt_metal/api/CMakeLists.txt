@@ -42,6 +42,7 @@ target_sources(
         test_runtime_args.cpp
         test_semaphores.cpp
         test_shape_base.cpp
+        test_shape.cpp
         test_sharded_l1_buffer.cpp
         test_simple_dram_buffer.cpp
         test_simple_l1_buffer.cpp
