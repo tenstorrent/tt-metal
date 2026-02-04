@@ -32,6 +32,7 @@ _CI_SKIP_MARK = pytest.mark.skipif(
     CI_ACTIVE,
     reason="CI runs traced coverage only.",
 )
+SPARSITY_BLOCK_SIZE = 128
 
 
 class DeepseekV3MoEExperts(nn.Module):
@@ -175,7 +176,6 @@ def test_forward_pass(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
-
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
 
     def check_outputs(tt_output: ttnn.Tensor) -> None:
@@ -235,13 +235,13 @@ def test_forward_pass(
 
     if trace_mode:
         # Iteration 0: eager compile run (not traced)
-        tt_output = run_module_forward(TTExperts, mode, tt_input, tt_sparsity, run_config)
+        tt_output = run_module_forward(TTExperts, mode, tt_input, run_config)
         ttnn.synchronize_device(mesh_device)
         check_outputs(tt_output)
         ttnn.deallocate(tt_output)
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        trace_output = run_module_forward(TTExperts, mode, tt_input, tt_sparsity, run_config)
+        trace_output = run_module_forward(TTExperts, mode, tt_input, run_config)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
 
@@ -254,14 +254,13 @@ def test_forward_pass(
         ttnn.deallocate(trace_output)
     else:
         for iter_idx in range(TEST_CHECK_ITERS):
-            tt_output = run_module_forward(TTExperts, mode, tt_input, tt_sparsity, run_config)
+            tt_output = run_module_forward(TTExperts, mode, tt_input, run_config)
             ttnn.synchronize_device(mesh_device)
             if iter_idx in (0, TEST_CHECK_ITERS - 1):
                 check_outputs(tt_output)
             ttnn.deallocate(tt_output)
 
     ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_sparsity)
 
 
 if __name__ == "__main__":
