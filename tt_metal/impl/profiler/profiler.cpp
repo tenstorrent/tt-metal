@@ -24,7 +24,6 @@
 #include <iostream>
 
 #include <tt_stl/assert.hpp>
-#include "dispatch/hardware_command_queue.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_analysis.hpp"
@@ -2209,7 +2208,7 @@ void DeviceProfiler::readResults(
 
     TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
 
-    bool force_slow_dispatch = MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
+    bool force_slow_dispatch = MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled();
 
     constexpr uint8_t default_dram_buffer_index = 0;
 
@@ -2726,7 +2725,7 @@ void DeviceProfiler::pollDebugDumpResults(
 bool getDeviceProfilerState() { return MetalContext::instance().rtoptions().get_profiler_enabled(); }
 
 bool getDeviceDebugDumpEnabled() {
-    return MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
+    return MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled();
 }
 
 }  // namespace tt::tt_metal

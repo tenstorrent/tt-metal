@@ -51,7 +51,7 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 class MLA1D(AbstractModule):
     """
-    Pipeline-Parallel Multi-Latent Attention Module for 1D tensor parallelism.
+    Multi-Latent Attention Module for 1D tensor parallelism.
     """
 
     @classmethod
@@ -1041,7 +1041,7 @@ class MLA1D(AbstractModule):
         # Strategy: Process each chunk independently to keep all_gather buffers small
         SEQ_LEN_CHUNK_SIZE = 8192
         if seq_len > SEQ_LEN_CHUNK_SIZE:
-            num_heads_local = v_out.shape[2]
+            num_heads = v_out.shape[2]
             v_head_dim = v_out.shape[3]
             # Use ceiling division instead of even_int_div to handle non-multiples of 8192
             num_chunks = (seq_len + SEQ_LEN_CHUNK_SIZE - 1) // SEQ_LEN_CHUNK_SIZE
@@ -1053,15 +1053,11 @@ class MLA1D(AbstractModule):
                 v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
 
             output_chunks = []
-            num_heads = cfg["num_heads"]
             hidden_dim = num_heads * v_head_dim
             for chunk_idx in range(num_chunks):
                 start = chunk_idx * SEQ_LEN_CHUNK_SIZE
                 end = start + SEQ_LEN_CHUNK_SIZE
-                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads_local, v_head_dim))
-                v_chunk = ttnn.experimental.all_gather_async(
-                    v_chunk, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-                )  # [1, chunk_size, num_heads, v_head_dim]
+                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads, v_head_dim))
                 v_chunk = ttnn.reshape(v_chunk, (1, 1, SEQ_LEN_CHUNK_SIZE, hidden_dim))
                 out_chunk = ttnn.linear(v_chunk, **cfg["wo"])  # [1, 1, chunk_size, dim]
                 output_chunks.append(out_chunk)
