@@ -34,12 +34,15 @@ Edit `info.json`:
 
 **Fields:**
 - `deterministic`: `true` if failure happens every time, `false` if intermittent
-- `url`: GitHub Actions run URL (leave empty if using raw-logs or existing-test-path)
+- `url`: GitHub Actions run URL (or leave empty if using raw-logs)
 - `prompt`: Description of what to fix or improve
-- `raw-logs`: Raw log text (leave empty if using url or existing-test-path)
+- `raw-logs`: Raw error logs/stack trace (or leave empty if using url)
 - `existing-test-path`: Path to existing reproduction test (skips test creation phase)
 
-**Note:** Use either `existing-test-path` OR (`url` OR `raw-logs`), not both.
+**Note:**
+- **ALWAYS provide either `url` OR `raw-logs`** - Claude needs error context to fix
+- Optionally provide `existing-test-path` to skip test creation
+- If using `existing-test-path`, you still need logs/url for error information
 
 ### 2. Run the Automation
 

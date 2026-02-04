@@ -2,11 +2,21 @@
 
 ## Context
 
-You are in the **Fix Implementation Phase**. A reproduction test has been created and confirmed to demonstrate the issue. Your task is to analyze the root cause, implement a fix, verify it works, and create a PR.
+You are in the **Fix Implementation Phase**. A reproduction test has been created and confirmed to demonstrate the issue. Your task is to analyze the root cause, implement a fix, verify it works, and prepare for PR creation.
 
 **Time Limit: 15 minutes**
 
 If you cannot make meaningful progress within this time, document your findings and give up gracefully.
+
+## 🚨 CRITICAL RULES - READ FIRST
+
+1. **DO NOT CREATE THE PR** - The user or orchestration script will do it
+2. **ALWAYS build Metal** - Run `./build_metal.sh` after EVERY code change
+3. **USE the bash script** - Run tests via `./run_test.sh`, NOT pytest directly
+4. **USE /opt/venv** - The bash script activates it automatically
+5. **TEST thoroughly** - Run test 5 times before declaring success
+6. **PUSH the branch** - So user can create PR
+7. **WRITE a report** - Document what you did in outputs/
 
 ## Input
 
@@ -18,13 +28,14 @@ You will receive:
 
 ## Your Task
 
-1. Analyze the root cause of the failure
-2. Create a fix branch off main
-3. Copy the reproduction test to the new branch
-4. Implement fixes iteratively
-5. Verify the test passes reliably
-6. Create a draft PR (excluding the test)
-7. Write a detailed report
+1. Analyze the root cause of the failure (read raw-logs for error details)
+2. Verify test fails on the fix branch (build Metal first!)
+3. Implement fixes iteratively (build after each change!)
+4. Test thoroughly using ./run_test.sh (5 successful runs minimum)
+5. Remove test from branch (stays on dev branch)
+6. Push the fix branch
+7. Write PR description for user
+8. Write detailed execution report
 
 ## CRITICAL CHECKLIST
 
@@ -144,31 +155,60 @@ Branch naming:
 
 #### 2b. Copy Reproduction Test
 
-**IMPORTANT**: Cherry-pick or copy the test from the old branch:
+The test should already be on this branch (copied by run.sh script).
+Verify it exists:
 
 ```bash
-# Find the commit with the test
-git log $OLD_BRANCH --oneline | head -5
-
-# Cherry-pick the test commit
-git cherry-pick <commit-hash>
-
-# Or manually copy
-git checkout $OLD_BRANCH -- path/to/test_repro.py
-git add path/to/test_repro.py
-git commit -m "Add reproduction test for <issue>"
+ls -la <path-to-test-directory>/
 ```
 
-#### 2c. Verify Test Fails on New Branch
+If not present, the script should have copied it. Check git log.
+
+#### 2c. Build Metal (CRITICAL)
+
+**Before running ANY tests, you MUST build Metal:**
 
 ```bash
-# Run test to confirm it still fails
-pytest path/to/test_repro.py -v -s 2>&1 | tee baseline_failure.txt
+# Navigate to Metal root
+cd /tt-metal
+
+# Build Metal (required for all tests)
+./build_metal.sh
+
+# This takes ~5-10 minutes
+# Wait for it to complete before proceeding
 ```
 
-If test PASSES on new branch:
-- Issue might be branch-specific
-- Environment might be different
+**DO NOT:**
+- ❌ Run cmake commands directly
+- ❌ Use build_python_venv (wrong venv)
+- ❌ Skip the build step
+
+**DO:**
+- ✅ Use `./build_metal.sh`
+- ✅ Use `/opt/venv/bin/activate` for venv
+- ✅ Wait for build to complete
+
+#### 2d. Verify Test Fails on New Branch
+
+**Use the bash script runner (not pytest directly):**
+
+```bash
+# Navigate to test directory
+cd <path-to-test-parent-directory>
+
+# Run using the bash script
+./run_test.sh 2>&1 | tee baseline_failure.txt
+
+# Check the output
+tail -50 baseline_failure.txt
+```
+
+**Expected**: Test should FAIL with the error from raw-logs
+
+If test PASSES unexpectedly:
+- Check if you're on the right branch
+- Verify Metal was built
 - Document this and STOP
 
 ### Phase 3: Implement Fix (8 min)
@@ -210,15 +250,33 @@ output_shape = [batch, seq_len, hidden]  # Fix: preserves sequence
 
 #### 3b. Test After Each Change
 
-After EVERY code change:
+After EVERY code change, you MUST:
 
+1. **Rebuild Metal**:
 ```bash
-# Quick test run
-pytest path/to/test_repro.py -v -x 2>&1 | tee test_run_1.txt
+cd /tt-metal
+./build_metal.sh
+```
+
+2. **Run test using bash script**:
+```bash
+# Navigate to test directory
+cd <path-to-test-parent-directory>
+
+# Run using bash script (not pytest directly!)
+./run_test.sh 2>&1 | tee test_run_1.txt
 
 # Check result
-tail -20 test_run_1.txt
+tail -50 test_run_1.txt
 ```
+
+**CRITICAL:**
+- ❌ DO NOT run `pytest` directly
+- ❌ DO NOT skip the build step
+- ❌ DO NOT use build_python_venv
+- ✅ USE `./build_metal.sh` after each change
+- ✅ USE `./run_test.sh` to run tests
+- ✅ USE `/opt/venv` (activated by run_test.sh)
 
 **Track your attempts**:
 - `test_run_1.txt` - First attempt
@@ -237,27 +295,49 @@ Keep making changes until:
 - Try a different approach
 - Consider giving up and documenting findings
 
-#### 3d. Verify Stability
+#### 3d. Verify Stability (MANDATORY)
 
-Once test passes, verify it's reliable:
+**CRITICAL**: You MUST verify the fix works reliably before finishing.
+
+Once test passes, verify it's stable:
 
 ```bash
-# Run test 5 times
+# Navigate to test directory
+cd <path-to-test-parent-directory>
+
+# Run test 5 times using bash script
 for i in {1..5}; do
-    echo "Run $i"
-    pytest path/to/test_repro.py -v -x || break
+    echo "========== Run $i =========="
+    ./run_test.sh 2>&1 | tee verify_run_${i}.txt
+
+    # Check result
+    if [ $? -ne 0 ]; then
+        echo "❌ Test failed on run $i"
+        break
+    fi
+    echo "✅ Test passed run $i"
 done
 ```
 
-For performance fixes:
+For performance fixes, measure consistency:
 ```bash
-# Measure performance multiple times
-for i in {1..3}; do
-    pytest path/to/test_repro.py -v -s | grep "samples/s\|duration\|time"
+# Measure performance 5 times
+for i in {1..5}; do
+    echo "Run $i:"
+    ./run_test.sh 2>&1 | grep -E "samples/s|duration|time|PASSED|FAILED"
 done
 ```
 
-All runs should pass consistently.
+**Success criteria:**
+- ✅ Test passes 5/5 times
+- ✅ No intermittent failures
+- ✅ Performance improvement consistent (if applicable)
+- ✅ No device errors or hangs
+
+**If any run fails:**
+- ❌ DO NOT proceed to PR
+- ❌ Fix is not stable
+- 🔄 Debug and try again
 
 ### Phase 4: Prepare for PR (2 min)
 
@@ -320,7 +400,16 @@ uses bulk memcpy for better performance.
 Fixes timeout in gather operations with shape [1, 151936].
 ```
 
-### Phase 5: Create Draft PR (2 min)
+### Phase 5: Document Your Work (2 min)
+
+**CRITICAL: DO NOT CREATE THE PR**
+
+The user or the orchestration script will create the PR after you finish.
+Your job is to:
+1. ✅ Implement and test the fix
+2. ✅ Push the branch
+3. ✅ Write a report describing what you did
+4. ❌ DO NOT run `gh pr create`
 
 #### 5a. Push Branch
 
@@ -328,15 +417,16 @@ Fixes timeout in gather operations with shape [1, 151936].
 git push origin fix/<descriptive-name>
 ```
 
-#### 5b. Create Draft PR
+#### 5b. Write PR Description (for the user to use)
+
+Create a file with the PR description that the user can use:
 
 ```bash
-gh pr create \
-  --draft \
-  --base main \
-  --head fix/<descriptive-name> \
-  --title "<Short description of fix>" \
-  --body "$(cat <<'EOF'
+cat > /tmp/pr_description.md <<'EOF'
+## Title
+<Short description of fix>
+
+## Body
 ## Summary
 
 Brief description of the issue and the fix.
@@ -358,9 +448,10 @@ Explanation of what was wrong and why it failed.
 
 ## Testing
 
-Reproduction test created on branch `<old-branch-name>` at:
-- Path: `path/to/test_repro.py`
-- Status: Passes reliably after fix
+Reproduction test verified fix works:
+- Test: `path/to/test_repro.py`
+- Results: Passed 5/5 runs after fix
+- Build: Rebuilt Metal with ./build_metal.sh
 
 ## Recommended CI Workflows
 
@@ -376,8 +467,15 @@ Reproduction test created on branch `<old-branch-name>` at:
 
 Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 EOF
-)"
+
+echo "PR description written to /tmp/pr_description.md"
+echo "Branch pushed to: fix/<descriptive-name>"
+echo ""
+echo "User can create PR with:"
+echo "gh pr create --draft --base main --head fix/<descriptive-name> --title \"...\" --body-file /tmp/pr_description.md"
 ```
+
+**DO NOT run gh pr create yourself!** The user or script will do it.
 
 #### 5c. Add Recommended Workflows
 
@@ -596,22 +694,28 @@ Based on the area of change:
 | Phase | Time | Cumulative |
 |-------|------|------------|
 | Root cause analysis | 2 min | 2 min |
-| Create fix branch | 1 min | 3 min |
-| Implement fix (iterative) | 8 min | 11 min |
-| Prepare for PR | 2 min | 13 min |
-| Create PR | 2 min | 15 min |
+| Build Metal (initial) | 5 min | 7 min |
+| Implement fix (iterative) | 15 min | 22 min |
+| Verify stability (5x runs) | 5 min | 27 min |
+| Prepare branch & docs | 3 min | 30 min |
 
-**At 15 minutes, STOP regardless of status** and write the report.
+**Note**: Build time can vary. Each iteration requires rebuild (~5 min).
+**At 30 minutes, STOP regardless of status** and write the report.
+
+**Realistically**: Expect 2-3 fix iterations, so ~20-30 minutes total.
 
 ## Success Criteria
 
 A successful implementation should:
-1. ✅ Reproduction test passes reliably (5/5 runs)
-2. ✅ Changes are well-documented
-3. ✅ Draft PR created with clear description
-4. ✅ Recommended CI workflows listed
-5. ✅ Execution report written
-6. ✅ No obvious regressions introduced
+1. ✅ Reproduction test passes reliably (5/5 runs using ./run_test.sh)
+2. ✅ Metal rebuilt after each code change (./build_metal.sh)
+3. ✅ Changes are well-documented in commits
+4. ✅ Fix branch pushed to origin
+5. ✅ PR description written for user (in /tmp/pr_description.md)
+6. ✅ Recommended CI workflows listed
+7. ✅ Execution report written to outputs/
+8. ✅ No obvious regressions introduced
+9. ❌ **DID NOT create PR directly** (user/script does this)
 
 ## Giving Up Gracefully
 
@@ -670,11 +774,13 @@ in the dispatch system. The issue is deeper than a simple optimization.
 
 Before finishing, verify:
 
-- [ ] Reproduction test passed 5/5 times after fix (or documented failure)
-- [ ] Commits are clean and well-documented
-- [ ] Reproduction test removed from PR branch
-- [ ] Draft PR created (or failure documented)
-- [ ] PR description includes recommended workflows
-- [ ] Execution report written to outputs/
-- [ ] Report includes relevant developer contacts
-- [ ] Total time <= 15 minutes
+- [ ] **Built Metal with ./build_metal.sh** after all changes
+- [ ] **Ran test 5/5 times using ./run_test.sh** (not pytest directly)
+- [ ] **Test passed all 5 runs** (or documented failure)
+- [ ] **Reproduction test removed** from PR branch
+- [ ] **Fix branch pushed** to origin
+- [ ] **PR description written** to /tmp/pr_description.md
+- [ ] **DID NOT create PR** (user/script will do it)
+- [ ] **Execution report written** to outputs/
+- [ ] **Report includes** relevant developer contacts
+- [ ] **Total time** <= 15 minutes

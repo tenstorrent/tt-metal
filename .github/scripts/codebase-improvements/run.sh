@@ -76,7 +76,16 @@ parse_info_json() {
         exit 1
     fi
 
-    # If existing test path is provided, skip log requirements
+    # Validate we have error context (logs or URL)
+    # ALWAYS required - even with existing test, Claude needs to know the error
+    if [ -z "$URL" ] && [ -z "$RAW_LOGS" ]; then
+        log_error "Both URL and raw-logs are empty."
+        log_error "Claude needs error context to implement fixes."
+        log_error "Provide either 'url' or 'raw-logs' with the error message."
+        exit 1
+    fi
+
+    # If existing test path is provided, just validate it exists
     if [ -n "$EXISTING_TEST_PATH" ]; then
         log_info "Existing test path provided, will skip reproduction phase"
 
@@ -86,15 +95,7 @@ parse_info_json() {
             exit 1
         fi
 
-        # No need for logs if using existing test
-        return
-    fi
-
-    # Otherwise, require logs
-    if [ -z "$URL" ] && [ -z "$RAW_LOGS" ]; then
-        log_error "No existing-test-path provided and both URL and raw-logs are empty."
-        log_error "Provide either: existing-test-path OR (url OR raw-logs)"
-        exit 1
+        log_info "Error context available in raw-logs/url for implementation phase"
     fi
 
     if [ -n "$URL" ] && [ -n "$RAW_LOGS" ]; then
@@ -330,26 +331,41 @@ $PROMPT
 ## Reproduction Test
 $TEST_FILE
 
+## Error Information
+$RAW_LOGS
+
 ## Current Branch
 $FIX_BRANCH (created from main)
 
 ## Original Branch
-$OLD_BRANCH (has the test)
+$OLD_BRANCH
+
+## CRITICAL INSTRUCTIONS
+
+1. **Build Metal first**: Run ./build_metal.sh before testing
+2. **Use bash script**: Run tests via ./run_test.sh (in test parent dir)
+3. **Rebuild after changes**: Run ./build_metal.sh after EVERY code change
+4. **Test 5 times**: Verify stability with 5 consecutive successful runs
+5. **DO NOT create PR**: Push branch and write PR description, but don't run gh pr create
+6. **Write report**: Document everything in outputs/
 
 ## Expected Output
-1. Analyze root cause
-2. Implement fix iteratively
-3. Verify test passes reliably
-4. Create draft PR (excluding test)
-5. Write execution report
+1. Analyze root cause from error information above
+2. Build Metal: ./build_metal.sh
+3. Implement fix iteratively (rebuild after each change)
+4. Verify test passes 5/5 times using ./run_test.sh
+5. Remove test from branch
+6. Push fix branch
+7. Write PR description to /tmp/pr_description.md
+8. Write execution report to outputs/
 
 ## Time Limit
-15 minutes
+30 minutes (includes build time)
 
 ## Success Criteria
-- Test passes 5/5 times
-- Changes are well-documented
-- Draft PR created
+- Test passes 5/5 times using ./run_test.sh
+- Metal rebuilt after all changes
+- Branch pushed (but PR NOT created)
 - Report written to outputs/
 
 ## If You Cannot Fix
@@ -365,33 +381,51 @@ EOF
     log_warning "Press ENTER after Claude has completed the implementation..."
     read
 
-    # Check for PR creation
-    PR_URL=$(gh pr list --head "$FIX_BRANCH" --json url --jq '.[0].url' 2>/dev/null || echo "")
+    # Check if branch was pushed (not looking for PR - Claude shouldn't create it)
+    log_info "Checking if fix branch was pushed..."
 
-    if [ -n "$PR_URL" ]; then
-        log_success "Draft PR created: $PR_URL"
-        export PR_URL
-    else
-        log_warning "No PR found for branch $FIX_BRANCH"
-        log_info "Claude may have documented why PR was not created"
+    if git ls-remote --heads origin "$FIX_BRANCH" 2>/dev/null | grep -q "$FIX_BRANCH"; then
+        log_success "Fix branch pushed to origin: $FIX_BRANCH"
 
-        # If no PR was created, offer to clean up the branch
-        log_warning "Fix branch was created but no PR resulted"
-        log_info "Cleaning up abandoned fix branch..."
-
-        # Return to original branch first
-        log_info "Returning to original branch: $OLD_BRANCH"
-        git checkout "$OLD_BRANCH"
-
-        # Delete the abandoned fix branch
-        git branch -D "$FIX_BRANCH" 2>/dev/null && {
-            log_success "Deleted abandoned branch: $FIX_BRANCH"
-        } || {
-            log_warning "Could not delete branch $FIX_BRANCH (may not exist locally)"
-        }
+        # Check if PR description was written
+        if [ -f "/tmp/pr_description.md" ]; then
+            log_success "PR description found at /tmp/pr_description.md"
+            log_info ""
+            log_info "📋 To create PR, run:"
+            log_info "   gh pr create --draft --base main --head $FIX_BRANCH \\"
+            log_info "     --title \"<title>\" --body-file /tmp/pr_description.md"
+            log_info ""
+        else
+            log_warning "No PR description found at /tmp/pr_description.md"
+        fi
 
         export PR_URL=""
-        # Continue to restore stash
+        export FIX_BRANCH_PUSHED="yes"
+    else
+        log_warning "Fix branch was not pushed to origin"
+        log_info "Claude may have encountered errors during implementation"
+
+        # Check if there are any commits on the branch
+        COMMIT_COUNT=$(git rev-list --count main.."$FIX_BRANCH" 2>/dev/null || echo "0")
+
+        if [ "$COMMIT_COUNT" -eq "0" ] || [ "$COMMIT_COUNT" -eq "1" ]; then
+            # No meaningful work done, clean up the branch
+            log_info "No meaningful changes on fix branch, cleaning up..."
+
+            # Return to original branch first
+            log_info "Returning to original branch: $OLD_BRANCH"
+            git checkout "$OLD_BRANCH"
+
+            # Delete the abandoned fix branch
+            git branch -D "$FIX_BRANCH" 2>/dev/null && {
+                log_success "Deleted abandoned branch: $FIX_BRANCH"
+            }
+        else
+            log_warning "Fix branch has $COMMIT_COUNT commits but wasn't pushed"
+            log_info "Keeping branch for manual review: $FIX_BRANCH"
+        fi
+
+        export FIX_BRANCH_PUSHED="no"
     fi
 
     # Return to original branch (if not already there)
