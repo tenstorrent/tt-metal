@@ -185,7 +185,7 @@ jobs:
     if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout }}
-    name: "TTNN ${{ matrix.test-group.name }} - ${{ matrix.arch }}"
+    name: "TTNN ${{ matrix.test-group.name }} - ${{ matrix.arch.name }}"
     strategy:
       fail-fast: false
       matrix:
