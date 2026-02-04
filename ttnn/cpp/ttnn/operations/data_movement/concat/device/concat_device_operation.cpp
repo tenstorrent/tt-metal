@@ -93,10 +93,20 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
         TT_FATAL(in_ref.is_sharded() == shard_first, "All tensors must be sharded or all must be interleaved");
         if (shard_first) {
-            TT_FATAL(in_ref.shard_spec().has_value(), "Sharded tensors must have a shard spec.");
-            TT_FATAL(
-                in_ref.shard_spec().value().grid == first_input.shard_spec().value().grid,
-                "Sharded tensors must have the same grid.");
+            if (first_input.nd_shard_spec().has_value()) {
+                TT_FATAL(in_ref.nd_shard_spec().has_value(), "ND Sharded tensors must have a shard spec.");
+
+                // TODO:Z add nd sharding verification possibility here
+                //  need to be different at the same dimention
+                TT_FATAL(
+                    in_ref.nd_shard_spec().value().grid == first_input.nd_shard_spec().value().grid,
+                    "ND Sharded tensors must have the same grid.");
+            } else {
+                TT_FATAL(in_ref.shard_spec().has_value(), "Sharded tensors must have a shard spec.");
+                TT_FATAL(
+                    in_ref.shard_spec().value().grid == first_input.shard_spec().value().grid,
+                    "Sharded tensors must have the same grid.");
+            }
             TT_FATAL(
                 in_ref.memory_config().memory_layout() == first_input.memory_config().memory_layout(),
                 "Sharded tensors must have the same memory layout.");
