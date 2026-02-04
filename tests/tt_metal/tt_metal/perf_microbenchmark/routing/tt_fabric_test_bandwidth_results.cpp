@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_bandwidth_results.hpp"
 
 #include <algorithm>
