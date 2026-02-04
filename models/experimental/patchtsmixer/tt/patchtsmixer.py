@@ -284,6 +284,7 @@ class TtPatchTSMixerMLP:
             compute_config=self.compute_config,
             min_K_tiles=self.min_k_tiles_fc1,
             return_sharded=True,  # Keep sharded for GELU
+            activation="gelu",
             program_config_factory=lambda **kwargs: make_1d_mcast_prog_config_for_height_sharded(
                 nc=kwargs["nc"],
                 shard_shape=kwargs["shard_shape"],
