@@ -61,6 +61,7 @@ ttnn::Tensor uniform(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::uniform::UniformDeviceOperation;
+    TT_FATAL(input.device() != nullptr, "Uniform: Input tensor needs to be on device");
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             from,
