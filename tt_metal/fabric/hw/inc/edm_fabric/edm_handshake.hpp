@@ -59,9 +59,9 @@ FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
     handshake_info->local_value = 0;
-    handshake_info->mesh_id = my_mesh_id;
-    handshake_info->device_id = my_device_id;
     handshake_info->scratch[0] = MAGIC_HANDSHAKE_VALUE;
+    // Sender exposes itself as the neighbor to its peer. Shifts align our IDs to the
+    // neighbor_mesh_id (<<16) and neighbor_device_id (<<8) offsets in the peer's handshake_info_t.
     handshake_info->scratch[1] = (static_cast<uint32_t>(my_mesh_id) << 16);
     handshake_info->scratch[2] = (static_cast<uint32_t>(my_device_id) << 8);
     handshake_info->scratch[3] = 0;
@@ -88,6 +88,8 @@ FORCE_INLINE void sender_side_handshake(
         }
         invalidate_l1_cache();
     }
+    // reinitialize our own mesh_id and device_id to the values received from the peer
+    // these values are cleared by the handshake_info_t initialization above.
     handshake_info->mesh_id = my_mesh_id;
     handshake_info->device_id = my_device_id;
 }
@@ -112,6 +114,8 @@ FORCE_INLINE void receiver_side_handshake(
         invalidate_l1_cache();
     }
     internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+    // reinitialize our own mesh_id and device_id to the values received from the peer
+    // these values are cleared by the handshake_info_t initialization above.
     handshake_info->mesh_id = my_mesh_id;
     handshake_info->device_id = my_device_id;
 }
