@@ -26,24 +26,37 @@ The stress test in `tests/test_gather_timeout_stress.py` reproduces this failure
 
 ### Run Test
 
-```bash
-# Activate virtual environment first
-source /opt/venv/bin/activate
+**Simple way (recommended):**
 
+```bash
+# The run_test.sh script sets up environment and runs the test
+./run_test.sh
+
+# Or run a specific test
+./run_test.sh -k "test_gather_long_tensor_stress[0]"
+
+# Or with custom args
+./run_test.sh --verbose --timeout=300
+```
+
+**Manual way (if needed):**
+
+```bash
 # Set required environment variables (CRITICAL!)
 export TT_METAL_OPERATION_TIMEOUT_SECONDS=5
 export ARCH_NAME=wormhole_b0
 export TT_METAL_HOME=/tt-metal
 export PYTHONPATH=/tt-metal
 
+# Activate virtual environment
+source /opt/venv/bin/activate
+
 # Reset device before testing
 tt-smi -r 0
 
-# Run a single test to verify reproduction
-pytest "tests/test_gather_timeout_stress.py::test_gather_long_tensor_stress[0]" -x -v --timeout=120 2>&1 | tee logs/run_test.log
-
-# Run full stress test (50 iterations of the main test case)
-pytest tests/test_gather_timeout_stress.py::test_gather_long_tensor_stress -x -v --timeout=300 2>&1 | tee logs/full_stress.log
+# Run the test
+cd tests
+pytest test_gather_timeout_stress.py -x -v --timeout=120
 ```
 
 ### Expected Behavior

@@ -348,11 +348,97 @@ grep -i "device.*timeout\|dispatch.*timeout" logs/*.log
 
 ### 8. Write the Focused Stress Test
 
-**Your test should be SIMPLE and FOCUSED - not a copy of the original test.**
+**CRITICAL: You must create TWO files:**
+1. `tests/test_<descriptive_name>_stress.py` - The Python test
+2. `run_test.sh` - Bash script to set up environment and run the test
 
-Create a new file in `tests/` with:
+#### 8a. Create the Bash Runner Script
 
-**File naming:** `test_<descriptive_name>_stress.py`
+**File naming:** `run_test.sh`
+
+**This is MANDATORY** - The bash script is the primary way to run the test.
+
+```bash
+#!/bin/bash
+
+# Runner script for <test name> stress test
+# Sets up environment and runs the test
+
+set -e
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "=========================================="
+echo "<Test Name> Stress Test"
+echo "=========================================="
+echo ""
+
+# Set ALL required environment variables
+echo "Setting up environment..."
+
+# CRITICAL: Set any timeout/hang detection variables
+export TT_METAL_OPERATION_TIMEOUT_SECONDS=5  # Example: adjust as needed
+
+# Architecture
+export ARCH_NAME=${ARCH_NAME:-wormhole_b0}
+
+# Metal paths
+export TT_METAL_HOME=${TT_METAL_HOME:-/tt-metal}
+export PYTHONPATH=${PYTHONPATH:-/tt-metal}
+
+# Logging
+export LOGURU_LEVEL=${LOGURU_LEVEL:-INFO}
+
+# Add any other environment variables from CI
+echo "  TT_METAL_OPERATION_TIMEOUT_SECONDS=$TT_METAL_OPERATION_TIMEOUT_SECONDS"
+echo "  ARCH_NAME=$ARCH_NAME"
+echo ""
+
+# Activate virtual environment
+if [ -f "/opt/venv/bin/activate" ]; then
+    echo "Activating virtual environment..."
+    source /opt/venv/bin/activate
+elif [ -f "$TT_METAL_HOME/python_env/bin/activate" ]; then
+    source "$TT_METAL_HOME/python_env/bin/activate"
+fi
+
+echo ""
+echo "Running stress test..."
+echo "=========================================="
+echo ""
+
+# Change to test directory
+cd "$SCRIPT_DIR/tests"
+
+# Run the test with pytest
+# For stress tests: use -n auto for parallel workers (amplification)
+# Use -x to stop on first failure
+# Use --timeout to prevent hanging
+pytest test_<name>_stress.py -n auto -x -v --timeout=300 "$@"
+
+TEST_RESULT=$?
+
+echo ""
+echo "=========================================="
+if [ $TEST_RESULT -eq 0 ]; then
+    echo "✅ Test PASSED (no failures reproduced)"
+else
+    echo "❌ Test FAILED (failure reproduced!)"
+fi
+echo "=========================================="
+
+exit $TEST_RESULT
+```
+
+**Make it executable:**
+```bash
+chmod +x run_test.sh
+```
+
+#### 8b. Create the Python Stress Test
+
+**File naming:** `tests/test_<descriptive_name>_stress.py`
 
 **Design Principles:**
 1. **Isolate**: Test ONLY the failing operation, not the whole test
@@ -371,42 +457,40 @@ Original failure: <job name> - <date>
 Error: <brief error description>
 
 This test amplifies <specific condition> to reproduce the failure.
-Run with: <command to run>
+
+Run with:
+    cd <failure-folder>
+    ./run_test.sh
 """
 
-import ...
+import pytest
+import torch
+import ttnn
 
-def setup():
-    """Setup test environment"""
-    pass
-
-def stress_test(iterations=100, **amplification_params):
+@pytest.mark.parametrize("iteration", range(50))
+def test_<name>_stress(iteration, device):
     """
-    Main stress test loop
+    Stress test that amplifies <failure condition>.
 
-    Args:
-        iterations: Number of times to run (default: 100)
-        amplification_params: Parameters to control amplification
+    Each iteration runs the failing operation. With pytest -n auto,
+    multiple workers run in parallel, increasing failure probability.
     """
-    for i in range(iterations):
-        # Run amplified version of original test
-        pass
+    # Minimal setup - just what's needed
+    input_tensor = torch.randn([batch, size], dtype=torch.bfloat16)
 
-if __name__ == "__main__":
-    # CLI args for easy parameter tuning
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--iterations", type=int, default=100)
-    # Add amplification parameters
-    args = parser.parse_args()
+    # The exact failing operation
+    ttnn_input = ttnn.from_torch(input_tensor, device=device)
+    result = ttnn.operation_that_fails(ttnn_input)  # ← Fails here
 
-    stress_test(iterations=args.iterations, ...)
+    # Basic validation
+    assert result is not None
 ```
 
 **Must include:**
-- Clear docstring explaining what failure we're reproducing
+- Clear docstring with instructions to use run_test.sh
 - Comments explaining the amplification strategy
+- Parametrized iterations (50-100+)
 - Logging to show progress and when failure occurs
-- CLI arguments for tuning parameters
 - Exit with non-zero code on failure
 
 ### 9. Verify Reproduction
@@ -536,6 +620,20 @@ sleep 5
 - Errors and stack traces must be preserved for debugging
 - Multiple runs should be numbered (run_1.log, run_2.log, etc.)
 
+**Run using the bash script:**
+
+```bash
+# Simply run the script - it handles everything
+cd <failure-name>
+./run_test.sh 2>&1 | tee logs/run_1.log
+```
+
+The bash script will:
+- Set all environment variables (including critical timeouts)
+- Activate the virtual environment
+- Run the test with appropriate pytest flags
+- Report pass/fail status
+
 **What to look for:**
 - Device timeout exception: `RuntimeError: ... TIMEOUT: device timeout`
 - Specific error message matching the CI logs
@@ -548,10 +646,10 @@ Run the test multiple times to verify:
 
 **If not reproducing after 10 runs:**
 
-1. **Check environment variables again** - This is the #1 reason reproduction fails:
+1. **Check environment variables in run_test.sh** - This is the #1 reason reproduction fails:
    ```bash
    # Verify hang detection timeout is set
-   echo $TT_METAL_HANG_DETECTION_TIMEOUT
+   grep TIMEOUT run_test.sh
    # Search for other timeout variables you might have missed
    grep -i "timeout" logs/*.log | grep -v "pytest"
    ```
@@ -647,11 +745,23 @@ These are the most common reasons reproduction attempts fail:
 **Wrong:** Only reading the YAML file
 **Right:** Search logs for hidden config, timeout settings, environment dumps
 
-### 8. Not Saving Test Output ❌ (CRITICAL)
-**Wrong:** `pytest tests/test_stress.py -v` - user CANNOT see what happened
-**Right:** `pytest tests/test_stress.py -v 2>&1 | tee logs/run_1.log` - output saved to file
+### 8. Not Creating Bash Runner Script ❌ (CRITICAL)
+**Wrong:** Only creating the Python test file
+**Right:** Create both `run_test.sh` AND `test_*_stress.py`
 
-**EVERY pytest command MUST end with `2>&1 | tee logs/<name>.log`** - no exceptions. The user cannot see your terminal output. If you don't save to a log file, the user has no way to verify results or see errors.
+The bash script is MANDATORY because:
+- Sets up environment variables automatically (especially timeouts!)
+- Activates virtual environment
+- Can be run from any directory
+- Works in CI without manual setup
+- Documents all required configuration
+- Makes the test truly portable
+
+### 9. Not Saving Test Output ❌ (CRITICAL)
+**Wrong:** `pytest tests/test_stress.py -v` - user CANNOT see what happened
+**Right:** `./run_test.sh 2>&1 | tee logs/run_1.log` - output saved to file
+
+**EVERY test run MUST save output to logs/** - no exceptions. The user cannot see your terminal output. If you don't save to a log file, the user has no way to verify results or see errors.
 
 ### 9. Mismatching Device Setup ❌
 **Wrong:** Using different device initialization than the original test
@@ -753,29 +863,31 @@ With `-n auto`, pytest creates multiple worker processes. If each test tries to 
 
 ## Important Notes
 
+- **⚠️ CREATE BASH RUNNER SCRIPT** - ALWAYS create `run_test.sh` that sets up environment, not just the Python test
 - **⚠️ ALWAYS RUN TESTS IN BACKGROUND** - Use `run_in_background: true` in Bash tool, then monitor with `tail`/`Read`. Never block waiting for a test to complete.
 - **⚠️ MONITOR OUTPUT EVERY 10-15 SECONDS** - Check logs for errors, don't wait for timeouts
 - **⚠️ RESET BOARD AFTER DEVICE ERRORS** - Run `tt-smi -r` before retrying after device failures
 - **⚠️ EVERY pytest command MUST save output to logs/** - Use `2>&1 | tee logs/run_N.log` - the user CANNOT see your terminal
-- **Set environment variables FIRST** - Extract ALL variables from CI YAML and logs
+- **Set environment variables in run_test.sh** - Extract ALL variables from CI YAML and logs
 - **Match the original test's device setup** - Use the same fixture or initialization method as the failing test
 - **Use `-x` flag to stop on first failure** - Once reproducing, don't waste time running more iterations
 - **Don't guess** - Read the actual test code, YAML, and logs thoroughly
 - **Isolate and simplify** - Don't reproduce the whole test suite
 - **Be specific** - Target the exact failing operation and error type
-- **Make it tunable** - Use CLI args so parameters can be adjusted
 - **Run sequential first** - Verify test works before adding `-n auto` parallel stress
 - **Run sequential for clean logs** - After reproducing with parallel, run sequential to get clean stack traces
+- **Make script executable** - Always `chmod +x run_test.sh`
 
 ## Success Criteria
 
 Your stress test successfully reproduces the failure if:
-1. It runs standalone without manual setup (after setting environment variables)
-2. It completes within 5 minutes (hard requirement)
-3. It reproduces the failure within that 5 minute window
-4. The failure mode matches the original error (same exception/message)
-5. It can be run repeatedly for verification
-6. Parameters can be tuned via CLI arguments
+1. **Has run_test.sh** - Bash script that sets up environment and runs test
+2. It runs standalone with one command: `./run_test.sh`
+3. It completes within 5 minutes (hard requirement)
+4. It reproduces the failure within that 5 minute window
+5. The failure mode matches the original error (same exception/message)
+6. It can be run repeatedly for verification
+7. Parameters can be tuned via command-line arguments to run_test.sh
 
 ## Example: Device Timeout Reproduction
 
@@ -875,11 +987,13 @@ pytest test_gather_device_timeout.py -x -v --timeout=60 2>&1 | tee logs/sequenti
 
 Before telling the user you're done, verify:
 
+- [ ] **Created run_test.sh bash script** - Sets up environment and runs the test
+- [ ] **Made run_test.sh executable** - `chmod +x run_test.sh`
 - [ ] **Ran tests in BACKGROUND mode** - Used `run_in_background: true` and monitored output, didn't block waiting
 - [ ] **Monitored output and reacted to errors** - Checked logs every 10-15 seconds, reset board after device errors
-- [ ] **ALL pytest commands used `2>&1 | tee logs/<name>.log`** - The user CANNOT see your terminal. If you didn't save output, go back and re-run with logging.
+- [ ] **ALL test runs used `./run_test.sh 2>&1 | tee logs/<name>.log`** - The user CANNOT see your terminal. If you didn't save output, go back and re-run with logging.
 - [ ] **Device setup matches original test** - Used same fixture or initialization method
 - [ ] **Used `-x` flag** - Tests stop on first failure
 - [ ] **Ran sequential first before parallel** - Verified test works before adding `-n auto`
 - [ ] **Log files exist in logs/ folder** - Run `ls -la logs/` to verify files were created
-- [ ] **README.md documents how to run** - Including the exact command with `| tee logs/...`
+- [ ] **README.md documents how to run** - Including `./run_test.sh` command
