@@ -202,7 +202,6 @@ jobs:
         if: ${{ failure() }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-
   quick-bh-glx-health:
     if: ${{ inputs.blackhole == true || inputs.scheduled == true }}
     runs-on:
