@@ -15,11 +15,8 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
 
-def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
-    logger.warning("[TT-METAL-SGLANG-LOG] allocate_vllm_kv_cache called")
-    logger.warning(
-        f"[TT-METAL-SGLANG-LOG] kv_cache_shape={kv_cache_shape}, dtype={dtype}, num_layers={num_layers}, tt_cache_path={tt_cache_path}"
-    )
+def allocate_sglang_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
+    logger.warning("[TT-METAL-SGLANG-LOG] allocate_sglang_kv_cache called in generator")
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
@@ -39,7 +36,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
                 ttnn.as_tensor(
                     cache_kv,
                     device=submesh,
-                    # TODO: this could be ShardTensorToMesh, removing the need for vLLM to know about TP for num_kv_heads.
+                    # TODO: this could be ShardTensorToMesh, removing the need for sglang to know about TP for num_kv_heads.
                     # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
                     mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
                     layout=ttnn.TILE_LAYOUT,
@@ -56,7 +53,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
     return kv_cache
 
 
-def initialize_vllm_text_transformer(
+def initialize_sglang_text_transformer(
     hf_config,
     tt_data_parallel,
     mesh_device,
@@ -82,7 +79,7 @@ def initialize_vllm_text_transformer(
 
         assert model_args_i.model_name.replace("-", "") in hf_config._name_or_path.replace(
             "-", ""
-        ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.CKPT_DIR})."
+        ), f"The model specified in sglang ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.CKPT_DIR})."
         if n_layers is not None:
             model_args_i.n_layers = n_layers
 
@@ -110,7 +107,7 @@ class LlamaForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(
+    def initialize_sglang_model(
         cls,
         hf_config,
         mesh_device,
@@ -126,14 +123,14 @@ class LlamaForCausalLM(Generator):
             and mesh_device.get_num_devices() == 1
             and is_wormhole_b0()
         ):
-            MAX_PROMPT_LEN = 65536
+            MAX_PROMPT_LEN = 32768
             if max_seq_len > MAX_PROMPT_LEN:
                 raise ValueError(
                     f"TT-LLama8B and TT-Llama11B do not support max_model_len greater than {MAX_PROMPT_LEN} on N150 "
-                    f"(received {max_seq_len}). Set --max_model_len to {MAX_PROMPT_LEN} or lower in vLLM."
+                    f"(received {max_seq_len}). Set --max_model_len to {MAX_PROMPT_LEN} or lower in sglang."
                 )
 
-        tt_model, model_args = initialize_vllm_text_transformer(
+        tt_model, model_args = initialize_sglang_text_transformer(
             hf_config,
             tt_data_parallel,
             mesh_device,
@@ -158,7 +155,7 @@ class LlamaForCausalLM(Generator):
         return super().decode_forward_text(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+        return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 class QwenForCausalLM(Generator):
@@ -166,7 +163,7 @@ class QwenForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(
+    def initialize_sglang_model(
         cls,
         hf_config,
         mesh_device,
@@ -176,7 +173,7 @@ class QwenForCausalLM(Generator):
         tt_data_parallel=1,
         optimizations: str = "performance",
     ):
-        tt_model, model_args = initialize_vllm_text_transformer(
+        tt_model, model_args = initialize_sglang_text_transformer(
             hf_config,
             tt_data_parallel,
             mesh_device,
@@ -201,7 +198,7 @@ class QwenForCausalLM(Generator):
         return super().decode_forward_text(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+        return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 class MistralForCausalLM(Generator):
@@ -209,7 +206,7 @@ class MistralForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(
+    def initialize_sglang_model(
         cls,
         hf_config,
         mesh_device,
@@ -219,7 +216,7 @@ class MistralForCausalLM(Generator):
         tt_data_parallel=1,
         optimizations: str = "performance",
     ):
-        tt_model, model_args = initialize_vllm_text_transformer(
+        tt_model, model_args = initialize_sglang_text_transformer(
             hf_config,
             tt_data_parallel,
             mesh_device,
@@ -244,17 +241,17 @@ class MistralForCausalLM(Generator):
         return super().decode_forward_text(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+        return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 class GptOssForCausalLM(Generator):
-    """GPT-OSS model for vLLM integration"""
+    """GPT-OSS model for sglang integration"""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(
+    def initialize_sglang_model(
         cls,
         hf_config,
         mesh_device,
@@ -308,4 +305,4 @@ class GptOssForCausalLM(Generator):
         return super().decode_forward_text(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+        return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
