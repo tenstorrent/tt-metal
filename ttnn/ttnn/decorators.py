@@ -988,7 +988,6 @@ def register_python_operation(
 
         operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
 
-        wrapped_function = function
         if not ttnn.CONFIG.enable_fast_runtime_mode:
             # Wrap function before attaching documentation to avoid errors
             if doc is not None:
