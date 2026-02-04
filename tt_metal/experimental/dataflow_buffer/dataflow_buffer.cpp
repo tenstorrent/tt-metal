@@ -393,7 +393,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                     uint8_t consumer_tensix_id = get_tensix_id_for_pair((producer_idx * num_producer_tcs) + tc_slot);
                     ::experimental::PackedTileCounter consumer_tc =
                         tile_counter_allocator_.allocate(consumer_tensix_id);
-                    group.consumer_tcs.push_back(::experimental::get_counter_id(consumer_tc));
+                    group.consumer_tcs.push_back(consumer_tc);
                 }
 
                 log_info(
@@ -481,9 +481,11 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
             } else if (config.cap == ::experimental::AccessPattern::BLOCKED) {
                 // For blocked mode, each consumer has num_producers TCs, one per producer
                 // The tc-th TC on this consumer pairs with the tc-th producer
+                // Consumer uses its own allocated TC from consumer_tcs, not the producer's TC
                 uint8_t producer_idx = tc;
                 uint8_t producer_tc_slot = 0;
-                risc_config.config.packed_tile_counter[tc] = tc_groups[producer_idx][producer_tc_slot].producer_tc;
+                risc_config.config.packed_tile_counter[tc] =
+                    tc_groups[producer_idx][producer_tc_slot].consumer_tcs[consumer_idx];
             } else {
                 TT_FATAL(false, "Unsupported consumer access pattern");
             }

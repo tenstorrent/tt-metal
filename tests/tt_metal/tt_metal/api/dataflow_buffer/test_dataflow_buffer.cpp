@@ -123,7 +123,6 @@ void run_dfb_program(
     EXPECT_EQ(input, output);
 }
 
-// move this into test_dataflow_buffer_e2e.cpp
 TEST_F(MeshDeviceFixture, TensixTest1xDFB1Sx1S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
