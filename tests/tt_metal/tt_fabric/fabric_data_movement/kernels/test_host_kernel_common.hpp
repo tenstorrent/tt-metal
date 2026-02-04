@@ -16,4 +16,18 @@ enum FabricPacketType {
     COUNT = CHIP_SPARSE_MULTICAST + 1
 };
 
+// Enum used to specify the NoC packet type used in the test
+enum TestNocPacketType {
+    TEST_NOC_UNICAST_WRITE = 0,
+    TEST_NOC_UNICAST_INLINE_WRITE = 1,
+    TEST_NOC_UNICAST_ATOMIC_INC = 2,
+    TEST_NOC_FUSED_UNICAST_ATOMIC_INC = 3,
+    TEST_NOC_UNICAST_SCATTER_WRITE = 4,
+    TEST_NOC_MULTICAST_WRITE = 5,       // mcast has bug
+    TEST_NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
+    TEST_NOC_UNICAST_READ = 7,
+    TEST_NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC = 8,
+    TEST_COUNT = TEST_NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC + 1
+};
+
 }  // namespace tt::tt_fabric::fabric_router_tests

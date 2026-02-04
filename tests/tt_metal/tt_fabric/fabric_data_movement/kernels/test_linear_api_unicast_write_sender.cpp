@@ -19,13 +19,20 @@ using namespace tt::tt_fabric::mesh::experimental;
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "test_host_kernel_common.hpp"
 using tt::tt_fabric::fabric_router_tests::FabricPacketType;
+using tt::tt_fabric::fabric_router_tests::TestNocPacketType;
 
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 constexpr uint32_t notification_mailbox_address = get_compile_time_arg_val(2);
 uint32_t target_address = get_compile_time_arg_val(3);
-constexpr NocSendType noc_send_type = static_cast<NocSendType>(get_compile_time_arg_val(4));
+constexpr TestNocPacketType noc_packet_type = static_cast<TestNocPacketType>(get_compile_time_arg_val(4));
+static_assert(
+    noc_packet_type < static_cast<uint32_t>(TestNocPacketType::TEST_COUNT),
+    "Compile-time arg 4 (noc_packet_type) must be 0 (TEST_NOC_UNICAST_WRITE), 1 (TEST_NOC_UNICAST_INLINE_WRITE), 2 "
+    "(TEST_NOC_UNICAST_ATOMIC_INC), 3 (TEST_NOC_FUSED_UNICAST_ATOMIC_INC), 4 (TEST_NOC_UNICAST_SCATTER_WRITE), 5 "
+    "(TEST_NOC_MULTICAST_WRITE), 6 (TEST_NOC_MULTICAST_ATOMIC_INC), 7 (TEST_NOC_UNICAST_READ), 8 "
+    "(TEST_NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)");
 constexpr uint32_t num_send_dir = get_compile_time_arg_val(5);
 constexpr bool with_state = get_compile_time_arg_val(6) == 1;
 constexpr uint32_t raw_fabric_packet_type = get_compile_time_arg_val(7);
@@ -68,7 +75,7 @@ void kernel_main() {
     uint64_t start_timestamp = get_timestamp();
 
     if constexpr (with_state) {
-        set_state<num_send_dir, fabric_packet_type, noc_send_type>(
+        set_state<num_send_dir, fabric_packet_type, noc_packet_type>(
             connections, route_id, hop_info, static_cast<uint16_t>(packet_payload_size_bytes));
     }
 
@@ -80,8 +87,8 @@ void kernel_main() {
 #ifdef API_TYPE_Linear
         if constexpr (fabric_packet_type == FabricPacketType::CHIP_SPARSE_MULTICAST) {
             // Currently sparse multicast has only been tested for NoC Unicast Writes
-            switch (noc_send_type) {
-                case NOC_UNICAST_WRITE: {
+            switch (noc_packet_type) {
+                case TEST_NOC_UNICAST_WRITE: {
                     fabric_sparse_multicast_noc_unicast_write(
                         connections,
                         route_id,
@@ -95,8 +102,8 @@ void kernel_main() {
                 } break;
             }
         } else if constexpr (fabric_packet_type == FabricPacketType::CHIP_MULTICAST) {
-            switch (noc_send_type) {
-                case NOC_UNICAST_WRITE: {
+            switch (noc_packet_type) {
+                case TEST_NOC_UNICAST_WRITE: {
                     if constexpr (with_state) {
                         fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             connections,
@@ -116,7 +123,7 @@ void kernel_main() {
                             hop_info.mcast.range);
                     }
                 } break;
-                case NOC_UNICAST_INLINE_WRITE: {
+                case TEST_NOC_UNICAST_INLINE_WRITE: {
                     if constexpr (with_state) {
                         tt::tt_fabric::NocUnicastInlineWriteCommandHeader ih{};
                         ih.noc_address = get_noc_addr(noc_x_start, noc_y_start, target_address);
@@ -132,7 +139,7 @@ void kernel_main() {
                             hop_info.mcast.range);
                     }
                 } break;
-                case NOC_UNICAST_SCATTER_WRITE: {
+                case TEST_NOC_UNICAST_SCATTER_WRITE: {
                     if constexpr (with_state) {
                         uint16_t first_chunk_size = packet_payload_size_bytes / 2;
                         const auto sh = tt::tt_fabric::NocUnicastScatterCommandHeader(
@@ -161,8 +168,8 @@ void kernel_main() {
                 } break;
             }
         } else {
-            switch (noc_send_type) {
-                case NOC_UNICAST_WRITE: {
+            switch (noc_packet_type) {
+                case TEST_NOC_UNICAST_WRITE: {
                     if constexpr (with_state) {
                         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             connections,
@@ -182,7 +189,7 @@ void kernel_main() {
                             hop_info.ucast.num_hops);
                     }
                 } break;
-                case NOC_UNICAST_INLINE_WRITE: {
+                case TEST_NOC_UNICAST_INLINE_WRITE: {
                     if constexpr (with_state) {
                         tt::tt_fabric::NocUnicastInlineWriteCommandHeader ih{};
                         ih.noc_address = get_noc_addr(noc_x_start, noc_y_start, target_address);
@@ -197,7 +204,7 @@ void kernel_main() {
                             hop_info.ucast.num_hops);
                     }
                 } break;
-                case NOC_UNICAST_SCATTER_WRITE: {
+                case TEST_NOC_UNICAST_SCATTER_WRITE: {
                     if constexpr (with_state) {
                         uint16_t first_chunk_size = packet_payload_size_bytes / 2;
                         const auto sh = tt::tt_fabric::NocUnicastScatterCommandHeader(
@@ -230,8 +237,8 @@ void kernel_main() {
             fabric_packet_type != FabricPacketType::CHIP_SPARSE_MULTICAST,
             "Sparse multicast has not been tested yet with mesh topology");
         if constexpr (fabric_packet_type == FabricPacketType::CHIP_MULTICAST) {
-            switch (noc_send_type) {
-                case NOC_UNICAST_WRITE: {
+            switch (noc_packet_type) {
+                case TEST_NOC_UNICAST_WRITE: {
                     if constexpr (with_state) {
                         fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             connections,
@@ -251,7 +258,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)});
                     }
                 } break;
-                case NOC_UNICAST_INLINE_WRITE: {
+                case TEST_NOC_UNICAST_INLINE_WRITE: {
                     if constexpr (with_state) {
                         fabric_multicast_noc_unicast_inline_write_with_state<UnicastInlineWriteUpdateMask::DstAddr>(
                             connections,
@@ -267,7 +274,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF});
                     }
                 } break;
-                case NOC_UNICAST_SCATTER_WRITE: {
+                case TEST_NOC_UNICAST_SCATTER_WRITE: {
                     if constexpr (with_state) {
                         fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                             connections,
@@ -296,8 +303,8 @@ void kernel_main() {
                 } break;
             }
         } else {
-            switch (noc_send_type) {
-                case NOC_UNICAST_WRITE: {
+            switch (noc_packet_type) {
+                case TEST_NOC_UNICAST_WRITE: {
                     if constexpr (with_state) {
                         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             connections,
@@ -316,7 +323,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)});
                     }
                 } break;
-                case NOC_UNICAST_INLINE_WRITE: {
+                case TEST_NOC_UNICAST_INLINE_WRITE: {
                     if constexpr (with_state) {
                         tt::tt_fabric::NocUnicastInlineWriteCommandHeader ih{};
                         ih.noc_address = get_noc_addr(noc_x_start, noc_y_start, target_address);
@@ -330,7 +337,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF});
                     }
                 } break;
-                case NOC_UNICAST_SCATTER_WRITE: {
+                case TEST_NOC_UNICAST_SCATTER_WRITE: {
                     if constexpr (with_state) {
                         uint16_t first_chunk_size = packet_payload_size_bytes / 2;
                         const auto sh = tt::tt_fabric::NocUnicastScatterCommandHeader(
