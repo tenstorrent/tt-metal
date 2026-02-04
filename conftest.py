@@ -61,12 +61,7 @@ def is_single_card_n300(device):
 
 @pytest.fixture(scope="function")
 def galaxy_type():
-    if is_6u():
-        return "6U"
-    elif is_tg_cluster():
-        return "4U"
-    else:
-        return None
+    return "6U"
 
 
 def is_galaxy():
@@ -728,14 +723,6 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
     del mesh_device
-
-
-@pytest.fixture()
-def ensure_devices_tg():
-    import ttnn
-
-    device_ids = ttnn.get_device_ids()
-    assert len(device_ids) == 32, f"Expected 32 devices, got {len(device_ids)}"
 
 
 @pytest.fixture(autouse=True)

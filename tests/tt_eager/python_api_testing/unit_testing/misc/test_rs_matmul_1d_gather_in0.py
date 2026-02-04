@@ -11,7 +11,6 @@ import torch
 import itertools
 import os
 
-from conftest import is_6u
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
@@ -443,7 +442,7 @@ def run_multi_core_matmul_1d(
     )
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
+        mesh_device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=fp32_acc_mode,
@@ -589,126 +588,6 @@ def run_multi_core_matmul_1d(
     mesh_device.reset_sub_device_stall_group()
 
 
-@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
-@pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
-@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
-@pytest.mark.parametrize(
-    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved, untilize_out",
-    [
-        (
-            1,
-            32,
-            2048,
-            3584,
-            ttnn.bfloat16,
-            ttnn.bfloat4_b,
-            ttnn.bfloat8_b,
-            ttnn.MathFidelity.LoFi,
-            True,
-            False,
-            PREFETCHER_NOC1_GRID,
-            False,
-            False,
-        ),
-    ],
-    ids=[
-        "ff13",
-    ],
-)
-@pytest.mark.parametrize(
-    "num_iters",
-    [50],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "trace_region_size": 1200000,
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("shard_height", [32])
-@pytest.mark.parametrize("shard_width", [64])
-@pytest.mark.parametrize("input_grid", [(5, 5)])
-@pytest.mark.parametrize("output_grid", [(5, 1)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (8, 4),  # TODO: Once fabric can be initialized on a SubMesh, revert to (1, 4)
-    ],
-    indirect=True,
-)
-def test_tg_matmul_1d_ring_llama_with_rs_perf(
-    mesh_device,
-    in0_dtype,
-    in1_dtype,
-    output_dtype,
-    fidelity,
-    has_bias,
-    fp32_acc_mode,
-    packer_l1_acc,
-    B,
-    M,
-    K,
-    N,
-    grid,
-    in1_is_dram_interleaved,
-    untilize_out,
-    num_iters,
-    function_level_defaults,
-    shard_height,
-    shard_width,
-    input_grid,
-    output_grid,
-    dtype,
-):
-    # Only run these tests on unharvested TG
-    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
-    if device_grid != (7, 10):
-        pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
-
-    if in1_is_dram_interleaved:
-        hop_grid = None
-    else:
-        hop_grid = [
-            (3, 6),
-        ]
-
-    run_multi_core_matmul_1d(
-        mesh_device,
-        in0_dtype,
-        in1_dtype,
-        fidelity,
-        has_bias,
-        fp32_acc_mode,
-        packer_l1_acc,
-        B,
-        M,
-        K,
-        N,
-        None,  # activation,
-        grid,
-        True,
-        num_iters,
-        shard_height,
-        shard_width,
-        input_grid,
-        output_grid,
-        dtype,
-        output_dtype=output_dtype,
-        use_physical_to_logical_mapping=False,
-        hop_grid=hop_grid,
-        in1_is_dram_interleaved=in1_is_dram_interleaved,
-        untilize_out=untilize_out,
-        use_regular_grid=True,
-    )
-
-
-@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(

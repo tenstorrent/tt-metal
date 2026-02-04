@@ -56,16 +56,6 @@ jobs:
               "owner_id": "U053W15B6JF"
             }, # Djordje Ivanovic
             {
-              "name": "Llama Galaxy Perf Unit Tests",
-              "model-name": "llama_unit_tests",
-              "arch": "wormhole_b0",
-              "cmd": "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/tests/tg_perf_unit_tests",
-              "timeout": 100,
-              "tracy": true,
-              "save-perf-data": true,
-              "owner_id": "U053W15B6JF"
-            }, # Djordje Ivanovic
-            {
               "name": "Galaxy Llama 70B prefill perf tests",
               "model-type": "Llama-70B",
               "model-name": "llama70b_prefill",
@@ -88,6 +78,16 @@ jobs:
           ]' --compact-output)
 
           ACTIVE_MODELS=$(jq -n '[
+            {
+              "name": "Llama Galaxy Perf Unit Tests",
+              "model-name": "llama_unit_tests",
+              "arch": "wormhole_b0",
+              "cmd": "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/tests/tg_perf_unit_tests",
+              "timeout": 100,
+              "tracy": true,
+              "save-perf-data": true,
+              "owner_id": "U053W15B6JF"
+            }, # Djordje Ivanovic
             {
               "name": "Galaxy DiT SD3.5 model perf tests",
               "model-type": "SD3.5",

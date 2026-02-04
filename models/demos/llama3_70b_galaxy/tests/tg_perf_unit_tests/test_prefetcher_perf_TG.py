@@ -45,7 +45,7 @@ def test_dram_prefetcher_perf(
         f"pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py::test_run_prefetcher_llama_perf"
     )
     cols = ["DEVICE NCRISC KERNEL"]
-    op_name = "DramPrefetcher"
+    op_name = "DramPrefetcherOperation"
 
     profiler.start("run")
     profiler.start(step_name)

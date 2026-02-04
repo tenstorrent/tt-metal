@@ -169,8 +169,8 @@ def is_collective_op(op_code):
 def test_llama_TG_perf_device(
     seqlen,
     reset_seeds,
-    galaxy_type,
 ):
+    galaxy_type = "6U"
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = f"tg-llama-prefill-device-{galaxy_type}-perf-{seqlen}"

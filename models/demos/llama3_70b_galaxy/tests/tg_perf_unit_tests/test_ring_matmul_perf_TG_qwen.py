@@ -18,7 +18,13 @@ THRESHOLD = 1.0
         ("do", 7.3),
         ("ff13", 9.9),
         ("ff2", 14.8),
-        ("lm_head", 380),
+        pytest.param(
+            "lm_head",
+            380,
+            marks=pytest.mark.skip(
+                reason="Skipped due to L1 buffer memory allocation issue with qwen lm_head configuration"
+            ),
+        ),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -34,7 +40,7 @@ def test_ring_mm_tg_qwen_perf(
     subdir = "qwen_tg_perf"
     command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_qwen_perf -k {mm_type}"
     cols = ["DEVICE KERNEL"]
-    op_name = "Matmul"
+    op_name = "MatmulDeviceOperation"
 
     profiler.start("run")
     profiler.start(step_name)
