@@ -89,7 +89,7 @@ To build an image from a custom branch (your own branch or one requested from a 
 Discovers Ethernet connections, compares against expected topology (FSD), resets chips, sends traffic. Catches bad cables, DRAM failures, unstable links, CRC errors.
 
 ```bash
-./tools/scaleout/exabox/run_validation.sh <hosts> <docker-image>
+./tools/scaleout/exabox/run_validation.sh --hosts <hosts> --image <docker-image>
 ```
 
 Runs 50 loops (reset, discovery, 10 traffic iterations each). Logs go to `validation_output/` in your current directory.
@@ -113,7 +113,7 @@ The script parses all `*.log` files in the specified directory and provides:
 Ensures all chips in the cluster are stable. Stress tests the Compute, Memory, and Data-Movement blocks on each chip.
 
 ```bash
-./tools/scaleout/exabox/run_dispatch_tests.sh <hosts> <docker-image>
+./tools/scaleout/exabox/run_dispatch_tests.sh --hosts <hosts> --image <docker-image>
 ```
 
 If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
