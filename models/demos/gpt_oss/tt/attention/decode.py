@@ -51,11 +51,14 @@ def decode_forward(
     if seq_len != 1:
         raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
+    disable_binary_eltwise = True
+
     # QKV projection
     xqkv_fused = ttnn.matmul(
         hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
-    xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    if not disable_binary_eltwise:
+        xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
@@ -158,8 +161,9 @@ def decode_forward(
     )
 
     tt_sdpa_out.deallocate(True)
-    tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-    tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
+    if not disable_binary_eltwise:
+        tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+        tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
     tt_out = ttnn.reshape(
         tt_out,
         (1, 1, batch_size, hidden_size),

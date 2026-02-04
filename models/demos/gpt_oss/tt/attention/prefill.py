@@ -51,6 +51,7 @@ def prefill_forward(
         Attention output [batch, seq_len, hidden_size]
     """
     activation_dtype = ttnn.bfloat16
+    disable_binary_eltwise = True
     _, batch_size, seq_len, hidden_size = hidden_states.shape
 
     # Validate prefill mode
@@ -61,7 +62,7 @@ def prefill_forward(
         raise NotImplementedError(f"Currently only batch_size=1 supported, got {batch_size}")
 
     # QKV projection
-    xqkv_fused = apply_qkv_projection(hidden_states, weights)
+    xqkv_fused = apply_qkv_projection(hidden_states, weights, disable_binary_eltwise)
 
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
@@ -120,7 +121,7 @@ def prefill_forward(
     tt_sdpa_out = concat_heads(tt_sdpa_out, is_decode_mode=False)
     tt_sdpa_out_pre_concat.deallocate(True)
 
-    tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
+    tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype, disable_binary_eltwise)
     # Note: apply_output_projection already deallocates its input tensor internally
     # tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, hidden_size))
 

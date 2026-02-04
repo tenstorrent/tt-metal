@@ -86,7 +86,7 @@ class AllToAllDispatchConfig:
     cluster_axis: int = 0
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
     num_links: int = 1
-    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Ring)
+    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Linear)
     subdevice_id: Optional[int] = None
     output_concat_dim: Optional[int] = 2  # 2 for tokens on seq_len dim (decode and prefill)
 
@@ -114,7 +114,7 @@ class AllToAllCombineConfig:
     cluster_axis: int = 0
     memory_config: ttnn.MemoryConfig = field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
     num_links: int = 1
-    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Ring)
+    topology: ttnn.Topology = field(default_factory=lambda: ttnn.Topology.Linear)
     output_shard_dim: int = 2  # 1 for batch dim, 2 for seq_len dim (prefer 2 for decode)
 
     def as_dict(self):

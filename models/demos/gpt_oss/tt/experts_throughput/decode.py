@@ -23,7 +23,12 @@ from .weights import ThroughputExpertWeights
 
 
 def _apply_swiglu(
-    gate: ttnn.Tensor, up: ttnn.Tensor, alpha: float, limit: float, memory_config: ttnn.MemoryConfig
+    gate: ttnn.Tensor,
+    up: ttnn.Tensor,
+    alpha: float,
+    limit: float,
+    memory_config: ttnn.MemoryConfig,
+    disable_binary_eltwise: bool = False,
 ) -> ttnn.Tensor:
     """Apply SwiGLU activation: (up + 1) * (gate * sigmoid(gate * alpha)).
 
@@ -51,24 +56,39 @@ def _apply_swiglu(
     ttnn.deallocate(up)
 
     # Compute gate_alpha = gate * alpha
-    gate_alpha = ttnn.mul(gate_clamped, alpha)
+    if disable_binary_eltwise:
+        # Binary eltwise disabled: skip gate * alpha
+        gate_alpha = gate_clamped
+    else:
+        gate_alpha = ttnn.mul(gate_clamped, alpha)
 
     # Compute gate_sigmoid = sigmoid(gate_alpha)
     gate_sigmoid = ttnn.sigmoid(gate_alpha)
-    ttnn.deallocate(gate_alpha)
+    if not disable_binary_eltwise:
+        ttnn.deallocate(gate_alpha)
 
     # Compute glu = gate * gate_sigmoid
-    glu = ttnn.mul(gate_clamped, gate_sigmoid, memory_config=memory_config)
-    ttnn.deallocate(gate_clamped)
-    ttnn.deallocate(gate_sigmoid)
+    if disable_binary_eltwise:
+        # Binary eltwise disabled: skip gate * gate_sigmoid
+        glu = gate_sigmoid
+        # ttnn.deallocate(gate_clamped)
+    else:
+        glu = ttnn.mul(gate_clamped, gate_sigmoid, memory_config=memory_config)
+        ttnn.deallocate(gate_clamped)
+        ttnn.deallocate(gate_sigmoid)
 
     # Add 1 to up: up = up + 1
-    up_clamped = ttnn.add(up_clamped, 1.0, output_tensor=up_clamped)
+    if disable_binary_eltwise:
+        # Binary eltwise disabled: skip up + 1 and final multiply
+        result = up_clamped
+        # ttnn.deallocate(glu)
+    else:
+        up_clamped = ttnn.add(up_clamped, 1.0, output_tensor=up_clamped)
 
-    # Multiply: result = up * glu
-    result = ttnn.mul(up_clamped, glu, memory_config=memory_config)
-    ttnn.deallocate(up_clamped)
-    ttnn.deallocate(glu)
+        # Multiply: result = up * glu
+        result = ttnn.mul(up_clamped, glu, memory_config=memory_config)
+        # ttnn.deallocate(glu)
+        ttnn.deallocate(up_clamped)
 
     return result
 
@@ -112,6 +132,9 @@ def decode_forward(
     Returns:
         Output tensor [batch_size_per_device, 1, seq_len, hidden_size]
     """
+    # Disable binary eltwise ops by default.
+    disable_binary_eltwise = True
+
     # ==========================================================================
     # STEP 0: RESHAPE TO PUT TOKENS ON DIM -2 (seq_len dimension)
     # ==========================================================================
@@ -258,7 +281,8 @@ def decode_forward(
     # Add gate bias
     # w1_out shape: [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
     # Bias shape: [1, 1, 1, num_experts_per_device, 1, intermediate] - broadcasts correctly
-    w1_out = ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
+    if not disable_binary_eltwise:
+        w1_out = ttnn.add(w1_out, weights.w1_bias, output_tensor=w1_out)
 
     # Up projection (w3): same shape as gate
     w3_out = ttnn.sparse_matmul(
@@ -276,10 +300,11 @@ def decode_forward(
     # Add up bias
     # w3_out shape: [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
     # Bias shape: [1, 1, 1, num_experts_per_device, 1, intermediate] - broadcasts correctly
-    w3_out = ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
+    if not disable_binary_eltwise:
+        w3_out = ttnn.add(w3_out, weights.w3_bias, output_tensor=w3_out)
 
     # SwiGLU activation: (up + 1) * (gate * sigmoid(gate * alpha))
-    activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config)
+    activated = _apply_swiglu(w1_out, w3_out, config.alpha, config.swiglu_limit, memory_config, disable_binary_eltwise)
 
     # For testing standard SiLU activation instead of SwiGLU, uncomment below and comment above:
     # activated = _apply_silu_mul(w1_out, w3_out, memory_config)
@@ -308,7 +333,8 @@ def decode_forward(
     # Add down projection bias
     # expert_output shape: [num_sparse_blocks, num_experts_per_device, block_size, hidden]
     # Bias shape: [1, num_experts_per_device, 1, hidden] - broadcasts correctly after squeeze
-    expert_output_sparse = ttnn.add(expert_output_sparse, weights.w2_bias)
+    if not disable_binary_eltwise:
+        expert_output_sparse = ttnn.add(expert_output_sparse, weights.w2_bias)
 
     # ==========================================================================
     # STEP 6: PREPARE EXPERT OUTPUT FOR ALL_TO_ALL_COMBINE
@@ -372,9 +398,13 @@ def decode_forward(
     ttnn.deallocate(topk_weights_rm)
 
     # Weighted sum: sum_k(expert_output_k * routing_weight_k)
-    weighted_output = ttnn.mul(post_combine, topk_weights_reshaped, memory_config=memory_config)
-    ttnn.deallocate(post_combine)
-    ttnn.deallocate(topk_weights_reshaped)
+    if disable_binary_eltwise:
+        weighted_output = post_combine
+        ttnn.deallocate(topk_weights_reshaped)
+    else:
+        weighted_output = ttnn.mul(post_combine, topk_weights_reshaped, memory_config=memory_config)
+        ttnn.deallocate(post_combine)
+        ttnn.deallocate(topk_weights_reshaped)
 
     # Sum across K experts (first dimension)
     output = ttnn.sum(weighted_output, dim=0, keepdim=True)

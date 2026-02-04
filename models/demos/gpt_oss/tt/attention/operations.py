@@ -6,7 +6,7 @@ import ttnn
 from .weights import AttentionWeights
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights):
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, disable_binary_eltwise: bool = False):
     """
     Apply QKV projection and add bias.
 
@@ -18,7 +18,8 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights):
         Fused QKV tensor [batch, seq_len, total_qkv_dim]
     """
     xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16)
-    xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+    if not disable_binary_eltwise:
+        xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
     return xqkv_fused
 
 
@@ -97,7 +98,7 @@ def concat_heads(tensor, is_decode_mode: bool):
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype):
+def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype, disable_binary_eltwise: bool = False):
     """
     Apply output projection and bias.
 
@@ -112,7 +113,8 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
     tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
     out = ttnn.matmul(tensor, weights.o_proj, dtype=activation_dtype)
     tensor.deallocate(True)
-    out = ttnn.add(out, weights.o_proj_bias, output_tensor=out)
+    if not disable_binary_eltwise:
+        out = ttnn.add(out, weights.o_proj_bias, output_tensor=out)
     return out
 
 

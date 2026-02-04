@@ -86,6 +86,7 @@ class DecoderLayer:
             create_kv_cache=create_kv_cache,
         )
         self.mesh_device = mesh_device
+        self.disable_binary_eltwise = True
 
     def __call__(
         self,
@@ -116,8 +117,11 @@ class DecoderLayer:
         hidden_states_post_norm.deallocate(True)
 
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
-        hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
-        residual.deallocate(True)
+        if self.disable_binary_eltwise:
+            residual.deallocate(True)
+        else:
+            hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+            residual.deallocate(True)
         residual = hidden_states
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
         # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
@@ -126,7 +130,10 @@ class DecoderLayer:
         hidden_states_post_norm.deallocate(True)
 
         # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
-        hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
-        residual.deallocate(True)
+        if self.disable_binary_eltwise:
+            residual.deallocate(True)
+        else:
+            hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+            residual.deallocate(True)
 
         return hidden_states
