@@ -1,29 +1,5 @@
-set(UNIT_TESTS_DATA_MOVEMENT_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/dm_common.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dram_unary/test_unary_dram.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/one_to_all/test_one_to_all.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/one_to_all/test_multicast_schemes.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/loopback/test_loopback.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reshard_hardcoded/test_reshard_hardcoded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/deinterleave_hardcoded/test_deinterleave_hardcoded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/conv_hardcoded/test_conv_hardcoded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/one_to_one/test_one_to_one.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/one_from_one/test_one_from_one.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core_bidirectional/test_core_bidirectional.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/one_from_all/test_one_from_all.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/all_to_all/test_all_to_all.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/all_from_all/test_all_from_all.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/interleaved/test_interleaved.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/one_packet/test_one_packet.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/interleaved_to_sharded_hardcoded/test_interleaved_to_sharded_hardcoded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/multi_interleaved/test_multi_interleaved.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dram_sharded/test_dram_sharded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/transaction_id/test_transaction_id.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/direct_write/test_direct_write.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pcie_read_bw/test_pcie_read_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/atomics/test_atomic_semaphore_bandwidth.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/noc_api_latency/test_noc_api_latency.cpp
-)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 add_executable(unit_tests_data_movement ${UNIT_TESTS_DATA_MOVEMENT_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_data_movement)

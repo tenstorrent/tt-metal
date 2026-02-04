@@ -1,19 +1,11 @@
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
+
 # Smoke tests (fast, not necessarily thorough)
 add_library(unit_tests_dispatch_smoke OBJECT)
 add_library(TT::Metalium::Test::Dispatch::Smoke ALIAS unit_tests_dispatch_smoke)
 TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_smoke)
-target_sources(
-    unit_tests_dispatch_smoke
-    PRIVATE
-        dispatch_device/test_enqueue_read_write_core.cpp
-        dispatch_event/test_EnqueueWaitForEvent.cpp
-        dispatch_event/test_events.cpp
-        dispatch_program/test_dispatch_stress.cpp
-        dispatch_program/test_sub_device.cpp
-        dispatch_program/test_kernel_config_buffer.cpp
-        dispatch_util/test_device_command.cpp
-        dispatch_util/test_dispatch_settings.cpp
-)
+target_sources(unit_tests_dispatch_smoke PRIVATE ${UNIT_TESTS_DISPATCH_SMOKE_SOURCES})
 target_include_directories(
     unit_tests_dispatch_smoke
     PRIVATE
@@ -29,16 +21,7 @@ target_link_libraries(unit_tests_dispatch_smoke PRIVATE test_metal_common_libs)
 add_library(unit_tests_dispatch_basic OBJECT)
 add_library(TT::Metalium::Test::Dispatch::Basic ALIAS unit_tests_dispatch_basic)
 TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_basic)
-target_sources(
-    unit_tests_dispatch_basic
-    PRIVATE
-        dispatch_buffer/test_sub_device.cpp
-        dispatch_buffer/test_BufferCorePageMapping_Iterator.cpp
-        dispatch_program/test_dispatch.cpp
-        dispatch_program/test_global_circular_buffers.cpp
-        dispatch_trace/test_sub_device.cpp
-        dispatch_util/test_ringbuffer_cache.cpp
-)
+target_sources(unit_tests_dispatch_basic PRIVATE ${UNIT_TESTS_DISPATCH_BASIC_SOURCES})
 target_include_directories(
     unit_tests_dispatch_basic
     PRIVATE
@@ -53,14 +36,7 @@ target_link_libraries(unit_tests_dispatch_basic PRIVATE test_metal_common_libs)
 add_library(unit_tests_dispatch_slow OBJECT)
 add_library(TT::Metalium::Test::Dispatch::Slow ALIAS unit_tests_dispatch_slow)
 TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_slow)
-target_sources(
-    unit_tests_dispatch_slow
-    PRIVATE
-        dispatch_buffer/test_EnqueueWriteBuffer_and_EnqueueReadBuffer.cpp # FIXME: Fix the heap-buffer-overflow in here and see if it's fast enough for Basic
-        dispatch_buffer/test_large_mesh_buffer.cpp
-        dispatch_program/test_EnqueueProgram.cpp
-        dispatch_trace/test_EnqueueTrace.cpp
-)
+target_sources(unit_tests_dispatch_slow PRIVATE ${UNIT_TESTS_DISPATCH_SLOW_SOURCES})
 target_include_directories(
     unit_tests_dispatch_slow
     PRIVATE
