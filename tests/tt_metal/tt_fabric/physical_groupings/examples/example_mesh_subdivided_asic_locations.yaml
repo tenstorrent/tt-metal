@@ -1,0 +1,40 @@
+# Example: Mesh with Subdivided ASIC Locations Using Custom Groupings
+# This example shows defining a custom grouping called "halftray" twice
+# with different ASIC locations (1-4 and 5-8), both representing a half tray concept
+
+groupings:
+  - base_units:
+      - asic_location_1
+      - asic_location_2
+      - asic_location_3
+      - asic_location_4
+      - asic_location_5
+      - asic_location_6
+      - asic_location_7
+      - asic_location_8
+
+  - trays:
+      asic_locations: [asic_location_1, asic_location_2, asic_location_3, asic_location_4, asic_location_5, asic_location_6, asic_location_7, asic_location_8]
+
+  - hosts:
+      trays: 4
+
+  # Custom grouping: Half tray - defined twice with different ASIC locations
+  # Both represent a "half tray" concept
+  - halftray:
+      asic_locations: [asic_location_1, asic_location_2, asic_location_3, asic_location_4]  # Lower half (locations 1-4)
+
+  - halftray:
+      asic_locations: [asic_location_5, asic_location_6, asic_location_7, asic_location_8]  # Upper half (locations 5-8)
+
+  - meshes:
+      halftray: 1  # Each mesh uses 1 half tray (can be either lower or upper)
+
+  - pods:
+      meshes: 2
+
+  - superpods:
+      pods: 2
+
+  - clusters:
+      superpods: 2
