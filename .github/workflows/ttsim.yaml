@@ -253,22 +253,10 @@ jobs:
       - name: Build skip list arguments
         id: skip-list
         run: |
-          SKIP_LIST_FILE=".github/ttsim-skip-list.yaml"
           ARCH="${{ matrix.arch.name }}"
-
-          # Get common skips + architecture-specific skips using Python (PyYAML is available)
-          SKIP_ARGS=$(python3 -c "
-          import yaml
-          with open('$SKIP_LIST_FILE') as f:
-              data = yaml.safe_load(f)
-          common = data.get('common') or []
-          arch_specific = data.get('$ARCH') or []
-          for path in common + arch_specific:
-              print(f'--deselect={path}', end=' ')
-          ")
-
+          SKIP_ARGS=$(python3 .github/scripts/parse_skip_list.py "$ARCH")
           echo "[info] Loaded skip list for arch: $ARCH"
-          echo "[info] Skip args: $SKIP_ARGS"
+          echo "[info] Skip args count: $(echo $SKIP_ARGS | wc -w)"
           echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
 
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
