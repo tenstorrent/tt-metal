@@ -305,8 +305,11 @@ Once test passes, verify it's stable:
 # Navigate to test directory
 cd <path-to-test-parent-directory>
 
-# Run test 5 times using bash script
-for i in {1..5}; do
+# For DETERMINISTIC failures: Run test 2 times
+# For NON-DETERMINISTIC failures: Run test 5 times
+RUNS=2  # Use 2 for deterministic, 5 for non-deterministic
+
+for i in $(seq 1 $RUNS); do
     echo "========== Run $i =========="
     ./run_test.sh 2>&1 | tee verify_run_${i}.txt
 
@@ -321,18 +324,25 @@ done
 
 For performance fixes, measure consistency:
 ```bash
-# Measure performance 5 times
-for i in {1..5}; do
+# Measure performance (2x for deterministic, 5x for non-deterministic)
+for i in $(seq 1 $RUNS); do
     echo "Run $i:"
     ./run_test.sh 2>&1 | grep -E "samples/s|duration|time|PASSED|FAILED"
 done
 ```
 
-**Success criteria:**
-- ✅ Test passes 5/5 times
-- ✅ No intermittent failures
-- ✅ Performance improvement consistent (if applicable)
+**Success criteria (deterministic failures):**
+- ✅ Test passes 2/2 times (deterministic should be consistent)
+- ✅ Error is resolved both times
 - ✅ No device errors or hangs
+
+**Success criteria (non-deterministic failures):**
+- ✅ Test passes 5/5 times (higher bar for race conditions/intermittent issues)
+- ✅ No intermittent failures
+- ✅ Stress test runs without triggering the original failure
+
+**How to know which you have:**
+Check the task file - it will say "deterministic: true" or "deterministic: false"
 
 **If any run fails:**
 - ❌ DO NOT proceed to PR
@@ -696,8 +706,12 @@ Based on the area of change:
 | Root cause analysis | 2 min | 2 min |
 | Build Metal (initial) | 5 min | 7 min |
 | Implement fix (iterative) | 15 min | 22 min |
-| Verify stability (5x runs) | 5 min | 27 min |
-| Prepare branch & docs | 3 min | 30 min |
+| Verify stability | 2-5 min | 24-27 min |
+| Prepare branch & docs | 3 min | 27-30 min |
+
+**Verify stability time**:
+- Deterministic: 2 runs × ~1 min = 2 min
+- Non-deterministic: 5 runs × ~1 min = 5 min
 
 **Note**: Build time can vary. Each iteration requires rebuild (~5 min).
 **At 30 minutes, STOP regardless of status** and write the report.
@@ -707,7 +721,9 @@ Based on the area of change:
 ## Success Criteria
 
 A successful implementation should:
-1. ✅ Reproduction test passes reliably (5/5 runs using ./run_test.sh)
+1. ✅ Reproduction test passes reliably using ./run_test.sh
+   - Deterministic: 2/2 runs pass
+   - Non-deterministic: 5/5 runs pass
 2. ✅ Metal rebuilt after each code change (./build_metal.sh)
 3. ✅ Changes are well-documented in commits
 4. ✅ Fix branch pushed to origin

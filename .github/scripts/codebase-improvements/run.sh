@@ -275,17 +275,29 @@ implement_fix() {
 
     # Copy the test to the fix branch
     if [ -n "$EXISTING_TEST_PATH" ]; then
-        # Using existing test - just copy the files
-        log_info "Copying existing test to fix branch..."
+        # Using existing test - copy the entire test directory
+        log_info "Copying existing test directory to fix branch..."
 
         # Get the test directory structure
+        # e.g., test path: reproduce-deterministic-failures/timeout-in-datamovement/tests/test.py
+        # TEST_DIR: reproduce-deterministic-failures/timeout-in-datamovement/tests
+        # PARENT_DIR: reproduce-deterministic-failures/timeout-in-datamovement
         TEST_DIR=$(dirname "$EXISTING_TEST_PATH")
         PARENT_DIR=$(dirname "$TEST_DIR")
 
-        # Copy the entire test directory structure
-        if [ -d "$PARENT_DIR" ]; then
+        # Copy the entire parent directory (includes run_test.sh, tests/, logs/, README.md)
+        if [ -d "$SCRIPT_DIR/$PARENT_DIR" ]; then
+            log_info "Copying $PARENT_DIR/ (includes run_test.sh and test files)"
             mkdir -p "$PARENT_DIR"
             cp -r "$SCRIPT_DIR/$PARENT_DIR"/* "$PARENT_DIR/" 2>/dev/null || true
+
+            # Verify run_test.sh was copied
+            if [ -f "$PARENT_DIR/run_test.sh" ]; then
+                log_success "✓ run_test.sh copied"
+                chmod +x "$PARENT_DIR/run_test.sh"
+            else
+                log_warning "run_test.sh not found in $PARENT_DIR/"
+            fi
 
             git add "$PARENT_DIR"
             git commit -m "Add reproduction test for testing
@@ -345,9 +357,11 @@ $OLD_BRANCH
 1. **Build Metal first**: Run ./build_metal.sh before testing
 2. **Use bash script**: Run tests via ./run_test.sh (in test parent dir)
 3. **Rebuild after changes**: Run ./build_metal.sh after EVERY code change
-4. **Test 5 times**: Verify stability with 5 consecutive successful runs
+4. **Test multiple times**: Verify stability with $([ "$DETERMINISTIC" = "true" ] && echo "2" || echo "5") consecutive successful runs (deterministic=$DETERMINISTIC)
 5. **DO NOT create PR**: Push branch and write PR description, but don't run gh pr create
 6. **Write report**: Document everything in outputs/
+
+Note: The bash script (run_test.sh) was copied to the fix branch along with the test.
 
 ## Expected Output
 1. Analyze root cause from error information above
@@ -363,7 +377,7 @@ $OLD_BRANCH
 30 minutes (includes build time)
 
 ## Success Criteria
-- Test passes 5/5 times using ./run_test.sh
+- Test passes $([ "$DETERMINISTIC" = "true" ] && echo "2/2" || echo "5/5") times using ./run_test.sh
 - Metal rebuilt after all changes
 - Branch pushed (but PR NOT created)
 - Report written to outputs/
