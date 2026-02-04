@@ -24,6 +24,7 @@ CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS = 1
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
+@pytest.mark.timeout(600)
 def test_unet(
     device,
     input_shape,
@@ -60,6 +61,7 @@ def test_unet(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
+@pytest.mark.timeout(600)
 def test_refiner_unet(
     device,
     input_shape,
