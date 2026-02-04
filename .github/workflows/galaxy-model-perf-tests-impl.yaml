@@ -214,7 +214,7 @@ jobs:
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
-            ${{ matrix.test-group.cmd }}
+            ${{ matrix.test-group.cmd }} --timeout {{ matrix.test-group.timeout }}
       - name: Check if benchmark data directory exists
         id: check-benchmark-data-directory
         if: ${{ matrix.test-group.save-perf-data && !cancelled() }}
