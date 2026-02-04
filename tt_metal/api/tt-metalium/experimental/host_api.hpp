@@ -11,12 +11,14 @@
 
 /**
  * The APIs in this file are for initial support of Quasar, our next-generation architecture.
+ *
  * Quasar has significant architectural differences from Wormhole and Blackhole. Some key differences are:
  * - There are 8 data movement cores per cluster
- * - There are 4 compute cores per cluster with each compute core having 4 TRISC processors
- * - Each cluster contains 4 MB of L1 SRAM which is shared by all the cores in the cluster
- * - Users will target clusters instead of the cores within the clusters; our internal implementation will choose which
- *   cores on each cluster are used
+ * - There are 4 Tensix engines per cluster with each Tensix engine having 4 TRISC processors
+ * - All the data movement cores and Tensix engines in a cluster share the same 4 MB of L1 SRAM
+ * - Users target clusters rather than individual data movement cores or Tensix engines; the implementation internally
+ *   selects which resources to use within each cluster
+ *
  * These APIs are very experimental and will evolve accordingly over time.
  */
 
@@ -25,11 +27,11 @@ class Program;
 
 namespace experimental::quasar {
 static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;
-static constexpr uint32_t QUASAR_NUM_COMPUTE_CORES_PER_CLUSTER = 4;
+static constexpr uint32_t QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER = 4;
 
 struct QuasarDataMovementConfig {
     // Number of data movement cores per cluster to use
-    uint32_t num_processors_per_cluster = QUASAR_NUM_DM_CORES_PER_CLUSTER;
+    uint32_t num_threads_per_cluster = QUASAR_NUM_DM_CORES_PER_CLUSTER;
 
     std::vector<uint32_t> compile_args;
 
@@ -48,8 +50,8 @@ struct QuasarDataMovementConfig {
 };
 
 struct QuasarComputeConfig {
-    // Number of compute cores per cluster to use
-    uint32_t num_processors_per_cluster = QUASAR_NUM_COMPUTE_CORES_PER_CLUSTER;
+    // Number of Tensix engines per cluster to use
+    uint32_t num_threads_per_cluster = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER;
 
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
