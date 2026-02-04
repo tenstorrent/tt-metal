@@ -81,6 +81,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
         num_dispatch_device_rows = mesh_device.shape[0]
 
+        # expert_mapping_torch = torch.eye(num_devices, dtype=torch.int32).repeat_interleave(num_experts_per_device, dim=0).unsqueeze(0).unsqueeze(0)
+        # torch.set_printoptions(threshold=torch.inf)
+        # print("Expert mapping tensor is: ", expert_mapping_torch[:, :, 128:136, :])
+
         expert_mapping_tensors = ttnn.from_torch(
             torch.eye(num_devices, dtype=torch.int32)
             .repeat_interleave(num_experts_per_device, dim=0)
@@ -193,6 +197,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
+        # expert_mapping_torch = torch.eye(32, dtype=torch.int32).repeat_interleave(8, dim=0).unsqueeze(0).unsqueeze(0)
+        # torch.set_printoptions(threshold=torch.inf)
+        # print("Expert mapping tensor is: ", expert_mapping_torch[:, :, 128:136, :])
+
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["revert_tp"]))
 
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
@@ -210,12 +218,24 @@ class MoE(SharedStateAddOn, AbstractModule):
         topk_experts_indices_rm = ttnn.reshape(
             topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
         )
+        print(f"all_to_all_dispatch input shape: {x_rm.shape}")
+        print(f"all_to_all_dispatch expert indices shape: {topk_experts_indices_rm.shape}")
+        print(f"all_to_all_dispatch expert mapping shape: {cfg['expert_mapping_tensors'].shape}")
+        # print(f"Expert maping tensor is: ", cfg['expert_mapping_tensors'][:, :, 128:136, :])
+        print("cfg[all_to_all_dispatch is :", cfg["all_to_all_dispatch"])
         all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
             x_rm,
             topk_experts_indices_rm,
             cfg["expert_mapping_tensors"],
-            **cfg["all_to_all_dispatch"],
+            cluster_axis=0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+            subdevice_id=None,
         )
+
+        print(f"all_to_all_dispatch output shape: {all_to_all_dispatch_output_tensors.shape}")
+        print(f"all_to_all_dispatch metadata shape: {all_to_all_dispatch_metadata_tensors.shape}")
         post_all_to_all_dispatch_output = ttnn.reshape(
             all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
         )
@@ -234,12 +254,17 @@ class MoE(SharedStateAddOn, AbstractModule):
         experts_output = ttnn.reshape(
             experts_output, shape=(cfg["num_experts_per_device"], batch_size, seq_len, cfg["hidden_size"])
         )
+        print(f"all_to_all_combine input shape: {experts_output.shape}")
         all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
             experts_output,
             all_to_all_dispatch_metadata_tensors,
             cfg["expert_mapping_tensors"],
-            **cfg["all_to_all_combine"],
+            cluster_axis=0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
         )
+        print(f"all_to_all_combine output shape: {all_to_all_combine_output_tensors.shape}")
         post_combine_output_tensor = ttnn.reshape(
             all_to_all_combine_output_tensors,
             shape=(cfg["num_experts_per_tok"], 1, batch_size_per_device * seq_len, cfg["hidden_size"]),
