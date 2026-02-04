@@ -29,8 +29,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/compute_kernel_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // ==================== Get Runtime Arguments ====================
     // Compute only needs: rank, then pages per dim (no offset/stride needed)
     uint32_t rank = get_arg_val<uint32_t>(0);
@@ -100,4 +99,3 @@ void MAIN {
     // Cleanup
     reduce_uninit();
 }
-}  // namespace NAMESPACE

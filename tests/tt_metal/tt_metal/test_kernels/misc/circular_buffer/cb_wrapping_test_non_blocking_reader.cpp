@@ -26,9 +26,7 @@ void kernel_main() { core_agnostic_main(); }
 #include "experimental/circular_buffer.h"
 
 // We are in compute kernel land
-namespace NAMESPACE {
-void MAIN { core_agnostic_main(); }
-}  // namespace NAMESPACE
+void kernel_main() { core_agnostic_main(); }
 #endif
 
 using namespace tt;

@@ -70,8 +70,7 @@ void kernel_main() {
 
 #else  // Compute Kernel
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     UNPACK({
         // Pass the CB base address as a compile time arg
         write_args_to_l1(get_compile_time_arg_val(0));
@@ -94,5 +93,4 @@ void MAIN {
 #endif
     })
 }
-}  // namespace NAMESPACE
 #endif

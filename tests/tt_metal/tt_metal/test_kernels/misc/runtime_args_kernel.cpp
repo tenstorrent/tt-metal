@@ -12,23 +12,16 @@
 #include "defines_generated.h"
 #endif
 
-#ifdef DATA_MOVEMENT
-namespace {
 void kernel_main() {
-#endif
-#ifdef COMPUTE
-    namespace NAMESPACE {
-    void MAIN {
-#endif
-        volatile uint32_t tt_l1_ptr* results = (volatile uint32_t tt_l1_ptr*)RESULTS_ADDR;
-        int i;
-        for (i = 0; i < NUM_RUNTIME_ARGS; i++) {
+    volatile uint32_t tt_l1_ptr* results = (volatile uint32_t tt_l1_ptr*)RESULTS_ADDR;
+    int i;
+    for (i = 0; i < NUM_RUNTIME_ARGS; i++) {
 #ifdef COMMON_RUNTIME_ARGS
             constexpr uint32_t kCommonRTASeparation = 1024;
             results[i + kCommonRTASeparation] = get_common_arg_val<uint32_t>(i);
 #endif
             results[i] = get_arg_val<uint32_t>(i);
-        }
+    }
 
 #ifdef COORDS_ADDR
 #ifdef DATA_MOVEMENT
@@ -41,5 +34,4 @@ void kernel_main() {
         coords[5] = get_relative_logical_y();
 #endif
 #endif
-    }
-    }
+}

@@ -18,8 +18,7 @@
  *
  * @note Based on LayerNorm compute kernel but simplified for SUM reduction only
  */
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // ============================================================================
     // Compile-time arguments
     // ============================================================================
@@ -116,5 +115,3 @@ void MAIN {
     // Dataflow kernel (sender) will gather all cores' reduced results
     // directly to cb_out, so compute kernel is done after Phase 2.
 }
-
-}  // namespace NAMESPACE

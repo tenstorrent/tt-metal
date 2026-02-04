@@ -7,13 +7,12 @@
 /*
  * A test for the watcher pausing feature.
 */
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
-void kernel_main() {
-#else
+#if !defined(COMPILE_FOR_BRISC) && !defined(COMPILE_FOR_NCRISC) && !defined(COMPILE_FOR_ERISC) && \
+    !defined(COMPILE_FOR_IDLE_ERISC) && !defined(COMPILE_FOR_AERISC)
 #include "api/compute/common.h"
-namespace NAMESPACE {
-void MAIN {
 #endif
+
+void kernel_main() {
     uint32_t wait_cycles = get_arg_val<uint32_t>(0);
 #if defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
     wait_cycles = 0x5f5e1000U;
@@ -24,9 +23,4 @@ void MAIN {
     riscv_wait(wait_cycles);
 #endif
     PAUSE();
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 }
-#else
-}
-}
-#endif
