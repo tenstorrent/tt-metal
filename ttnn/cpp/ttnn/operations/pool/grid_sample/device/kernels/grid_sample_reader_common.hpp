@@ -185,6 +185,62 @@ ALWI void read_four_corner_inputs(
     }
 }
 
+template <typename TensorAccessor>
+ALWI void read_four_corner_inputs_with_fill(
+    const TensorAccessor& input_tensor_accessor,
+    uint32_t batch_offset,
+    uint32_t input_width,
+    uint32_t input_stick_nbytes,
+    int32_t h0,
+    int32_t h1,
+    int32_t w0,
+    int32_t w1,
+    uint32_t input_height,
+    uint32_t l1_write_input_addr,
+    uint32_t fill_stick_addr) {
+    const bool h0_valid = is_coordinate_valid(h0, input_height);
+    const bool h1_valid = is_coordinate_valid(h1, input_height);
+    const bool w0_valid = is_coordinate_valid(w0, input_width);
+    const bool w1_valid = is_coordinate_valid(w1, input_width);
+
+    uint32_t write_addr = l1_write_input_addr;
+
+    if (h0_valid && w0_valid) {
+        const uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
+        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_west_stick_index);
+        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+    } else {
+        noc_async_read(get_noc_addr(fill_stick_addr), write_addr, input_stick_nbytes);
+    }
+    write_addr += input_stick_nbytes;
+
+    if (h0_valid && w1_valid) {
+        const uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
+        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_east_stick_index);
+        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+    } else {
+        noc_async_read(get_noc_addr(fill_stick_addr), write_addr, input_stick_nbytes);
+    }
+    write_addr += input_stick_nbytes;
+
+    if (h1_valid && w0_valid) {
+        const uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
+        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_west_stick_index);
+        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+    } else {
+        noc_async_read(get_noc_addr(fill_stick_addr), write_addr, input_stick_nbytes);
+    }
+    write_addr += input_stick_nbytes;
+
+    if (h1_valid && w1_valid) {
+        const uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
+        const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_east_stick_index);
+        noc_async_read(remote_noc_addr, write_addr, input_stick_nbytes);
+    } else {
+        noc_async_read(get_noc_addr(fill_stick_addr), write_addr, input_stick_nbytes);
+    }
+}
+
 // Process single grid point - common logic for both interleaved and sharded
 template <
     uint32_t grid_dtype,

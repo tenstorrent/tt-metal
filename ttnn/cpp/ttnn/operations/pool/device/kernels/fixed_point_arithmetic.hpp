@@ -84,6 +84,18 @@ ALWI constexpr int32_t int_to_fixed(int32_t i) { return i << FIXED_POINT_SHIFT; 
 // Convert float to fixed-point
 ALWI int32_t float_to_fixed(float f) { return static_cast<int32_t>(f * FIXED_ONE); }
 
+// Convert fixed-point to float (for debugging/verification)
+ALWI float fixed_to_float(int32_t fixed) { return static_cast<float>(fixed) / static_cast<float>(FIXED_ONE); }
+
+// Add two fixed-point numbers
+ALWI constexpr int32_t fixed_add(int32_t a, int32_t b) { return a + b; }
+
+// Subtract two fixed-point numbers
+ALWI constexpr int32_t fixed_sub(int32_t a, int32_t b) { return a - b; }
+
+// Compute (1.0 - x) for fixed-point number x in [0, 1] range
+ALWI constexpr int32_t fixed_one_minus(int32_t frac) { return FIXED_ONE - frac; }
+
 // Extract integer part with rounding
 ALWI constexpr int32_t fixed_to_int_round(int32_t fixed) { return (fixed + FIXED_HALF) >> FIXED_POINT_SHIFT; }
 
