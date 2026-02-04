@@ -160,13 +160,13 @@ class LMHead(LightweightModule):
                 dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
                 sub_device_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
             )
-
-            output = ttnn.to_memory_config(
-                output,
-                memory_config=self.args.get_lm_head_sharded_output_mem_config(
-                    self.prefetcher if use_prefetcher else None
-                ),
-            )
+            output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # output = ttnn.to_memory_config(
+            #     output,
+            #     memory_config=self.args.get_lm_head_sharded_output_mem_config(
+            #         self.prefetcher if use_prefetcher else None
+            #     ),
+            # )
 
             outputs.append(output)
 

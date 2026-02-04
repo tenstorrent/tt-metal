@@ -1220,7 +1220,7 @@ class ModelArgs:
                     overwrite_subblock_w=1,
                 )
             else:
-                if self.prefetcher is not None:
+                if prefetcher is not None:
                     return self.matmul_1d_ring_config(
                         1,
                         32,
@@ -1252,11 +1252,11 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_mlp_ff1_3_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         if mode == Mode.DECODE:
-            if self.prefetcher is not None:
+            if prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
                     shape=(32, self.hidden_dim // self.cluster_shape[1] // prefetcher.ring_size),  # Use padded N
                     core_grid=prefetcher.to_core_range_set(
-                        self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                        prefetcher.receiver_cores(sender_active=True, receiver_active=True)
                     ),
                     strategy=ttnn.ShardStrategy.WIDTH,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1332,7 +1332,7 @@ class ModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            return None
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1356,17 +1356,7 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
             else:
-                residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
-                return ttnn.create_sharded_memory_config(
-                    (
-                        self.tile_padded_batch_rows,
-                        self.dim // residual_grid.num_cores // self.num_devices,
-                    ),
-                    residual_grid,
-                    ttnn.ShardStrategy.WIDTH,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
+                return self.get_residual_mem_config(mode, None)
         elif mode == Mode.PREFILL:
             return None
         else:
@@ -1693,12 +1683,12 @@ class ModelArgs:
             if prefetcher is not None:
                 wo_out_shard_shape_ring = (
                     32,
-                    self.dim // self.cluster_shape[1] // self.prefetcher.ring_size,
+                    self.dim // self.cluster_shape[1] // prefetcher.ring_size,
                 )  # Use padded N
                 return ttnn.create_sharded_memory_config(
                     shape=wo_out_shard_shape_ring,
-                    core_grid=self.prefetcher.to_core_range_set(
-                        self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                    core_grid=prefetcher.to_core_range_set(
+                        prefetcher.receiver_cores(sender_active=True, receiver_active=True)
                     ),
                     strategy=ttnn.ShardStrategy.WIDTH,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -2123,7 +2113,10 @@ class ModelArgs:
                 )
             else:
                 return ttnn.create_sharded_memory_config(
-                    (self.tile_padded_batch_rows, self.dim // self.lm_head_core_grid.num_cores),
+                    (
+                        self.tile_padded_batch_rows,
+                        nearest_32((self.dim // (4 if self.is_galaxy else 1)) // self.lm_head_core_grid.num_cores),
+                    ),  # Shard shape: [32, 128] -> 1 shard per core
                     self.lm_head_core_grid,
                     ttnn.ShardStrategy.WIDTH,
                     ttnn.ShardOrientation.ROW_MAJOR,
