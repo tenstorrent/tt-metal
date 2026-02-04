@@ -29,6 +29,8 @@ Core logic is in unified_kernels/dram_streaming_matmul.hpp.
 bank_id and vc are computed in-kernel from grid position using linear_id_in_grid.
 """
 
+import math
+
 import torch
 from loguru import logger
 
@@ -88,8 +90,15 @@ class DRAMStreamingMatmul:
         input_a: torch.Tensor,
         input_b: torch.Tensor,
         fused_activation: str = None,
+        mul_tensor: torch.Tensor = None,
     ) -> torch.Tensor:
-        """PyTorch reference implementation with optional fused activation."""
+        """PyTorch reference implementation with optional fused activation and mul.
+
+        If mul_tensor is provided, computes:
+            activation(input_a @ input_b) * mul_tensor
+        Otherwise:
+            input_a @ input_b with optional fused_activation
+        """
         result = input_a @ input_b
         if fused_activation is not None:
             activation_fn = {
@@ -98,6 +107,8 @@ class DRAMStreamingMatmul:
             if activation_fn is None:
                 raise ValueError(f"Unknown activation for golden: {fused_activation}")
             result = activation_fn(result)
+        if mul_tensor is not None:
+            result = result * mul_tensor
         return result
 
     @staticmethod
@@ -111,6 +122,8 @@ class DRAMStreamingMatmul:
         subblock_k: int = None,  # K subblock size in tiles, None means full K
         fused_activation: str = None,  # "silu" to fuse SiLU activation
         index_tensor: ttnn.Tensor = None,  # Expert index tensor for indexed access
+        mul_tensor: ttnn.Tensor = None,  # Optional tensor to multiply with matmul output (16x16 tiles)
+        mm_out_tensor: ttnn.Tensor = None,  # Optional intermediate tensor for matmul output (1x32 tiles)
     ) -> ttnn.Tensor:
         """
         Execute simplified DRAM streaming matmul.
@@ -256,22 +269,91 @@ class DRAMStreamingMatmul:
 
         cb_descriptors = [cb0_descriptor, cb1_descriptor]
 
-        # CB 4: output - BACKED BY OUTPUT TENSOR
-        cb4_descriptor = ttnn.cb_descriptor_from_sharded_tensor(4, output_tensor)
-        cb_descriptors.append(cb4_descriptor)
-
         # CB 5: index tensor (optional, for expert indexing)
         cb_id_index = 5
         if enable_indexing:
             cb5_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_id_index, index_tensor)
             cb_descriptors.append(cb5_descriptor)
 
+        # Matmul output CB setup:
+        # - When mul disabled: cb_id_mm_out = 4, backed by output_tensor (final output)
+        # - When mul enabled: cb_id_mm_out = 8, backed by mm_out_tensor (intermediate)
+        #   Plus CB 4,6,7 with 16x16 format for mul operation
+        enable_mul = mul_tensor is not None
+        cb_id_mul_in1 = 6  # mul_tensor viewed as 16x16
+        cb_id_mul_in0 = 7  # mm_out viewed as 16x16
+
+        if enable_mul:
+            assert mm_out_tensor is not None, "mm_out_tensor required when mul_tensor is provided"
+            cb_id_mm_out = 8  # matmul writes to intermediate CB
+
+            # Get 16x16 tile format for the mul CBs
+            mul_tile_16x16 = ttnn.Tile([16, 16])
+            mul_tile_desc = ttnn.TileDescriptor(mul_tile_16x16)
+            mul_dtype = mul_tensor.dtype
+            mul_tile_size = mul_tile_16x16.get_tile_size(mul_dtype)
+
+            # CB 4: output with 16x16 tile format, backed by output_tensor's memory
+            cb4_format = ttnn.CBFormatDescriptor(
+                buffer_index=4,
+                data_format=mul_dtype,
+                page_size=mul_tile_size,
+                tile=mul_tile_desc,
+            )
+            cb4_descriptor = ttnn.CBDescriptor(
+                total_size=mul_tile_size,  # 1 tile of 16x16
+                core_ranges=compute_cores,
+                format_descriptors=[cb4_format],
+            )
+            cb4_descriptor.set_buffer_from_tensor(output_tensor)
+            cb_descriptors.append(cb4_descriptor)
+
+            # CB 6: mul_in1 with 16x16 tile format, backed by mul_tensor's memory
+            cb6_format = ttnn.CBFormatDescriptor(
+                buffer_index=cb_id_mul_in1,
+                data_format=mul_dtype,
+                page_size=mul_tile_size,
+                tile=mul_tile_desc,
+            )
+            cb6_descriptor = ttnn.CBDescriptor(
+                total_size=mul_tile_size,  # 1 tile of 16x16
+                core_ranges=compute_cores,
+                format_descriptors=[cb6_format],
+            )
+            cb6_descriptor.set_buffer_from_tensor(mul_tensor)
+            cb_descriptors.append(cb6_descriptor)
+
+            # CB 7: mul_in0 with 16x16 tile format, backed by mm_out_tensor's memory
+            cb7_format = ttnn.CBFormatDescriptor(
+                buffer_index=cb_id_mul_in0,
+                data_format=mul_dtype,
+                page_size=mul_tile_size,
+                tile=mul_tile_desc,
+            )
+            cb7_descriptor = ttnn.CBDescriptor(
+                total_size=mul_tile_size,  # 1 tile of 16x16
+                core_ranges=compute_cores,
+                format_descriptors=[cb7_format],
+            )
+            cb7_descriptor.set_buffer_from_tensor(mm_out_tensor)
+            cb_descriptors.append(cb7_descriptor)
+
+            # CB 8: mm_out - matmul writes here (1x32 tiles, same as tensor)
+            cb_mm_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_id_mm_out, mm_out_tensor)
+            cb_descriptors.append(cb_mm_out_descriptor)
+        else:
+            cb_id_mm_out = 4  # matmul writes directly to output CB
+
+            # CB 4: output - matmul writes here
+            cb_mm_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_id_mm_out, output_tensor)
+            cb_descriptors.append(cb_mm_out_descriptor)
+
         # ========== KERNEL ARGS ==========
 
         # CB IDs
         cb_id_in0 = 0
         cb_id_in1 = 1
-        cb_id_out = 4
+        cb_id_out = 4  # final output CB
 
         # Fused SiLU activation (only silu supported for now)
         fuse_silu = 0
@@ -300,6 +382,15 @@ class DRAMStreamingMatmul:
             "models/demos/deepseek_v3_b1/micro_ops/dram_streaming_matmul/kernels/dram_streaming_matmul_kernel.cpp"
         )
 
+        # Number of output tiles for mul (using 16x16 tiles)
+        # Total elements per core = M * per_core_N * tile_width
+        # 16x16 tile = 256 elements
+        if enable_mul:
+            total_elements = M * per_core_N * in1_tile_shape[1]  # M * N_tiles * tile_width
+            mul_num_tiles = math.ceil(total_elements / 256)
+        else:
+            mul_num_tiles = 0
+
         # Named compile-time args for NCRISC (in0 reader)
         ncrisc_named_compile_time_args = [
             ("dram_mm_cb_in0", cb_id_in0),
@@ -307,13 +398,16 @@ class DRAMStreamingMatmul:
             # Expert indexing parameters
             ("dram_mm_enable_indexing", 1 if enable_indexing else 0),
             ("dram_mm_cb_index", cb_id_index if enable_indexing else 0),
+            # Mul parameters
+            ("dram_mm_enable_mul", 1 if enable_mul else 0),
+            ("dram_mm_cb_mul_in1", cb_id_mul_in1),
+            ("dram_mm_mul_num_tiles", mul_num_tiles),
         ]
 
         # Named compile-time args for BRISC (in1 reader / DRAM streaming)
-        # bank_id and vc are passed as per-core compile-time args
         brisc_named_compile_time_args = [
             ("dram_mm_cb_in1", cb_id_in1),
-            ("dram_mm_cb_out", cb_id_out),
+            ("dram_mm_cb_out", cb_id_mm_out),  # matmul output CB (4 or 8)
             ("dram_mm_in1_tensor_addr", in1_buffer_addr),
             ("dram_mm_in1_page_size", in1_page_size),
             ("dram_mm_in1_num_pages", in1_num_pages),
@@ -326,19 +420,31 @@ class DRAMStreamingMatmul:
             ("dram_mm_enable_indexing", 1 if enable_indexing else 0),
             ("dram_mm_cb_index", cb_id_index if enable_indexing else 0),
             ("dram_mm_index_offset", 0),  # TODO: make configurable, offset into index tensor
+            # Mul parameters
+            ("dram_mm_enable_mul", 1 if enable_mul else 0),
+            ("dram_mm_cb_mul_in0", cb_id_mul_in0),
+            ("dram_mm_cb_mul_in1", cb_id_mul_in1),
+            ("dram_mm_cb_final_out", cb_id_out),
+            ("dram_mm_mul_num_tiles", mul_num_tiles),
         ]
 
         # Named compile-time args for TRISC (compute)
         trisc_named_compile_time_args = [
             ("dram_mm_cb_in0", cb_id_in0),
             ("dram_mm_cb_in1", cb_id_in1),
-            ("dram_mm_cb_out", cb_id_out),
+            ("dram_mm_cb_out", cb_id_mm_out),  # matmul output CB (4 or 8)
             ("dram_mm_subblock_k", subblock_k),
             ("dram_mm_per_core_n", per_core_N),
             ("dram_mm_subblock_w", subblock_w),
             ("dram_mm_num_subblocks_k", num_subblocks_k),
             ("dram_mm_tile_r_dim", in0_tile_shape[0]),
             ("dram_mm_fuse_silu", fuse_silu),
+            # Mul parameters (16x16 tiles)
+            ("dram_mm_enable_mul", 1 if enable_mul else 0),
+            ("dram_mm_cb_mul_in0", cb_id_mul_in0),
+            ("dram_mm_cb_mul_in1", cb_id_mul_in1),
+            ("dram_mm_cb_mul_out", cb_id_out),
+            ("dram_mm_mul_num_tiles", mul_num_tiles),
         ]
 
         # Unified kernel descriptor (same pattern as matmul)
@@ -388,6 +494,9 @@ class DRAMStreamingMatmul:
         io_tensors = [input_a, input_b, output_tensor]
         if enable_indexing:
             io_tensors.append(index_tensor)
+        if enable_mul:
+            io_tensors.append(mul_tensor)
+            io_tensors.append(mm_out_tensor)
         ttnn.generic_op(io_tensors, program_descriptor)
 
         # Output is written in-place to output_tensor
