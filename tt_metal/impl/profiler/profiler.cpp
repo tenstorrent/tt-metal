@@ -217,8 +217,33 @@ void populateZoneSrcLocations(
     std::string line;
     while (std::getline(log_file_read, line)) {
         std::string delimiter = "'#pragma message: ";
-        int delimiter_index = line.find(delimiter) + delimiter.length();
+        auto pos = line.find(delimiter);
+        if (pos == std::string::npos) {
+            // Skip malformed lines (can occur from line-wrapping in compiler output with long paths)
+            continue;
+        }
+        size_t delimiter_index = pos + delimiter.length();
+        if (delimiter_index >= line.length()) {
+            continue;
+        }
         std::string zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
+
+        std::stringstream ss(zone_src_location);
+        std::string zone_name;
+        std::string source_file;
+        std::string line_num_str;
+        if (!std::getline(ss, zone_name, ',') || !std::getline(ss, source_file, ',') ||
+            !std::getline(ss, line_num_str, ',') || line_num_str.empty()) {
+            // Skip malformed zone_src_location entries
+            continue;
+        }
+
+        // Validate line_num_str contains only digits before calling stoull
+        bool valid_number =
+            std::all_of(line_num_str.begin(), line_num_str.end(), [](unsigned char c) { return std::isdigit(c); });
+        if (!valid_number) {
+            continue;
+        }
 
         uint16_t hash_16bit = hash16CT(zone_src_location);
 
@@ -226,14 +251,6 @@ void populateZoneSrcLocations(
         if (did_insert.second && (hash_to_zone_src_locations.contains(hash_16bit))) {
             TT_THROW("Source location hashes are colliding, two different locations are having the same hash");
         }
-
-        std::stringstream ss(zone_src_location);
-        std::string zone_name;
-        std::string source_file;
-        std::string line_num_str;
-        std::getline(ss, zone_name, ',');
-        std::getline(ss, source_file, ',');
-        std::getline(ss, line_num_str, ',');
 
         tracy::MarkerDetails details(zone_name, source_file, std::stoull(line_num_str));
 
