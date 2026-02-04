@@ -19,7 +19,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
-DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
+DEFAULT_LD_LIBRARY_PATH = os.getenv("TT_RUN_DEFAULT_LD_LIBRARY_PATH", "{home}/build/lib")
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 
