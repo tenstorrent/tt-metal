@@ -120,13 +120,13 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo "Running tt-smi -glx_reset..."
         mpirun --host $HOSTS --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
 
-        echo "Waiting 5 seconds for hardware to stabilize after reset..."
-        sleep 5
+        mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+
         echo ""
         echo "Running cluster validation..."
-        ./tools/scaleout/exabox/mpi-docker --image $DOCKER_IMAGE \
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
-            --host $HOSTS \
+            --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             --cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" \
             --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH" \
