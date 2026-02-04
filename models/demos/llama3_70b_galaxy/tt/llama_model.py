@@ -256,6 +256,12 @@ class TtTransformer(LightweightModule):
             f"[PREFILL_TABLE_DEBUG] chunk_start_idx={chunk_start_idx} batch_size={batch_size} user_id={user_id}"
         )
         if page_table is not None:
+            # NOTE ON SENTINELS / SAFETY:
+            # - For cache-write style ops (e.g. paged_fill_cache), -1 is a "skip" sentinel.
+            # - For SDPA ops that READ page_table, there is no sentinel check in address-gen, so -1 would overflow.
+            #   In prefix-cached prefill (chunk_start_idx > 0) we may use chunked SDPA, so we must avoid -1 there.
+            inactive_fill_value = 0 if (chunk_start_idx is not None and chunk_start_idx > 0) else -1
+
             # Chunked SDPA requires page_table "stick size" (row width) to be a multiple of 32 Bytes.
             # Page table entries are int32, so this means the number of columns must be a multiple of 8
             # (8 * sizeof(int32) = 32 bytes). Pad with read-safe zeros.
@@ -271,9 +277,12 @@ class TtTransformer(LightweightModule):
 
             if batch_size > 1:
                 assert batch_size == 32, "batch_size must be 32 for batched prefill"
-                # Mesh layout padding: (32, num_blocks) -> (4, 32 * num_blocks), read-safe 0 padding.
+                # Mesh layout padding: (32, num_blocks) -> (4, 32 * num_blocks).
+                # In non-prefix prefill, use -1 for the "unused" regions so paged_fill_cache can skip safely.
                 batch_size_per_column = batch_size // columns
-                page_table_padded = torch.zeros((columns, page_table.shape[1] * batch_size), dtype=torch.int32)
+                page_table_padded = (
+                    torch.ones((columns, page_table.shape[1] * batch_size), dtype=torch.int32) * inactive_fill_value
+                )
                 for i in range(columns):
                     page_table_padded[
                         i,
@@ -286,13 +295,15 @@ class TtTransformer(LightweightModule):
             else:
                 # Mesh layout padding: only the active column is used; others must be read-safe.
                 num_blocks = page_table.shape[1]
-                page_table_padded = torch.zeros((columns, num_blocks), dtype=torch.int32)
+                page_table_padded = torch.ones((columns, num_blocks), dtype=torch.int32) * inactive_fill_value
                 # Note: For prefix caching, page_table is already extracted to a single row (shape: 1, num_blocks),
                 # so we always access row 0. The original user_id is used only to compute user_id_column.
                 page_table_padded[user_id_column, :num_blocks] = page_table[0, :]
 
                 # Ensure row width (in bytes) divisible by 32 for chunked SDPA.
-                page_table_padded = _pad_table_cols_to_multiple_of_8_int32(page_table_padded, pad_value=0)
+                page_table_padded = _pad_table_cols_to_multiple_of_8_int32(
+                    page_table_padded, pad_value=inactive_fill_value
+                )
 
             logger.info(f"[PREFILL_TABLE_DEBUG] page_table { _table_preview(page_table_padded) }")
             tt_page_table = ttnn.from_torch(
