@@ -99,7 +99,7 @@ class DeepseekGenerator:
         # Ensure max_seq_len matches the reference config expectations (e.g. YARN-scaled context length)
         self._ensure_max_seq_len(self.hf_config)
         # Allow a smaller explicit max_seq_len to limit KV cache size (e.g. 32k).
-        # Default to 4096 unless DEEPSEEK_V3_MAX_SEQ_LEN is provided (issue #36180).
+        # Default to 2048 unless DEEPSEEK_V3_MAX_SEQ_LEN is provided (issue #36180).
         if max_seq_len is None:
             env_max_seq_len = os.getenv("DEEPSEEK_V3_MAX_SEQ_LEN")
             if env_max_seq_len:
@@ -107,9 +107,9 @@ class DeepseekGenerator:
                     max_seq_len = int(env_max_seq_len)
                 except Exception as e:
                     logger.warning(f"Ignoring invalid DEEPSEEK_V3_MAX_SEQ_LEN='{env_max_seq_len}': {e}")
-                    max_seq_len = 4096
+                    max_seq_len = 2048
             else:
-                max_seq_len = 4096
+                max_seq_len = 2048
         if max_seq_len is not None:
             self.hf_config.max_seq_len = int(max_seq_len)
         # Optional overrides for layer counts before building states
