@@ -364,7 +364,20 @@ void py_module_types(nb::module_& mod) {
         .def_rw(
             "format_descriptors",
             &tt::tt_metal::CBDescriptor::format_descriptors,
-            "Collection of format descriptors for different sections of the buffer");
+            "Collection of format descriptors for different sections of the buffer")
+        .def(
+            "set_buffer_from_tensor",
+            [](tt::tt_metal::CBDescriptor& self, const ttnn::Tensor& tensor) { self.buffer = tensor.buffer(); },
+            nb::arg("tensor"),
+            R"pbdoc(
+                Set the CB's buffer pointer from a tensor's buffer.
+
+                This allows creating a CB with custom format (e.g., different tile dimensions)
+                that points to an existing tensor's memory.
+
+                Args:
+                    tensor: The tensor whose buffer address should be used for this CB
+            )pbdoc");
 
     // Helper function for creating CBDescriptor from sharded tensor
     mod.def(
