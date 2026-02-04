@@ -126,7 +126,6 @@ enum class EnvVarID {
     TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
     TT_METAL_EXIT_ON_DISPATCH_TIMEOUT,             // Exit application on dispatch timeout with exit code
     TT_METAL_DISPATCH_TIMEOUT_EXIT_CODE,           // Exit code to use when exiting on dispatch timeout
-    TT_METAL_DEVICE_DEBUG_DUMP_ENABLED,            // Enable experimental debug dump mode for profiler
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
 
     // ========================================
