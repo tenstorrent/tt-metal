@@ -31,11 +31,11 @@ Based on past failures, DO NOT:
 ❌ **Trust existing "fix" commits** - "There's already a fix on the branch, I'll build on it"
    → Test it first. Many "fixes" don't actually work.
 
-❌ **Make universal changes** - `timeout = base_timeout * 10`
-   → Use: `if (size > THRESHOLD) { timeout = base_timeout * 10 }`
+❌ **Make universal changes** - `timeout = timeout * 10` or `sleep(100ms)`
+   → Use conditional logic that only affects the problematic case
 
-❌ **Guess at data sizes** - "300KB transfer in 5 seconds = 60 KB/s throughput"
-   → Log the ACTUAL size. It might be 9.27 MB, not 300KB.
+❌ **Guess at values** - "The tensor is X bytes" or "There are Y iterations"
+   → Log the ACTUAL values. Your assumptions may be wrong by 10x or more.
 
 ❌ **Give up without proof** - "This is a fundamental hardware limitation"
    → Show specific code/evidence. What have you actually tried?
@@ -69,12 +69,12 @@ You will receive:
 ### Why Profiling is Mandatory
 
 In past attempts, agents have:
-- Spent hours optimizing data transfer when computation was fast (23ms)
-- Assumed 300KB transfer when it was actually 9.27 MB
-- Tried to speed up the wrong code path
+- Spent hours optimizing the wrong code path
+- Made incorrect assumptions about data sizes, iteration counts, etc.
 - Given up claiming "fundamental limitations" without measuring
+- Implemented fixes that didn't address the actual bottleneck
 
-**Profiling would have revealed the truth in under 1 minute.**
+**Profiling reveals where time is actually spent - often different from what stack traces suggest.**
 
 ### Step 1: Add Python Timing Instrumentation
 
@@ -124,10 +124,8 @@ auto start = std::chrono::high_resolution_clock::now();
 auto checkpoint = std::chrono::high_resolution_clock::now();
 auto duration_ms = std::chrono::duration<double, std::milli>(checkpoint - start).count();
 
-// Log for large transfers only (to avoid noise):
-if (size > 256 * 1024) {
-    log_info(LogMetal, "operation took {:.2f}ms for {}KB", duration_ms, size/1024);
-}
+// Log timing (add conditions to reduce noise if needed):
+log_info(LogMetal, "operation took {:.2f}ms", duration_ms);
 ```
 
 ### Step 3: Log Actual Data Sizes
@@ -154,21 +152,22 @@ cat /tmp/profiling_results.log
 
 **ONLY AFTER you have timing data should you proceed to implement fixes.**
 
-### Example Profiling Result That Changes Everything
+### Example: Why Profiling Matters
 
-Before profiling, you might assume:
-- "Timeout in copy_completion_queue = transfer is slow"
+Before profiling, you might assume based on stack trace:
+- "Error in function X = function X is slow"
 
 After profiling:
 ```
 TIMING BREAKDOWN:
-  to_device:    57.40 ms
-  gather:       23.20 ms  <<< FAST! Not the problem!
-  to_torch:   8615.80 ms  <<< THIS is where 99% of time goes!
-  TOTAL:      8696.40 ms
+  setup:       50 ms  (1%)
+  operation:   30 ms  (1%)   <<< Stack trace pointed here, but it's FAST
+  cleanup:   4920 ms  (98%)  <<< THIS is where time actually goes!
+  TOTAL:     5000 ms
 ```
 
-Now you know: Don't optimize gather. Optimize to_torch.
+The stack trace showed where the *error* occurred, not where the *time* was spent.
+Profiling prevents you from optimizing the wrong thing.
 
 ## CRITICAL CHECKLIST
 
@@ -325,23 +324,17 @@ If optimizing data transfer, you MUST know the actual size:
 
 #### 1e. Analyze the Failure (Based on Profiling)
 
-Now that you have MEASURED data:
+Now that you have MEASURED data, determine:
 
-#### 1b. Analyze the Failure
+1. **What operation is the bottleneck?**
+   - Look at your profiling results - which phase takes the most time?
+   - The stack trace shows where *failure* occurred, not where *time* is spent
 
-From the test output and code, determine:
+2. **Where specifically is time being spent?**
+   - If profiling pointed to a particular phase, dig deeper
+   - Add more granular timing if needed
 
-1. **What operation fails?**
-   - Is it a TTNN operation? (`ttnn.gather`, `ttnn.to_torch`)
-   - Is it a model forward pass?
-   - Is it a kernel execution?
-
-2. **Where does it fail?**
-   - Extract the stack trace
-   - Identify the exact function/line
-   - Understand the call chain
-
-3. **Why does it fail?**
+3. **Why is it slow/failing?**
    - **Performance**: Too slow (timeout, benchmark miss)
    - **Correctness**: Wrong output (shape, values, exception)
    - **Resource**: OOM, device hang, buffer overflow
@@ -353,17 +346,17 @@ From the test output and code, determine:
    - Incorrect parameters
    - Resource limitation
 
-#### 1c. Identify Files to Modify
+#### 1f. Identify Files to Modify
 
-Based on the failure, locate the relevant source files:
+Based on the profiling results, locate the relevant source files:
 
 ```bash
-# Find operation implementation
-grep -r "def gather" ttnn/
-grep -r "class Gather" tt_eager/
+# Find operation implementation (replace <operation> with actual name)
+grep -r "def <operation>" ttnn/
+grep -r "class <Operation>" tt_eager/
 
 # Find kernel code
-find tt_metal/ ttnn/ -name "*gather*.cpp"
+find tt_metal/ ttnn/ -name "*<operation>*.cpp"
 
 # Find dispatch/device code
 find tt_metal/impl/dispatch/ -name "*.cpp"
@@ -371,7 +364,7 @@ find tt_metal/impl/dispatch/ -name "*.cpp"
 
 **Create a list of candidate files** that likely need changes.
 
-#### 1d. Form a Hypothesis
+#### 1g. Form a Hypothesis
 
 Document your hypothesis for the root cause:
 
@@ -477,7 +470,7 @@ If test PASSES unexpectedly:
 
 **🚨 NEVER make UNIVERSAL changes that affect ALL operations.**
 
-Any optimization MUST be conditional based on clear criteria (size, type, etc.).
+Any optimization MUST be conditional based on clear criteria that identify the problematic case.
 
 **❌ BAD - Universal change:**
 ```cpp
@@ -487,33 +480,32 @@ auto timeout = base_timeout * 10;
 
 **✅ GOOD - Conditional change:**
 ```cpp
-// Only affects large transfers
-constexpr size_t LARGE_TRANSFER_THRESHOLD = 256 * 1024;  // 256KB
+// Only affects the specific problematic case
 auto timeout = base_timeout;
-if (transfer_size > LARGE_TRANSFER_THRESHOLD) {
-    timeout = base_timeout * 10;  // Extended only for large transfers
+if (condition_that_identifies_the_problem) {
+    timeout = base_timeout * 10;  // Extended only for problematic case
 }
 ```
 
-**❌ BAD - Changes all sleeps:**
+**❌ BAD - Unconditional slowdown:**
 ```cpp
 std::this_thread::sleep_for(std::chrono::milliseconds(100));  // ALL operations now slower
 ```
 
-**✅ GOOD - Conditional sleep:**
+**✅ GOOD - Conditional optimization:**
 ```cpp
-if (data_size > THRESHOLD) {
+if (is_problematic_case) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
-// Small transfers unaffected
+// Normal cases unaffected
 ```
 
 #### Why Conditional Changes Matter
 
 Universal changes can:
 - Slow down ALL operations (not just the problematic ones)
-- Mask the real issue (increasing timeout hides performance problems)
-- Break other tests that depend on fast timeouts
+- Mask the real issue (e.g., increasing timeout hides performance problems)
+- Break other tests that depend on original behavior
 - Make the codebase harder to maintain
 
 #### 3b. Make Small, Targeted Changes
@@ -523,28 +515,27 @@ Universal changes can:
 1. **Start with the most likely fix based on profiling data**
 2. **Make ONE change at a time**
 3. **Test after EACH change**
-4. **Ensure changes are CONDITIONAL**
+4. **Ensure changes are CONDITIONAL** - only affect the problematic case
 5. **Document what each change does and WHY**
 
-**Example: Conditional Performance Fix**
+**Example: Conditional Fix**
 
 ```cpp
-// Before: Tight polling loop affects all operations
+// Before: All cases use same behavior
 while (!done) {
     check_status();
-    std::this_thread::yield();
+    process();
 }
 
-// After: Conditional optimization for large transfers only
-constexpr size_t LARGE_TRANSFER_THRESHOLD = 256 * 1024;
+// After: Problematic cases get special handling
 while (!done) {
     check_status();
-    if (transfer_size > LARGE_TRANSFER_THRESHOLD) {
-        // Large transfers benefit from less aggressive polling
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    if (is_problematic_case) {
+        // Special handling for the case that was failing
+        process_with_workaround();
     } else {
-        // Small transfers keep original behavior
-        std::this_thread::yield();
+        // Normal cases keep original behavior
+        process();
     }
 }
 ```
