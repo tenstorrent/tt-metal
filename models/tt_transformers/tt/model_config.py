@@ -702,6 +702,8 @@ class ModelArgs:
             # end mixtral
 
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+            # Create padded dimension for self.dim
+            self.padded_dim = self.get_nearest_padded_dim()
 
             # Create memory config for sharded tensors
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
@@ -1345,6 +1347,10 @@ class ModelArgs:
 
         self.capped_warmup_seq_len = min(self.max_prefill_chunk_size, self.max_seq_len)
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def get_nearest_padded_dim(self):
+        """Round up self.dim to nearest power of 2."""
+        return 2 ** math.ceil(math.log2(self.dim))
 
     def get_warmup_prefill_supported_seq_lens(self):
         assert (

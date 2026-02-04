@@ -5,7 +5,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
-from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
@@ -236,7 +235,8 @@ class TransformerBlock(LightweightModule):
             kv_cache=kv_cache,
         )
         # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
-        attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
+        if not self.args.needed_padding:
+            attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
@@ -249,24 +249,16 @@ class TransformerBlock(LightweightModule):
             hidden_states = attn_out
         hidden_states = self.ff_norm(hidden_states, mode)
         if self.pre_ff_norm is not None:
-            # The output of the ff_norm is replicated across the device
-            # but the residual is fractured across the devices
-            if self.num_devices > 1:
-                hidden_states = tt_all_reduce(
-                    hidden_states,
-                    self.mesh_device,
-                    tt_ccl=self.tt_ccl,
-                    cluster_axis=0,
-                    dim=3,
-                    topology=ttnn.Topology.Ring,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=self.args.ccl_dtype,
-                )
-
-                hidden_states = ttnn.div(hidden_states, self.num_devices)
-            hidden_states = ttnn.add(
-                residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+            distributed = ttnn.mesh_partition(
+                hidden_states,
+                memory_config=hidden_states.memory_config(),
+                dim=3,
+                cluster_axis=1,
             )
+            hidden_states = ttnn.add(
+                residual, distributed, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+            )
+            ttnn.deallocate(distributed)
             residual = hidden_states
             hidden_states = self.pre_ff_norm(hidden_states, mode)
 
@@ -284,19 +276,12 @@ class TransformerBlock(LightweightModule):
 
         if self.post_ff_norm is not None:
             hidden_states = self.post_ff_norm(hidden_states, mode)  # Gathered
-            if self.num_devices > 1:
-                hidden_states = tt_all_reduce(
-                    hidden_states,
-                    self.mesh_device,
-                    tt_ccl=self.tt_ccl,
-                    cluster_axis=0,
-                    dim=3,
-                    topology=ttnn.Topology.Ring,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=self.args.ccl_dtype,
-                )
-
-                hidden_states = ttnn.div(hidden_states, self.num_devices)
+            hidden_states = ttnn.mesh_partition(
+                hidden_states,
+                memory_config=hidden_states.memory_config(),
+                dim=3,
+                cluster_axis=1,
+            )
 
         out = ttnn.add(
             residual,

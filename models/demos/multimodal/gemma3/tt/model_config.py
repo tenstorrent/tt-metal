@@ -13,7 +13,7 @@ from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, 
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
-
+from models.tt_transformers.tt.common import get_out_subblock_w
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
@@ -69,6 +69,49 @@ class ModelArgs(TTModelArgs):
 
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
+
+        if self.needed_padding:
+            self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = True
+            attn_allgather_matmul_grid = self.dram_shard_core_grid_for_k(self.padded_dim // self.num_devices)
+            self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"] = (
+                ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
+                if self.is_galaxy
+                else ttnn.create_sharded_memory_config(
+                    (
+                        self.tile_padded_batch_rows,
+                        self.padded_dim // attn_allgather_matmul_grid.num_cores // self.num_devices,
+                    ),
+                    attn_allgather_matmul_grid,
+                    ttnn.ShardStrategy.WIDTH,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+            )
+
+            do_core_grid_size = (8, 1)
+            do_per_core_N = (
+                self.padded_dim // self.num_devices // self.tile_size // (do_core_grid_size[0] * do_core_grid_size[1])
+            )
+            self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=do_core_grid_size,
+                in0_block_w=4096
+                // self.tile_size
+                // (do_core_grid_size[0] * do_core_grid_size[1]),  # [32 x 8k] x [8k x 1k] = [32 x 1k]
+                out_subblock_h=1,
+                out_subblock_w=get_out_subblock_w(
+                    do_per_core_N, out_subblock_h=1
+                ),  # Max out_subblock_w = 4, needs to be divisible by per_core_N
+                per_core_M=self.tile_padded_batch_rows // self.tile_size,
+                per_core_N=do_per_core_N,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+
+
+    @property
+    def needed_padding(self):
+        return any(x in self.base_model_name.lower() for x in ["gemma-3-27b"]) 
 
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len

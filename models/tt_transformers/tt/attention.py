@@ -5,6 +5,7 @@
 import math
 
 import torch
+import torch.nn.functional as F
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -132,6 +133,10 @@ class Attention(LightweightModule):
         self.li_o_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
         )
+
+        if self.args.needed_padding:
+            #Lower math fidelity for gemma3 decode with padding to make it more efficient
+            self.li_qkv_decode_compute_kernel_cfg.math_fidelity = ttnn.MathFidelity.HiFi2
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
@@ -300,7 +305,6 @@ class Attention(LightweightModule):
         wo_mem_config = configuration.create_dram_sharded_mem_config(
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
-
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=self.wo_dtype,
@@ -316,6 +320,24 @@ class Attention(LightweightModule):
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
+ 
+        if self.args.needed_padding:
+            pt_wo_decode = F.pad(pt_wo, (0, self.args.padded_dim - self.args.dim))
+            self.wo_decode = ttnn.as_tensor(
+                pt_wo_decode,
+                dtype=self.wo_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
+                    mesh_shape=configuration.cluster_shape,
+                ),
+                cache_file_name=(
+                    cache_name("wo_decode_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo_decode")
+                ),
+            )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
@@ -451,7 +473,7 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-
+        self.li_qkv_decode_compute_kernel_cfg.math_fidelity = ttnn.MathFidelity.HiFi2
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -620,7 +642,7 @@ class Attention(LightweightModule):
             if self.ccl_topology == ttnn.Topology.Ring:
                 _, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
                     attn_output_cat,
-                    self.wo,
+                    self.wo if not self.args.needed_padding else self.wo_decode,
                     persistent_output_buffer=None,
                     dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
@@ -628,7 +650,7 @@ class Attention(LightweightModule):
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                     num_links=1,
                     memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
-                    memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                    memory_config_mm= self.model_config["DECODE_RESIDUAL_MEMCFG"] if not self.args.needed_padding else self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"],
                     program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
                     compute_kernel_config=self.compute_kernel_config_hifi2,
                     chunks_per_sync=10,
@@ -660,7 +682,8 @@ class Attention(LightweightModule):
 
                 ttnn.deallocate(all_gather_output)
             ttnn.deallocate(attn_output_cat)
-            dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+            if not self.args.needed_padding:
+                dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
 
         else:
