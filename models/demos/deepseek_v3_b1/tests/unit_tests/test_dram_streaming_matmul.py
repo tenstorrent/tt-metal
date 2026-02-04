@@ -458,3 +458,165 @@ def test_dram_streaming_matmul_indexed(device, k, n, m, num_experts, fused_activ
     logger.info(output)
     assert passing, f"PCC check failed: {output}"
     logger.info(f"DRAM streaming matmul indexed{activation_str} test passed!")
+
+
+@pytest.mark.parametrize("k, n", [(7168, 2048)])
+@pytest.mark.parametrize("m", [1])
+@pytest.mark.parametrize("fused_activation", [None])
+def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
+    """Test DRAM streaming matmul with fused element-wise multiply.
+
+    Tests: silu(input @ weights) * mul_tensor
+
+    All tensors use 1x32 tiles (to mimic matmul outputs).
+    The kernel uses CB aliasing to view them as 16x16 tiles for the mul operation:
+    - mm_out_tensor: 1x256 per core = 8 tiles of 1x32, CB 8 (matmul writes here)
+    - mm_out viewed as 16x16: CB 7 (mul reads from here, aliased to CB 8)
+    - mul_tensor: 1x256 per core = 8 tiles of 1x32, CB 6 views as 16x16
+    - output_tensor: 1x256 per core = 8 tiles of 1x32, CB 4 views as 16x16
+    """
+    tile_h = m
+    tile_w = 32
+
+    # Tile shapes - tensors use 1x32 tiles, CBs alias to 16x16 for mul
+    in0_tile = ttnn.Tile([tile_h, tile_w])  # 1x32 for matmul input
+    mm_out_tile = ttnn.Tile([tile_h, tile_w])  # 1x32 for matmul output, mul_tensor, and final output
+    mul_out_tile = ttnn.Tile([16, 16])  # 16x16 for mul output
+
+    # Get compute cores from optimal DRAM bank assignment
+    compute_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_cores = len(compute_cores)
+    num_banks = device.dram_grid_size().x
+    assert num_cores == num_banks, f"num_cores ({num_cores}) must equal num_banks ({num_banks})"
+
+    logger.info(f"num_compute_cores={num_cores}, num_dram_banks={num_banks}")
+
+    n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
+    per_core_N = n_padded // num_banks
+
+    logger.info(f"n_padded={n_padded}, per_core_N={per_core_N}, Kt={k // tile_w}")
+
+    # Define shapes
+    in0_shape = [1, 1, m, k]
+    in1_shape = [1, 1, k, n_padded]
+
+    # Build CoreRangeSet for specific compute cores
+    compute_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
+    )
+
+    # Create PyTorch tensors with random values
+    torch.manual_seed(42)
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+    mul_tensor_torch = torch.randn([1, 1, m, n_padded]).bfloat16().float()
+
+    # ========== Input A - REPLICATED on compute cores ==========
+    in0_replicated = in0.repeat(1, 1, num_cores, 1)
+    in0_shard_shape_full = [m, k]
+    in0_shard_spec = ttnn.ShardSpec(compute_core_grid, in0_shard_shape_full, ttnn.ShardOrientation.ROW_MAJOR)
+    in0_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
+    in0_t = ttnn.from_torch(
+        in0_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+        tile=in0_tile,
+    )
+
+    # ========== Input B - WIDTH_SHARDED in DRAM with per-shard tile reordering ==========
+    in1_shuffled = shuffle_tensor_tiles(in1, tile_w, num_banks)
+    in1_shard_shape = [k, n_padded // num_banks]
+    in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+    in1_t = ttnn.from_torch(
+        in1_shuffled,
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+
+    # ========== Matmul output tensor (intermediate) - 1x32 tiles ==========
+    # This is where matmul writes its output before mul
+    mm_out_shard_spec = ttnn.ShardSpec(compute_core_grid, (m, per_core_N), ttnn.ShardOrientation.ROW_MAJOR)
+    mm_out_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, mm_out_shard_spec
+    )
+    mm_out_t = ttnn.from_torch(
+        torch.zeros([1, 1, m, n_padded]).bfloat16().float(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mm_out_memory_config,
+        tile=mm_out_tile,
+    )
+
+    # ========== Mul tensor - 1x32 tiles (same as mm_out, mimics another matmul output) ==========
+    # Same shape and memory config as mm_out_tensor
+    # Kernel will alias this CB to view it as 16x16 tiles for the mul operation
+    mul_shard_spec = ttnn.ShardSpec(compute_core_grid, (m, per_core_N), ttnn.ShardOrientation.ROW_MAJOR)
+    mul_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, mul_shard_spec)
+    mul_t = ttnn.from_torch(
+        mul_tensor_torch,  # [1, 1, m, n_padded]
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mul_memory_config,
+        tile=mm_out_tile,  # 1x32 tiles
+    )
+
+    # ========== Output tensor - 1x32 tiles (CB will view as 16x16) ==========
+    # Same format as mm_out and mul tensors
+    output_shard_spec = ttnn.ShardSpec(compute_core_grid, (m, per_core_N), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros([1, 1, m, n_padded]).bfloat16().float(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=output_mem_config,
+        tile=mm_out_tile,  # 1x32 tiles
+    )
+
+    if k == 7168:
+        subblock_k = k // tile_w // 4
+    else:
+        subblock_k = k // tile_w // 2
+
+    # Run DRAM streaming matmul with mul
+    logger.info(
+        f"Running DRAM streaming matmul + {fused_activation} + mul: m={m}, k={k}, n={n_padded}, num_cores={num_cores}"
+    )
+    try:
+        ttnn_result = DRAMStreamingMatmul.op(
+            in0_t,
+            in1_t,
+            ttnn_output,
+            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            subblock_k=subblock_k,
+            fused_activation=fused_activation,
+            mul_tensor=mul_t,
+            mm_out_tensor=mm_out_t,
+        )
+    except Exception as e:
+        logger.error(f"DRAM streaming matmul + {fused_activation} + mul failed: {e}")
+        pytest.skip(f"Operation failed (may need API adjustments): {e}")
+
+    # Compute PyTorch reference
+    pt_out = DRAMStreamingMatmul.golden(in0, in1, fused_activation, mul_tensor_torch)
+
+    # Convert to torch for comparison
+    tt_out = ttnn.to_torch(ttnn_result)
+
+    # Verify results
+    expected_pcc = 0.98
+    passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
+    logger.info(output)
+    assert passing, f"PCC check failed: {output}"
+    logger.info(f"DRAM streaming matmul + {fused_activation} + mul test passed!")

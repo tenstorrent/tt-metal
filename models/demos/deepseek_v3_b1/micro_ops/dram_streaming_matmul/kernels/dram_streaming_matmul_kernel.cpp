@@ -4,13 +4,15 @@
 // DRAM Streaming Matmul unified kernel
 // Single kernel file, compiles for all RISC cores
 //
-// NCRISC: Sets up sharded CBs (in0, index tensor)
+// NCRISC: Sets up sharded CBs (in0, index tensor, mul tensor, mm_out)
 // BRISC: Streams in1 from DRAM with pipelining
-// TRISC: Performs matmul compute with optional fused SiLU
+// TRISC: Performs matmul compute with optional fused SiLU and optional fused mul (16x16 tiles)
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/dram_streaming_matmul.hpp"
+#include "../../../unified_kernels/eltwise_mul.hpp"
+#include "api/debug/dprint.h"
 
 // Compile-time role flag for dead code elimination via if constexpr
 struct Core {
@@ -29,6 +31,9 @@ void kernel_main() {
     constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("dram_mm_num_tiles_k");
     constexpr uint32_t enable_indexing = get_named_compile_time_arg_val("dram_mm_enable_indexing");
     constexpr uint32_t cb_index = get_named_compile_time_arg_val("dram_mm_cb_index");
+    constexpr uint32_t enable_mul = get_named_compile_time_arg_val("dram_mm_enable_mul");
+    constexpr uint32_t cb_mul_in1 = get_named_compile_time_arg_val("dram_mm_cb_mul_in1");
+    constexpr uint32_t mul_num_tiles = get_named_compile_time_arg_val("dram_mm_mul_num_tiles");
 
     // Setup sharded persistent buffers
     if constexpr (Core::is_active_core) {
@@ -36,7 +41,14 @@ void kernel_main() {
         if constexpr (enable_indexing == 1) {
             unified_kernels::setup_sharded_buffer(cb_index, 1);
         }
+        if constexpr (enable_mul == 1) {
+            // CB 6 (mul_in1): mul_tensor viewed as 16x16
+            unified_kernels::setup_sharded_buffer(cb_mul_in1, mul_num_tiles);
+        }
     }
+
+    // MulCTArgs for NCRISC - no-op
+    using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
 
 #elif defined(COMPILE_FOR_BRISC)
     using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs<
@@ -56,7 +68,17 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_cb_index"),
         get_named_compile_time_arg_val("dram_mm_index_offset")>;
 
+    // Mul parameters for BRISC
+    constexpr uint32_t enable_mul = get_named_compile_time_arg_val("dram_mm_enable_mul");
+
+    // MulCTArgs: waits for final output (cb_out after mul writes to it)
+    // Uses mul_num_tiles (1 tile of 16x16)
+    using MulCTArgs = deepseek_b1_ops::EltwiseMul::WriterCTArgs<
+        get_named_compile_time_arg_val("dram_mm_cb_final_out"),
+        get_named_compile_time_arg_val("dram_mm_mul_num_tiles")>;
+
 #elif defined(COMPILE_FOR_TRISC)
+    // Matmul writes to dram_mm_cb_out (CB 4 when mul disabled, CB 8 when mul enabled)
     using DRAMMMCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
         get_named_compile_time_arg_val("dram_mm_cb_in0"),
         get_named_compile_time_arg_val("dram_mm_cb_in1"),
@@ -67,6 +89,18 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_num_subblocks_k"),
         get_named_compile_time_arg_val("dram_mm_tile_r_dim"),
         get_named_compile_time_arg_val("dram_mm_fuse_silu")>;
+
+    constexpr uint32_t enable_mul = get_named_compile_time_arg_val("dram_mm_enable_mul");
+
+    // MulCTArgs: CB 7 * CB 6 -> CB 4 (all 16x16 tiles)
+    // cb_in0_wait = dram_mm_cb_out (wait on matmul output before reading aliased CB 7)
+    using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
+        get_named_compile_time_arg_val("dram_mm_cb_mul_in0"),
+        get_named_compile_time_arg_val("dram_mm_cb_mul_in1"),
+        get_named_compile_time_arg_val("dram_mm_cb_mul_out"),
+        get_named_compile_time_arg_val("dram_mm_mul_num_tiles"),
+        get_named_compile_time_arg_val("dram_mm_cb_out"),
+        get_named_compile_time_arg_val("dram_mm_per_core_n")>;
 #endif
 
     // ========================================================================
@@ -74,4 +108,17 @@ void kernel_main() {
     // ========================================================================
     deepseek_b1_ops::DRAMStreamingMatmul::Op<DRAMMMCTArgs, Core::is_active_core> dram_mm;
     dram_mm();
+
+    // ========================================================================
+    // Optional fused element-wise multiply (16x16 tiles)
+    // When enabled:
+    //   - Matmul wrote to cb_out (CB 8, 8 tiles of 1x32)
+    //   - mul_tensor is in cb_mul_in1 (CB 6, 1 tile of 16x16)
+    //   - cb_mul_in0 (CB 7) views same memory as CB 8 but with 16x16 format
+    //   - Mul waits on CB 8, then reads cb_mul_in0 * cb_mul_in1 -> cb_mul_out
+    // ========================================================================
+    if constexpr (enable_mul == 1) {
+        deepseek_b1_ops::EltwiseMul::Op<MulCTArgs, Core::is_active_core> mul_op;
+        mul_op();
+    }
 }
