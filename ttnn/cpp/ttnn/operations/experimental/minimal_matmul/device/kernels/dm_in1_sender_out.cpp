@@ -51,7 +51,7 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here
-
+    argidx += N_chunks;
     // Tensor accessor for input tensor
     constexpr auto in1_args = TensorAccessorArgs<22>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
