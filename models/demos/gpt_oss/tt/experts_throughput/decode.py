@@ -287,15 +287,10 @@ def decode_forward(
     # Note: reshape returns views - don't deallocate originals
     hidden_states = ttnn.reshape(hidden_states, (-1, 1, 1, config.hidden_size))
 
-    # typecast creates new tensors - safe to deallocate originals
-    topk_expert_indices_orig = topk_expert_indices
+    # typecast creates new tensors
     topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint32)
-    ttnn.deallocate(topk_expert_indices_orig)
-
     topk_expert_indices = ttnn.reshape(topk_expert_indices, (-1, 1, 1, config.num_experts_per_tok))
-    topk_expert_indices_u32 = topk_expert_indices
     topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
-    ttnn.deallocate(topk_expert_indices_u32)
     topk_expert_weights = ttnn.reshape(topk_expert_weights, (-1, 1, 1, config.num_experts_per_tok))
 
     seq_len = 1  # Decode mode always has seq_len=1
