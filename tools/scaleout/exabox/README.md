@@ -89,8 +89,7 @@ To build an image from a custom branch (your own branch or one requested from a 
 Discovers Ethernet connections, compares against expected topology (FSD), resets chips, sends traffic. Catches bad cables, DRAM failures, unstable links, CRC errors.
 
 ```bash
-./tools/scaleout/exabox/run_validation_8x16.sh <hosts> <docker-image>
-./tools/scaleout/exabox/run_validation_4x32.sh <hosts> <docker-image>
+./tools/scaleout/exabox/run_validation.sh <hosts> <docker-image>
 ```
 
 Runs 50 loops (reset, discovery, 10 traffic iterations each). Logs go to `validation_output/` in your current directory.
@@ -182,7 +181,7 @@ Look for `All Detected Links are healthy` in the output.
 
 ## Validation Output
 
-Output from `recover_*.sh` and `run_validation_*.sh`:
+Output from `recover_*.sh` and `run_validation.sh`:
 
 Healthy:
 ```
@@ -212,7 +211,7 @@ A missing cable or bad port/connection will show up as a **consistently missing 
 | Script | Purpose |
 |--------|---------|
 | `recover_*.sh` | Quick reset + 5 traffic iterations |
-| `run_validation_*.sh` | Full 50-loop validation |
+| `run_validation.sh` | Full 50-loop validation |
 | `run_dispatch_tests.sh` | Chip stability stress tests |
 | `run_fabric_tests_*.sh` | Fabric connectivity tests |
 | `analyze_validation_results.py` | Parse validation logs (summary, recommendations, plots) |
