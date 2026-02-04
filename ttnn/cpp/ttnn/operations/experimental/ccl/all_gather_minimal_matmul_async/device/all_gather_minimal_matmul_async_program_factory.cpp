@@ -783,18 +783,16 @@ all_gather_minimal_matmul_async_factory_helper(
             semaphore.at(1).address(),
             in0_core_order_index,
             in0_core_order.size()};
-        // uint32_t worker_idx = transpose_core_grid ? core.x % num_workers_per_link : core.y % num_workers_per_link;
-        uint32_t worker_idx = in1_core_order_index % num_workers_per_link;
+        uint32_t worker_idx = in0_idx % num_workers_per_link;
         auto first_in0_core = in0_core_order.front();
-        auto termination_master_logical_core =
-            transpose_core_grid ? CoreCoord(in1_core_order.at(in1_core_order_index - worker_idx).x, first_in0_core.y)
-                                : CoreCoord(first_in0_core.x, in1_core_order.at(in1_core_order_index - worker_idx).y);
+        auto termination_master_logical_core = transpose_core_grid ? CoreCoord(in0_idx - worker_idx, first_in0_core.y)
+                                                                   : CoreCoord(first_in0_core.x, in0_idx - worker_idx);
         CoreCoord termination_master_virtual_core =
             device->worker_core_from_logical_core(termination_master_logical_core);
 
         // in0 backward sender
         uint32_t mux_core_index_backward =
-            ((in1_core_order_index / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
+            ((in0_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
         if (mux_core_index_backward >= in1_core_order.size()) {
             mux_core_index_backward = mux_core_index_backward - in1_core_order.size();
         }
@@ -802,7 +800,7 @@ all_gather_minimal_matmul_async_factory_helper(
         CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
         fabric_mux_connection_rt_args(
             mux_connection_valid(0),
-            (in0_core_order_index == 0) && !(in1_core_order_index % num_workers_per_link),
+            (in0_core_order_index == 0) && !(in0_idx % num_workers_per_link),
             tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
             mux_virtual_core_backward,
             (in0_core_order_index * num_workers_per_link) + worker_idx,
@@ -814,7 +812,7 @@ all_gather_minimal_matmul_async_factory_helper(
 
         // in0 forward sender
         uint32_t mux_core_index_forward =
-            ((in1_core_order_index / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
+            ((in0_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
         if (mux_core_index_forward >= in1_core_order.size()) {
             mux_core_index_forward = mux_core_index_forward - in1_core_order.size();
         }
@@ -822,7 +820,7 @@ all_gather_minimal_matmul_async_factory_helper(
         CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
         fabric_mux_connection_rt_args(
             mux_connection_valid(1),
-            (in0_core_order_index == 0) && !(in1_core_order_index % num_workers_per_link),
+            (in0_core_order_index == 0) && !(in0_idx % num_workers_per_link),
             tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
             mux_virtual_core_forward,
             (in0_core_order_index * num_workers_per_link) + worker_idx,
