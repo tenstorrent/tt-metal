@@ -158,7 +158,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait_with_prefetch_stall(
 }
 
 template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint32_t addr) {
+void DeviceCommand<hugepage_write>::add_prefetch_relay_linear(
+    uint32_t noc_xy_addr, DeviceAddr lengthB, DeviceAddr addr) {
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmdLarge), this->pcie_alignment);
     auto initialize_relay_linear_cmd = [&](CQPrefetchCmdLarge* relay_linear_cmd) {
         relay_linear_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
@@ -174,6 +175,27 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_linear(uint32_t noc_xy_ad
         this->memcpy(relay_linear_cmd_dst, &relay_linear_cmd, sizeof(CQPrefetchCmdLarge));
     } else {
         initialize_relay_linear_cmd(relay_linear_cmd_dst);
+    }
+}
+
+template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_prefetch_relay_linear_h(
+    uint32_t noc_xy_addr, DeviceAddr lengthB, DeviceAddr addr) {
+    uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmdLarge), this->pcie_alignment);
+    auto initialize_relay_linear_h_cmd = [&](CQPrefetchCmdLarge* relay_linear_h_cmd) {
+        relay_linear_h_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_H;
+        relay_linear_h_cmd->relay_linear_h.noc_xy_addr = noc_xy_addr;
+        relay_linear_h_cmd->relay_linear_h.length = lengthB;
+        relay_linear_h_cmd->relay_linear_h.addr = addr;
+    };
+    CQPrefetchCmdLarge* relay_linear_h_cmd_dst = this->reserve_space<CQPrefetchCmdLarge*>(increment_sizeB);
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQPrefetchCmdLarge relay_linear_h_cmd{};
+        initialize_relay_linear_h_cmd(&relay_linear_h_cmd);
+        this->memcpy(relay_linear_h_cmd_dst, &relay_linear_h_cmd, sizeof(CQPrefetchCmdLarge));
+    } else {
+        initialize_relay_linear_h_cmd(relay_linear_h_cmd_dst);
     }
 }
 
@@ -357,6 +379,50 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear(
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 }
+
+template <bool hugepage_write>
+template <bool flush_prefetch, bool inline_data>
+void DeviceCommand<hugepage_write>::add_dispatch_write_linear_h(
+    uint8_t num_mcast_dests,
+    uint32_t noc_xy_addr,
+    DeviceAddr addr,
+    DeviceAddr data_sizeB,
+    const void* data,
+    uint32_t write_offset_index) {
+    uint32_t payload_sizeB = sizeof(CQDispatchCmdLarge) + (flush_prefetch ? data_sizeB : 0);
+    this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
+
+    auto initialize_write_cmd = [&](CQDispatchCmdLarge* write_cmd) {
+        write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H;
+        write_cmd->write_linear.num_mcast_dests = num_mcast_dests;
+        write_cmd->write_linear.write_offset_index = write_offset_index;
+        write_cmd->write_linear.noc_xy_addr = noc_xy_addr;
+        write_cmd->write_linear.addr = addr;
+        write_cmd->write_linear.length = data_sizeB;
+    };
+    CQDispatchCmdLarge* write_cmd_dst = this->reserve_space<CQDispatchCmdLarge*>(sizeof(CQDispatchCmdLarge));
+
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQDispatchCmdLarge write_cmd{};
+        initialize_write_cmd(&write_cmd);
+        this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmdLarge));
+    } else {
+        initialize_write_cmd(write_cmd_dst);
+    }
+
+    if constexpr (flush_prefetch && inline_data) {
+        TT_ASSERT(data != nullptr);
+        this->add_data(data, data_sizeB, data_sizeB);
+    }
+
+    if constexpr (!flush_prefetch) {
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+}
+
+// Explicit template instantiations for add_dispatch_write_linear_h
+template void DeviceCommand<true>::add_dispatch_write_linear_h<false, false>(
+    uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(

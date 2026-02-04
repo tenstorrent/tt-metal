@@ -166,8 +166,7 @@ inline void reblock_and_untilize(
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles =
@@ -625,5 +624,4 @@ void MAIN {
             bias_block_offset += in1_block_w;
         }
     }  // for in1_num_blocks_w
-}  // MAIN
-}  // namespace NAMESPACE
+}  // void kernel_main()

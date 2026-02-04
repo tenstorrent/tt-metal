@@ -1,17 +1,11 @@
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
+
 # Smoke tests
 add_library(unit_tests_device_smoke OBJECT)
 add_library(TT::Metalium::Test::Device::Smoke ALIAS unit_tests_device_smoke)
 TT_ENABLE_UNITY_BUILD(unit_tests_device_smoke)
-target_sources(
-    unit_tests_device_smoke
-    PRIVATE
-        test_device_init_and_teardown.cpp
-        test_device_cluster_api.cpp
-        test_device_pool.cpp
-        test_device.cpp
-        test_simulator_device.cpp
-        test_galaxy_cluster_api.cpp
-)
+target_sources(unit_tests_device_smoke PRIVATE ${UNIT_TESTS_DEVICE_SMOKE_SOURCES})
 target_include_directories(
     unit_tests_device_smoke
     PRIVATE

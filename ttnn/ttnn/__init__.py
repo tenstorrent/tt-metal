@@ -159,6 +159,10 @@ from ttnn._ttnn.fabric import (
     FabricUDMMode,
     FabricManagerMode,
     set_fabric_config,
+    MeshId,
+    FabricNodeId,
+    setup_fabric_connection,
+    setup_routing_plane_connection,
 )
 
 # Import cluster functions and types
@@ -250,6 +254,7 @@ from ttnn.types import (
     RuntimeArgsColProxy,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    MeshProgramDescriptor,
     cb_descriptor_from_sharded_tensor,
     TensorAccessorArgs,
 )
@@ -381,6 +386,7 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
+    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
 )
 
 from ttnn.operations.normalization import (

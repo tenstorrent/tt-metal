@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/device_fixture.hpp"
+
 #include <chrono>
 #include <cerrno>
 #include <fmt/base.h>
@@ -30,14 +32,11 @@
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
+using namespace tt::tt_metal;
 
 namespace unary_datacopy {
 // #include "hlks/eltwise_copy.cpp"
@@ -47,22 +46,11 @@ struct hlk_args_t {
 };
 }  // namespace unary_datacopy
 
-int main() {
+TEST_F(MeshDeviceSingleCardFixture, DramCopySticksMultiCore) {
     bool pass = true;
-
-    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    IDevice* dev = devices_[0]->get_devices()[0];
 
     try {
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Application Setup
-        ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::CreateProgram();
         auto num_cores_c = 2;
         auto num_cores_r = 2;
@@ -76,7 +64,7 @@ int main() {
         uint32_t dram_buffer_size =
             num_sticks * stick_size;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,
+            .device = dev,
             .size = dram_buffer_size,
             .page_size = dram_buffer_size,
             .buffer_type = tt_metal::BufferType::DRAM};
@@ -84,16 +72,15 @@ int main() {
         auto src_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
-        TT_FATAL(
-            src_dram_buffer->size() % (num_cores_r * num_cores_c) == 0,
-            "DRAM buffer size must be divisible by number of cores");
+        ASSERT_EQ(src_dram_buffer->size() % (num_cores_r * num_cores_c), 0)
+            << "DRAM buffer size must be divisible by number of cores";
         uint32_t per_core_l1_size = src_dram_buffer->size() / (num_cores_r * num_cores_c);
         std::unordered_map<CoreCoord, uint32_t> core_to_l1_addr;
         for (int i = start_core.y; i < start_core.y + num_cores_r; i++) {
             for (int j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 tt_metal::InterleavedBufferConfig l1_config{
-                    .device = device,
+                    .device = dev,
                     .size = per_core_l1_size,
                     .page_size = per_core_l1_size,
                     .buffer_type = tt_metal::BufferType::L1};
@@ -137,7 +124,7 @@ int main() {
             }
         }
 
-        tt_metal::detail::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(dev, program);
         // std::vector<uint32_t> result_vec;
         // tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
@@ -145,8 +132,6 @@ int main() {
         ////////////////////////////////////////////////////////////////////////////
 
         // pass &= (src_vec == result_vec);
-
-        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception& e) {
         pass = false;
@@ -156,13 +141,5 @@ int main() {
         log_error(LogTest, "System error message: {}", std::strerror(errno));
     }
 
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass, "Error");
-
-    return 0;
+    ASSERT_TRUE(pass);
 }

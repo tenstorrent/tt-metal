@@ -14,13 +14,16 @@
 
 namespace ttnn::operations::experimental::minimal_matmul {
 
+// Re-export the config type for backward compatibility
+using MinimalMatmulConfig = ttnn::experimental::prim::MinimalMatmulConfig;
+
 struct ExecuteMinimalMatmul {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         const std::optional<ttnn::Tensor>& bias_tensor,
         std::optional<unary::UnaryWithParam> fused_activation,
-        const std::optional<const MinimalMatmulConfig>& config,
+        const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
         std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);

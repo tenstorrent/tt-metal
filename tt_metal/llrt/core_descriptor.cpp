@@ -55,7 +55,7 @@ inline std::string get_core_descriptor_file(
         auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
             tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
         tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
-        if (grid_size.y <= 2) {  // these SOC descriptors declare a 2x2 grid
+        if (grid_size.y <= 2 || grid_size.x <= 2) {  // these SOC descriptors declare a 2x2 grid
             use_small_core_desc_yaml = true;
         }
     }
@@ -95,7 +95,7 @@ inline std::string get_core_descriptor_file(
                 } else {
                     return core_desc_dir + "blackhole_140_arch.yaml";
                 }
-            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_8x4_arch.yaml";
         };
     }
     return "";
@@ -214,8 +214,12 @@ const core_descriptor_t& get_core_descriptor_config(
 
     CoreCoord grid_size =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    auto logical_active_eth_cores =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
+    // For mock devices, control plane doesn't exist, use empty set
+    std::unordered_set<CoreCoord> logical_active_eth_cores;
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        logical_active_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
+    }
 
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
         RelativeCoreCoord coord = {};

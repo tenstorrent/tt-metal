@@ -7,8 +7,13 @@
 #include <utility>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
+
+#include <fmt/ranges.h>
 
 #include "export_enum.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -29,17 +34,30 @@ void py_module(nb::module_& mod) {
     using namespace ttnn::operations::unary;
 
     auto unary_with_param = static_cast<nb::class_<UnaryWithParam>>(mod.attr("UnaryWithParam"));
-    unary_with_param
-        .def(nb::init<UnaryOpType>())
+    unary_with_param.def(nb::init<UnaryOpType>())
         .def(nb::init<UnaryOpType, float>())
-        .def("__init__", [](UnaryWithParam* t, std::pair<UnaryOpType, float> arg) {
-                new (t) UnaryWithParam{arg.first, arg.second};})
-        .def("__init__", [](UnaryWithParam* t, std::pair<UnaryOpType, int> arg) {
-                new (t) UnaryWithParam{arg.first, static_cast<float>(arg.second)};})
-        .def("__init__", [](UnaryWithParam* t, std::pair<UnaryOpType, bool> arg) {
-                new (t) UnaryWithParam{arg.first, static_cast<float>(arg.second)};})
+        .def(
+            "__init__",
+            [](UnaryWithParam* t, std::pair<UnaryOpType, float> arg) { new (t) UnaryWithParam{arg.first, arg.second}; })
+        .def(
+            "__init__",
+            [](UnaryWithParam* t, std::pair<UnaryOpType, int> arg) {
+                new (t) UnaryWithParam{arg.first, static_cast<float>(arg.second)};
+            })
+        .def(
+            "__init__",
+            [](UnaryWithParam* t, std::pair<UnaryOpType, bool> arg) {
+                new (t) UnaryWithParam{arg.first, static_cast<float>(arg.second)};
+            })
         .def_ro("op_type", &UnaryWithParam::op_type)
-        .def(nb::init_implicit<UnaryOpType>());
+        .def(nb::init_implicit<UnaryOpType>())
+        .def("__repr__", [](const UnaryWithParam& param) {
+            if (param.params.empty()) {
+                return fmt::format("UnaryWithParam(op_type={})", param.op_type);
+            }                 return fmt::format(
+                    "UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
+
+        });
 
     // Allow implicit construction of UnaryWithParam object without user explicitly creating it
     // Can take in just the op type, or sequence container of op type and param value

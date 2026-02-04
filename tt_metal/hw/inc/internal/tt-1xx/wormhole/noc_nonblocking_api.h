@@ -292,6 +292,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
+[[deprecated("unused function, use async write instead")]]
 inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(
     uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t len_bytes, uint32_t vc, uint32_t num_times_to_write) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -1596,5 +1597,20 @@ inline __attribute__((always_inline)) void ncrisc_dynamic_noc_full_sync() {
         while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
             invalidate_l1_cache();
         }
+    }
+}
+
+template <bool write, bool posted>
+inline __attribute__((always_inline)) uint32_t get_noc_counter_for_debug(uint32_t noc) {
+    if constexpr (write) {
+        if constexpr (posted) {
+            return NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+        } else {
+            return NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
+        }
+    } else {
+        // Read
+        static_assert(posted == false, "There is no such thing as posted reads");
+        return NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
     }
 }

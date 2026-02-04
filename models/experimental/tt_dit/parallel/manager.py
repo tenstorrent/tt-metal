@@ -249,6 +249,24 @@ class CCLManager:
         """
         Helper function to all-gather a tensor with a persistent output buffer.
         """
+        return self.all_gather(
+            tensor,
+            dim=dim,
+            mesh_axis=mesh_axis,
+            use_hyperparams=use_hyperparams,
+            use_persistent_buffer=True,
+        )
+
+    def all_gather(
+        self,
+        tensor: ttnn.Tensor,
+        /,
+        *,
+        dim: int,
+        mesh_axis: int | None,
+        use_hyperparams: bool,
+        use_persistent_buffer: bool = False,
+    ) -> ttnn.Tensor:
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
 
@@ -266,9 +284,12 @@ class CCLManager:
 
         tensor = ttnn.experimental.all_gather_async(
             tensor,
-            persistent_output_buffer=self.get_ag_ping_pong_buffer(
-                tensor.shape, dim, mesh_axis, dtype=tensor.get_dtype()
+            persistent_output_buffer=(
+                self.get_ag_ping_pong_buffer(tensor.shape, dim, mesh_axis, dtype=tensor.get_dtype())
+                if use_persistent_buffer
+                else None
             ),
+            barrier_semaphore=self.get_barrier_semaphore(mesh_axis) if not use_persistent_buffer else None,
             dim=dim,
             multi_device_global_semaphore=self.get_ag_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
@@ -286,6 +307,17 @@ class CCLManager:
     def reduce_scatter_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None
     ) -> ttnn.Tensor:
+        self.reduce_scatter(tensor, dim=dim, mesh_axis=mesh_axis, use_persistent_buffer=True)
+
+    def reduce_scatter(
+        self,
+        tensor: ttnn.Tensor,
+        /,
+        *,
+        dim: int,
+        mesh_axis: int | None,
+        use_persistent_buffer: bool = False,
+    ) -> ttnn.Tensor:
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
 
@@ -300,7 +332,10 @@ class CCLManager:
 
         tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
-            persistent_output_buffers=self.get_rs_ping_pong_buffer(tensor.shape, dim, mesh_axis),
+            persistent_output_buffers=(
+                self.get_rs_ping_pong_buffer(tensor.shape, dim, mesh_axis) if use_persistent_buffer else None
+            ),
+            barrier_semaphore=self.get_barrier_semaphore(mesh_axis) if not use_persistent_buffer else None,
             dim=dim,
             multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,

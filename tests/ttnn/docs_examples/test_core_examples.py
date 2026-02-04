@@ -96,3 +96,45 @@ def test_to_memory_config(device):
     ttnn_tensor_memory_config_changed = ttnn.to_memory_config(ttnn_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     logger.info("TT-NN tensor shape after changing memory configuration", ttnn_tensor_memory_config_changed.shape)
+
+
+def test_copy_device_to_host_tensor(device):
+    # Create a TT-NN tensor and copy it to the host
+    ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
+    host_tensor = ttnn.allocate_tensor_on_host(ttnn_tensor.spec, device)
+    ttnn.copy_device_to_host_tensor(ttnn_tensor, host_tensor)
+
+    logger.info("Host tensor shape after copying from device", host_tensor.shape)
+
+
+def test_copy_host_to_device_tensor(device):
+    # Create a host tensor and copy it to a pre-allocated device tensor
+    dtype = ttnn.bfloat16
+    layout = ttnn.ROW_MAJOR_LAYOUT
+
+    tensor = ttnn.rand((10, 64, 32), device=device, dtype=dtype, layout=layout)
+    host_tensor = ttnn.from_device(tensor)
+    device_tensor_copy = ttnn.allocate_tensor_on_device(host_tensor.spec, device)
+    ttnn.copy_host_to_device_tensor(host_tensor, device_tensor_copy)
+
+    logger.info("TT-NN tensor shape after copying to device", device_tensor_copy.shape)
+
+
+def test_to_dtype(device):
+    # Create a TT-NN tensor on the host and convert it to a different data type
+    tensor = ttnn.rand((10, 64, 32), device=device, dtype=ttnn.bfloat16)
+    tensor = ttnn.from_device(tensor)  # to_dtype requires a host tensor
+    tensor = ttnn.to_dtype(tensor, dtype=ttnn.uint8)
+    assert tensor.dtype == ttnn.uint8
+    assert tensor.shape == (10, 64, 32)
+
+    logger.info("TT-NN tensor shape after converting to uint8", tensor.shape)
+
+
+def test_typecast(device):
+    # Create a TT-NN tensor (on host or device) and typecast it to a different data type
+    tensor = ttnn.typecast(ttnn.rand((10, 3, 32, 32), dtype=ttnn.bfloat16, device=device), dtype=ttnn.uint16)
+    assert tensor.dtype == ttnn.uint16
+    assert tensor.shape == (10, 3, 32, 32)
+
+    logger.info("TT-NN tensor shape after typecasting to uint16", tensor.shape)

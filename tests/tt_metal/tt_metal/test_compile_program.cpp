@@ -2,35 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstring>
-#include <exception>
-#include <cerrno>
-#include <filesystem>
-#include <map>
+#include "common/mesh_dispatch_fixture.hpp"
+
 #include <cstdint>
+#include <filesystem>
 #include <string>
-#include <sys/types.h>
 #include <unordered_map>
-#include <variant>
 #include <vector>
 
-#include <fmt/base.h>
-
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/assert.hpp>
-#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "hal_types.hpp"
-#include "hostdevcommon/kernel_structs.h"
 #include "jit_build/build.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
@@ -43,6 +28,8 @@
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
+
+namespace {
 
 struct KernelCacheStatus {
     std::unordered_map<std::string, std::string> kernel_name_to_hash_str;
@@ -80,9 +67,7 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(
     return kernel_name_to_last_compiled_dir;
 }
 
-// TODO: Replace this when we have debug/test hooks (GH: #964) to inspect inside CompileProgram
 KernelCacheStatus CompileProgramTestWrapper(IDevice* device, Program& program, bool /*profile_kernel*/ = false) {
-    // Check
     std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(
         program,
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env.get_out_kernel_root_path());
@@ -123,50 +108,43 @@ struct ProgramAttributes {
 
 Program create_program(IDevice* /*device*/, const ProgramAttributes& program_attributes) {
     CoreCoord core = {0, 0};
-    tt_metal::Program program = tt_metal::CreateProgram();
+    Program program = CreateProgram();
 
     uint32_t single_tile_size = 2 * 1024;
 
-    // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
-    // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel,
-    // input CB and reader
     uint32_t num_input_tiles = 8;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(
             num_input_tiles * single_tile_size, {{program_attributes.src_cb_index, program_attributes.data_format}})
             .set_page_size(program_attributes.src_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t num_output_tiles = 1;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
+    CircularBufferConfig cb_output_config =
+        CircularBufferConfig(
             num_output_tiles * single_tile_size, {{program_attributes.output_cb_index, program_attributes.data_format}})
             .set_page_size(program_attributes.output_cb_index, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    CreateCircularBuffer(program, core, cb_output_config);
 
-    tt_metal::CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
         core,
-        tt_metal::DataMovementConfig{
-            .processor = program_attributes.reader_processor, .noc = program_attributes.reader_noc});
+        DataMovementConfig{.processor = program_attributes.reader_processor, .noc = program_attributes.reader_noc});
 
-    tt_metal::CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
-        tt_metal::DataMovementConfig{
-            .processor = program_attributes.writer_processor, .noc = program_attributes.writer_noc});
+        DataMovementConfig{.processor = program_attributes.writer_processor, .noc = program_attributes.writer_noc});
 
-    vector<uint32_t> compute_kernel_args = {
-        uint(program_attributes.num_tiles)  // per_core_tile_cnt
-    };
+    vector<uint32_t> compute_kernel_args = {uint(program_attributes.num_tiles)};
 
-    tt_metal::CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
         core,
-        tt_metal::ComputeConfig{
+        ComputeConfig{
             .math_fidelity = program_attributes.math_fidelity,
             .fp32_dest_acc_en = program_attributes.fp32_dest_acc_en,
             .math_approx_mode = program_attributes.math_approx_mode,
@@ -207,64 +185,6 @@ void assert_kernel_hash_matches(
         const auto& expected_hash = golden_kernel_name_to_hash.at(kernel_name);
         TT_FATAL(hash == expected_hash, "Expected hash for {} {} but got {}", kernel_name, expected_hash, hash);
     }
-}
-
-bool test_compile_program_in_loop(IDevice* device) {
-    bool pass = true;
-
-    ClearKernelCache(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env.get_out_kernel_root_path());
-    ProgramAttributes default_attributes;
-    auto program = create_program(device, default_attributes);
-
-    static constexpr int num_compiles = 10;
-    std::unordered_map<std::string, std::string> kernel_name_to_hash;
-    for (int compile_idx = 0; compile_idx < num_compiles; compile_idx++) {
-        auto kernel_cache_status = CompileProgramTestWrapper(device, program);
-        if (compile_idx == 0) {
-            assert_kernel_binary_path_exists(
-                program,
-                BuildEnvManager::get_instance()
-                    .get_device_build_env(device->build_id())
-                    .build_env.get_out_kernel_root_path(),
-                kernel_cache_status);
-            assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
-            kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
-        } else {
-            assert_program_cache_hit_status(program, /*hit_expected=*/true, kernel_cache_status);
-            assert_kernel_hash_matches(kernel_name_to_hash, kernel_cache_status);
-        }
-    }
-
-    return pass;
-}
-
-bool test_compile_program_after_clean_kernel_binary_directory(IDevice* device) {
-    bool pass = true;
-
-    ClearKernelCache(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env.get_out_kernel_root_path());
-
-    ProgramAttributes default_attributes;
-    auto program = create_program(device, default_attributes);
-
-    auto kernel_cache_status = CompileProgramTestWrapper(device, program);
-
-    assert_kernel_binary_path_exists(
-        program,
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env.get_out_kernel_root_path(),
-        kernel_cache_status);
-    assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
-    std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
-
-    ClearKernelCache(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env.get_out_kernel_root_path());
-    auto second_program = create_program(device, default_attributes);
-    auto second_kernel_cache_status = CompileProgramTestWrapper(device, second_program);
-    assert_program_cache_hit_status(second_program, /*hit_expected=*/false, second_kernel_cache_status);
-    assert_kernel_hash_matches(kernel_name_to_hash, second_kernel_cache_status);
-
-    return pass;
 }
 
 void assert_hash_comparison_for_kernel_type(
@@ -321,8 +241,64 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
     return kernel_name_to_hash;
 }
 
-bool test_compile_program_with_modified_program(IDevice* device) {
-    bool pass = true;
+}  // namespace
+
+TEST_F(MeshDispatchFixture, CompileProgramInLoop) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+
+    ClearKernelCache(
+        BuildEnvManager::get_instance().get_device_build_env(dev->build_id()).build_env.get_out_kernel_root_path());
+    ProgramAttributes default_attributes;
+    auto program = create_program(dev, default_attributes);
+
+    static constexpr int num_compiles = 10;
+    std::unordered_map<std::string, std::string> kernel_name_to_hash;
+    for (int compile_idx = 0; compile_idx < num_compiles; compile_idx++) {
+        auto kernel_cache_status = CompileProgramTestWrapper(dev, program);
+        if (compile_idx == 0) {
+            assert_kernel_binary_path_exists(
+                program,
+                BuildEnvManager::get_instance()
+                    .get_device_build_env(dev->build_id())
+                    .build_env.get_out_kernel_root_path(),
+                kernel_cache_status);
+            assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
+            kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
+        } else {
+            assert_program_cache_hit_status(program, /*hit_expected=*/true, kernel_cache_status);
+            assert_kernel_hash_matches(kernel_name_to_hash, kernel_cache_status);
+        }
+    }
+}
+
+TEST_F(MeshDispatchFixture, CompileProgramAfterCleanKernelBinaryDirectory) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+
+    ClearKernelCache(
+        BuildEnvManager::get_instance().get_device_build_env(dev->build_id()).build_env.get_out_kernel_root_path());
+
+    ProgramAttributes default_attributes;
+    auto program = create_program(dev, default_attributes);
+
+    auto kernel_cache_status = CompileProgramTestWrapper(dev, program);
+
+    assert_kernel_binary_path_exists(
+        program,
+        BuildEnvManager::get_instance().get_device_build_env(dev->build_id()).build_env.get_out_kernel_root_path(),
+        kernel_cache_status);
+    assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
+    std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
+
+    ClearKernelCache(
+        BuildEnvManager::get_instance().get_device_build_env(dev->build_id()).build_env.get_out_kernel_root_path());
+    auto second_program = create_program(dev, default_attributes);
+    auto second_kernel_cache_status = CompileProgramTestWrapper(dev, second_program);
+    assert_program_cache_hit_status(second_program, /*hit_expected=*/false, second_kernel_cache_status);
+    assert_kernel_hash_matches(kernel_name_to_hash, second_kernel_cache_status);
+}
+
+TEST_F(MeshDispatchFixture, CompileProgramWithModifiedProgram) {
+    IDevice* dev = devices_[0]->get_devices()[0];
 
     const static std::unordered_map<HalProcessorClassType, bool> compute_miss_data_movement_hit = {
         {HalProcessorClassType::COMPUTE, false}, {HalProcessorClassType::DM, true}};
@@ -337,14 +313,14 @@ bool test_compile_program_with_modified_program(IDevice* device) {
         {HalProcessorClassType::COMPUTE, false}, {HalProcessorClassType::DM, false}};
 
     ClearKernelCache(
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env.get_out_kernel_root_path());
+        BuildEnvManager::get_instance().get_device_build_env(dev->build_id()).build_env.get_out_kernel_root_path());
 
     ProgramAttributes attributes;
-    auto program = create_program(device, attributes);
-    auto kernel_cache_status = CompileProgramTestWrapper(device, program);
+    auto program = create_program(dev, attributes);
+    auto kernel_cache_status = CompileProgramTestWrapper(dev, program);
     assert_kernel_binary_path_exists(
         program,
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env.get_out_kernel_root_path(),
+        BuildEnvManager::get_instance().get_device_build_env(dev->build_id()).build_env.get_out_kernel_root_path(),
         kernel_cache_status);
     assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
@@ -352,80 +328,46 @@ bool test_compile_program_with_modified_program(IDevice* device) {
     // Modify compute kernel compile time args - expect cache miss for compute kernel
     attributes.num_tiles = 1024;
     kernel_name_to_hash =
-        compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
+        compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
 
     // Modify compute kernel math fidelity - expect cache miss for compute kernel
     attributes.math_fidelity = MathFidelity::LoFi;
     kernel_name_to_hash =
-        compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
+        compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
 
     // Modify compute kernel fp32_dest_acc_en - expect cache miss for compute kernel
     // Grayskull does not support fp32 accumulation
-    if (device->arch() != ARCH::GRAYSKULL) {
+    if (dev->arch() != ARCH::GRAYSKULL) {
         attributes.fp32_dest_acc_en = true;
-        kernel_name_to_hash = compile_program_with_modified_kernel(
-            device, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
+        kernel_name_to_hash =
+            compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
     }
 
     // Modify compute kernel math_approx_mode - expect cache miss for compute kernel
     attributes.math_approx_mode = true;
     kernel_name_to_hash =
-        compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
+        compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
 
     // Modify data movement kernel noc - expect cache miss for data movement kernels
     attributes.reader_noc = NOC::RISCV_0_default;
     attributes.writer_noc = NOC::RISCV_1_default;
     kernel_name_to_hash =
-        compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_hit_data_movement_miss);
+        compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_hit_data_movement_miss);
 
     // Modify data movement kernel processor - expect cache hit
     attributes.reader_processor = DataMovementProcessor::RISCV_1;
     attributes.writer_processor = DataMovementProcessor::RISCV_0;
     kernel_name_to_hash =
-        compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_hit_data_movement_hit);
+        compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_hit_data_movement_hit);
 
     // Modify circular buffer data format - expect cache miss for all kernels
     attributes.data_format = tt::DataFormat::Bfp8_b;
     kernel_name_to_hash =
-        compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_miss_data_movement_miss);
+        compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_miss);
 
     // Modify circular buffer index - expect cache miss for all kernels
     attributes.src_cb_index = attributes.src_cb_index + 1;
     attributes.output_cb_index = attributes.output_cb_index + 1;
     kernel_name_to_hash =
-        compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_miss_data_movement_miss);
-
-    return pass;
-}
-
-int main() {
-    bool pass = true;
-
-    try {
-        int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
-
-        pass &= test_compile_program_in_loop(device);
-
-        pass &= test_compile_program_after_clean_kernel_binary_directory(device);
-
-        pass &= test_compile_program_with_modified_program(device);
-
-        pass &= CloseDevice(device);
-    } catch (const std::exception& e) {
-        pass = false;
-        // Capture the exception error message
-        log_error(LogTest, "{}", e.what());
-        // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
-    }
-
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass, "Error");
-    return 0;
+        compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_miss);
 }

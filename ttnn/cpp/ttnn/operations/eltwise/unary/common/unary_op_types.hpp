@@ -46,6 +46,7 @@ enum class UnaryOpType {
     RELU_MAX,
     RELU_MIN,
     POWER,
+    POWER_ITERATIVE,
     LEAKY_RELU,
     ELU,
     EXP2,

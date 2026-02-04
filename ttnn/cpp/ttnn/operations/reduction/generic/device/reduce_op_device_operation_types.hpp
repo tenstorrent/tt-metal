@@ -10,9 +10,9 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "common.hpp"
 
-namespace ttnn::operations::reduction::generic {
+namespace ttnn::prim {
 
-struct operation_attributes_t {
+struct ReduceParams {
     tt::tt_metal::ReduceOpMath math_op{};
     tt::tt_metal::ReduceOpDim dim{};
     float scaler{1.0f};
@@ -22,11 +22,4 @@ struct operation_attributes_t {
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
 };
 
-struct tensor_args_t {
-    Tensor input_tensor;
-};
-
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
-
-}  // namespace ttnn::operations::reduction::generic
+}  // namespace ttnn::prim

@@ -76,6 +76,11 @@ def create_parser() -> argparse.ArgumentParser:
         choices=["mlp", "moe"],
         help="When using --random-weights, request a single layer (mlp supported)",
     )
+    p.add_argument(
+        "--override-num-layers",
+        type=int,
+        help="Override the number of layers in the model. Defaults to None.",
+    )
     # Teacher-forcing / accuracy verification options
     p.add_argument("--token-accuracy", action="store_true", help="Enable teacher-forced decode and report accuracy")
     p.add_argument(
@@ -111,6 +116,16 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Number of times to repeat the generation process.",
+    )
+    p.add_argument(
+        "--signpost",
+        action="store_true",
+        help="Enable signpost for tracing.",
+    )
+    p.add_argument(
+        "--prefill-max-tokens",
+        type=int,
+        help="Maximum number of tokens to prefill.",
     )
     return p
 
@@ -217,14 +232,16 @@ def run_demo(
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
     single_layer: str | None = None,
+    override_num_layers: int | None = None,
     token_accuracy: bool = False,
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     generator: str = "bp",
     enable_trace: bool = False,
-    override_num_layers: int | None = None,
     repeat_batches: int = 1,
+    signpost: bool = False,
+    prefill_max_tokens: int = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -260,7 +277,18 @@ def run_demo(
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")
-        trace_region_size = 4880384 + int(0.20 * 4880384)  # 20% additional
+        # NOTE:
+        # The base trace region size below (~36.3 MiB) was empirically determined from
+        # vLLM decode workloads to be sufficient to keep the trace buffer from
+        # overflowing under typical DeepSeek-V3 demo settings (batch size, sequence
+        # length, and mesh configuration). We add 20% headroom as a conservative
+        # safety margin to accommodate variability across models / prompts without
+        # repeatedly re-tuning this value.
+        #
+        # If you are optimizing memory usage, this can be reduced after verifying
+        # that tracing completes without buffer exhaustion for your target workload.
+        BASE_TRACE_REGION_BYTES = 38_070_272
+        trace_region_size = BASE_TRACE_REGION_BYTES + int(0.20 * BASE_TRACE_REGION_BYTES)
         logger.info(f"Trace region size set to {trace_region_size}")
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
     else:
@@ -310,6 +338,8 @@ def run_demo(
                 ),
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
+                signpost=signpost,
+                prefill_max_tokens=prefill_max_tokens,
             )
         # Build the prompt list
         pre_tokenized_prompts = None
@@ -319,9 +349,12 @@ def run_demo(
             if token_acc is not None:
                 # Use pre-tokenized tokens directly to avoid re-encoding with chat template.
                 # This ensures the TT model uses the exact same token sequence as the reference.
-                pre_tokenized_prompts = [token_acc.get_prompt_token_ids()]
-                # Still need a placeholder prompt for the generator API
-                prompt_list = [""]
+                if prompts:
+                    prompt_list = prompts
+                else:
+                    # Still need a placeholder prompt for the generator API
+                    prompt_list = [""]
+                pre_tokenized_prompts = [token_acc.get_prompt_token_ids() for _ in range(len(prompt_list))]
                 # If not overridden, ensure we don't decode past the available ground truth
                 max_new_tokens = min(max_new_tokens, token_acc.num_gt_tokens())
             else:
@@ -396,12 +429,15 @@ def main() -> None:
         cache_dir=args.cache_dir,
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,
+        override_num_layers=args.override_num_layers,
         token_accuracy=bool(args.token_accuracy),
         reference_file=args.reference_file,
         tf_prompt_len=args.tf_prompt_len,
         early_print_first_user=args.early_print_first_user,
         generator=args.generator,
         enable_trace=args.enable_trace,
+        signpost=args.signpost,
+        prefill_max_tokens=args.prefill_max_tokens,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing

@@ -6,15 +6,15 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors {
+namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt;
 
 CreateQKVHeadsSeparateTensorsProgramFactory::cached_program_t CreateQKVHeadsSeparateTensorsProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const CreateQKVHeadsFromSeparateTensorsParams& operation_attributes,
+    const CreateQKVHeadsFromSeparateTensorsInputs& tensor_args,
+    CreateQKVHeadsFromSeparateTensorsResult& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.input_tensor;
     const auto& input_tensor_kv = tensor_args.input_tensor_kv;
     auto& output_q = std::get<0>(tensor_return_value);
@@ -131,9 +131,9 @@ CreateQKVHeadsSeparateTensorsProgramFactory::cached_program_t CreateQKVHeadsSepa
 
 void CreateQKVHeadsSeparateTensorsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const CreateQKVHeadsFromSeparateTensorsParams& /*operation_attributes*/,
+    const CreateQKVHeadsFromSeparateTensorsInputs& tensor_args,
+    CreateQKVHeadsFromSeparateTensorsResult& tensor_return_value) {
     using namespace tt::tt_metal;
 
     auto& program = cached_program.program;
@@ -158,4 +158,4 @@ void CreateQKVHeadsSeparateTensorsProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_out2_id, *out2_buffer);
 }
 
-}  // namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors
+}  // namespace ttnn::experimental::prim

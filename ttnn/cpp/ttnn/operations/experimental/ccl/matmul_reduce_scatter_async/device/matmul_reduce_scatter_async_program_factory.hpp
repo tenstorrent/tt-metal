@@ -11,11 +11,11 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
 
-namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::program {
+namespace ttnn::experimental::prim {
 
 struct MatmulReduceScatterAsyncSharedVariables {
-    reduce_scatter_minimal_async::detail::ReduceScatterProgramArtifacts reduce_scatter_artifacts;
-    matmul::program::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t matmul_shared_variables;
+    ttnn::experimental::prim::ReduceScatterProgramArtifacts reduce_scatter_artifacts;
+    ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t matmul_shared_variables;
 };
 
 struct MatmulReduceScatterAsyncProgramFactory {
@@ -23,25 +23,25 @@ struct MatmulReduceScatterAsyncProgramFactory {
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
-        const operation_attributes_t& args,
+        const MatmulReduceScatterAsyncParams& args,
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensors);
+        const MatmulReduceScatterAsyncInputs& tensor_args,
+        MatmulReduceScatterAsyncResult& output_tensors);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& args,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensors);
+        const MatmulReduceScatterAsyncParams& args,
+        const MatmulReduceScatterAsyncInputs& tensor_args,
+        MatmulReduceScatterAsyncResult& output_tensors);
 
 private:
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create_at(
-        const operation_attributes_t& args,
+        const MatmulReduceScatterAsyncParams& args,
         const ttnn::MeshCoordinate& mesh_coord,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensors);
+        const MatmulReduceScatterAsyncInputs& tensor_args,
+        MatmulReduceScatterAsyncResult& output_tensors);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_async::program
+}  // namespace ttnn::experimental::prim

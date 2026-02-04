@@ -96,7 +96,7 @@ TestResult mem_bench_page_sizing(benchmark::State& state) {
     auto hugepage_size = get_hugepage_size(device_id);
     bool cached = state.range(2);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         const double iteration_time =
             cached ? copy_to_hugepage(hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size, true)
                    : copy_to_hugepage(hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size, false);
@@ -132,7 +132,7 @@ TestResult mem_bench_copy_multithread(benchmark::State& state) {
     const auto bytes_per_thread = ((ctx.total_size / ctx.threads) + (MEMCPY_ALIGNMENT)-1) & -(MEMCPY_ALIGNMENT);
     const auto last_thread_bytes = ctx.total_size - (bytes_per_thread * (ctx.threads - 1));
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto iteration_time = execute_work_synced_start(
             ctx.threads,
             [&](int thread_idx) {
@@ -185,7 +185,7 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     auto* hugepage = get_hugepage(device->id(), 0);
     auto hugepage_size = get_hugepage_size(device->id());
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto pgm = CreateProgram();
         std::optional<CoreRange> configured_cores;
         if (ctx.number_reader_kernels) {
@@ -254,7 +254,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
     auto* host_hugepage = get_hugepage(device->id() + 1, 0);
     auto host_hugepage_size = get_hugepage_size(device->id() + 1);
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto pgm = CreateProgram();
         auto configured_cores =
             configure_kernels(device, pgm, ctx, 0, ctx.number_reader_kernels, false, device_hugepage_size).value();
@@ -295,7 +295,7 @@ TestResult mem_bench_multi_mmio_devices(
 
     // One thread to wait for program on each device
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         std::map<int, Program> programs;                  // device : programs
         std::map<int, CoreRange> configured_core_ranges;  // device : cores
         for (auto [device_id, device] : devices) {
@@ -412,7 +412,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     // Writers will have 0 bytes read. Will not mix.
     TestResult results;
 
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto pgm = CreateProgram();
         auto configured_read_cores =
             configure_kernels(device, pgm, ctx, 0, ctx.number_reader_kernels, false, hugepage_size / 2).value();

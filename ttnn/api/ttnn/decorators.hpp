@@ -83,14 +83,7 @@ struct registered_operation_t {
 private:
     template <typename... args_t>
     auto traced_invoke(args_t&&... args) const {
-        log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
-
-        auto output = invoke(std::forward<args_t>(args)...);
-
-        tt::tt_metal::GraphTracker::instance().track_function_end(output);
-        log_debug(tt::LogOp, "Finished invoking C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        return output;
+        return invoke(std::forward<args_t>(args)...);
     }
 
     template <typename... args_t>

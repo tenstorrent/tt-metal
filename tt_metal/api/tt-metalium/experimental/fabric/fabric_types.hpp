@@ -7,10 +7,10 @@
 #include <stdint.h>
 #include <functional>
 #include <ostream>
+#include <optional>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
-// Include fmt formatting support
 #include <fmt/format.h>
 
 namespace tt::tt_fabric {
@@ -53,6 +53,14 @@ enum class FabricManagerMode : uint32_t {
 FabricManagerMode operator|(FabricManagerMode lhs, FabricManagerMode rhs);
 FabricManagerMode operator&(FabricManagerMode lhs, FabricManagerMode rhs);
 bool has_flag(FabricManagerMode flags, FabricManagerMode test_flag);
+
+// Configuration for router-level parameters
+// Extensible for future router tuning (buffer counts, VC settings, etc.)
+struct FabricRouterConfig {
+    // Optional override for maximum packet payload size (bytes)
+    // If not set, uses architecture and routing mode defaults
+    std::optional<size_t> max_packet_payload_size_bytes = std::nullopt;
+};
 
 enum class FabricType {
     MESH = 1 << 0,
@@ -126,6 +134,7 @@ namespace tt::tt_metal {
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
 using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
 using ASICLocation = tt::stl::StrongType<uint32_t, struct ASICLocationTag>;
+using ASICPosition = std::pair<TrayID, ASICLocation>;
 using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
 using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
 using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;

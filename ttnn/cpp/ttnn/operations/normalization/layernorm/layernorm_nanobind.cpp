@@ -11,7 +11,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "layernorm.hpp"
 
 // NOLINTBEGIN(bugprone-unused-raii)
@@ -23,16 +23,21 @@ struct LayerNormProgramConfigPlaceholder {};
 void bind_normalization_layernorm_program_config(nb::module_& mod) {
     nb::class_<LayerNormProgramConfigPlaceholder>(mod, "LayerNormProgramConfig");
 
-    nb::class_<LayerNormDefaultProgramConfig>(mod, "LayerNormDefaultProgramConfig")
+    nb::class_<ttnn::prim::LayerNormDefaultProgramConfig>(mod, "LayerNormDefaultProgramConfig")
         .def(
             nb::init<bool, bool, bool>(),
             nb::kw_only(),
             nb::arg("legacy_reduction").noconvert() = false,
             nb::arg("legacy_rsqrt").noconvert() = false,
             nb::arg("use_welford").noconvert() = false)
-        .def("__repr__", [](const LayerNormDefaultProgramConfig& config) { return fmt::format("{}", config); });
+        .def_rw("legacy_reduction", &prim::LayerNormDefaultProgramConfig::legacy_reduction)
+        .def_rw("legacy_rsqrt", &prim::LayerNormDefaultProgramConfig::legacy_rsqrt)
+        .def_rw("use_welford", &prim::LayerNormDefaultProgramConfig::use_welford)
+        .def("__repr__", [](const ttnn::prim::LayerNormDefaultProgramConfig& config) {
+            return fmt::format("{}", config);
+        });
 
-    nb::class_<LayerNormShardedMultiCoreProgramConfig>(mod, "LayerNormShardedMultiCoreProgramConfig")
+    nb::class_<ttnn::prim::LayerNormShardedMultiCoreProgramConfig>(mod, "LayerNormShardedMultiCoreProgramConfig")
         .def(
             nb::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool, bool>(),
             nb::kw_only(),
@@ -44,15 +49,22 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
             nb::arg("legacy_reduction").noconvert() = false,
             nb::arg("legacy_rsqrt").noconvert() = false,
             nb::arg("use_welford").noconvert() = false)
-        .def(
-            "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
+        .def_rw(
+            "compute_with_storage_grid_size", &prim::LayerNormShardedMultiCoreProgramConfig::compute_with_storage_grid_size)
+        .def_rw("subblock_w", &prim::LayerNormShardedMultiCoreProgramConfig::subblock_w)
+        .def_rw("block_h", &prim::LayerNormShardedMultiCoreProgramConfig::block_h)
+        .def_rw("block_w", &prim::LayerNormShardedMultiCoreProgramConfig::block_w)
+        .def_rw("inplace", &prim::LayerNormShardedMultiCoreProgramConfig::inplace)
+        .def_rw("legacy_reduction", &prim::LayerNormShardedMultiCoreProgramConfig::legacy_reduction)
+        .def_rw("legacy_rsqrt", &prim::LayerNormShardedMultiCoreProgramConfig::legacy_rsqrt)
+        .def_rw("use_welford", &prim::LayerNormShardedMultiCoreProgramConfig::use_welford)
+        .def("__repr__", [](const ttnn::prim::LayerNormShardedMultiCoreProgramConfig& config) {
+            return fmt::format("{}", config);
+        });
 }
 
 void bind_normalization_layernorm_operation(nb::module_& mod) {
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::layer_norm,
-        R"doc(
+    const auto* doc = R"doc(
         Computes layer norm over :attr:`input_tensor`.
         See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
 
@@ -132,9 +144,21 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
 
-        )doc",
+        )doc";
 
-        ttnn::nanobind_arguments_t{
+    ttnn::bind_function<"layer_norm">(
+        mod,
+        doc,
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                float,
+                const std::optional<const ttnn::Tensor>&,
+                const std::optional<const ttnn::Tensor>&,
+                const std::optional<const ttnn::Tensor>&,
+                const std::optional<ttnn::MemoryConfig>&,
+                const std::optional<const ttnn::prim::LayerNormProgramConfig>&,
+                std::optional<const ttnn::DeviceComputeKernelConfig>>(&ttnn::layer_norm),
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("epsilon") = 1e-12,
@@ -143,7 +167,7 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             nb::arg("residual_input_tensor") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 
 void bind_normalization_layernorm(nb::module_& mod) {

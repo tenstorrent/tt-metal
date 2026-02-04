@@ -15,7 +15,7 @@ import ttnn
 from models.demos.deepseek_v3.conftest import PREFILL_SEQ_LENS
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
-from models.demos.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE, even_int_div, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import even_int_div, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
@@ -74,7 +74,18 @@ def create_combined_state_dict(module_path: str, model_path: Path, state_dict: d
     [
         ("decode", 128),
     ]
-    + [("prefill", seq_len) for seq_len in PREFILL_SEQ_LENS],
+    + [
+        ("prefill", seq_len)
+        if seq_len == 128
+        else pytest.param(
+            "prefill",
+            seq_len,
+            marks=pytest.mark.skip(
+                f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
+            ),
+        )
+        for seq_len in PREFILL_SEQ_LENS
+    ],
 )
 @pytest.mark.parametrize(
     "weight_type",
@@ -97,18 +108,11 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
 ):
-    # Skip all prefill seq lengths except 128 to avoid exceeding CI workload time
-    if mode == "prefill" and seq_len != 128:
-        pytest.skip(
-            f"Skipping prefilling with seq_len={seq_len} since this would cause us to exceed our available CI workload time"
-        )
-
     batch_size = 1
     num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
 
     reference_model = DeepseekV3MoEExperts(hf_config).eval()
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
-    sparsity = torch.ones(1, 1, even_int_div(seq_len, SPARSITY_BLOCK_SIZE), num_experts_per_device)
 
     if weight_type == "random":
         state_dict = add_inv_scale_to_state_dict(
@@ -127,24 +131,16 @@ def test_forward_pass(
     run_config = create_run_config(model_config, weight_config, model_state)
 
     tt_input = ttnn.from_torch(
-        torch_input,
+        torch_input.repeat(1, run_config["num_experts_per_device"], 1, 1),  # repeat activations per expert
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
-    tt_sparsity = ttnn.from_torch(
-        sparsity,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
 
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(TTExperts, mode, tt_input, tt_sparsity, run_config)
+    tt_output = run_module_forward(TTExperts, mode, tt_input, run_config)
     expected_output_memory_config = run_config["output_memory_config"]
 
     actual_output_memory_config = tt_output.memory_config()
@@ -153,8 +149,7 @@ def test_forward_pass(
     ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
     TARGET_CHUNK_SIZE = 2048
-    CHUNK_SIZE_SEQ = ((TARGET_CHUNK_SIZE + SPARSITY_BLOCK_SIZE - 1) // SPARSITY_BLOCK_SIZE) * SPARSITY_BLOCK_SIZE
-    num_chunks = (seq_len + CHUNK_SIZE_SEQ - 1) // CHUNK_SIZE_SEQ
+    num_chunks = (seq_len + TARGET_CHUNK_SIZE - 1) // TARGET_CHUNK_SIZE
 
     from models.common.utility_functions import comp_pcc
 
@@ -162,8 +157,8 @@ def test_forward_pass(
     passed = True
 
     for chunk_idx in range(num_chunks):
-        start_seq = chunk_idx * CHUNK_SIZE_SEQ
-        end_seq = min(start_seq + CHUNK_SIZE_SEQ, seq_len)
+        start_seq = chunk_idx * TARGET_CHUNK_SIZE
+        end_seq = min(start_seq + TARGET_CHUNK_SIZE, seq_len)
         chunk_seq_len = end_seq - start_seq
 
         chunk_input = torch_input[:, :, start_seq:end_seq, :]

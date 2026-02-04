@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import logging
 
 import torch
@@ -33,6 +34,7 @@ class TTSampling(LightweightModule):
         max_batch_size: Maximum batch size supported
         max_top_k: Maximum number of top-k tokens to consider
         cluster_shape: Shape of the device cluster (rows, cols)
+        sampling_all_gather_axis: Axis to all-gather over in 2D meshes (0=rows, 1=cols, default: 0)
         sub_core_grids: Sub-core grid configuration for operations
         sub_core_grid_topk: Sub-core grid configuration specifically for top-k operations
         start_core: Starting core coordinate for sampling operations
@@ -59,12 +61,29 @@ class TTSampling(LightweightModule):
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
+        self._line_all_gather = getattr(self.tt_ccl, "line_all_gather", None)
+        self._line_all_gather_supports_buffer_key = False
+        self._line_all_gather_supports_dtype = False
+        if callable(self._line_all_gather):
+            try:
+                line_all_gather_sig = inspect.signature(self._line_all_gather)
+                line_all_gather_params = line_all_gather_sig.parameters
+                self._line_all_gather_supports_buffer_key = "buffer_key" in line_all_gather_params or any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD for param in line_all_gather_params.values()
+                )
+                self._line_all_gather_supports_dtype = "dtype" in line_all_gather_params or any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD for param in line_all_gather_params.values()
+                )
+            except (TypeError, ValueError):
+                logger.warning("Unable to inspect line_all_gather signature; assuming no buffer_key or dtype support.")
 
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
         self.max_batch_size = 32
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
+
+        self.sampling_all_gather_axis = getattr(args, "sampling_all_gather_axis", 0)
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
@@ -125,7 +144,19 @@ class TTSampling(LightweightModule):
         """Create the indices tensors needed for distributed top-k operations."""
         # Create indices tensor for device offsets
         # For multi-step reduction, we use reduce over 2 steps in a single device
-        num_devices_in_mesh = 2 if self.multi_step_reduction else max(self.cluster_shape[0], self.cluster_shape[1])
+        if self.multi_step_reduction:
+            num_devices_in_mesh = 2
+        else:
+            # If the mesh is effectively 1D, use the non-singleton dimension.
+            # If the mesh is 2D, use the configured gather axis.
+            if 1 in self.cluster_shape:
+                num_devices_in_mesh = max(self.cluster_shape[0], self.cluster_shape[1])
+            else:
+                assert self.sampling_all_gather_axis in (
+                    0,
+                    1,
+                ), f"sampling_all_gather_axis must be 0 or 1 for 2D meshes, got {self.sampling_all_gather_axis}"
+                num_devices_in_mesh = self.cluster_shape[self.sampling_all_gather_axis]
         indices_device_offsets = torch.ones(
             1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
         )
@@ -158,30 +189,34 @@ class TTSampling(LightweightModule):
         )
 
     def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
-        """Flexible all-gather that works with both CCL implementations."""
-        if self.cluster_shape[0] * self.cluster_shape[1] == 32:
-            # Use line_all_gather with persistent buffer support
-            return self.tt_ccl.line_all_gather(
-                tensor,
-                dim=dim,
-                cluster_axis=cluster_axis,
-                memory_config=memory_config,
-                num_links=num_links,
-                buffer_key=buffer_key,
-            )
-        else:
-            # Use tt_all_gather
-            cluster_axis = None
-            num_links = 1
-            tt_logits = ttnn.all_gather(
-                tensor,
-                dim=dim,
-                num_links=num_links,
-                memory_config=tensor.memory_config(),
-                cluster_axis=cluster_axis,
-                topology=ttnn.Topology.Linear,
-            )
-            return tt_logits
+        """
+        Flexible all-gather that works across different CCL implementations.
+
+        - If `tt_ccl` exposes `line_all_gather`, prefer it (enables persistent buffer usage on some stacks).
+        - Otherwise fall back to `ttnn.all_gather`.
+        """
+        if callable(self._line_all_gather):
+            # Some implementations accept `buffer_key` (for persistent buffers), others may not.
+            line_all_gather_kwargs = {
+                "dim": dim,
+                "cluster_axis": cluster_axis,
+                "memory_config": memory_config,
+                "num_links": num_links,
+            }
+            if self._line_all_gather_supports_buffer_key and buffer_key is not None:
+                line_all_gather_kwargs["buffer_key"] = buffer_key
+            if self._line_all_gather_supports_dtype and dtype is not None:
+                line_all_gather_kwargs["dtype"] = dtype
+            return self._line_all_gather(tensor, **line_all_gather_kwargs)
+
+        return ttnn.all_gather(
+            tensor,
+            dim=dim,
+            num_links=num_links,
+            memory_config=memory_config,
+            cluster_axis=cluster_axis,
+            topology=ttnn.Topology.Linear,
+        )
 
     def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
         """Update sampling parameters (k, p, temperature) dynamically."""
@@ -268,11 +303,14 @@ class TTSampling(LightweightModule):
                 indices_tensor=self.tt_indices_tensor,
             )
 
+            # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.
+            sampling_cluster_axis = None if 1 in self.cluster_shape else self.sampling_all_gather_axis
+
             # Gather top-k values across all devices
             topk_values_gathered = self._perform_all_gather(
                 topk_values,
                 dim=3,
-                cluster_axis=0,
+                cluster_axis=sampling_cluster_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 num_links=self.num_gather_links,
                 buffer_key="SAMPLING_VALUES",
@@ -298,7 +336,7 @@ class TTSampling(LightweightModule):
             topk_indices_gathered = self._perform_all_gather(
                 topk_indices,
                 dim=3,
-                cluster_axis=0,
+                cluster_axis=sampling_cluster_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 num_links=self.num_gather_links,
                 buffer_key="SAMPLING_INDICES",
@@ -322,7 +360,10 @@ class TTSampling(LightweightModule):
 
         # Add device offsets to get global vocabulary indices
         topk_global_indices = ttnn.add(
-            self.tt_indices_device_offsets, topk_indices_gathered_int32_sharded, dtype=ttnn.int32
+            self.tt_indices_device_offsets,
+            topk_indices_gathered_int32_sharded,
+            dtype=ttnn.int32,
+            memory_config=self.sampling_memory_config,
         )
 
         ttnn.deallocate(topk_indices_gathered_int32_sharded)
