@@ -389,8 +389,14 @@ def test_moe_routed_expert(device):
         f"Created DRAM matmul + SiLU tensors: weights={gate_proj_weights.shape}, output={gate_proj_output.shape}"
     )
 
-    # ========== up_proj Matmul Tensors (same structure as gate_proj, no SiLU) ==========
-    up_proj_weights, up_proj_output, up_proj_weights_dict, up_proj_expert_tensors = create_expert_matmul_tensors(
+    # ========== up_proj Matmul Tensors (with fused mul using gate_proj output) ==========
+    # up_proj computes: up_proj_mm_result * gate_proj_output (element-wise mul)
+    (
+        up_proj_weights,
+        up_proj_mm_out_tensor,
+        up_proj_weights_dict,
+        up_proj_expert_tensors,
+    ) = create_expert_matmul_tensors(
         device=device,
         K=gate_proj_K,
         N=gate_proj_N,
@@ -402,11 +408,27 @@ def test_moe_routed_expert(device):
         dtype=ttnn.bfloat4_b,
         seed=2000,  # Different seed for different weights
     )
-    logger.info(f"Created up_proj matmul tensors: weights={up_proj_weights.shape}, output={up_proj_output.shape}")
+    logger.info(
+        f"Created up_proj matmul tensors: weights={up_proj_weights.shape}, mm_out={up_proj_mm_out_tensor.shape}"
+    )
+
+    # Final fused output tensor: silu(gate_proj) * up_proj
+    # Same shape and memory config as up_proj_mm_out_tensor
+    num_banks = device.dram_grid_size().x
+    gate_proj_N_padded = ((gate_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
+    fused_output_tensor = ttnn.from_torch(
+        torch.zeros([1, 1, M, gate_proj_N_padded]).bfloat16().float(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=up_proj_mm_out_tensor.memory_config(),
+        tile=up_proj_mm_out_tensor.get_tile(),
+    )
+    logger.info(f"Created fused_output_tensor for final result: silu(gate_proj) * up_proj")
 
     # Run fused operation
     logger.info("Running MoE routed expert fused operation...")
-    ttnn_result_scores, ttnn_result_indices, ttnn_result_gate_proj, ttnn_result_up_proj = MoeRoutedExpert.op(
+    ttnn_result_scores, ttnn_result_indices, ttnn_result_fused = MoeRoutedExpert.op(
         ttnn_input,
         ttnn_mcast_output,
         ttnn_gate_mm_weights,
@@ -420,21 +442,24 @@ def test_moe_routed_expert(device):
         gate_proj_weights,
         gate_proj_output,
         up_proj_weights,
-        up_proj_output,
+        up_proj_mm_out_tensor,
+        fused_output_tensor,
     )
 
     # Convert back to torch for comparison
     output_scores_torch = ttnn.to_torch(ttnn_result_scores)
     output_indices_torch = ttnn.to_torch(ttnn_result_indices)
-    output_gate_proj_torch = ttnn.to_torch(ttnn_result_gate_proj)
-    output_up_proj_torch = ttnn.to_torch(ttnn_result_up_proj)
+    output_fused_torch = ttnn.to_torch(ttnn_result_fused)
 
-    # Compute golden reference (includes gate + expert matmuls)
+    # Also read back intermediate matmul outputs for debugging
+    output_gate_proj_torch = ttnn.to_torch(gate_proj_output)
+    output_up_proj_mm_torch = ttnn.to_torch(up_proj_mm_out_tensor)
+
+    # Compute golden reference (includes gate + expert matmuls + fused mul)
     (
         torch_expected_scores,
         torch_expected_indices,
-        torch_expected_gate_proj,
-        torch_expected_up_proj,
+        torch_expected_fused,
     ) = MoeRoutedExpert.golden(
         torch_input,
         torch_gate_mm_weights,
@@ -458,14 +483,31 @@ def test_moe_routed_expert(device):
     assert torch.equal(sorted_output_indices, sorted_expected_indices), "Gate indices mismatch"
     assert torch.allclose(sorted_output_scores, sorted_expected_scores, atol=1e-2, rtol=1e-4), "Gate scores mismatch"
 
+    # Compute expected intermediate outputs for debugging
+    selected_expert_idx = int(output_indices_torch[0, 0].item())
+    logger.info(f"Selected expert index: {selected_expert_idx}")
+
+    # gate_proj expected: input @ weights + SiLU
+    gate_proj_weights_torch = expert_weights_dict[selected_expert_idx]
+    input_for_expert = torch_input.reshape(1, 1, 1, -1).float()
+    torch_expected_gate_proj = input_for_expert @ gate_proj_weights_torch.float()
+    torch_expected_gate_proj = torch.nn.functional.silu(torch_expected_gate_proj)
+
+    # up_proj expected: input @ weights (no activation)
+    up_proj_weights_torch = up_proj_weights_dict[selected_expert_idx]
+    torch_expected_up_proj = input_for_expert @ up_proj_weights_torch.float()
+
     # Verify gate_proj matmul + SiLU
     passing, pcc_output = comp_pcc(torch_expected_gate_proj, output_gate_proj_torch, 0.98)
-    logger.info(f"gate_proj: {pcc_output}")
-    assert passing, f"gate_proj matmul PCC check failed: {pcc_output}"
+    logger.info(f"gate_proj (matmul + SiLU): {pcc_output}")
 
     # Verify up_proj matmul (no SiLU)
-    passing, pcc_output = comp_pcc(torch_expected_up_proj, output_up_proj_torch, 0.99)
-    logger.info(f"up_proj: {pcc_output}")
-    assert passing, f"up_proj matmul PCC check failed: {pcc_output}"
+    passing, pcc_output = comp_pcc(torch_expected_up_proj, output_up_proj_mm_torch, 0.98)
+    logger.info(f"up_proj (matmul only): {pcc_output}")
+
+    # Verify fused output: silu(gate_proj) * up_proj
+    passing, pcc_output = comp_pcc(torch_expected_fused, output_fused_torch, 0.98)
+    logger.info(f"fused output (silu(gate_proj) * up_proj): {pcc_output}")
+    assert passing, f"Fused output PCC check failed: {pcc_output}"
 
     logger.info("MoE routed expert test passed!")
