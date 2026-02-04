@@ -634,30 +634,59 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
 
     for op_id, op_name in operations:
         # Get all configurations for this operation
-        cur.execute(
-            f"""
-            SELECT
-                c.ttnn_configuration_id,
-                c.config_hash,
-                c.full_config_json,
-                c.hardware_id,
-                c.mesh_config_id,
-                h.board_type,
-                h.device_series,
-                h.card_count,
-                mc.mesh_shape,
-                mc.device_count,
-                mc.placement_type,
-                mc.shard_dim,
-                mc.distribution_shape
-            FROM {schema}.ttnn_configuration c
-            LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
-            LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
-            WHERE c.operation_id = %s
-            ORDER BY c.ttnn_configuration_id
-        """,
-            (op_id,),
-        )
+        # V2 schema doesn't have placement_type, shard_dim, distribution_shape in mesh_config
+        # (placement is per-tensor in V2)
+        if schema == "ttnn_ops_v2":
+            cur.execute(
+                f"""
+                SELECT
+                    c.ttnn_configuration_id,
+                    c.config_hash,
+                    c.full_config_json,
+                    c.hardware_id,
+                    c.mesh_config_id,
+                    h.board_type,
+                    h.device_series,
+                    h.card_count,
+                    mc.mesh_shape,
+                    mc.device_count,
+                    NULL as placement_type,
+                    NULL as shard_dim,
+                    NULL as distribution_shape
+                FROM {schema}.ttnn_configuration c
+                LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
+                LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
+                WHERE c.operation_id = %s
+                ORDER BY c.ttnn_configuration_id
+            """,
+                (op_id,),
+            )
+        else:
+            # V1 schema has placement fields in mesh_config
+            cur.execute(
+                f"""
+                SELECT
+                    c.ttnn_configuration_id,
+                    c.config_hash,
+                    c.full_config_json,
+                    c.hardware_id,
+                    c.mesh_config_id,
+                    h.board_type,
+                    h.device_series,
+                    h.card_count,
+                    mc.mesh_shape,
+                    mc.device_count,
+                    mc.placement_type,
+                    mc.shard_dim,
+                    mc.distribution_shape
+                FROM {schema}.ttnn_configuration c
+                LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
+                LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
+                WHERE c.operation_id = %s
+                ORDER BY c.ttnn_configuration_id
+            """,
+                (op_id,),
+            )
         configs = cur.fetchall()
 
         if not configs:
@@ -682,46 +711,31 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
                 distribution_shape,
             ) = config_row
 
-            # Get all sources linked to this config
-            cur.execute(
-                f"""
-                SELECT m.source_file, m.hf_model_identifier
-                FROM {schema}.ttnn_configuration_model cm
-                JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
-                WHERE cm.configuration_id = %s
-                ORDER BY m.source_file, m.hf_model_identifier
-            """,
-                (config_id,),
-            )
-            source_rows = cur.fetchall()
-
-            # Format sources
-            sources = [format_source(sf, hf) for sf, hf in source_rows]
-            sources = [s for s in sources if s]  # Remove None values
-
-            if len(sources) == 0:
-                source = None
-            elif len(sources) == 1:
-                source = sources[0]
+            # Get all sources linked to this config (with execution_count for V2)
+            if schema == "ttnn_ops_v2":
+                cur.execute(
+                    f"""
+                    SELECT m.source_file, m.hf_model_identifier, cm.execution_count
+                    FROM {schema}.ttnn_configuration_model cm
+                    JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
+                    WHERE cm.configuration_id = %s
+                    ORDER BY m.source_file, m.hf_model_identifier
+                """,
+                    (config_id,),
+                )
+                source_rows = cur.fetchall()
             else:
-                source = sources
-
-            # Build machine_info
-            machine_info = []
-            if board_type:
-                mi = {
-                    "board_type": board_type,
-                    "device_series": device_series,
-                    "card_count": card_count,
-                }
-
-                # Add tensor_placements if mesh config exists
-                if mesh_shape:
-                    placement = format_mesh_placement(mesh_shape, placement_type, shard_dim)
-                    if placement:
-                        mi["tensor_placements"] = [placement]
-
-                machine_info.append(mi)
+                cur.execute(
+                    f"""
+                    SELECT m.source_file, m.hf_model_identifier, 1 as execution_count
+                    FROM {schema}.ttnn_configuration_model cm
+                    JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
+                    WHERE cm.configuration_id = %s
+                    ORDER BY m.source_file, m.hf_model_identifier
+                """,
+                    (config_id,),
+                )
+                source_rows = cur.fetchall()
 
             # Use full_config_json for arguments (preserves exact original structure)
             if full_config_json:
@@ -735,11 +749,66 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
             if config_hash:
                 config_dict["config_hash"] = config_hash
 
-            if source:
-                config_dict["source"] = source
+            # V2 format: use executions array
+            if schema == "ttnn_ops_v2":
+                executions = []
+                for source_file, hf_model, exec_count in source_rows:
+                    source_str = format_source(source_file, hf_model)
+                    if not source_str:
+                        continue
 
-            if machine_info:
-                config_dict["machine_info"] = machine_info
+                    execution = {"source": source_str, "machine_info": {}, "count": exec_count}
+
+                    # Add hardware info to machine_info
+                    if board_type:
+                        execution["machine_info"]["board_type"] = board_type
+                        execution["machine_info"]["device_series"] = device_series
+                        execution["machine_info"]["card_count"] = card_count
+
+                    # Add mesh info (shape only, no placement - that's per-tensor in V2)
+                    if mesh_shape:
+                        execution["machine_info"]["mesh_device_shape"] = mesh_shape
+                        if device_count:
+                            execution["machine_info"]["device_count"] = device_count
+
+                    executions.append(execution)
+
+                if executions:
+                    config_dict["executions"] = executions
+            else:
+                # V1 format: use source and machine_info at config level
+                sources = [format_source(sf, hf) for sf, hf, _ in source_rows]
+                sources = [s for s in sources if s]  # Remove None values
+
+                if len(sources) == 0:
+                    source = None
+                elif len(sources) == 1:
+                    source = sources[0]
+                else:
+                    source = sources
+
+                # Build machine_info
+                machine_info = []
+                if board_type:
+                    mi = {
+                        "board_type": board_type,
+                        "device_series": device_series,
+                        "card_count": card_count,
+                    }
+
+                    # Add tensor_placements if mesh config exists (V1 only)
+                    if mesh_shape:
+                        placement = format_mesh_placement(mesh_shape, placement_type, shard_dim)
+                        if placement:
+                            mi["tensor_placements"] = [placement]
+
+                    machine_info.append(mi)
+
+                if source:
+                    config_dict["source"] = source
+
+                if machine_info:
+                    config_dict["machine_info"] = machine_info
 
             configurations.append(config_dict)
 
