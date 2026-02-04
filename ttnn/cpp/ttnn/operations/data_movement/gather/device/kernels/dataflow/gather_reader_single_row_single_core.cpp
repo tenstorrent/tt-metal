@@ -128,6 +128,9 @@ void kernel_main() {
 
     constexpr uint32_t one_tile = 1;
     const uint32_t tile_width_mask = tile_width - 1;
+    // Precompute shift amounts to avoid repeated __builtin_ctz calls in inner loop
+    const uint32_t tile_width_shift = __builtin_ctz(tile_width);
+    const uint32_t tile_hw = tile_width * tile_height;
 
     // Index tensor config
     constexpr uint32_t input_index_tensor_tile_size_bytes = get_tile_size(input_index_tensor_cb_index);
@@ -171,35 +174,26 @@ void kernel_main() {
                 for (uint32_t j = 0; j < tile_faces; ++j) {
                     for (uint32_t k = 0; k < face_size; ++k) {
                         for (uint32_t l = 0; l < face_size; l++) {
-                            // Read global index
-                            const uint32_t global_index = get_value_from_tile(
-                                input_index_tensor_l1_read_addr, count, input_index_tensor_data_format_size);
+                            // Read global index (using compile-time optimized template)
+                            const uint32_t global_index = get_value_from_tile_t<input_index_tensor_data_format_size>(
+                                input_index_tensor_l1_read_addr, count);
 
-                            // Calculate local index
-                            const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
+                            // Calculate local index using precomputed shift amounts
+                            const uint32_t tile_idx = global_index >> tile_width_shift;
                             const uint32_t index_in_local_tile = global_index & tile_width_mask;
-                            const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
+                            const uint32_t which_row = index_in_local_tile >> 4;  // face_size=16, shift=4
                             const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
-                            /* Equivalent to:
-                            const uint32_t tile_idx = global_index / tile_width;
-                            const uint32_t index_in_local_tile = global_index % tile_width;
-                            const uint32_t which_row = index_in_local_tile / face_size;
-                            const uint32_t which_col = index_in_local_tile % face_size;
 
-                            Division is replaced with bit shift,
-                            Modulo replaced with bitwise AND with mask.
-                            */
-                            const uint16_t local_index = tile_idx * (tile_width * tile_height) +
-                                                         which_row * (face_size * face_size) + k * face_size +
-                                                         which_col + i * (tile_width * face_size);
+                            const uint16_t local_index = tile_idx * tile_hw + which_row * (face_size * face_size) +
+                                                         k * face_size + which_col + i * (tile_width * face_size);
 
-                            // Read value
-                            const uint32_t value = get_value_from_tile(
-                                input_tensor_l1_read_addr, local_index, input_tensor_data_format_size);
+                            // Read value (using compile-time optimized template)
+                            const uint32_t value = get_value_from_tile_t<input_tensor_data_format_size>(
+                                input_tensor_l1_read_addr, local_index);
 
-                            // Write value to output
-                            write_value_to_tile(
-                                output_tensor_l1_read_addr, count, output_tensor_data_format_size, value);
+                            // Write value to output (using compile-time optimized template)
+                            write_value_to_tile_t<output_tensor_data_format_size>(
+                                output_tensor_l1_read_addr, count, value);
                             count++;
                         }  // l loop
                     }  // k loop

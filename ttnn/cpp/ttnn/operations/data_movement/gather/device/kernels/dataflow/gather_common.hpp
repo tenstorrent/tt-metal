@@ -12,6 +12,22 @@ FORCE_INLINE uint32_t read_data_from_type(const uint32_t l1_addr, const uint32_t
     return ptr[count];
 }
 
+// Compile-time optimized version - no switch at runtime
+template <uint32_t DataFormatSize>
+FORCE_INLINE uint32_t get_value_from_tile_t(const uint32_t l1_read_addr, const uint32_t count) {
+    if constexpr (DataFormatSize == sizeof(uint8_t)) {
+        return read_data_from_type<uint8_t>(l1_read_addr, count);
+    } else if constexpr (DataFormatSize == sizeof(uint16_t)) {
+        return read_data_from_type<uint16_t>(l1_read_addr, count);
+    } else if constexpr (DataFormatSize == sizeof(uint32_t)) {
+        return read_data_from_type<uint32_t>(l1_read_addr, count);
+    } else if constexpr (DataFormatSize == sizeof(uint64_t)) {
+        return read_data_from_type<uint64_t>(l1_read_addr, count);
+    } else {
+        return read_data_from_type<uint16_t>(l1_read_addr, count);
+    }
+}
+
 FORCE_INLINE uint32_t get_value_from_tile(
     const uint32_t l1_read_addr, const uint32_t count, const uint32_t input_index_tensor_data_format_size) {
     switch (input_index_tensor_data_format_size) {
@@ -37,6 +53,22 @@ template <typename T>
 FORCE_INLINE void write_data_from_type(const uint32_t l1_addr, const uint32_t count, const uint32_t value) {
     volatile tt_l1_ptr T* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(l1_addr);
     ptr[count] = value;
+}
+
+// Compile-time optimized version - no switch at runtime
+template <uint32_t DataFormatSize>
+FORCE_INLINE void write_value_to_tile_t(const uint32_t l1_read_addr, const uint32_t count, const uint32_t value) {
+    if constexpr (DataFormatSize == sizeof(uint8_t)) {
+        write_data_from_type<uint8_t>(l1_read_addr, count, value);
+    } else if constexpr (DataFormatSize == sizeof(uint16_t)) {
+        write_data_from_type<uint16_t>(l1_read_addr, count, value);
+    } else if constexpr (DataFormatSize == sizeof(uint32_t)) {
+        write_data_from_type<uint32_t>(l1_read_addr, count, value);
+    } else if constexpr (DataFormatSize == sizeof(uint64_t)) {
+        write_data_from_type<uint64_t>(l1_read_addr, count, value);
+    } else {
+        write_data_from_type<uint16_t>(l1_read_addr, count, value);
+    }
 }
 
 FORCE_INLINE void write_value_to_tile(
