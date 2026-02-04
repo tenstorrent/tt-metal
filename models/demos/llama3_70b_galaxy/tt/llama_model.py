@@ -5,6 +5,7 @@
 import ttnn
 import torch
 from tqdm import tqdm
+from loguru import logger
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
 import ttnn
@@ -243,13 +244,36 @@ class TtTransformer(LightweightModule):
         columns = 4
         rows = 8
         user_id_column = user_id // rows  # 0 for user_id 0-7, 1 for user_id 8-15, etc.
+
+        def _table_preview(tensor):
+            if tensor is None:
+                return "None"
+            flat = tensor.flatten()
+            preview = flat[:8].tolist()
+            return f"shape={tuple(tensor.shape)}, first={preview}"
+
+        logger.info(
+            f"[PREFILL_TABLE_DEBUG] chunk_start_idx={chunk_start_idx} batch_size={batch_size} user_id={user_id}"
+        )
         if page_table is not None:
+            # Chunked SDPA requires page_table "stick size" (row width) to be a multiple of 32 Bytes.
+            # Page table entries are int32, so this means the number of columns must be a multiple of 8
+            # (8 * sizeof(int32) = 32 bytes). Pad with read-safe zeros.
+            def _pad_table_cols_to_multiple_of_8_int32(table_2d: torch.Tensor, pad_value: int = 0) -> torch.Tensor:
+                assert table_2d.ndim == 2, f"expected 2D table, got shape={tuple(table_2d.shape)}"
+                cols = table_2d.shape[1]
+                cols_padded = ((cols + 7) // 8) * 8
+                if cols_padded == cols:
+                    return table_2d
+                padded = torch.full((table_2d.shape[0], cols_padded), pad_value, dtype=table_2d.dtype)
+                padded[:, :cols] = table_2d
+                return padded
+
             if batch_size > 1:
                 assert batch_size == 32, "batch_size must be 32 for batched prefill"
-                # we only want to update the kv cache for 8 users per 4 devices
-                # pad with -1 for the seqlen of all other users
+                # Mesh layout padding: (32, num_blocks) -> (4, 32 * num_blocks), read-safe 0 padding.
                 batch_size_per_column = batch_size // columns
-                page_table_padded = torch.ones((columns, page_table.shape[1] * batch_size), dtype=torch.int32) * -1
+                page_table_padded = torch.zeros((columns, page_table.shape[1] * batch_size), dtype=torch.int32)
                 for i in range(columns):
                     page_table_padded[
                         i,
@@ -260,13 +284,17 @@ class TtTransformer(LightweightModule):
                     ] = page_table[i * batch_size_per_column : (i + 1) * batch_size_per_column, :].reshape(1, -1)
                 chunk_page_table_padded = None  # batch_size>1 => no prefix caching => no chunk_page_table
             else:
-                # we only want to update the kv cache on the 8 devices (every fourth device starting at user_id//8 ) for a given user_id
-                # we are setting the page table to -1 for all other devices to skip the update
-                page_table_padded = torch.ones((columns, page_table.shape[1]), dtype=torch.int32) * -1
+                # Mesh layout padding: only the active column is used; others must be read-safe.
+                num_blocks = page_table.shape[1]
+                page_table_padded = torch.zeros((columns, num_blocks), dtype=torch.int32)
                 # Note: For prefix caching, page_table is already extracted to a single row (shape: 1, num_blocks),
                 # so we always access row 0. The original user_id is used only to compute user_id_column.
-                page_table_padded[user_id_column, :] = page_table[0, :]
+                page_table_padded[user_id_column, :num_blocks] = page_table[0, :]
 
+                # Ensure row width (in bytes) divisible by 32 for chunked SDPA.
+                page_table_padded = _pad_table_cols_to_multiple_of_8_int32(page_table_padded, pad_value=0)
+
+            logger.info(f"[PREFILL_TABLE_DEBUG] page_table { _table_preview(page_table_padded) }")
             tt_page_table = ttnn.from_torch(
                 page_table_padded,
                 device=None,
@@ -284,6 +312,7 @@ class TtTransformer(LightweightModule):
             chunk_page_table_padded = torch.ones((columns, chunk_page_table.shape[1]), dtype=torch.int32) * -1
             chunk_page_table_padded[user_id_column, :] = chunk_page_table[0, :]
 
+            logger.info(f"[PREFILL_TABLE_DEBUG] chunk_page_table { _table_preview(chunk_page_table_padded) }")
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table_padded,
                 device=None,
@@ -409,6 +438,25 @@ class TtTransformer(LightweightModule):
 
         # Necessary padding to be full tile sized when on device
         tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
+        # Decode debug: show token ids + positions before going to device
+        try:
+            tok_preview = tokens[:8].tolist()
+        except Exception:
+            tok_preview = "unavailable"
+        try:
+            pos_preview = current_pos[:8].tolist() if hasattr(current_pos, "shape") else current_pos
+            pos_min = int(current_pos.min().item()) if hasattr(current_pos, "min") else "unavailable"
+            pos_max = int(current_pos.max().item()) if hasattr(current_pos, "max") else "unavailable"
+        except Exception:
+            pos_preview, pos_min, pos_max = "unavailable", "unavailable", "unavailable"
+        logger.info(
+            "[DECODE_HOST_INPUT_DEBUG] B={} tokens_first8={} current_pos_first8={} current_pos_min={} current_pos_max={}",
+            B,
+            tok_preview,
+            pos_preview,
+            pos_min,
+            pos_max,
+        )
         tokens = ttnn.from_torch(
             tokens,
             device=None,
@@ -515,7 +563,14 @@ class TtTransformer(LightweightModule):
         # Device index for row 0 of each column: col 0 → dev 0, col 1 → dev 1, etc.
         output_device_idx = user_id // 8  # 0, 1, 2, or 3
 
+        logger.info(
+            "[PREFILL_PROCESS_DEBUG] tt_out shape={} last_token_idx={} user_id={}",
+            tt_out.shape,
+            last_token_idx,
+            user_id,
+        )
         x, _ = self.norm(tt_out, res=None, mode="prefill")
+        logger.info("[PREFILL_PROCESS_DEBUG] after norm x shape={}", x.shape)
         if isinstance(last_token_idx, list):
             # batched prefill: split the output tensor by the batch size and do the processing for each batch in a loop
             batch_size = len(last_token_idx)
@@ -530,7 +585,14 @@ class TtTransformer(LightweightModule):
             else:
                 last_token_idx_i = last_token_idx
 
+            logger.info(
+                "[PREFILL_SLICE_DEBUG] slicing x at [{}:{}] from shape {}",
+                last_token_idx_i,
+                last_token_idx_i + 1,
+                x.shape,
+            )
             x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
+            logger.info("[PREFILL_SLICE_DEBUG] after slice x shape={}", x.shape)
             tt_logits = self.lm_head(x, None, mode="prefill")
             # Gather the output across all devices and untilize the tensor (for argmax)
             tt_logits = self.tt_ccl.line_all_gather(
@@ -550,11 +612,32 @@ class TtTransformer(LightweightModule):
                 ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
             )
 
+            # Debug: print top-k logits before argmax
+            try:
+                logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[output_device_idx]).float()[0, 0, 0, :]
+                topk_vals, topk_ids = torch.topk(logits_torch, k=5)
+                logger.info(
+                    "[PREFILL_LOGITS_DEBUG] last_token_idx={} logits_shape={} min={:.4f} max={:.4f} mean={:.4f}",
+                    last_token_idx_i,
+                    logits_torch.shape,
+                    logits_torch.min().item(),
+                    logits_torch.max().item(),
+                    logits_torch.mean().item(),
+                )
+                logger.info("[PREFILL_LOGITS_DEBUG] top5_ids={} top5_vals={}", topk_ids.tolist(), topk_vals.tolist())
+            except Exception as e:
+                logger.info("[PREFILL_LOGITS_DEBUG] failed to get logits: {}", e)
+
             tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
             if isinstance(tt_out, list):
                 tt_out = tt_out[0]
             toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[output_device_idx]).float()[0, 0, 0, :1]
             # Validate token ID is within expected range
+            try:
+                toks_value = int(toks.item())
+            except Exception:
+                toks_value = "unavailable"
+            logger.info("[PREFILL_OUTPUT_DEBUG] last_token_idx={} token={}", last_token_idx_i, toks_value)
             toks_list.append(toks)
 
         if tt_out_logits_saved is not None:
@@ -605,6 +688,14 @@ class TtTransformer(LightweightModule):
         start_pos is a Python int used for attention decisions (SDPA path, program config); must match
         the value in chunk_start_idx.
         """
+        logger.info(
+            "[PREFILL_FORWARD_DEBUG] x_shape={} start_pos={} get_last_token={} batch_size={} page_table={}",
+            x.shape,
+            start_pos,
+            get_last_token,
+            batch_size,
+            "set" if page_table is not None else "None",
+        )
         assert rot_mats is not None, "prefill requires rot_mats (full from get_or_create_prefill_rot_mats)"
         assert chunk_start_idx is not None and hasattr(
             chunk_start_idx, "shape"
@@ -762,6 +853,12 @@ class TtTransformer(LightweightModule):
 
         # Prefill: slice full rot mats [chunk_start_idx, max_seq_len); _tt_seq_len_buffer holds max_seq_len (never updated).
         # chunk_start_idx is 1D [N]; ttnn.slice needs start [0, 0, N, 0] - build from zeros buffer.
+        if mode == "prefill":
+            logger.info(
+                "[PREFILL_ROPE_DEBUG] start_pos={} slice={}",
+                start_pos,
+                "yes" if start_pos > 0 else "no",
+            )
         if mode == "prefill" and start_pos > 0:
             full_rot_cos, full_rot_sin = rot_mats[0], rot_mats[1]
             num_devices = self.args.cluster_shape[0] * self.args.cluster_shape[1]

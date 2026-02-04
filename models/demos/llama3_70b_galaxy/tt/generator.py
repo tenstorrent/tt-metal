@@ -25,6 +25,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.generator import SamplingParams
+from models.demos.llama3_70b_galaxy.tt.llama_attention import should_use_ring_distributed_sdpa
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
@@ -110,7 +111,7 @@ class Generator:
         # Split sampling: decode trace captures transformer only, sampling runs separately
         self.enable_split_sampling = True  # Decode trace returns logits, sampling is separate
         self.model.enable_internal_trace = self.enable_split_sampling  # NEVER trace sampling - causes buffer corruption
-        self._disable_prefill_tracing = False  # Whether to disable prefill traces
+        self._disable_prefill_tracing = True  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
         self._trace_debug_seq = 0  # Monotonic seq for hang-debug logs (trace capture/replay ordering)
 
@@ -245,7 +246,9 @@ class Generator:
         all_users = [0] if use_batched_prefill else empty_slots
 
         for id, user_id in enumerate(all_users):
-            logger.info(f"Prefilling User {user_id + 1}, use_batched_prefill: {use_batched_prefill}")
+            logger.info(
+                f"Prefilling User {user_id}, use_batched_prefill: {use_batched_prefill}, prompt_lens: {prompt_lens[id]}, prefill_seq_len: {prefill_seq_lens[id]}, num_cached_tokens: {num_cached_tokens_list[id]}"
+            )
             if use_batched_prefill:
                 user_id = empty_slots
                 last_token_idx = [(seq_len - 1) for seq_len in prompt_lens]
@@ -288,12 +291,35 @@ class Generator:
                 # Extract tokens skipping cached ones
                 num_cached_tokens = num_cached_tokens_list[id]
                 new_tokens_len = seq_len - num_cached_tokens
+                tail_start = max(0, seq_len - 8)
+                logger.info(
+                    "[PREFILL_INPUT_DEBUG] user_id={} seq_len={} last_token_idx={} tail_tokens={}",
+                    user_id,
+                    seq_len,
+                    last_token_idx,
+                    tokens[id, tail_start:seq_len].tolist(),
+                )
                 prefill_ids = torch.cat(
                     [
                         tokens[id : id + 1, num_cached_tokens:seq_len],  # Skip cached tokens
                         torch.zeros(1, prefill_seq_len - new_tokens_len).long(),
                     ],
                     dim=-1,
+                )
+                # Extra debug: sanity-check padding and checksum for non-traced debugging
+                try:
+                    pad_len = int(prefill_seq_len - new_tokens_len)
+                    checksum = int(prefill_ids.sum().item())
+                except Exception:
+                    pad_len = "unavailable"
+                    checksum = "unavailable"
+                logger.info(
+                    "[PREFILL_IDS_DEBUG] user_id={} new_tokens_len={} prefill_seq_len={} pad_len={} checksum={}",
+                    user_id,
+                    new_tokens_len,
+                    prefill_seq_len,
+                    pad_len,
+                    checksum,
                 )
 
             if page_table is not None:
@@ -305,6 +331,23 @@ class Generator:
                     user_id,
                     use_batched_prefill,  # Use full seq_len including cached
                 )
+                # Debug: summarize the active user's row (first few entries) for the prefill page table
+                try:
+                    row = page_table_user[user_id if not use_batched_prefill else 0, :].to(torch.int32)
+                    first = row[:16].tolist()
+                    neg = int((row < 0).sum().item())
+                    zero = int((row == 0).sum().item())
+                    logger.info(
+                        "[PREFILL_PAGETABLE_DEBUG] user_id={} prefill_len={} blocks={} first16={} neg={} zero={}",
+                        user_id if not use_batched_prefill else "batched",
+                        num_cached_tokens + prefill_seq_len,
+                        int(page_table_user.shape[1]),
+                        first,
+                        neg,
+                        zero,
+                    )
+                except Exception as e:
+                    logger.info("[PREFILL_PAGETABLE_DEBUG] failed to summarize page_table_user: {}", e)
                 # remove the first user from the page table
                 page_table = page_table[1:, :]
 
@@ -606,7 +649,8 @@ class Generator:
         Trace key is (prefill_seq_len, batch_size) only; page_table/chunk_page_table
         are padded to fixed shapes so one trace serves any num_cached_blocks.
         """
-        if isinstance(last_token_idx, (list, tuple)):
+        is_last_token_list = isinstance(last_token_idx, (list, tuple))
+        if is_last_token_list and batch_size == 1:
             last_token_idx = last_token_idx[user_id] if isinstance(user_id, int) else last_token_idx[0]
 
         # Extract single user's page table row for batch_size=1
@@ -637,11 +681,34 @@ class Generator:
             page_table = _pad_or_create_page_table(page_table, max_blocks_prefill)
             chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
 
-        trace_key = f"{prefill_seq_len}_{batch_size}"
+        use_ring_sdpa = should_use_ring_distributed_sdpa(prefill_seq_len, batch_size, chunk_start_idx)
+        use_start_pos = "sp1" if (chunk_start_idx is not None and chunk_start_idx > 0) else "sp0"
+        trace_key = f"{prefill_seq_len}_{batch_size}_{'ring' if use_ring_sdpa else 'no_ring'}_{use_start_pos}"
+
+        def _table_preview(tensor):
+            if tensor is None:
+                return "None"
+            flat = tensor.flatten()
+            preview = flat[:8].tolist()
+            return f"shape={tuple(tensor.shape)}, first={preview}"
+
+        logger.info(
+            "[PREFILL_TRACE_DEBUG] key={} start_pos={} ring_sdpa={} page_table={} chunk_page_table={}",
+            trace_key,
+            chunk_start_idx,
+            use_ring_sdpa,
+            _table_preview(page_table),
+            _table_preview(chunk_page_table),
+        )
 
         # For prefix caching, the model output has only prefill_seq_len positions (the chunk).
         # get_last_token must be the relative index within the chunk (0..prefill_seq_len-1).
-        last_token_idx_for_trace = last_token_idx - num_cached_tokens
+        if is_last_token_list and batch_size > 1:
+            last_token_idx_for_trace = (
+                [idx - num_cached_tokens for idx in last_token_idx] if use_prefix_caching else list(last_token_idx)
+            )
+        else:
+            last_token_idx_for_trace = last_token_idx - num_cached_tokens
 
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -657,6 +724,15 @@ class Generator:
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out_trace
+        # Debug: print input tokens checksum before trace
+        tokens_checksum = tokens.sum().item() if hasattr(tokens, "sum") else "N/A"
+        logger.info(
+            "[PREFILL_TRACE_INPUT] trace_key={} tokens_shape={} tokens_checksum={} user_id={}",
+            trace_key,
+            tuple(tokens.shape),
+            tokens_checksum,
+            user_id,
+        )
         tt_out_trace = self._prefill_forward_trace_text(
             self.trace_id_prefill[trace_key],
             self.trace_inputs_prefill[trace_key],
@@ -685,6 +761,14 @@ class Generator:
         Captures a trace for the prefill_forward method with prefix caching support.
         Uses full rot mats + chunk_start_idx device tensor; slice is inside the trace.
         """
+        logger.info(
+            "[PREFILL_CAPTURE_DEBUG] tokens_shape={} last_token_idx={} user_id={} start_pos={} batch_size={}",
+            tuple(tokens.shape),
+            last_token_idx,
+            user_id,
+            start_pos,
+            batch_size,
+        )
         # Get host tensors (tokens, user_id, page_table, chunk_page_table, chunk_start_idx)
         host_inputs = self.model.prepare_prefill_inputs_host(
             tokens,
@@ -825,6 +909,54 @@ class Generator:
     ):
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False
+
+        # Decode input debug (outside traced region)
+        try:
+            tok0 = tokens[:8, :].reshape(-1)[:8].tolist() if isinstance(tokens, torch.Tensor) else "unavailable"
+        except Exception:
+            tok0 = "unavailable"
+        try:
+            pos0 = start_pos[:8].tolist() if isinstance(start_pos, torch.Tensor) else start_pos
+        except Exception:
+            pos0 = "unavailable"
+        logger.info(
+            "[DECODE_INPUT_DEBUG] enable_trace={} tokens_shape={} tokens_first8={} start_pos_first8={}",
+            enable_trace,
+            tuple(tokens.shape) if hasattr(tokens, "shape") else "unavailable",
+            tok0,
+            pos0,
+        )
+        if page_table is not None and isinstance(page_table, torch.Tensor):
+            try:
+                row0 = page_table[0, :64].to(torch.int32)
+                logger.info(
+                    "[DECODE_PAGETABLE_DEBUG] page_table_shape={} row0_first16={} row0_neg={} row0_zero={} row0_max={}",
+                    tuple(page_table.shape),
+                    row0[:16].tolist(),
+                    int((row0 < 0).sum().item()),
+                    int((row0 == 0).sum().item()),
+                    int(row0.max().item()) if row0.numel() > 0 else "unavailable",
+                )
+            except Exception as e:
+                logger.info("[DECODE_PAGETABLE_DEBUG] failed to summarize page_table: {}", e)
+        # Compare decode start_pos[0] vs last prefill metadata, if available
+        try:
+            if (
+                hasattr(self, "_debug_last_prefill_meta")
+                and 0 in self._debug_last_prefill_meta
+                and isinstance(start_pos, torch.Tensor)
+            ):
+                meta = self._debug_last_prefill_meta[0]
+                logger.info(
+                    "[DECODE_PREFILL_XCHECK] start_pos0={} prefill_last_token_idx={} prefill_seq_len={} prompt_seq_len={} num_cached_tokens={}",
+                    int(start_pos[0].item()),
+                    meta.get("last_token_idx"),
+                    meta.get("prefill_seq_len"),
+                    meta.get("seq_len"),
+                    meta.get("num_cached_tokens"),
+                )
+        except Exception:
+            pass
 
         if sampling_params is None:
             return_logits = True
@@ -1146,6 +1278,22 @@ class Generator:
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
+        # Debug: inspect incoming page_table row 0 (or first batch row) before slicing
+        try:
+            if isinstance(page_table, torch.Tensor):
+                row0 = page_table[0, : min(64, page_table.shape[1])].to(torch.int32)
+                logger.info(
+                    "[PREFILL_PAGETABLE_SRC_DEBUG] prefill_len={} block_size={} num_blocks={} src_shape={} row0_first16={} row0_neg={} row0_zero={}",
+                    int(prefill_len),
+                    int(block_size),
+                    int(num_blocks),
+                    tuple(page_table.shape),
+                    row0[:16].tolist(),
+                    int((row0 < 0).sum().item()),
+                    int((row0 == 0).sum().item()),
+                )
+        except Exception as e:
+            logger.info("[PREFILL_PAGETABLE_SRC_DEBUG] failed: {}", e)
         page_table = page_table[:, :num_blocks]
         if page_table.shape[1] < num_blocks:
             # If page table is too short, pad it with -1
@@ -1158,6 +1306,20 @@ class Generator:
                 padded_page_table[user, :] = page_table[i, :]
         else:
             padded_page_table[user_id, :] = page_table[0, :]
+        # Debug: inspect resulting padded page_table for selected user
+        try:
+            if isinstance(padded_page_table, torch.Tensor) and (not use_batched_prefill) and isinstance(user_id, int):
+                row = padded_page_table[user_id, : min(64, padded_page_table.shape[1])].to(torch.int32)
+                logger.info(
+                    "[PREFILL_PAGETABLE_DST_DEBUG] user_id={} dst_shape={} row_first16={} row_neg={} row_zero={}",
+                    user_id,
+                    tuple(padded_page_table.shape),
+                    row[:16].tolist(),
+                    int((row < 0).sum().item()),
+                    int((row == 0).sum().item()),
+                )
+        except Exception:
+            pass
         return padded_page_table
 
     def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:

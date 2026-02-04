@@ -4,8 +4,13 @@
 
 import torch
 import ttnn
+from loguru import logger
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+
+
+def should_use_ring_distributed_sdpa(seq_len: int, batch_size: int, chunk_start_idx) -> bool:
+    return seq_len > 1024 and batch_size == 1 and (chunk_start_idx is None or chunk_start_idx == 0)
 
 
 class TtLlamaAttention(LightweightModule):
@@ -735,8 +740,10 @@ class TtLlamaAttention(LightweightModule):
 
         user_id_for_mask = None  # Will be set if page_table is provided
         if page_table:
-            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
-            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+            # Use chunk_page_table only for prefix-cached prefill (chunk_start_idx > 0).
+            # For non-prefix prefill, ignore chunk_page_table (trace may pass a dummy) and use page_table.
+            use_chunk_for_fill = chunk_start_idx is not None and chunk_start_idx > 0
+            fill_page_table = chunk_page_table if (use_chunk_for_fill and chunk_page_table is not None) else page_table
 
             # Each shard gets one row, which is locally at index 0
             ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, fill_page_table, batch_idx=0)
@@ -760,7 +767,16 @@ class TtLlamaAttention(LightweightModule):
 
         # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
         # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
-        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1 and (chunk_start_idx is None or chunk_start_idx == 0)
+        ring_distributed_sdpa = should_use_ring_distributed_sdpa(seq_len, batch_size, chunk_start_idx)
+        use_chunked_sdpa = chunk_start_idx is not None and chunk_start_idx > 0
+        logger.info(
+            "[PREFILL_SDPA_DEBUG] seq_len={} batch_size={} chunk_start_idx={} ring_sdpa={} chunked_sdpa={}",
+            seq_len,
+            batch_size,
+            chunk_start_idx,
+            ring_distributed_sdpa,
+            use_chunked_sdpa,
+        )
 
         if ring_distributed_sdpa:
             k_tensor = k_heads_1KSD_8b
@@ -782,7 +798,7 @@ class TtLlamaAttention(LightweightModule):
         else:
             # When using prefix caching (chunk_start_idx provided), use chunked SDPA with KV cache tensors.
             # Flexible path: chunk_start_idx_tensor so one trace works for any chunk_start at replay.
-            if chunk_start_idx is not None and chunk_start_idx > 0:
+            if use_chunked_sdpa:
                 assert page_table is not None, "page_table must be provided for prefix caching"
                 assert (
                     chunk_start_idx_tensor is not None
