@@ -375,7 +375,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     }
 
     if (rms_norm) {
-        compute_defines["RMSNORM"] = "1";
+        compute_defines.emplace_back("RMSNORM", "1");
     }
 
     // Select reader kernel path
