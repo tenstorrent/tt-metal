@@ -12,7 +12,7 @@
 namespace ttnn::experimental::prim {
 
 struct FusedRmsnormPreAllGatherParams {
-    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::INVALID;
+    tt::tt_metal::DataType dtype;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
