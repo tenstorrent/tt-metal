@@ -93,6 +93,9 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
     // To ensure that Y_POS counter gets reset to 0 after the operation is completed,
     // we need to set pack_reads_per_xy_plane to 1. When Y_POS counter hits that value, it will reset.
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
+    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC1_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
+    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC2_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
+    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC3_pack_reads_per_xy_plane_RMW>(y_pos_counter_limit);
     // Set the packer X counter to pack the specified number of datums per row
     TTI_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
 

@@ -326,7 +326,7 @@ inline void reconfig_packer_data_format(
     TT_SETDMAREG(0, LOWER_HALFWORD(pack_counters.val), 0, LO_16(p_gpr_pack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(pack_counters.val), 0, HI_16(p_gpr_pack::TMP0));
 
-    for (uint i = 0; i < 4; i++)
+    for (uint i = 0; i < NUM_PACKERS; i++)
     {
         TT_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i); // disable auto last generation
     }
@@ -441,7 +441,7 @@ inline void configure_pack(
     pack_counters.val                       = 0;
     pack_counters.f.pack_reads_per_xy_plane = face_r_dim; // Number of reads per face
                                                           // Used for resetting tile position generator for edge masks
-    for (uint i = 0; i < 4; i++)
+    for (uint i = 0; i < NUM_PACKERS; i++)
     {
         cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val; // disable auto last generation
     }
