@@ -726,6 +726,21 @@ void copy_to_host(
         device_tensor.tensor_topology());
 }
 
+void copy_to_host(
+    distributed::MeshCommandQueue& queue,
+    const Tensor& device_tensor,
+    std::byte* dst,
+    const std::optional<BufferRegion>& region,
+    bool blocking) {
+    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "copy_to_host: source tensor must be on device");
+    TT_FATAL(queue.device()->num_devices() == 1, "copy_to_host only supports single device mesh");
+    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
+        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
+            .host_data(dst)
+            .region(region)};
+    queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer(), blocking);
+}
+
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
     TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Source tensor is not on host.");
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor is not on device.");
@@ -748,6 +763,20 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         cq_id);
     device_tensor = Tensor(
         std::move(mesh_storage), host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
+}
+
+void copy_to_device(
+    distributed::MeshCommandQueue& queue,
+    const std::byte* src,
+    Tensor& device_tensor,
+    const std::optional<BufferRegion>& region) {
+    TT_FATAL(is_device_tensor(device_tensor), "copy_to_device to non-device tensor is not supported!");
+    TT_FATAL(queue.device()->num_devices() == 1, "copy_to_device only supports single device mesh");
+    std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
+        distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
+            .host_data(const_cast<std::byte*>(src))
+            .region(region)};
+    queue.enqueue_write_shards(device_tensor.mesh_buffer(), shard_data_transfers, false);
 }
 
 // ======================================================================================
