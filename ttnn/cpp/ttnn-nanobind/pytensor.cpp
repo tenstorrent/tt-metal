@@ -592,16 +592,12 @@ Tensor tensor_from_numpy_custom_dtype(
 // to_numpy helper functions
 // ============================================================================
 
-// Get ml_dtypes.bfloat16 dtype (cached, returns None if not available)
+// Get ml_dtypes.bfloat16 dtype (cached, throws if not available)
 nb::object get_ml_dtypes_bfloat16_dtype() {
     static nb::object ml_dtypes_bfloat16_dtype = []() -> nb::object {
-        try {
-            nb::object ml_dtypes = nb::module_::import_("ml_dtypes");
-            nb::object bfloat16_dtype = ml_dtypes.attr("bfloat16");
-            return bfloat16_dtype;
-        } catch (...) {
-            return nb::none();
-        }
+        nb::object ml_dtypes = nb::module_::import_("ml_dtypes");
+        nb::object bfloat16_dtype = ml_dtypes.attr("bfloat16");
+        return bfloat16_dtype;
     }();
     return ml_dtypes_bfloat16_dtype;
 }
@@ -626,27 +622,30 @@ nb::object make_numpy_tensor_from_data(const auto& tensor_data, const TensorSpec
     std::vector<size_t> numpy_shape(tensor_shape_rank);
     std::copy(tensor_shape.cbegin(), tensor_shape.cend(), numpy_shape.begin());
 
-    // For bfloat16, use ml_dtypes.bfloat16 dtype if available
+    // For bfloat16, create uint16 array and view as ml_dtypes.bfloat16
+    // (nanobind doesn't natively support bfloat16, so we use uint16 as storage)
     if constexpr (std::is_same_v<NumpyType, bfloat16>) {
         nb::object ml_dtypes_bfloat16_dtype = get_ml_dtypes_bfloat16_dtype();
-        if (!ml_dtypes_bfloat16_dtype.is_none()) {
-            const size_t num_elements = tensor_data.size();
-            auto* numpy_data = new bfloat16[num_elements];
-            const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<bfloat16*>(p); });
+        const size_t num_elements = tensor_data.size();
+        auto* numpy_data = new uint16_t[num_elements];
+        const nb::capsule owner(numpy_data, [](void* p) noexcept { delete[] static_cast<uint16_t*>(p); });
 
-            using TensorDataType = typename std::decay_t<decltype(tensor_data)>::value_type;
-            if constexpr (std::is_same_v<TensorDataType, bfloat16>) {
-                std::memcpy(numpy_data, tensor_data.data(), num_elements * sizeof(bfloat16));
-            } else {
-                std::copy(tensor_data.begin(), tensor_data.end(), numpy_data);
-            }
-
-            nb::object array = nb::cast(nb::ndarray<nb::numpy, uint16_t>(
-                reinterpret_cast<uint16_t*>(numpy_data), tensor_shape_rank, numpy_shape.data(), owner));
-            return array.attr("view")(ml_dtypes_bfloat16_dtype);
+        using TensorDataType = typename std::decay_t<decltype(tensor_data)>::value_type;
+        if constexpr (std::is_same_v<TensorDataType, bfloat16>) {
+            // bit_cast each bfloat16 to uint16_t
+            std::transform(tensor_data.begin(), tensor_data.end(), numpy_data, [](bfloat16 val) {
+                return std::bit_cast<uint16_t>(val);
+            });
         } else {
-            TT_THROW("ml_dtypes package required for bfloat16 NumPy arrays (try pip install ml_dtypes)");
+            // Convert to bfloat16, then bit_cast to uint16_t
+            std::transform(tensor_data.begin(), tensor_data.end(), numpy_data, [](auto val) {
+                return std::bit_cast<uint16_t>(bfloat16(static_cast<float>(val)));
+            });
         }
+
+        nb::object array =
+            nb::cast(nb::ndarray<nb::numpy, uint16_t>(numpy_data, tensor_shape_rank, numpy_shape.data(), owner));
+        return array.attr("view")(ml_dtypes_bfloat16_dtype);
     }
 
     const size_t num_elements = tensor_data.size();

@@ -9,6 +9,7 @@ import pathlib
 
 import torch
 import numpy as np
+import ml_dtypes
 
 import ttnn
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
@@ -848,6 +849,7 @@ np_dtypes_for_from_numpy = [
     np.float32,
     np.int32,
     np.uint32,
+    ml_dtypes.bfloat16,
 ]
 
 # Expected ttnn dtype when no conversion is requested
@@ -855,6 +857,7 @@ np_to_tt_dtype_default = {
     np.float32: ttnn.float32,
     np.int32: ttnn.int32,
     np.uint32: ttnn.uint32,
+    ml_dtypes.bfloat16: ttnn.bfloat16,
 }
 
 # Target ttnn dtypes supported by from_numpy
@@ -949,43 +952,6 @@ def test_tensor_from_numpy_full_permutation(shape, np_dtype, tt_dtype, layout):
     assert list(tt_tensor.shape) == list(shape)
 
 
-@pytest.mark.parametrize("tt_dtype", tt_dtypes_for_from_numpy)
-@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-def test_tensor_from_numpy_ml_dtypes_bfloat16(shape, tt_dtype):
-    """Test from_numpy with ml_dtypes.bfloat16 input, converting to various ttnn dtypes"""
-    ml_dtypes = pytest.importorskip("ml_dtypes")
-
-    np.random.seed(0)
-    np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
-
-    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, dtype=tt_dtype)
-
-    assert tt_tensor.dtype == tt_dtype
-    assert list(tt_tensor.shape) == list(shape)
-
-
-@pytest.mark.parametrize(
-    "layout",
-    [
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.TILE_LAYOUT,
-    ],
-)
-@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-def test_tensor_from_numpy_ml_dtypes_bfloat16_with_layout(shape, layout):
-    """Test from_numpy with ml_dtypes.bfloat16 and explicit layout"""
-    ml_dtypes = pytest.importorskip("ml_dtypes")
-
-    np.random.seed(0)
-    np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
-
-    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, layout=layout)
-
-    assert tt_tensor.layout == layout
-    assert tt_tensor.dtype == ttnn.bfloat16
-    assert list(tt_tensor.shape) == list(shape)
-
-
 @pytest.mark.parametrize(
     "layout",
     [
@@ -999,33 +965,6 @@ def test_tensor_from_numpy_ml_dtypes_bfloat16_with_layout(shape, layout):
 def test_tensor_from_numpy_to_device_roundtrip(shape, np_dtype, tt_dtype, layout, device):
     """Test from_numpy followed by device transfer and back"""
     np_tensor = create_np_tensor(shape, np_dtype)
-
-    # Create tensor from numpy
-    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, layout=layout, dtype=tt_dtype)
-
-    # Transfer to device and back
-    tt_tensor = tt_tensor.to(device)
-    tt_tensor = tt_tensor.cpu()
-
-    assert tt_tensor.layout == layout
-    assert tt_tensor.dtype == tt_dtype
-
-
-@pytest.mark.parametrize(
-    "layout",
-    [
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.TILE_LAYOUT,
-    ],
-)
-@pytest.mark.parametrize("tt_dtype", tt_dtypes_for_from_numpy)
-@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-def test_tensor_from_numpy_ml_dtypes_to_device_roundtrip(shape, tt_dtype, layout, device):
-    """Test from_numpy with ml_dtypes.bfloat16 followed by device transfer"""
-    ml_dtypes = pytest.importorskip("ml_dtypes")
-
-    np.random.seed(0)
-    np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
 
     # Create tensor from numpy
     tt_tensor = ttnn.Tensor.from_numpy(np_tensor, layout=layout, dtype=tt_dtype)
@@ -1085,7 +1024,6 @@ def test_to_numpy_default_dtype(shape, tt_dtype):
     elif tt_dtype == ttnn.float32:
         assert result.dtype == np.float32
     elif tt_dtype == ttnn.bfloat16:
-        ml_dtypes = pytest.importorskip("ml_dtypes")
         assert result.dtype == ml_dtypes.bfloat16
 
 
@@ -1118,52 +1056,6 @@ def test_to_numpy_dtype_conversion(shape, source_dtype, target_dtype):
         assert result.dtype == np.float32
 
 
-@pytest.mark.parametrize("source_dtype", [ttnn.int32, ttnn.float32, ttnn.bfloat16])
-@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-def test_to_numpy_convert_to_bfloat16(shape, source_dtype):
-    """Test to_numpy with conversion to bfloat16 (requires ml_dtypes)"""
-    ml_dtypes = pytest.importorskip("ml_dtypes")
-    np.random.seed(0)
-
-    # Create source tensor
-    if source_dtype == ttnn.float32:
-        np_tensor = np.random.random(shape).astype(np.float32)
-    elif source_dtype == ttnn.bfloat16:
-        np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
-    else:
-        np_tensor = np.random.randint(0, 100, size=shape, dtype=np.int32)
-
-    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, dtype=source_dtype)
-
-    # Convert to bfloat16
-    result = tt_tensor.to_numpy(dtype=ttnn.bfloat16)
-
-    assert list(result.shape) == list(shape)
-    assert result.dtype == ml_dtypes.bfloat16
-
-
-@pytest.mark.parametrize("target_dtype", [ttnn.int32, ttnn.float32])
-@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-def test_to_numpy_from_bfloat16_source(shape, target_dtype):
-    """Test to_numpy conversion from bfloat16 source to other dtypes"""
-    ml_dtypes = pytest.importorskip("ml_dtypes")
-    np.random.seed(0)
-
-    # Create bfloat16 source tensor
-    np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
-    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, dtype=ttnn.bfloat16)
-
-    # Convert to target dtype
-    result = tt_tensor.to_numpy(dtype=target_dtype)
-
-    assert list(result.shape) == list(shape)
-
-    if target_dtype == ttnn.int32:
-        assert result.dtype == np.int32
-    elif target_dtype == ttnn.float32:
-        assert result.dtype == np.float32
-
-
 @pytest.mark.parametrize("target_dtype", to_numpy_target_dtypes)
 @pytest.mark.parametrize("source_dtype", to_numpy_source_dtypes)
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
@@ -1173,7 +1065,6 @@ def test_to_numpy_full_dtype_permutation(shape, source_dtype, target_dtype):
 
     # Create source tensor based on dtype
     if source_dtype == ttnn.bfloat16:
-        ml_dtypes = pytest.importorskip("ml_dtypes")
         np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
     elif source_dtype == ttnn.float32:
         np_tensor = np.random.random(shape).astype(np.float32)
@@ -1197,7 +1088,6 @@ def test_to_numpy_full_dtype_permutation(shape, source_dtype, target_dtype):
     elif target_dtype == ttnn.float32:
         assert result.dtype == np.float32
     elif target_dtype == ttnn.bfloat16:
-        ml_dtypes = pytest.importorskip("ml_dtypes")
         assert result.dtype == ml_dtypes.bfloat16
 
 
@@ -1210,7 +1100,6 @@ def test_to_numpy_device_roundtrip_with_dtype(shape, source_dtype, target_dtype,
 
     # Create source tensor
     if source_dtype == ttnn.bfloat16:
-        ml_dtypes = pytest.importorskip("ml_dtypes")
         np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
     else:
         np_tensor = np.random.random(shape).astype(np.float32)
@@ -1231,7 +1120,6 @@ def test_to_numpy_device_roundtrip_with_dtype(shape, source_dtype, target_dtype,
     elif target_dtype == ttnn.float32:
         assert result.dtype == np.float32
     elif target_dtype == ttnn.bfloat16:
-        ml_dtypes = pytest.importorskip("ml_dtypes")
         assert result.dtype == ml_dtypes.bfloat16
 
 
@@ -1241,15 +1129,11 @@ def test_to_numpy_device_roundtrip_with_dtype(shape, source_dtype, target_dtype,
 
 
 @pytest.mark.parametrize("tt_dtype", tt_dtypes_for_from_numpy)
+@pytest.mark.parametrize("np_dtype", np_dtypes_for_from_numpy)
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-def test_from_numpy_with_device_parameter(shape, tt_dtype, device):
+def test_from_numpy_with_device_parameter(shape, np_dtype, tt_dtype, device):
     """Test from_numpy with device parameter creates tensor directly on device"""
-    np.random.seed(0)
-
-    if tt_dtype in [ttnn.float32, ttnn.bfloat16]:
-        np_tensor = np.random.random(shape).astype(np.float32)
-    else:
-        np_tensor = np.random.randint(0, 100, size=shape, dtype=np.int32)
+    np_tensor = create_np_tensor(shape, np_dtype)
 
     # Create tensor directly on device
     tt_tensor = ttnn.Tensor.from_numpy(np_tensor, dtype=tt_dtype, device=device)
@@ -1267,15 +1151,11 @@ def test_from_numpy_with_device_parameter(shape, tt_dtype, device):
     ],
 )
 @pytest.mark.parametrize("tt_dtype", tt_dtypes_for_from_numpy)
+@pytest.mark.parametrize("np_dtype", np_dtypes_for_from_numpy)
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-def test_from_numpy_with_device_and_layout(shape, tt_dtype, layout, device):
+def test_from_numpy_with_device_and_layout(shape, np_dtype, tt_dtype, layout, device):
     """Test from_numpy with device, layout, and dtype parameters"""
-    np.random.seed(0)
-
-    if tt_dtype in [ttnn.float32, ttnn.bfloat16]:
-        np_tensor = np.random.random(shape).astype(np.float32)
-    else:
-        np_tensor = np.random.randint(0, 100, size=shape, dtype=np.int32)
+    np_tensor = create_np_tensor(shape, np_dtype)
 
     # Create tensor with layout directly on device
     tt_tensor = ttnn.Tensor.from_numpy(np_tensor, layout=layout, dtype=tt_dtype, device=device)
@@ -1283,22 +1163,6 @@ def test_from_numpy_with_device_and_layout(shape, tt_dtype, layout, device):
     assert tt_tensor.storage_type() == ttnn.StorageType.DEVICE
     assert tt_tensor.layout == layout
     assert tt_tensor.dtype == tt_dtype
-    assert list(tt_tensor.shape) == list(shape)
-
-
-@pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
-def test_from_numpy_ml_dtypes_with_device(shape, device):
-    """Test from_numpy with ml_dtypes.bfloat16 and device parameter"""
-    ml_dtypes = pytest.importorskip("ml_dtypes")
-    np.random.seed(0)
-
-    np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
-
-    # Create tensor directly on device
-    tt_tensor = ttnn.Tensor.from_numpy(np_tensor, device=device)
-
-    assert tt_tensor.storage_type() == ttnn.StorageType.DEVICE
-    assert tt_tensor.dtype == ttnn.bfloat16
     assert list(tt_tensor.shape) == list(shape)
 
 
@@ -1311,9 +1175,6 @@ def test_from_numpy_ml_dtypes_with_device(shape, device):
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 def test_to_numpy_auto_device_to_host(shape, tt_dtype, device):
     """Test to_numpy automatically moves device tensor to host for all supported dtypes"""
-    if tt_dtype == ttnn.bfloat16:
-        pytest.importorskip("ml_dtypes")
-
     np.random.seed(0)
 
     # Create appropriate numpy source data
@@ -1338,9 +1199,6 @@ def test_to_numpy_auto_device_to_host(shape, tt_dtype, device):
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 def test_to_numpy_auto_device_to_host_with_dtype(shape, target_dtype, device):
     """Test to_numpy auto device-to-host with dtype conversion"""
-    if target_dtype == ttnn.bfloat16:
-        pytest.importorskip("ml_dtypes")
-
     np.random.seed(0)
     np_tensor = np.random.random(shape).astype(np.float32)
 
@@ -1358,7 +1216,6 @@ def test_to_numpy_auto_device_to_host_with_dtype(shape, target_dtype, device):
     elif target_dtype == ttnn.float32:
         assert result.dtype == np.float32
     elif target_dtype == ttnn.bfloat16:
-        ml_dtypes = pytest.importorskip("ml_dtypes")
         assert result.dtype == ml_dtypes.bfloat16
 
 
@@ -1371,9 +1228,6 @@ def test_to_numpy_auto_device_to_host_with_dtype(shape, target_dtype, device):
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 def test_from_numpy_to_numpy_value_roundtrip(shape, tt_dtype):
     """Test that values are preserved through from_numpy -> to_numpy round trip"""
-    if tt_dtype == ttnn.bfloat16:
-        pytest.importorskip("ml_dtypes")
-
     np.random.seed(42)
 
     # Create appropriate numpy source data
@@ -1403,9 +1257,6 @@ def test_from_numpy_to_numpy_value_roundtrip(shape, tt_dtype):
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 def test_from_numpy_to_numpy_device_value_roundtrip(shape, tt_dtype, device):
     """Test that values are preserved through from_numpy(device) -> to_numpy round trip"""
-    if tt_dtype == ttnn.bfloat16:
-        pytest.importorskip("ml_dtypes")
-
     np.random.seed(42)
 
     # Create appropriate numpy source data
@@ -1437,19 +1288,11 @@ def test_from_numpy_to_numpy_device_value_roundtrip(shape, tt_dtype, device):
 # ============================================================================
 
 
-@pytest.mark.parametrize("np_dtype", [np.float32, np.int32, np.uint32, "bfloat16"])
+@pytest.mark.parametrize("np_dtype", np_dtypes_for_from_numpy)
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
 def test_from_numpy_without_device_creates_host_tensor(shape, np_dtype):
     """Test that from_numpy without device parameter creates tensor on host (backward compatibility)"""
-    np.random.seed(0)
-
-    if np_dtype == "bfloat16":
-        ml_dtypes = pytest.importorskip("ml_dtypes")
-        np_tensor = np.random.random(shape).astype(ml_dtypes.bfloat16)
-    elif np_dtype == np.float32:
-        np_tensor = np.random.random(shape).astype(np_dtype)
-    else:
-        np_tensor = np.random.randint(0, 100, size=shape, dtype=np_dtype)
+    np_tensor = create_np_tensor(shape, np_dtype)
 
     # Create tensor without device parameter
     tt_tensor = ttnn.Tensor.from_numpy(np_tensor)
@@ -1488,7 +1331,6 @@ def test_to_numpy_backward_compatibility(shape, tt_dtype):
     elif tt_dtype == ttnn.float32:
         assert result.dtype == np.float32
     elif tt_dtype == ttnn.bfloat16:
-        ml_dtypes = pytest.importorskip("ml_dtypes")
         assert result.dtype == ml_dtypes.bfloat16
 
     # Verify values
