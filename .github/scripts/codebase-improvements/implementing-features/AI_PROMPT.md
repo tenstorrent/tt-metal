@@ -4,19 +4,44 @@
 
 You are in the **Fix Implementation Phase**. A reproduction test has been created and confirmed to demonstrate the issue. Your task is to analyze the root cause, implement a fix, verify it works, and prepare for PR creation.
 
-**Time Limit: 15 minutes**
+**Time Limit: 30 minutes**
 
 If you cannot make meaningful progress within this time, document your findings and give up gracefully.
 
 ## 🚨 CRITICAL RULES - READ FIRST
 
-1. **DO NOT CREATE THE PR** - The user or orchestration script will do it
-2. **ALWAYS build Metal** - Run `./build_metal.sh` after EVERY code change
-3. **USE the bash script** - Run tests via `./run_test.sh`, NOT pytest directly
-4. **USE /opt/venv** - The bash script activates it automatically
-5. **TEST thoroughly** - Run test 5 times before declaring success
-6. **PUSH the branch** - So user can create PR
-7. **WRITE a report** - Document what you did in outputs/
+1. **PROFILE FIRST** - Add timing instrumentation BEFORE attempting ANY fix
+2. **TEST EXISTING CODE** - If there's an existing "fix" on the branch, TEST it first - don't assume it works
+3. **NEVER MAKE UNIVERSAL CHANGES** - ALL optimizations must be CONDITIONAL (e.g., only for large transfers)
+4. **VERIFY ASSUMPTIONS** - Log actual data sizes, iteration counts, etc. - don't guess
+5. **DO NOT CREATE THE PR** - The user or orchestration script will do it
+6. **ALWAYS build Metal** - Run `./build_metal.sh` after EVERY code change
+7. **USE the bash script** - Run tests via `./run_test.sh`, NOT pytest directly
+8. **USE /opt/venv** - The bash script activates it automatically
+9. **DON'T DELETE TESTS** - Keep test files until fix is FULLY validated
+10. **WRITE a report** - Document what you did in outputs/
+
+## ⚠️ COMMON MISTAKES TO AVOID
+
+Based on past failures, DO NOT:
+
+❌ **Skip profiling** - "I can see from the stack trace where the bottleneck is"
+   → Stack traces show WHERE timeout happens, not WHERE time is spent
+
+❌ **Trust existing "fix" commits** - "There's already a fix on the branch, I'll build on it"
+   → Test it first. Many "fixes" don't actually work.
+
+❌ **Make universal changes** - `timeout = base_timeout * 10`
+   → Use: `if (size > THRESHOLD) { timeout = base_timeout * 10 }`
+
+❌ **Guess at data sizes** - "300KB transfer in 5 seconds = 60 KB/s throughput"
+   → Log the ACTUAL size. It might be 9.27 MB, not 300KB.
+
+❌ **Give up without proof** - "This is a fundamental hardware limitation"
+   → Show specific code/evidence. What have you actually tried?
+
+❌ **Optimize without measuring** - Spend hours tweaking code paths
+   → Profile first. You might be optimizing the wrong thing.
 
 ## Input
 
@@ -26,46 +51,281 @@ You will receive:
 - **Branch name**: Current development branch with the test
 - **Failure logs**: Output from running the reproduction test
 
-## Your Task
+## Your Task (IN THIS ORDER)
 
-1. Analyze the root cause of the failure (read raw-logs for error details)
-2. Verify test fails on the fix branch (build Metal first!)
-3. Implement fixes iteratively (build after each change!)
-4. Test thoroughly using ./run_test.sh (5 successful runs minimum)
-5. Remove test from branch (stays on dev branch)
-6. Push the fix branch
+1. **TEST the existing branch state** - Don't assume anything works
+2. **PROFILE to find the bottleneck** - Add timing instrumentation FIRST
+3. Analyze the root cause based on MEASURED data
+4. Implement fixes iteratively (CONDITIONAL changes only!)
+5. Test thoroughly using ./run_test.sh (2x for deterministic, 5x for non-deterministic)
+6. Push the fix branch (keep test files for validation)
 7. Write PR description for user
 8. Write detailed execution report
 
+## 🔬 MANDATORY FIRST STEP: PROFILING
+
+**DO NOT SKIP THIS SECTION. Profile BEFORE attempting any fix.**
+
+### Why Profiling is Mandatory
+
+In past attempts, agents have:
+- Spent hours optimizing data transfer when computation was fast (23ms)
+- Assumed 300KB transfer when it was actually 9.27 MB
+- Tried to speed up the wrong code path
+- Given up claiming "fundamental limitations" without measuring
+
+**Profiling would have revealed the truth in under 1 minute.**
+
+### Step 1: Add Python Timing Instrumentation
+
+Add this to the test file BEFORE running it:
+
+```python
+import time
+
+# At the start of test function:
+t0 = time.perf_counter()
+
+# After first operation (e.g., moving to device):
+t1 = time.perf_counter()
+
+# After main operation (e.g., gather):
+t2 = time.perf_counter()
+
+# After reading back (e.g., to_torch):
+t3 = time.perf_counter()
+
+# Log the breakdown:
+print(f"\n{'='*60}")
+print(f"TIMING BREAKDOWN:")
+print(f"  to_device:  {(t1-t0)*1000:7.2f} ms")
+print(f"  operation:  {(t2-t1)*1000:7.2f} ms  <<< is this the bottleneck?")
+print(f"  to_torch:   {(t3-t2)*1000:7.2f} ms  <<< or is this?")
+print(f"  TOTAL:      {(t3-t0)*1000:7.2f} ms")
+print(f"{'='*60}\n")
+
+# Also write to file for easy retrieval:
+with open("/tmp/profiling_results.log", "a") as f:
+    f.write(f"to_device={t1-t0:.3f}s, op={t2-t1:.3f}s, to_torch={t3-t2:.3f}s\n")
+```
+
+### Step 2: Add C++ Timing (if needed)
+
+If the bottleneck is in C++ code, add timing there too:
+
+```cpp
+#include <chrono>
+#include <tt_metal/common/logger.hpp>
+
+// At start of function:
+auto start = std::chrono::high_resolution_clock::now();
+
+// After key operations:
+auto checkpoint = std::chrono::high_resolution_clock::now();
+auto duration_ms = std::chrono::duration<double, std::milli>(checkpoint - start).count();
+
+// Log for large transfers only (to avoid noise):
+if (size > 256 * 1024) {
+    log_info(LogMetal, "operation took {:.2f}ms for {}KB", duration_ms, size/1024);
+}
+```
+
+### Step 3: Log Actual Data Sizes
+
+**CRITICAL**: Don't assume you know the transfer size. LOG IT:
+
+```cpp
+// In the transfer function:
+log_info(LogMetal, "Transferring {} bytes ({:.2f} MB)", size, size / (1024.0 * 1024.0));
+```
+
+```python
+# In the test:
+print(f"Tensor size: {tensor.numel() * tensor.element_size()} bytes")
+print(f"Shape: {tensor.shape}")
+```
+
+### Step 4: Run and Analyze
+
+```bash
+./run_test.sh 2>&1 | tee /tmp/profiling_run.log
+cat /tmp/profiling_results.log
+```
+
+**ONLY AFTER you have timing data should you proceed to implement fixes.**
+
+### Example Profiling Result That Changes Everything
+
+Before profiling, you might assume:
+- "Timeout in copy_completion_queue = transfer is slow"
+
+After profiling:
+```
+TIMING BREAKDOWN:
+  to_device:    57.40 ms
+  gather:       23.20 ms  <<< FAST! Not the problem!
+  to_torch:   8615.80 ms  <<< THIS is where 99% of time goes!
+  TOTAL:      8696.40 ms
+```
+
+Now you know: Don't optimize gather. Optimize to_torch.
+
 ## CRITICAL CHECKLIST
 
-Before starting, verify:
+### Before Starting Implementation
 
-- [ ] **Reproduction test runs and fails consistently** on current branch
+- [ ] **Checked for existing "fix" commits** on the branch
+- [ ] **Tested current state** - Verified test actually fails (don't assume!)
+- [ ] **Added profiling instrumentation** - Will measure where time is spent
 - [ ] **You understand the expected vs actual behavior**
 - [ ] **You have identified the failing operation/function**
-- [ ] **You know what files likely need changes**
-- [ ] **You have a hypothesis for the root cause**
 
-**If you don't have clear answers to the above, STOP and analyze more.**
+### After Profiling (Before Writing Fix Code)
+
+- [ ] **You have MEASURED timing data** - Know exactly where time is spent
+- [ ] **You know ACTUAL data sizes** - Verified, not assumed
+- [ ] **You have a hypothesis based on measurements** - Not stack trace guesses
+- [ ] **You know what files need CONDITIONAL changes**
+
+**If you don't have measured data for the above, STOP and profile first.**
+
+### Implementation Principles
+
+- [ ] **All changes will be CONDITIONAL** - Only affect specific cases
+- [ ] **Will not make universal changes** - Won't slow down small operations
+- [ ] **Will test after EACH change** - Build + run_test.sh
 
 ## Step-by-Step Process
 
-### Phase 1: Root Cause Analysis (2 min)
+### Phase 0: Test Existing State (MANDATORY - 2 min)
 
-#### 1a. Run the Reproduction Test
+**DO NOT SKIP THIS PHASE.**
+
+#### 0a. Check for Existing "Fix" Commits
 
 ```bash
-# Set required environment variables (from test docs)
-export TT_METAL_HOME=/tt-metal
-export PYTHONPATH=/tt-metal
-export ARCH_NAME=wormhole_b0
-source /opt/venv/bin/activate
+# Check current branch
+git log --oneline -10
 
-# Run the test to see the failure
-cd <test-directory>
-pytest test_*_repro.py -v -s 2>&1 | tee failure_log.txt
+# Look for existing fix attempts
+git log --oneline --all | grep -i "fix\|optim\|timeout"
 ```
+
+If there's already a "fix" commit on this branch or a related fix branch:
+1. **DO NOT assume it works**
+2. **TEST IT FIRST** before building on it
+
+#### 0b. Test the Current State
+
+```bash
+# Build Metal first (CRITICAL)
+cd /tt-metal
+./build_metal.sh
+
+# Navigate to test directory
+cd <path-to-test-parent-directory>
+
+# Run the test
+./run_test.sh 2>&1 | tee current_state_test.txt
+```
+
+**Document the result:**
+- Does the test PASS or FAIL?
+- What is the exact error?
+- How long does it take to fail?
+
+**If the test PASSES:**
+- The issue may already be fixed
+- Verify by running 2-3 times
+- Document and report this finding
+
+**If the test FAILS:**
+- Proceed to profiling (Phase 1)
+- You now have a baseline
+
+### Phase 1: Root Cause Analysis (5 min)
+
+**IMPORTANT: This phase REQUIRES profiling. Do not skip to implementation.**
+
+#### 1a. Add Profiling Instrumentation
+
+**BEFORE running any analysis, add timing to the test file:**
+
+```python
+import time
+
+def test_...(device):
+    t0 = time.perf_counter()
+
+    # ... existing setup code ...
+
+    t1 = time.perf_counter()  # After setup/to_device
+
+    # ... main operation ...
+
+    t2 = time.perf_counter()  # After main operation
+
+    # ... read back (to_torch) ...
+
+    t3 = time.perf_counter()  # After read back
+
+    # Log timing
+    print(f"\n>>> PROFILING: setup={t1-t0:.3f}s, op={t2-t1:.3f}s, readback={t3-t2:.3f}s, total={t3-t0:.3f}s\n")
+
+    # Write to file
+    with open("/tmp/profiling.log", "a") as f:
+        f.write(f"setup={t1-t0:.3f}, op={t2-t1:.3f}, readback={t3-t2:.3f}\n")
+```
+
+#### 1b. Run the Profiling Test
+
+```bash
+# Clear old logs
+rm -f /tmp/profiling.log
+
+# Run test with profiling
+./run_test.sh 2>&1 | tee profiling_run.txt
+
+# Check timing results
+cat /tmp/profiling.log
+grep -i "profiling\|timing\|ms\|seconds" profiling_run.txt
+```
+
+#### 1c. Analyze the Timing Data
+
+**Document the breakdown:**
+```markdown
+## Profiling Results
+
+| Phase | Time | % of Total |
+|-------|------|------------|
+| Setup/to_device | X.XX s | XX% |
+| Main operation | X.XX s | XX% |
+| Read back | X.XX s | XX% |
+| **TOTAL** | X.XX s | 100% |
+
+**Bottleneck**: The XXXXX phase takes XX% of time. This is where optimization should focus.
+```
+
+**ONLY AFTER you have this data should you form a hypothesis.**
+
+#### 1d. Verify Data Sizes (Don't Guess!)
+
+Add logging to verify actual transfer sizes:
+
+```bash
+# Search for where to add logging
+grep -r "completion_queue\|transfer\|copy" tt_metal/impl/
+```
+
+If optimizing data transfer, you MUST know the actual size:
+- Add `log_info` statements in C++ code
+- Add `print(f"size={tensor.numel() * tensor.element_size()}")` in Python
+- **DO NOT assume sizes based on tensor shapes without verification**
+
+#### 1e. Analyze the Failure (Based on Profiling)
+
+Now that you have MEASURED data:
 
 #### 1b. Analyze the Failure
 
@@ -211,30 +471,81 @@ If test PASSES unexpectedly:
 - Verify Metal was built
 - Document this and STOP
 
-### Phase 3: Implement Fix (8 min)
+### Phase 3: Implement Fix (10 min)
 
-#### 3a. Make Small, Targeted Changes
+#### 3a. CRITICAL: Make CONDITIONAL Changes Only
+
+**🚨 NEVER make UNIVERSAL changes that affect ALL operations.**
+
+Any optimization MUST be conditional based on clear criteria (size, type, etc.).
+
+**❌ BAD - Universal change:**
+```cpp
+// This affects EVERYTHING - unacceptable!
+auto timeout = base_timeout * 10;
+```
+
+**✅ GOOD - Conditional change:**
+```cpp
+// Only affects large transfers
+constexpr size_t LARGE_TRANSFER_THRESHOLD = 256 * 1024;  // 256KB
+auto timeout = base_timeout;
+if (transfer_size > LARGE_TRANSFER_THRESHOLD) {
+    timeout = base_timeout * 10;  // Extended only for large transfers
+}
+```
+
+**❌ BAD - Changes all sleeps:**
+```cpp
+std::this_thread::sleep_for(std::chrono::milliseconds(100));  // ALL operations now slower
+```
+
+**✅ GOOD - Conditional sleep:**
+```cpp
+if (data_size > THRESHOLD) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+// Small transfers unaffected
+```
+
+#### Why Conditional Changes Matter
+
+Universal changes can:
+- Slow down ALL operations (not just the problematic ones)
+- Mask the real issue (increasing timeout hides performance problems)
+- Break other tests that depend on fast timeouts
+- Make the codebase harder to maintain
+
+#### 3b. Make Small, Targeted Changes
 
 **DO NOT** make large, sweeping changes. Instead:
 
-1. **Start with the most likely fix**
+1. **Start with the most likely fix based on profiling data**
 2. **Make ONE change at a time**
 3. **Test after EACH change**
-4. **Document what each change does**
+4. **Ensure changes are CONDITIONAL**
+5. **Document what each change does and WHY**
 
-**Example: Performance Fix**
+**Example: Conditional Performance Fix**
 
 ```cpp
-// Before: Inefficient memory copy
-void copy_data(uint32_t* src, uint32_t* dst, size_t size) {
-    for (size_t i = 0; i < size; i++) {
-        dst[i] = src[i];  // Slow element-by-element
-    }
+// Before: Tight polling loop affects all operations
+while (!done) {
+    check_status();
+    std::this_thread::yield();
 }
 
-// After: Optimized bulk copy
-void copy_data(uint32_t* src, uint32_t* dst, size_t size) {
-    memcpy(dst, src, size * sizeof(uint32_t));  // Fast bulk operation
+// After: Conditional optimization for large transfers only
+constexpr size_t LARGE_TRANSFER_THRESHOLD = 256 * 1024;
+while (!done) {
+    check_status();
+    if (transfer_size > LARGE_TRANSFER_THRESHOLD) {
+        // Large transfers benefit from less aggressive polling
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    } else {
+        // Small transfers keep original behavior
+        std::this_thread::yield();
+    }
 }
 ```
 
@@ -697,17 +1008,18 @@ Based on the area of change:
 - Status: ⚠️ Partial - Improvement but not complete
 - List remaining work
 
-## Time Management (Total: 15 min)
+## Time Management (Total: 30 min)
 
 **Strict timeline:**
 
-| Phase | Time | Cumulative |
-|-------|------|------------|
-| Root cause analysis | 2 min | 2 min |
-| Build Metal (initial) | 5 min | 7 min |
-| Implement fix (iterative) | 15 min | 22 min |
-| Verify stability | 2-5 min | 24-27 min |
-| Prepare branch & docs | 3 min | 27-30 min |
+| Phase | Time | Cumulative | Notes |
+|-------|------|------------|-------|
+| Test existing state | 2 min | 2 min | Check for existing fixes |
+| Build Metal (initial) | 5 min | 7 min | Required before any tests |
+| **PROFILING** | 5 min | 12 min | **MANDATORY - DO NOT SKIP** |
+| Root cause analysis | 3 min | 15 min | Based on profiling data |
+| Implement fix (iterative) | 10 min | 25 min | CONDITIONAL changes only |
+| Verify stability | 2-5 min | 30 min | 2x deterministic, 5x non-deterministic |
 
 **Verify stability time**:
 - Deterministic: 2 runs × ~1 min = 2 min
@@ -716,87 +1028,206 @@ Based on the area of change:
 **Note**: Build time can vary. Each iteration requires rebuild (~5 min).
 **At 30 minutes, STOP regardless of status** and write the report.
 
-**Realistically**: Expect 2-3 fix iterations, so ~20-30 minutes total.
+**Profiling is NON-NEGOTIABLE**: The 5 minutes for profiling will SAVE time by ensuring you optimize the right thing. Skipping it leads to hours of wasted effort.
+
+**Realistically**: Expect 2-3 fix iterations, so ~25-35 minutes total.
 
 ## Success Criteria
 
 A successful implementation should:
-1. ✅ Reproduction test passes reliably using ./run_test.sh
+1. ✅ **Profiled FIRST** - Have timing data showing where time is spent
+2. ✅ **Tested existing state** - Verified the baseline behavior
+3. ✅ **Changes are CONDITIONAL** - Only affect specific cases (e.g., large transfers)
+4. ✅ Reproduction test passes reliably using ./run_test.sh
    - Deterministic: 2/2 runs pass
    - Non-deterministic: 5/5 runs pass
-2. ✅ Metal rebuilt after each code change (./build_metal.sh)
-3. ✅ Changes are well-documented in commits
-4. ✅ Fix branch pushed to origin
-5. ✅ PR description written for user (in /tmp/pr_description.md)
-6. ✅ Recommended CI workflows listed
-7. ✅ Execution report written to outputs/
-8. ✅ No obvious regressions introduced
-9. ❌ **DID NOT create PR directly** (user/script does this)
+5. ✅ Metal rebuilt after each code change (./build_metal.sh)
+6. ✅ Changes are well-documented in commits
+7. ✅ Fix branch pushed to origin
+8. ✅ PR description written for user (in /tmp/pr_description.md)
+9. ✅ Recommended CI workflows listed
+10. ✅ Execution report written to outputs/ (including profiling data)
+11. ✅ No obvious regressions introduced
+12. ❌ **DID NOT create PR directly** (user/script does this)
+13. ❌ **DID NOT delete test files** until fix is fully validated
 
-## Giving Up Gracefully
+## Giving Up Gracefully - STRICT REQUIREMENTS
 
-If you need to give up:
+**DO NOT give up easily.** In past attempts, agents claimed "fundamental limitations" without evidence, then found fixes when pushed to continue.
 
-1. **Document everything you tried**
-2. **Explain what didn't work and why**
-3. **Provide your best hypothesis**
-4. **List what would be needed to succeed**
-5. **Recommend specific developers/experts**
-6. **Write a complete report with Status: Failed**
+### Before You Can Give Up, You MUST Have:
 
-**Example give-up report:**
+**✅ ALL of these requirements must be met:**
+
+1. **Profiled the operation** - You have MEASURED timing data showing exactly where time is spent
+2. **Verified assumptions** - You have LOGGED actual data sizes, iteration counts, etc.
+3. **Tested at least 5 different approaches** - Not just variations, but fundamentally different strategies
+4. **Searched alternative code paths** - Looked for DMA, async, streaming, or other mechanisms
+5. **Examined BOTH host AND device code** - Not just one side
+6. **Documented WHY each approach failed** - With specific evidence, not speculation
+7. **Spent at least 20 minutes actively trying** - Not just analyzing
+
+**❌ You CANNOT give up if:**
+
+- You haven't profiled yet
+- You've only tried 2-3 approaches
+- You're assuming something is a "hardware limitation" without evidence
+- You've only looked at host code (or only device code)
+- You're guessing at bottleneck locations instead of measuring
+
+### Evidence Required for "Fundamental Limitation" Claims
+
+If you claim something is a hardware/firmware limitation:
+
+1. **Show the specific code** that cannot be optimized
+2. **Show the measurement** proving where time is spent
+3. **Explain why** no software change can improve it
+4. **Provide the math** - actual throughput vs theoretical limits
+
+**Example of VALID "fundamental limitation" evidence:**
+```
+Profiling shows:
+- Device writes 9.27 MB at 1.22 MB/s
+- PCIe theoretical limit: 4 GB/s
+- Actual throughput is 3000x below hardware capability
+
+Tried:
+1. Reduced polling frequency → No improvement
+2. Batched NOC writes → No improvement
+3. Increased burst size → Crashes (hardware limit)
+4. Removed synchronization waits → Crashes (required for correctness)
+5. Async DMA transfer → Not available in this code path
+
+CONCLUSION: Device-side write speed is the bottleneck, not host or software.
+The 1.22 MB/s suggests device firmware issue, not software optimization opportunity.
+```
+
+**Example of INVALID "fundamental limitation" claim:**
+```
+The timeout appears to be fundamental to how wide tensors are handled.
+This issue is deeper than a simple optimization.
+```
+(This has no evidence, no measurements, no specific code references)
+
+### Give-Up Checklist
+
+Before writing a failure report, verify:
+
+- [ ] **I have profiling data** showing time breakdown
+- [ ] **I know the actual data sizes** (not guesses)
+- [ ] **I tried at least 5 approaches** with documented results
+- [ ] **I examined device-side code** (not just host)
+- [ ] **I searched for alternative APIs/mechanisms**
+- [ ] **I can cite specific code** that cannot be changed
+- [ ] **I spent at least 20 minutes** on active implementation attempts
+
+### If Requirements Not Met
+
+If you cannot check all boxes above:
+- **DO NOT give up**
+- Continue investigating
+- Ask for more time if needed
+- Try more approaches
+
+### Example give-up report (With Required Evidence):
 
 ```markdown
-## Status: ❌ Failed
+## Status: ❌ Failed - With Evidence
 
-### What Was Tried
-1. Optimized completion queue read → Still times out
-2. Increased buffer size → OOM error
-3. Changed dispatch path → Test hangs
-4. Reduced timeout threshold → Different error
+### Profiling Data (REQUIRED)
+```
+TIMING BREAKDOWN:
+  setup:      0.05s (0.6%)
+  gather:     0.02s (0.2%)
+  to_torch:   8.62s (99.2%)  <<< BOTTLENECK IDENTIFIED
+```
 
-### Why It Failed
-The timeout appears to be fundamental to how wide tensors are handled
-in the dispatch system. The issue is deeper than a simple optimization.
+### Verified Data Sizes (REQUIRED)
+- Actual transfer: 9.27 MB (not 300KB as stack trace suggested)
+- Chunks: 1159 × 8KB = 9.27 MB
+- Throughput: 1.22 MB/s
 
-### What's Needed
-- Expert analysis of dispatch architecture
-- Possibly redesign of completion queue for wide tensors
-- May need hardware team input on buffer limitations
+### What Was Tried (5+ approaches REQUIRED)
+1. ✅ Reduced polling sleep (10µs → 100µs → 1ms) → No improvement
+2. ✅ Batched NOC flushes (every 8 chunks) → No improvement
+3. ✅ Moved flush outside loop → Test crashes (buffer overflow)
+4. ✅ Increased NOC burst size → Test crashes (hardware limit)
+5. ✅ Conditional timeout scaling → Test passes but doesn't fix speed
+6. ✅ Pre-buffering sleep → Slight improvement but still slow
 
-### Recommended Next Steps
-1. Consult @dispatch-expert for architecture review
-2. Profile the exact bottleneck in completion queue
-3. Consider if this is a hardware limitation
+### Evidence of Limitation
+The device writes at 1.22 MB/s. PCIe theoretical is 4 GB/s.
+This 3000x gap suggests hardware/firmware issue, not software.
+
+Specific code at `cq_common.hpp:130` uses `CQ_NOC_WAIT` which MUST wait
+(removing it causes crashes - attempt #3). This serialization appears
+required for correctness.
 
 ### Recommended Developers
-- **@dispatch-lead**: Completion queue architecture
-- **@device-expert**: Hardware buffer limits
-- **@perf-team**: Wide tensor optimization expertise
+- **@dispatch-lead**: Why is device write so slow?
+- **@device-expert**: Is this a firmware limitation?
 ```
 
 ## Important Notes
 
-- **Work quickly but carefully** - 15 minutes is tight
-- **Don't overthink** - Make reasonable changes and test
+### Methodology
+- **PROFILE FIRST** - This is non-negotiable. 5 minutes of profiling saves hours of guessing.
+- **TEST existing code** - Don't assume existing "fixes" work. Verify first.
+- **MEASURE, don't guess** - Log actual data sizes, don't assume from tensor shapes.
+- **CONDITIONAL changes only** - Never make universal changes that affect all operations.
+
+### Giving Up
+- **DON'T give up easily** - Past agents claimed "fundamental limitations" without evidence, then found fixes when pushed.
+- **Require evidence** - If claiming something is unfixable, show the code, measurements, and math.
+- **Try 5+ approaches** - Not variations of the same approach, but fundamentally different strategies.
+- **Examine both sides** - Check device code, not just host code (or vice versa).
+
+### Process
+- **Work methodically** - 30 minutes is enough if you profile first
 - **Document as you go** - Don't wait until the end
-- **Give up if stuck** - Better to document failure than waste time
-- **Always create the report** - Even if you give up
-- **Remove test from PR** - It stays on dev branch only
-- **Use draft PRs** - Always create as draft first
+- **Always create the report** - Even if you give up (with required evidence)
+- **Keep test files** - Don't delete until fix is fully validated
+- **Include profiling data** - In all reports
+
+### PR Preparation
+- **DO NOT create PR directly** - User/script will do it
 - **Include relevant developers** - Tag appropriate reviewers
+- **Write clear PR description** - Save to /tmp/pr_description.md
 
 ## Final Checklist
 
 Before finishing, verify:
 
+### Methodology Requirements
+- [ ] **Tested existing state FIRST** - Didn't assume existing code works
+- [ ] **Added profiling instrumentation** - Have timing data
+- [ ] **Know where bottleneck is** - Based on MEASURED data, not assumptions
+- [ ] **Verified data sizes** - Logged actual transfer sizes
+
+### Implementation Requirements
+- [ ] **All changes are CONDITIONAL** - Only affect specific cases (e.g., large transfers)
+- [ ] **No universal slowdowns** - Small operations still fast
 - [ ] **Built Metal with ./build_metal.sh** after all changes
-- [ ] **Ran test 5/5 times using ./run_test.sh** (not pytest directly)
-- [ ] **Test passed all 5 runs** (or documented failure)
-- [ ] **Reproduction test removed** from PR branch
+- [ ] **Ran test using ./run_test.sh** (not pytest directly)
+   - [ ] Deterministic: 2/2 passes
+   - [ ] Non-deterministic: 5/5 passes
+- [ ] **Test passed all runs** (or documented failure with required evidence)
+
+### Documentation Requirements
 - [ ] **Fix branch pushed** to origin
 - [ ] **PR description written** to /tmp/pr_description.md
 - [ ] **DID NOT create PR** (user/script will do it)
+- [ ] **DID NOT delete test files** (kept for validation)
 - [ ] **Execution report written** to outputs/
+- [ ] **Report includes profiling data** showing time breakdown
 - [ ] **Report includes** relevant developer contacts
-- [ ] **Total time** <= 15 minutes
+
+### If Giving Up
+- [ ] **Profiled the operation** - Have timing data
+- [ ] **Tried at least 5 approaches** - Documented each
+- [ ] **Examined both host AND device code**
+- [ ] **Have specific evidence** for why fix isn't possible
+- [ ] **Spent at least 20 minutes** on active attempts
+
+### Time
+- [ ] **Total time** <= 30 minutes
