@@ -104,6 +104,12 @@ gh pr view <PR-number>
 
 This approach is faster when you already have a working reproduction test!
 
+**Pro tip**: Test the bash script directly first:
+```bash
+cd reproduce-deterministic-failures/timeout-in-datamovement
+./run_test.sh  # Verify test reproduces the failure
+```
+
 ## Common Scenarios
 
 ### Scenario 1: I Have a CI Failure URL
@@ -113,7 +119,8 @@ This approach is faster when you already have a working reproduction test!
   "deterministic": true,
   "url": "https://github.com/tenstorrent/tt-metal/actions/runs/12345678",
   "prompt": "Test XYZ fails with error ABC. Fix the root cause.",
-  "raw-logs": ""
+  "raw-logs": "",
+  "existing-test-path": ""
 }
 ```
 
@@ -124,11 +131,12 @@ This approach is faster when you already have a working reproduction test!
   "deterministic": false,
   "url": "",
   "prompt": "Intermittent hang in reduce_scatter. Fix race condition.",
-  "raw-logs": "... paste full error logs here ..."
+  "raw-logs": "... paste full error logs here ...",
+  "existing-test-path": ""
 }
 ```
 
-### Scenario 3: I Have an Existing Test
+### Scenario 3: I Have an Existing Test (with bash script)
 
 ```json
 {
@@ -136,8 +144,14 @@ This approach is faster when you already have a working reproduction test!
   "url": "",
   "prompt": "Fix the timeout issue demonstrated by the existing test.",
   "raw-logs": "",
-  "existing-test-path": "path/to/test_file.py"
+  "existing-test-path": "reproduce-deterministic-failures/timeout-in-datamovement/tests/test_gather_timeout_stress.py"
 }
+```
+
+**Note**: Each test folder should have a `run_test.sh` script. Test it first:
+```bash
+cd reproduce-deterministic-failures/timeout-in-datamovement
+./run_test.sh  # Should reproduce the failure
 ```
 
 ### Scenario 4: I Want to Optimize Performance
