@@ -472,14 +472,12 @@ inline void l1_only_fabric_send_noc_unicast_with_semaphore(
         // Send payload followed by header over the fabric.
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_without_header_non_blocking_from_address(payload_l1_address, curr_packet_size);
-        fabric_connection.send_payload_flush_non_blocking_from_address(
-            (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+        fabric_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 
         payload_l1_address += curr_packet_size;
         noc_payload_write_address += curr_packet_size;
         size_bytes -= curr_packet_size;
     }
-    noc_async_writes_flushed();
 }
 
 template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType>
