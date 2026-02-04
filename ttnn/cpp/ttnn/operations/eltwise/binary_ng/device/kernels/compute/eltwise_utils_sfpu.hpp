@@ -34,6 +34,7 @@
                                                                        \
         cb_pop_front(cb_pre, per_core_block_size);                     \
         cb_push_back(cb_post, per_core_block_size);                    \
+        tensix_sync();                                                 \
                                                                        \
         pack_reconfig_data_format(/*old*/ cb_post, /*new*/ cb_out);    \
     } while (0)

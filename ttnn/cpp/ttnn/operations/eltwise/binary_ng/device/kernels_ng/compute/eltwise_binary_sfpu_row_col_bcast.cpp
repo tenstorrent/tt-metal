@@ -74,6 +74,7 @@ ALWI void process_tile(
         pack_tile(0, cb_llk_post);
         cb_push_back(cb_llk_post, num_tiles_per_cycle);
         tile_regs_release();
+        tensix_sync();
 
         cb_pop_front(CB_POST_OTHER, num_tiles_per_cycle);
 
@@ -105,6 +106,7 @@ ALWI void process_tile(
         }
         tile_regs_release();
         cb_push_back(cb_out, num_tiles_per_cycle);
+        tensix_sync();
         cb_pop_front(cb_llk_post, num_tiles_per_cycle);
     }
     cb_pop_front(CB_POST_BCAST, num_tiles_per_cycle);

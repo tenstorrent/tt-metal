@@ -77,5 +77,6 @@ void kernel_main() {
 
         cb_pop_front(cb_in0, num_tiles_per_cycle);
         cb_push_back(cb_out, num_tiles_per_cycle);
+        tensix_sync();
     }
 }

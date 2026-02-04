@@ -53,6 +53,7 @@ void kernel_main() {
 
         cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
         cb_push_back(cb_out, num_tiles_per_cycle);
+        tensix_sync();
     }
 
     // Pop the scalar tile from RHS CB

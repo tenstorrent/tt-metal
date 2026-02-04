@@ -67,6 +67,7 @@ void kernel_main() {
 
         cb_pop_front(cb_in0, per_core_block_size);
         cb_push_back(cb_inp0, per_core_block_size);
+        tensix_sync();
 #ifndef SFPU_OP_INIT_PRE_IN1_0
         reconfig_data_format_srca(cb_in0, cb_inp0);
         pack_reconfig_data_format(cb_inp0, cb_out0);
@@ -100,6 +101,7 @@ void kernel_main() {
 
         cb_pop_front(cb_in1, per_core_block_size);
         cb_push_back(cb_inp1, per_core_block_size);
+        tensix_sync();
         reconfig_data_format_srca(cb_in1, cb_inp0);
         pack_reconfig_data_format(cb_inp1, cb_out0);
 #endif
@@ -136,5 +138,6 @@ void kernel_main() {
         cb_pop_front(cb_inp0, per_core_block_size);
         cb_pop_front(cb_inp1, per_core_block_size);
         cb_push_back(cb_out0, per_core_block_size);
+        tensix_sync();
     }
 }

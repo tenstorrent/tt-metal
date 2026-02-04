@@ -74,6 +74,7 @@ void kernel_main() {
         tile_regs_release();
 
         cb_push_back(cb_out, num_tiles_per_cycle);
+        tensix_sync();
         cb_pop_front(cb_in0, num_tiles_per_cycle);
         cb_pop_front(cb_in1, num_tiles_per_cycle);
     }

@@ -80,6 +80,7 @@ void kernel_main() {
 
         cb_pop_front(cb_in0, per_core_block_size);
         cb_push_back(cb_inp0, per_core_block_size);
+        tensix_sync();
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN1_0
@@ -102,6 +103,7 @@ void kernel_main() {
 
         cb_pop_front(cb_in1, per_core_block_size);
         cb_push_back(cb_inp1, per_core_block_size);
+        tensix_sync();
 #endif
         cb_wait_front(cb_inp0, per_core_block_size);
         cb_wait_front(cb_inp1, per_core_block_size);
@@ -170,5 +172,6 @@ void kernel_main() {
         cb_pop_front(cb_inp0, per_core_block_size);
         cb_pop_front(cb_inp1, per_core_block_size);
         cb_push_back(cb_out0, per_core_block_size);
+        tensix_sync();
     }
 }

@@ -60,6 +60,7 @@ void kernel_main() {
         pack_tile(0, cb_llk_post);
         cb_push_back(cb_llk_post, num_tiles_per_cycle);
         tile_regs_release();
+        tensix_sync();
 
         cb_pop_front(cb_bcast, num_tiles_per_cycle);
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
@@ -76,6 +77,7 @@ void kernel_main() {
         tile_regs_release();
 
         cb_push_back(cb_out, num_tiles_per_cycle);
+        tensix_sync();
         cb_pop_front(cb_left, num_tiles_per_cycle);
         cb_pop_front(cb_right, num_tiles_per_cycle);
     }
