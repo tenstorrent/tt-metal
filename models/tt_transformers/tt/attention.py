@@ -59,11 +59,14 @@ class Attention(LightweightModule):
         self.batch_size_per_device_group = (
             max(self.max_batch_size // self.num_device_groups, 1) if self.TG else self.max_batch_size
         )
+        self.configuration = configuration
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 
         self.arch_name = configuration.arch_name
+        #import json
+        #open("/tmp/tt_cfg_dump.json","w").write(json.dumps(dir(configuration), indent=2))
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
             weight = torch.zeros(1, 32, 8, 32)
@@ -176,6 +179,7 @@ class Attention(LightweightModule):
             if self.is_phi1:
                # Keep CPU copy so we can expand per seq_len during traced prefill
                self._qkv_bias_cpu = qkv_bias
+               
             # Prefill can use broadcasting on the bias add so wants a 1d tensor
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
@@ -342,7 +346,7 @@ class Attention(LightweightModule):
             self.scale = configuration.query_pre_attn_scalar**-0.5
         else:
             self.scale = self.head_dim**-0.5
-
+    
     def init_kv_cache(self, configuration, weight_cache_path):
         """
         Generates empty KV cache and pushed to device memory
@@ -805,26 +809,13 @@ class Attention(LightweightModule):
         )
 
         # FIXME: surely ttnn.linear bias should work?
+        #with open("/tmp/phi1_bias_dbg.txt", "a") as f:
+            #f.write(f"xqkv: shape={tuple(xqkv_fused.shape)} dtype={xqkv_fused.dtype} layout={xqkv_fused.layout} mem={xqkv_fused.memory_config()} dist={getattr(xqkv_fused,'distributed_tensor_config',lambda:None)()}\n")
+            #f.write(f"bias: shape={tuple(self.wqkv_bias_prefill.shape)} dtype={self.wqkv_bias_prefill.dtype} layout={self.wqkv_bias_prefill.layout} mem={self.wqkv_bias_prefill.memory_config()} dist={getattr(self.wqkv_bias_prefill,'distributed_tensor_config',lambda:None)()}\n")
+
         if self.wqkv_bias_prefill is not None:
-            if self.is_phi1:
-                # Phi-1 + tracing: avoid 1->seq_len broadcast (can trip BinaryNg subtile broadcast)
-                if not hasattr(self, "_wqkv_bias_prefill_by_seqlen"):
-                    self._wqkv_bias_prefill_by_seqlen = {}
-                if seq_len not in self._wqkv_bias_prefill_by_seqlen:
-                    # Create [1,1,seq_len,qkv] bias and shard over -1 like the others
-                    qkv_bias_prefill = self._qkv_bias_cpu.unsqueeze(0).unsqueeze(0).expand(1, 1, seq_len, -1)
-                    self._wqkv_bias_prefill_by_seqlen[seq_len] = ttnn.as_tensor(
-                        qkv_bias_prefill,
-                        device=self.mesh_device,
-                        mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                        dtype=ttnn.bfloat16,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        layout=ttnn.TILE_LAYOUT,
-                        cache_file_name=None,  # optional: you can add a cache_name() here
-                    )
-                xqkv_fused = xqkv_fused + self._wqkv_bias_prefill_by_seqlen[seq_len]
-            else:
-                xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
+            xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
+
 
         xqkv_fused = tt_all_reduce(
             xqkv_fused,

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
+import os
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
 
@@ -119,7 +119,7 @@ class RMSNorm(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:        
         # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = self.sharded_program_config if in_sharded else None
         memory_config = self.sharded_output_config if out_sharded else None
@@ -127,6 +127,10 @@ class RMSNorm(LightweightModule):
         distributed = self.is_distributed and self.is_distributed(mode)
         norm = self._distributed_rmsnorm if distributed else ttnn.rms_norm
         weight = self.weight_distributed if distributed else self.weight
+        # Check the HF_MODEL environment variable
+        hf_model = os.getenv("HF_MODEL", "").strip()
+        # If the model explicitly matches Phi-1 (add Phi-1.5 if you want)
+        is_phi1 = hf_model in {"microsoft/Phi-1"}
 
         if in_sharded:
             assert not distributed, "Distributed RMSNorm does not support sharded inputs"
@@ -139,9 +143,21 @@ class RMSNorm(LightweightModule):
         def get_shards(t):
             if t is None:
                 return None
+            # Newer tt-metal exposes helpers at the top-level; older versions keep them under ttnn.distributed    
             if hasattr(ttnn, "get_device_tensors"):
                 return ttnn.get_device_tensors(t)
+            if hasattr(ttnn, "distributed") and hasattr(ttnn.distributed, "get_device_tensors"):
+                return ttnn.distributed.get_device_tensors(t)    
             return None
+
+        def aggregate_as_tensor(device_tensors, like_tensor: ttnn.Tensor):
+            cfg = like_tensor.distributed_tensor_config()
+            if hasattr(ttnn, "aggregate_as_tensor"):
+                return ttnn.aggregate_as_tensor(device_tensors, cfg)
+            if hasattr(ttnn, "distributed") and hasattr(ttnn.distributed, "aggregate_as_tensor"):
+                return ttnn.distributed.aggregate_as_tensor(device_tensors, cfg)
+            # Fallback: will drop distribution metadata, but better than crashing
+            return ttnn.combine_device_tensors(device_tensors)
 
         def ensure_gamma_layout(w_local: ttnn.Tensor) -> ttnn.Tensor:
             if w_local is None:
@@ -152,7 +168,8 @@ class RMSNorm(LightweightModule):
 
     
 
-        if norm is ttnn.rms_norm:
+        # Only enable the per-device/manual aggregation path for Phi-1
+        if is_phi1 and norm is ttnn.rms_norm:
             x_shards = get_shards(x)
             w_shards = get_shards(weight)
 
@@ -177,10 +194,7 @@ class RMSNorm(LightweightModule):
                     )
                     out_shards.append(out_i)
 
-                if hasattr(ttnn, "aggregate_as_tensor"):
-                    x = ttnn.aggregate_as_tensor(out_shards, x.distributed_tensor_config())
-                else:
-                    x = ttnn.combine_device_tensors(out_shards)
+                x = aggregate_as_tensor(out_shards, x)
 
             else:
                 w = ensure_gamma_layout(w_shards[0] if w_is_md else weight)

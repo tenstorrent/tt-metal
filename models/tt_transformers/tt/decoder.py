@@ -223,20 +223,123 @@ class TransformerBlock(LightweightModule):
     ) -> ttnn.Tensor:
 
         def _phi1_safe_add(a, b, mem_cfg, dtype):
-            # Only needed for multi-device mesh tensors
             if self.num_devices <= 1:
                 return ttnn.add(a, b, memory_config=mem_cfg, dtype=dtype)
 
-            if hasattr(ttnn, "get_device_tensors") and hasattr(a, "distributed_tensor_config"):
-                a_shards = ttnn.get_device_tensors(a)
-                b_shards = ttnn.get_device_tensors(b)
-                if isinstance(a_shards, (list, tuple)) and isinstance(b_shards, (list, tuple)) and len(a_shards) == len(b_shards):
-                    out_shards = [ttnn.add(ai, bi, memory_config=mem_cfg, dtype=dtype) for ai, bi in zip(a_shards, b_shards)]
-                    if hasattr(ttnn, "aggregate_as_tensor"):
-                        return ttnn.aggregate_as_tensor(out_shards, a.distributed_tensor_config())
-                    return ttnn.combine_device_tensors(out_shards)
+            def _get_device_tensors(t):
+                if hasattr(ttnn, "get_device_tensors"):
+                    return ttnn.get_device_tensors(t)
+                if hasattr(ttnn, "distributed") and hasattr(ttnn.distributed, "get_device_tensors"):
+                    return ttnn.distributed.get_device_tensors(t)
+                return None
 
-            return ttnn.add(a, b, memory_config=mem_cfg, dtype=dtype)
+            def _get_dist_cfg(t):
+                return t.distributed_tensor_config() if hasattr(t, "distributed_tensor_config") else None
+
+            def _aggregate_as_tensor(device_tensors, like_tensor):
+                cfg = _get_dist_cfg(like_tensor)
+                if cfg is not None:
+                    if hasattr(ttnn, "aggregate_as_tensor"):
+                        return ttnn.aggregate_as_tensor(device_tensors, cfg)
+                    if hasattr(ttnn, "distributed") and hasattr(ttnn.distributed, "aggregate_as_tensor"):
+                        return ttnn.distributed.aggregate_as_tensor(device_tensors, cfg)
+                return ttnn.combine_device_tensors(device_tensors)
+
+            a_shards = _get_device_tensors(a)
+            b_shards = _get_device_tensors(b)
+
+            a_is_sharded = isinstance(a_shards, (list, tuple)) and len(a_shards) > 1
+            b_is_sharded = isinstance(b_shards, (list, tuple)) and len(b_shards) > 1
+
+            # sharded + sharded
+            if a_is_sharded and b_is_sharded and len(a_shards) == len(b_shards):
+                out_shards = [
+                    ttnn.add(ai, bi, memory_config=mem_cfg, dtype=dtype)
+                    for ai, bi in zip(a_shards, b_shards)
+                ]
+                return _aggregate_as_tensor(out_shards, a)
+            
+            # a is sharded (list of per-device tensors), b is not (single full-width tensor)
+            if a_is_sharded and not b_is_sharded:
+                # residual shards define the sharding scheme
+                shard_w = a_shards[0].shape[-1]
+                num = len(a_shards)
+                total_w = shard_w * num
+
+                # Only handle the exact mismatch you're seeing: b is full width, a shards are partial width
+                if hasattr(b, "shape") and b.shape[-1] == total_w:
+                    # Bring b to host as a torch.Tensor, slice in Python, then rebuild a TT tensor
+                    b_torch = ttnn.to_torch(b)  # docs: ttnn.to_torch :contentReference[oaicite:4]{index=4}
+
+                    out_shards = []
+                    for i, ai in enumerate(a_shards):
+                        start = i * shard_w
+                        end = (i + 1) * shard_w
+
+                        # Slice last dim in torch (safe, no TTNN device-op invoked)
+                        bi_torch = b_torch[..., start:end]
+
+                        # Recreate as TT tensor in TILE so it can add with ai (also TILE)
+                        bi_host = ttnn.from_torch(
+                            bi_torch,
+                            dtype=ai.dtype,
+                            layout=ttnn.TILE_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )  # docs: ttnn.from_torch :contentReference[oaicite:5]{index=5}
+
+                        # Put on mesh, then select the i-th device shard (same as your existing flow)
+                        bi_mesh = ttnn.to_device(bi_host, device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+                        bi_list = ttnn.get_device_tensors(bi_mesh)
+                        bi = bi_list[i]
+
+                        out_shards.append(ttnn.add(ai, bi, memory_config=mem_cfg, dtype=dtype))
+
+                                        # Host aggregate (torch.cat), then upload as a SHARDED mesh tensor
+                    import torch
+
+                    out_torch = [ttnn.to_torch(s).detach().cpu() for s in out_shards]
+                    full = torch.cat(out_torch, dim=-1)
+
+                    num_devices = len(a_shards)
+
+                    mesh_mapper_config = ttnn.MeshMapperConfig(
+                        [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)],
+                        ttnn.MeshShape(1, num_devices),
+                    )
+                    mesh_mapper = ttnn.create_mesh_mapper(self.mesh_device, mesh_mapper_config)
+
+                    full_mesh_sharded = ttnn.from_torch(
+                        full,
+                        dtype=out_shards[0].dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.mesh_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=mesh_mapper,
+                    )
+
+                    return ttnn.to_memory_config(full_mesh_sharded, mem_cfg)
+
+                # Don’t fall back to mesh add — it will hit invalid subtile broadcast again
+                raise RuntimeError(
+                    f"_phi1_safe_add: cannot align shapes; a_shard_last={a_shards[0].shape[-1]} "
+                    f"num_shards={len(a_shards)} b_shape={getattr(b,'shape',None)}"
+                )
+
+
+            if b_is_sharded and not a_is_sharded:
+                a2 = ttnn.to_memory_config(a, mem_cfg)
+                out_shards = [
+                    ttnn.add(a2, bi, memory_config=mem_cfg, dtype=dtype)
+                    for bi in b_shards
+                ]
+                return _aggregate_as_tensor(out_shards, b)
+
+            # neither sharded (safe normal add)
+            a2 = ttnn.to_memory_config(a, mem_cfg)
+            b2 = ttnn.to_memory_config(b, mem_cfg)
+            return ttnn.add(a2, b2, memory_config=mem_cfg, dtype=dtype)
+
 
         TG = self.args.is_galaxy
         residual = x
@@ -270,6 +373,12 @@ class TransformerBlock(LightweightModule):
 
         if self.pre_ff_norm is None:
             if getattr(self, "is_phi1", False) and mode == "prefill":
+                if getattr(self, "is_phi1", False) and mode == "prefill" and not hasattr(self, "_meta_dumped"):
+                    self._meta_dumped = True
+                    #with open("/tmp/phi1_add_meta.txt", "w") as f:
+                    #    f.write(f"residual: {residual}\n")
+                    #    f.write(f"attn_out: {attn_out}\n")
+
                 hidden_states = _phi1_safe_add(residual, attn_out, skip_mem_cfg, ttnn.bfloat16 if TG else None)
             else:
                 hidden_states = ttnn.add(residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
@@ -311,6 +420,11 @@ class TransformerBlock(LightweightModule):
 
         hidden_states = self.feed_forward.forward(hidden_states, mode)
 
+        # For Phi-1 prefill, keep residual + MLP output in same memcfg before the final add
+        if getattr(self, "is_phi1", False) and mode == "prefill":
+            hidden_states = ttnn.to_memory_config(hidden_states, skip_mem_cfg)
+            residual = ttnn.to_memory_config(residual, skip_mem_cfg)
+
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
@@ -333,13 +447,14 @@ class TransformerBlock(LightweightModule):
 
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
 
-        out = ttnn.add(
-            residual,
-            hidden_states,
-            memory_config=skip_mem_cfg,
-            dtype=self.args.ccl_dtype
+        final_dtype = (
+            self.args.ccl_dtype
             if TG and not self.args.is_distributed_norm(mode)
-            else activation_dtype or ttnn.bfloat16,
+            else activation_dtype or ttnn.bfloat16
         )
+        if getattr(self, "is_phi1", False) and mode == "prefill":
+            out = _phi1_safe_add(residual, hidden_states, skip_mem_cfg, final_dtype)
+        else:
+            out = ttnn.add(residual, hidden_states, memory_config=skip_mem_cfg, dtype=final_dtype)
 
         return out  # fractured across devices
