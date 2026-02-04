@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/context.hpp>
+#include <tt-metalium/experimental/context_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 namespace tt {
 class Cluster;
@@ -16,6 +17,7 @@ class RunTimeOptions;
 
 namespace tt::tt_metal {
 class Hal;
+class MetaliumObjectAccessor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::experimental {
@@ -24,46 +26,47 @@ namespace tt::tt_metal::experimental {
 #pragma clang diagnostic ignored "-Wunused-private-field"
 
 // Manages the runtime state and context management
-class Runtime {
+class Context {
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
 
-    Runtime();
+    Context();
 
 public:
-    ~Runtime();
+    ~Context();
 
-    Runtime(const Runtime&) = delete;
-    Runtime& operator=(const Runtime&) = delete;
-    Runtime(Runtime&&) = delete;
-    Runtime& operator=(Runtime&&) = delete;
+    Context(const Context&) = delete;
+    Context& operator=(const Context&) = delete;
+    Context(Context&&) = delete;
+    Context& operator=(Context&&) = delete;
 
-    // Returns the Runtime instance.
-    static Runtime& instance();
+    // Returns the Context instance.
+    static Context& instance();
 
-    // Try to bind a context. Returns false if unsuccessful.
-    bool bind_context(const std::shared_ptr<Context>& context);
+    // Try to bind a a descriptor. This will initialize the devices according to the descriptor. Returns false if
+    // unsuccessful.
+    bool set_descriptor(const std::shared_ptr<ContextDescriptor>& descriptor);
 
-    // Try to unbind a context. Returns false if unsuccessful.
-    bool unbind_context();
+    // Remove a descriptor and return the devices to a reset state. Returns false if unsuccessful.
+    bool remove_descriptor();
 
-    // Returns true if a context is bound.
-    bool has_bound_context() const;
+    // Returns true if a descriptor is set.
+    bool has_descriptor() const;
 
-    // Returns the current context.
-    std::shared_ptr<Context> get_context() const;
+    // Returns the current descriptor.
+    std::shared_ptr<ContextDescriptor> get_descriptor() const;
 };
 
 #pragma clang diagnostic pop
 
 // Interface to query system state
-class ClusterQuery {
+class MetaliumObject {
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
 
-    ClusterQuery();
+    MetaliumObject();
 
     tt::Cluster& cluster();
     const tt::Cluster& cluster() const;
@@ -71,30 +74,34 @@ private:
     const tt::tt_metal::Hal& hal() const;
     tt::llrt::RunTimeOptions& rtoptions();
     const tt::llrt::RunTimeOptions& rtoptions() const;
+    tt::tt_fabric::ControlPlane& get_control_plane();
+    const tt::tt_fabric::ControlPlane& get_control_plane() const;
 
-    friend class Runtime;
+    friend class tt::tt_metal::MetaliumObjectAccessor;
+    friend class SiliconRuntime;
 
 public:
-    ~ClusterQuery();
+    ~MetaliumObject();
 
-    ClusterQuery(const ClusterQuery&) = delete;
-    ClusterQuery& operator=(const ClusterQuery&) = delete;
-    ClusterQuery(ClusterQuery&&) = delete;
-    ClusterQuery& operator=(ClusterQuery&&) = delete;
+    MetaliumObject(const MetaliumObject&) = delete;
+    MetaliumObject& operator=(const MetaliumObject&) = delete;
+    MetaliumObject(MetaliumObject&&) = delete;
+    MetaliumObject& operator=(MetaliumObject&&) = delete;
 
-    // Returns the instance of the ClusterQuery
-    static ClusterQuery& instance();
+    // Returns the instance of the MetaliumObject
+    static MetaliumObject& instance();
 
-    // Initialize the ClusterQuery. This must be called before any queries or Runtime::bind().
+    // Initialize the MetaliumObject. This must be called before any queries or Context::bind().
     bool initialize();
 
-    // Teardown the ClusterQuery. The ClusterQuery cannot be destructed until the runtime is unbound from any context.
+    // Teardown the MetaliumObject. The MetaliumObject cannot be destructed until the runtime is unbound from any
+    // context.
     bool teardown();
 
-    // Returns true if the ClusterQuery is initialized.
+    // Returns true if the MetaliumObject is initialized.
     bool is_initialized() const;
 
-    // Returns true if a context is active. The ClusterQuery cannot be destructed until the runtime is unbound.
+    // Returns true if a context is active. The MetaliumObject cannot be destructed until the runtime is unbound.
     bool is_runtime_active() const;
 
     // Returns the number of visible devices which may be specified by the TT_VISIBLE_DEVICES environment variable

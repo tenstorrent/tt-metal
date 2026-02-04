@@ -11,6 +11,8 @@
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
 
+#include <api/tt-metalium/experimental/runtime.hpp>
+
 namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
@@ -261,5 +263,58 @@ private:
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
     tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
 };
+
+static bool using_new_context = false;
+
+// Internal accessor
+class MetaliumObjectAccessor {
+public:
+    static tt::Cluster& cluster() { return experimental::MetaliumObject::instance().cluster(); }
+    static tt::tt_metal::Hal& hal() { return experimental::MetaliumObject::instance().hal(); }
+    static llrt::RunTimeOptions& rtoptions() { return experimental::MetaliumObject::instance().rtoptions(); }
+    static tt::tt_fabric::ControlPlane& get_control_plane() {
+        return experimental::MetaliumObject::instance().get_control_plane();
+    }
+};
+
+// Returns the cluster instance.
+inline tt::Cluster& get_cluster() {
+    if (using_new_context) {
+        return MetaliumObjectAccessor::cluster();
+    }
+    return tt::tt_metal::MetalContext::instance().get_cluster();
+}
+
+// Returns the HAL for querying hardware properties.
+inline const tt::tt_metal::Hal& get_hal() {
+    if (using_new_context) {
+        return MetaliumObjectAccessor::hal();
+    }
+    return tt::tt_metal::MetalContext::instance().hal();
+}
+
+// Returns the parsed runtime options.
+inline llrt::RunTimeOptions& get_rtoptions() {
+    if (using_new_context) {
+        return MetaliumObjectAccessor::rtoptions();
+    }
+    return tt::tt_metal::MetalContext::instance().rtoptions();
+}
+
+// Returns the Fabric control plane.
+inline tt::tt_fabric::ControlPlane& get_control_plane() {
+    if (using_new_context) {
+        return MetaliumObjectAccessor::get_control_plane();
+    }
+    return tt::tt_metal::MetalContext::instance().get_control_plane();
+}
+
+// Returns the fabric config. When using MetaliumObject, returns DISABLED since MetaliumObject doesn't handle Fabric.
+inline tt_fabric::FabricConfig get_fabric_config() {
+    if (using_new_context) {
+        return tt_fabric::FabricConfig::DISABLED;
+    }
+    return tt::tt_metal::MetalContext::instance().get_fabric_config();
+}
 
 }  // namespace tt::tt_metal

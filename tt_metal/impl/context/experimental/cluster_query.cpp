@@ -4,10 +4,12 @@
 
 #include <tt-metalium/experimental/runtime.hpp>
 
+#include <filesystem>
 #include <mutex>
 #include <stdexcept>
 
 #include "impl/profiler/profiler_state_manager.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -19,13 +21,13 @@
 
 namespace tt::tt_metal::experimental {
 
-#define LOCK_ASSERT_INITIALIZED_FUNCTION()                           \
-    std::lock_guard<std::mutex> lock(mutex_);                        \
-    if (!initialized_) {                                             \
-        throw std::runtime_error("ClusterQuery is not initialized"); \
+#define LOCK_ASSERT_INITIALIZED_FUNCTION()                             \
+    std::lock_guard<std::mutex> lock(mutex_);                          \
+    if (!initialized_) {                                               \
+        throw std::runtime_error("MetaliumObject is not initialized"); \
     }
 
-class ClusterQuery::Impl {
+class MetaliumObject::Impl {
 public:
     tt::llrt::RunTimeOptions rtoptions_;
 
@@ -42,7 +44,7 @@ public:
     bool initialize() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (initialized_) {
-            log_critical(tt::LogMetal, "Cannot initialize ClusterQuery: already initialized");
+            log_critical(tt::LogMetal, "Cannot initialize MetaliumObject: already initialized");
             return false;
         }
 
@@ -73,6 +75,34 @@ public:
             initialize_objects();
         }
 
+        // Initialize control plane using auto-discovery for single-host scenarios
+        // MetaliumObject is only for ControlPlane, NOT Fabric - fabric is a higher level concern
+        // For multi-host scenarios, a mesh graph descriptor would be needed
+        if (*distributed_context_->size() == 1) {
+            // Single-host: Use auto-discovery to construct ControlPlane with DISABLED fabric config
+            log_info(tt::LogMetal, "MetaliumObject: Constructing control plane using auto-discovery");
+            // control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(tt::tt_fabric::FabricConfig::DISABLED);
+        } else {
+            // Multi-host: Need mesh graph descriptor based on cluster type
+            auto cluster_type = cluster_->get_cluster_type();
+            auto fabric_type = tt::tt_fabric::FabricType::MESH;  // Default for topology discovery
+            std::filesystem::path mesh_graph_desc_path =
+                tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
+                    cluster_type, rtoptions_.get_root_dir(), fabric_type);
+
+            if (!mesh_graph_desc_path.empty() && std::filesystem::exists(mesh_graph_desc_path)) {
+                log_info(
+                    tt::LogMetal, "MetaliumObject: Using mesh graph descriptor: {}", mesh_graph_desc_path.string());
+                // Use DISABLED fabric config since MetaliumObject doesn't handle Fabric
+                // control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
+                //     mesh_graph_desc_path.string(), tt::tt_fabric::FabricConfig::DISABLED);
+            } else {
+                log_warning(
+                    tt::LogMetal,
+                    "MetaliumObject: No mesh graph descriptor found for multi-host. Control plane not initialized.");
+            }
+        }
+
         initialized_ = true;
 
         return true;
@@ -81,11 +111,12 @@ public:
     bool teardown() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!initialized_) {
-            log_critical(tt::LogMetal, "Cannot teardown ClusterQuery: not initialized");
+            log_critical(tt::LogMetal, "Cannot teardown MetaliumObject: not initialized");
             return false;
         }
-        if (Runtime::instance().has_bound_context()) {
-            log_critical(tt::LogMetal, "Cannot teardown ClusterQuery: Runtime has a bound context");
+        if (Context::instance().has_descriptor()) {
+            log_critical(
+                tt::LogMetal, "Cannot teardown MetaliumObject: Runtime has a descriptor. Need to reset it first.");
             return false;
         }
         distributed_context_.reset();
@@ -145,49 +176,58 @@ public:
         TT_FATAL(distributed_context_, "Distributed context not initialized.");
         return distributed_context_;
     }
+
+    tt::tt_fabric::ControlPlane& get_control_plane() const {
+        TT_FATAL(control_plane_, "Control plane not initialized.");
+        return *control_plane_;
+    }
 };
 
 #undef LOCK_ASSERT_INITIALIZED_FUNCTION
 
-ClusterQuery::ClusterQuery() : impl_(std::make_unique<Impl>()) {}
+MetaliumObject::MetaliumObject() : impl_(std::make_unique<Impl>()) {}
 
-ClusterQuery::~ClusterQuery() = default;
+MetaliumObject::~MetaliumObject() = default;
 
-ClusterQuery& ClusterQuery::instance() {
-    static ClusterQuery instance;
+MetaliumObject& MetaliumObject::instance() {
+    static MetaliumObject instance;
     return instance;
 }
 
-bool ClusterQuery::initialize() { return impl_->initialize(); }
+bool MetaliumObject::initialize() { return impl_->initialize(); }
 
-bool ClusterQuery::teardown() { return impl_->teardown(); }
+bool MetaliumObject::teardown() { return impl_->teardown(); }
 
-bool ClusterQuery::is_initialized() const { return impl_->is_initialized(); }
+bool MetaliumObject::is_initialized() const { return impl_->is_initialized(); }
 
-bool ClusterQuery::is_runtime_active() const { return Runtime::instance().has_bound_context(); }
+bool MetaliumObject::is_runtime_active() const { return Context::instance().has_descriptor(); }
 
-int ClusterQuery::get_num_visible_devices() const { return impl_->cluster().number_of_user_devices(); }
+int MetaliumObject::get_num_visible_devices() const { return impl_->cluster().number_of_user_devices(); }
 
-int ClusterQuery::get_num_pcie_devices() const { return impl_->cluster().number_of_pci_devices(); }
+int MetaliumObject::get_num_pcie_devices() const { return impl_->cluster().number_of_pci_devices(); }
 
-bool ClusterQuery::is_galaxy_cluster() const { return impl_->cluster().is_galaxy_cluster(); }
+bool MetaliumObject::is_galaxy_cluster() const { return impl_->cluster().is_galaxy_cluster(); }
 
-int ClusterQuery::get_pcie_device_id(int device_id) const {
+int MetaliumObject::get_pcie_device_id(int device_id) const {
     return impl_->cluster().get_associated_mmio_device(device_id);
 }
 
 // Internal functions
 
-tt::Cluster& ClusterQuery::cluster() { return impl_->cluster(); }
+tt::Cluster& MetaliumObject::cluster() { return impl_->cluster(); }
 
-const tt::Cluster& ClusterQuery::cluster() const { return impl_->cluster(); }
+const tt::Cluster& MetaliumObject::cluster() const { return impl_->cluster(); }
 
-tt::tt_metal::Hal& ClusterQuery::hal() { return impl_->hal(); }
+tt::tt_metal::Hal& MetaliumObject::hal() { return impl_->hal(); }
 
-const tt::tt_metal::Hal& ClusterQuery::hal() const { return impl_->hal(); }
+const tt::tt_metal::Hal& MetaliumObject::hal() const { return impl_->hal(); }
 
-tt::llrt::RunTimeOptions& ClusterQuery::rtoptions() { return impl_->rtoptions(); }
+tt::llrt::RunTimeOptions& MetaliumObject::rtoptions() { return impl_->rtoptions(); }
 
-const tt::llrt::RunTimeOptions& ClusterQuery::rtoptions() const { return impl_->rtoptions(); }
+const tt::llrt::RunTimeOptions& MetaliumObject::rtoptions() const { return impl_->rtoptions(); }
+
+tt::tt_fabric::ControlPlane& MetaliumObject::get_control_plane() { return impl_->get_control_plane(); }
+
+const tt::tt_fabric::ControlPlane& MetaliumObject::get_control_plane() const { return impl_->get_control_plane(); }
 
 }  // namespace tt::tt_metal::experimental
