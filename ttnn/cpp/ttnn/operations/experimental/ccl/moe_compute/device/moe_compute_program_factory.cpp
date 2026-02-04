@@ -269,18 +269,19 @@ MoEComputeMeshWorkloadFactory::create_at(
     auto tilize_partial_metadata_ready_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
 
-    // Non-drain-sync cores signal to drain-sync core that partial chunk has been sent to the matmul cores
-    // NOTE:
-    // - Need a semaphore per expert to avoid a race condition where each expert has a single chunk
-    // - Removes requirement that non-drain-sync cores have to wait to signal until drain-sync core
-    //   signals that the previous matmul_chunk_ready_semaphore has been multicasted
+    // Non-drain-sync cores signal to drain-sync core that partial chunk has been sent to the matmul cores.
+    // Need to double buffer the semaphores so that a given tilize core can write into a free second buffer,
+    // while the tilize drain-sync core hasn't yet signalled that the first buffer is completely full
+    // (ex: one tilize core lags behind filling the first buffer).
     TT_FATAL(
         experts_per_device <= supported_num_experts_per_device,
         "requires a semaphore per expert, expected {} experts per device but got {}",
         supported_num_experts_per_device,
         experts_per_device);
-    auto e0_tilize_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
-    auto e1_tilize_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
+    auto tilize_chunk_ready_first_half_buffer_semaphore_id =
+        tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
+    auto tilize_chunk_ready_second_half_buffer_semaphore_id =
+        tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Matmul semaphores
@@ -298,7 +299,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Tilize drain-sync core signals to matmul cores that final metadata results are ready
     auto metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 
-    // Matmul cores signal to tilize drain-sync-core that the intermediate chunk is free to be written to
+    // Matmul cores signal to tilize drain-sync-core that the input chunk is free to be written to
     // Tilize drain-sync-core propogates this to the tilize non-drain-sync cores
     auto matmul_chunk_available_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
@@ -329,25 +330,15 @@ MoEComputeMeshWorkloadFactory::create_at(
     //-------------------------------------------------------------------------
     // Tilize and Matmul CBs
     //-------------------------------------------------------------------------
-    // after determining the total number of tokens for each expert, this buffer will store the total number of tokens
-    // for each expert to pass to the other kernels
-    uint32_t per_expert_total_tokens_cb_id = tt::CBIndex::c_0;
-    tt::tt_metal::create_cb(
-        per_expert_total_tokens_cb_id,
-        program,
-        tilize_matmul_core_range_set,
-        tilize_per_expert_total_tokens_output_page_size,
-        1,
-        tt::tt_metal::datatype_to_dataformat_converter(tilize_per_expert_total_tokens_output_tensor.dtype()));
 
     /*
      * Tilize: Used as output CB of tilize operation
      * MM: Used as input CB (where tilized chunks arrive)
      * Combine: Stores output of MM, for input to combine
      */
-    uint32_t tilize_output_cb_id = tt::CBIndex::c_1;
-    [[maybe_unused]] uint32_t cb_s2c_in_id = tt::CBIndex::c_1;
-    [[maybe_unused]] uint32_t combine_input_cb_id = tt::CBIndex::c_1;
+    uint32_t tilize_output_cb_id = tt::CBIndex::c_0;
+    [[maybe_unused]] uint32_t cb_s2c_in_id = tt::CBIndex::c_0;
+    [[maybe_unused]] uint32_t combine_input_cb_id = tt::CBIndex::c_0;
 
     // All cores (not just Tilize and Matmul)
     CoreRangeSet shard_cores = output_tensor.memory_config().shard_spec()->grid;
@@ -364,6 +355,10 @@ MoEComputeMeshWorkloadFactory::create_at(
     //-------------------------------------------------------------------------
     // Tilize CBs
     //-------------------------------------------------------------------------
+
+    // after determining the total number of tokens for each expert, this buffer will store the total number of tokens
+    // for each expert to pass to the other kernels
+    uint32_t per_expert_total_tokens_cb_id = tt::CBIndex::c_1;
     // CB for passing total_chunks from writer to compute
     uint32_t total_chunks_cb_id = tt::CBIndex::c_2;
     // full indices buffer
@@ -407,6 +402,14 @@ MoEComputeMeshWorkloadFactory::create_at(
     constexpr uint32_t buffering_factor = 2;
     constexpr uint32_t tokens_per_chunk = 32;  // Hardcoding for now, can adjust when tiny tiles support added
 
+    tt::tt_metal::create_cb(
+        per_expert_total_tokens_cb_id,
+        program,
+        tilize_core_range_set,
+        tilize_per_expert_total_tokens_output_page_size,
+        1,
+        tt::tt_metal::datatype_to_dataformat_converter(tilize_per_expert_total_tokens_output_tensor.dtype()));
+
     // e_t buffer entry size must be 16B aligned for NOC DMA during BRISC->NCRISC merge
     tt::tt_metal::create_cb(
         e_t_cb_id,
@@ -431,7 +434,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         scores_tensor_cb_id,
         program,
         tilize_core_range_set,
-        tilize_input_scores_aligned_page_size,  // TODO: (GR) is this change correct
+        tilize_input_scores_aligned_page_size,
         tilize_input_scores_pages,
         tilize_input_scores_data_format,
         tilize_input_scores_tensor.buffer());
@@ -534,23 +537,23 @@ MoEComputeMeshWorkloadFactory::create_at(
         ------------------------------------------------------------------------------------
         |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
         ------------------------------------------------------------------------------------
-        | cb_s2c_in      | CBIndex::c_1  | Float16_b  | true  |    224*2 |      917504     |
-        | cb_r2c_w0      | CBIndex::c_2  | Bfp4_b     | true  |    14*6  |      48384      |
-        | cb_c2w_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
-        | cb_w2c_rdy     | CBIndex::c_4  | Float32    | false |    1     |      4          |
-        | cb_s2c_in2     | CBIndex::c_5  | Float16_b  | true  |    6*2   |      24576      |
-        | cb_r2c_rdy     | CBIndex::c_6  | Float32    | false |    1     |      4          |
+        | cb_s2c_in      | CBIndex::c_0  | Float16_b  | true  |    224*2 |      917504     |
+        | cb_r2c_w0      | CBIndex::c_1  | Bfp4_b     | true  |    14*6  |      48384      |
+        | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
+        | cb_w2c_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
+        | cb_s2c_in2     | CBIndex::c_4  | Float16_b  | true  |    6*2   |      24576      |
+        | cb_w2c_md      | CBIndex::c_5  | UInt32     | false |    2     |      8          |
         ------------------------------------------------------------------------------------
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in is handled separately as it is allocated on Tilize, Matmul, and (future) Combine cores
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> matmul_cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_2, tt::DataFormat::Bfp4_b, true, 14 * 6},
-        {"cb_c2w_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
-        {"cb_w2c_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
-        {"cb_s2c_in2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, true, 6 * 2},
-        {"cb_r2c_rdy", tt::CBIndex::c_6, tt::DataFormat::Float32, false, 1},
+        {"cb_r2c_w0", tt::CBIndex::c_1, tt::DataFormat::Bfp4_b, true, 14 * 6},
+        {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
+        {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
+        {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 6 * 2},
+        {"cb_w2c_md", tt::CBIndex::c_5, tt::DataFormat::UInt32, false, 2},
     };
 
     std::map<std::string, tt::tt_metal::CBHandle> matmul_cb_handles;
@@ -680,8 +683,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"partial_metadata_ready_semaphore_id", tilize_partial_metadata_ready_semaphore_id},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
         {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
-        {"e0_tilize_chunk_ready_semaphore_id", e0_tilize_chunk_ready_semaphore_id},
-        {"e1_tilize_chunk_ready_semaphore_id", e1_tilize_chunk_ready_semaphore_id},
+        {"tilize_chunk_ready_first_half_buffer_semaphore_id", tilize_chunk_ready_first_half_buffer_semaphore_id},
+        {"tilize_chunk_ready_second_half_buffer_semaphore_id", tilize_chunk_ready_second_half_buffer_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
     };
 
