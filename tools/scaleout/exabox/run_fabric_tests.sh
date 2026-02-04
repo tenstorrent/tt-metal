@@ -5,7 +5,7 @@ show_help() {
     cat << EOF
 Usage: $0 --hosts <comma-separated-host-list> --image <docker-image> [OPTIONS]
 
-Run fabric tests on 4x32 cluster configuration.
+Run fabric tests on 4x32 or 8x16 cluster configuration.
 
 Required Options:
     --hosts <host-list>                 Comma-separated list of hosts
