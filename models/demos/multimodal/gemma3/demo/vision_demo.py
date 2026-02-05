@@ -13,7 +13,6 @@ from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
 from pydantic import BaseModel
 
-# from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
 from models.common.llama_models import sample_top_p
 from models.tt_transformers.tt.common import ImageMedia
 from models.tt_transformers.tt.generator import create_submeshes
