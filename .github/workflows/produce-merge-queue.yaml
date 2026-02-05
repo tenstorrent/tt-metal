@@ -1,6 +1,10 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
 on:
+  push:
+    branches:
+      - ashah/merge-queue   
+
   workflow_dispatch:
 
   # Runs automatically every 5 minutes after merge to main
