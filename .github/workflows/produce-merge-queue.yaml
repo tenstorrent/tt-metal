@@ -1,10 +1,18 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
 on:
+  # test on your branch
   push:
     branches:
       - ashah/merge-queue
+
+  # test in PR
+  pull_request:
+    types: [opened, synchronize, reopened]
+
   workflow_dispatch:
+
+  # runs after merge to main
   schedule:
     - cron: "*/5 * * * *"
 
@@ -20,19 +28,46 @@ jobs:
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # Fetch ALL open PRs (full objects)
+      # Verify token works
       # ------------------------------------------------------------
-      - name: Fetch PR objects
+      - name: Check GitHub API rate limit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api rate_limit
+
+      # ------------------------------------------------------------
+      # Fetch REAL merge queue using GraphQL
+      # ------------------------------------------------------------
+      - name: Fetch merge queue
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api --paginate \
-            /repos/tenstorrent/tt-metal/pulls \
-            > pulls_full.json
+
+          gh api graphql -f query='
+          query {
+            repository(owner: "tenstorrent", name: "tt-metal") {
+              mergeQueue {
+                entries(first: 100) {
+                  nodes {
+                    pullRequest {
+                      number
+                      title
+                      author { login }
+                      headRefOid
+                    }
+                  }
+                }
+              }
+            }
+          }
+          ' > merge_queue_raw.json
+
+          echo "[Info] Raw merge queue size:"
+          jq '.data.repository.mergeQueue.entries.nodes | length' merge_queue_raw.json
 
       # ------------------------------------------------------------
-      # Build MERGE QUEUE snapshot (auto_merge == true)
+      # Build snapshot JSON
       # ------------------------------------------------------------
       - name: Build merge queue snapshot
         run: |
@@ -46,32 +81,37 @@ jobs:
             repository: $repo,
             collected_at: $ts,
             merge_queue: [
-              .[]
-              | select(.auto_merge != null)
-              | {
-                  merge_queue_id: null,
-                  pr_number: .number,
-                  pr_title: .title,
-                  pr_author_login: .user.login,
-                  head_sha: .head.sha,
-                  state: "IN_QUEUE",
-                  queue_position: null,
-                  enqueued_at: null,
-                  estimated_time_to_merge_sec: null,
-                  collected_at: $ts
-                }
+              .data.repository.mergeQueue.entries.nodes[].pullRequest | {
+                merge_queue_id: null,
+                pr_number: .number,
+                pr_title: .title,
+                pr_author_login: .author.login,
+                head_sha: .headRefOid,
+                state: "IN_QUEUE",
+                queue_position: null,
+                enqueued_at: null,
+                estimated_time_to_merge_sec: null,
+                collected_at: $ts
+              }
             ]
           }
-          ' pulls_full.json > generated/merge_queue/merge_queue_snapshot.json
+          ' merge_queue_raw.json \
+            > generated/merge_queue/merge_queue_snapshot.json
+
+          echo "[Info] Snapshot size:"
+          jq '.merge_queue | length' generated/merge_queue/merge_queue_snapshot.json
 
       # ------------------------------------------------------------
       # Timestamp filename
       # ------------------------------------------------------------
-      - name: Timestamp snapshot
+      - name: Add timestamp to filename
         run: |
           TS=$(date -u +"%Y%m%dT%H%M%SZ")
+
           mv generated/merge_queue/merge_queue_snapshot.json \
              generated/merge_queue/${TS}_merge_queue_snapshot.json
+
+          ls -lh generated/merge_queue
 
       # ------------------------------------------------------------
       # Upload via SFTP
