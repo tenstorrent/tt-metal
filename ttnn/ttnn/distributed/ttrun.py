@@ -39,8 +39,9 @@ def get_local_network_interfaces() -> List[str]:
         net_path = Path("/sys/class/net")
         if net_path.exists():
             return [p.name for p in net_path.iterdir()]
-    except (OSError, PermissionError):
-        pass
+    except (OSError, PermissionError) as exc:
+        # Best-effort enumeration: on non-Linux or restricted environments, fall back to empty list
+        logger.debug(f"{TT_RUN_PREFIX} Failed to enumerate network interfaces: {exc}")
     return []
 
 
