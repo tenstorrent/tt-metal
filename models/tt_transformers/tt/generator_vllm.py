@@ -2,11 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from typing import List, Mapping, Optional, Sequence, Union
 
 import torch
-import vllm.envs as envs
 from loguru import logger
 from PIL.Image import Image
 from tqdm import tqdm
@@ -16,18 +14,11 @@ from vllm.model_executor.models.gemma3_mm import (
     Gemma3MultiModalProcessor,
     Gemma3ProcessingInfo,
 )
-from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsV0Only
-from vllm.model_executor.models.mllama import MllamaProcessingInfo
+from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.multimodal.inputs import (
-    MultiModalDataDict,
-    MultiModalEncDecInputs,
-    MultiModalFieldConfig,
-    MultiModalInputs,
-    MultiModalKwargs,
-)
+from vllm.multimodal.inputs import MultiModalDataDict, MultiModalFieldConfig, MultiModalInputs, MultiModalKwargs
 from vllm.multimodal.parse import MultiModalDataItems
-from vllm.multimodal.processing import BaseMultiModalProcessor, EncDecMultiModalProcessor, PromptUpdate
+from vllm.multimodal.processing import BaseMultiModalProcessor, PromptUpdate
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
 
 import ttnn
@@ -125,11 +116,6 @@ def initialize_vllm_text_transformer(
     return tt_model, model_args
 
 
-class TT_MllamaProcessingInfo(MllamaProcessingInfo):
-    def get_supported_mm_limits(self):
-        return {"image": 1}  # TT implementation currently only supports 1 image
-
-
 class DummyInputsBuilder(BaseDummyInputsBuilder):
     """
     We don't need to implement a dummy input builder since we don't do profiling in vLLM.
@@ -147,129 +133,12 @@ class DummyInputsBuilder(BaseDummyInputsBuilder):
         raise NotImplementedError
 
 
-# TODO: This multi-modal processor currently bypasses vLLM's mm processing on the images
-# and passes the images directly to the model. In the future, the apply() function should
-# call super().apply() (similar to vllm.model_executor.models.mllama.py::MllamaMultiModalProcessor)
-# and _get_mm_fields_config / _get_prompt_updates should be implemented.
-class MllamaMultiModalProcessor(EncDecMultiModalProcessor[TT_MllamaProcessingInfo]):
-    """Multi-modal processor for Llama3.2-Vision that handles encoder-decoder inputs."""
-
-    def create_encoder_prompt(
-        self,
-        prompt: Union[str, list[int]],
-        mm_data: MultiModalDataDict,
-    ) -> Union[str, list[int]]:
-        data = mm_data.get("image", [])
-        num_images = 1 if isinstance(data, Image) else len(data)
-        image_token_id = self.info.get_hf_config().image_token_index
-        return [image_token_id] * num_images
-
-    def _get_mm_fields_config(
-        self,
-        hf_inputs: "BatchFeature",
-        hf_processor_mm_kwargs: Mapping[str, object],
-    ) -> Mapping[str, MultiModalFieldConfig]:
-        """Unused, defined to satisfy abstract method requirement."""
-        raise NotImplementedError
-
-    def _get_prompt_updates(
-        self,
-        mm_items: MultiModalDataItems,
-        hf_processor_mm_kwargs: Mapping[str, object],
-        out_mm_kwargs: MultiModalKwargs,
-    ) -> Sequence[PromptUpdate]:
-        """Unused, defined to satisfy abstract method requirement."""
-        raise NotImplementedError
-
-    def apply(
-        self,
-        prompt: Union[str, list[int]],
-        mm_data: MultiModalDataDict,
-        hf_processor_mm_kwargs: Mapping[str, object],
-        tokenization_kwargs: Optional[Mapping[str, object]] = None,
-        return_mm_hashes: bool = False,
-    ) -> MultiModalEncDecInputs:
-        """
-        Based on vllm.model_executor.models.mllama.py::MllamaMultiModalProcessor
-        without performing processing on the images inputs or computing num_tiles (here it is fixed).
-        """
-
-        # In vLLM's mllama.py, super().apply() is called which also processes images,
-        # while here only prompts are tokenized.
-        encoder_prompt = self.create_encoder_prompt(prompt, mm_data)
-        encoder_inputs = MultiModalInputs(
-            type="multimodal",
-            prompt=prompt,
-            prompt_token_ids=encoder_prompt,
-            mm_kwargs=mm_data,  # We pass the image directly
-            mm_hashes={},
-            mm_placeholders={},
-        )
-        mm_inputs = self._get_enc_dec_inputs(
-            prompt=prompt,
-            mm_data=mm_data,
-            encoder_inputs=encoder_inputs,
-        )
-
-        image_token_id = self.info.get_hf_config().image_token_index
-        # Check that the number of image tokens in the decoder prompt matches
-        # the number of images provided in mm_data
-        num_image_tokens = mm_inputs["prompt_token_ids"].count(image_token_id)
-        image_data = mm_data.get("image", [])
-        num_images = 1 if isinstance(image_data, Image) else len(image_data)
-        if num_image_tokens != num_images:
-            raise ValueError(
-                f"The number of image tokens ({num_image_tokens}) must be"
-                f" the same as the number of images ({num_images})"
-            )
-
-        if os.environ.get("MESH_DEVICE") == "N300":
-            prompt_len = len(mm_inputs["prompt_token_ids"])
-            MAX_PROMPT_LEN = 8192
-            if prompt_len > MAX_PROMPT_LEN:
-                raise ValueError(
-                    f"TT-LLama11B-Vision does not support prompts longer than {MAX_PROMPT_LEN} tokens on N300 (received prompt with {prompt_len} tokens)"
-                )
-
-        # Example input to encoder and decoder:
-        # {
-        #     'encoder': {
-        #         'type': 'token',
-        #         'prompt_token_ids': [128256, 128256, ..., 128256],
-        #         'prompt': '<|image|><|image|>...<|image|>',
-        #         'multi_modal_data': {'image': <PIL.Image.Image image mode=RGB size=1770x1180 at 0x7FDE2C624880>},  # noqa: E501
-        #     },
-        #     'decoder': {
-        #         'type': 'token',
-        #         'prompt_token_ids': [128000, 128256, 128000, 3923, 374, 279, 2262, 315, 420, 2217, 30],  # noqa: E501
-        #         'prompt': '<|image|><|begin_of_text|>What is the content of this image?',  # noqa: E501
-        #         'multi_modal_data': {'image': <PIL.Image.Image image mode=RGB size=1770x1180 at 0x7FDE2C624880>},  # noqa: E501
-        #     },
-        # }
-
-        if mm_data:
-            # Set encoder prompt length based on the number of vision tokens so block manager allocates enough blocks (cross block tables).
-            vision_config = self.info.get_hf_config().vision_config
-            assert vision_config.image_size % 14 == 0, "chunk size should be multiple of 14"
-            token_per_chunk = nearest_32(
-                (vision_config.image_size // 14) ** 2 + 1
-            )  # Note: we use nearest 32 while vLLM does not by default
-            num_vision_tokens = (
-                vision_config.max_num_tiles * token_per_chunk
-            )  # Note: we use max_num_tiles while vLLM uses num_tiles by default
-
-            hf_processor = self.info.get_hf_processor()
-            image_token: str = hf_processor.image_token
-            mm_inputs["encoder_prompt_token_ids"] = [image_token_id] * num_vision_tokens
-            mm_inputs["encoder_prompt"] = image_token * num_vision_tokens
-
-        return mm_inputs
-
-
-@MULTIMODAL_REGISTRY.register_processor(
-    MllamaMultiModalProcessor, info=TT_MllamaProcessingInfo, dummy_inputs=DummyInputsBuilder
-)
-class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0Only):
+# Mllama is currently not supported in vLLM V1.
+# TODO: Remove or re-enable when Mllama is supported in vLLM V1.
+# @MULTIMODAL_REGISTRY.register_processor(
+#     MllamaMultiModalProcessor, info=TT_MllamaProcessingInfo, dummy_inputs=DummyInputsBuilder
+# )
+class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     # Class-level capabilities
     # Note: Mllama doesn't support prefix caching (it's V0 only)
     model_capabilities = {
@@ -581,7 +450,7 @@ class MultiModalProcessor(BaseMultiModalProcessor):
 
 
 @MULTIMODAL_REGISTRY.register_processor(
-    Gemma3MultiModalProcessor if envs.VLLM_USE_V1 else MultiModalProcessor,
+    Gemma3MultiModalProcessor,
     info=Gemma3ProcessingInfo,
     dummy_inputs=Gemma3DummyInputsBuilder,
 )
@@ -636,12 +505,6 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        if not envs.VLLM_USE_V1:
-            data = kwargs.get("images", None)
-            kwargs["pixel_values"] = (
-                [im.pixel_values if hasattr(im, "pixel_values") else None for im in data] if data else None
-            )
-
         return super().prefill_forward_text(**kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):

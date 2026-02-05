@@ -44,94 +44,6 @@ jobs:
           # Note: This matrix must be kept in sync with the original static matrix
           all_tests='[
             {
-              "name": "[WH-T3K] Llama-3.1-8B-Instruct",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\"}",
-              "multimodal": false,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08CEGF78ET"
-            },
-            {
-              "name": "[WH-T3K] Qwen2.5-VL-72B-Instruct",
-              "model": "Qwen/Qwen2.5-VL-72B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 10,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
-              "multimodal": true,
-              "additional-server-args": "--max_model_len 2048",
-              "co-owner-1-id": "U07RY6B5FLJ"
-            },
-            {
-              "name": "[BH-LB] Llama-3.1-8B-Instruct v0 single-step with sampling-tests",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "bh-loudbox",
-              "arch": "arch-blackhole",
-              "mesh-device": "P150x8",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"data_parallel\": 8, \"sample_on_device_mode\": \"all\"}",
-              "multimodal": false,
-              "structured-output": true,
-              "sampling-tests": true,
-              "additional-server-args": "--num_scheduler_steps 1",
-              "owner_id": "U091SNDA4TS"
-            },
-            {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct multi-step",
-              "model": "meta-llama/Llama-3.3-70B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "topology-6u",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "TG",
-              "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
-              "multimodal": false,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08CEGF78ET"
-            },
-            {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct v0 single-step with sampling-tests",
-              "model": "meta-llama/Llama-3.3-70B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "topology-6u",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "TG",
-              "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
-              "multimodal": false,
-              "structured-output": true,
-              "sampling-tests": true,
-              "additional-server-args": "--num_scheduler_steps 1",
-              "owner_id": "U091SNDA4TS"
-            },
-            {
-              "name": "[WH-GLX] Llama-8B DP=16",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
-              "runner-label": "topology-6u",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "TG",
-              "override-tt-config": "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
-              "tt-llama-text-ver": "tt_transformers",
-              "multimodal": false,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08BH66EXAL"
-            },
-            {
               "name": "[WH-T3K][v1] Gemma3-27B",
               "model": "google/gemma-3-27b-it",
               "server-timeout": 45,
@@ -142,7 +54,6 @@ jobs:
               "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 50000000, \"l1_small_size\": 24576}",
               "tt-llama-text-ver": "tt_transformers",
               "multimodal": true,
-              "use-vllm-v1": true,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08BH66EXAL"
             },
@@ -159,7 +70,6 @@ jobs:
               "tt_mm_throttle_perf": 5,
               "tt-llama-text-ver": "tt_transformers",
               "multimodal": true,
-              "use-vllm-v1": true,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08BH66EXAL"
             },
@@ -174,7 +84,6 @@ jobs:
               "multimodal": false,
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--max_num_seqs 1",
-              "use-vllm-v1": true,
               "structured-output": true,
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
@@ -191,7 +100,7 @@ jobs:
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\"}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32",
-              "use-vllm-v1": true,
+              "additional-server-args": "--max_num_seqs 1",
               "structured-output": true,
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
@@ -206,7 +115,6 @@ jobs:
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\"}",
-              "use-vllm-v1": true,
               "structured-output": true,
               "sampling-tests": true,
               "multimodal": false,
@@ -223,7 +131,6 @@ jobs:
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\"}",
-              "use-vllm-v1": true,
               "multimodal": false,
               "additional-benchmark-args": "--random-prefix-len 128",
               "co-owner-1-id": "U08E1JCDVNX",
@@ -239,7 +146,6 @@ jobs:
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
-              "use-vllm-v1": true,
               "structured-output": true,
               "multimodal": true,
               "additional-server-args": "--max_model_len 2048",
@@ -270,7 +176,6 @@ jobs:
               "mesh-device": "P150x2",
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--data_parallel_size 2",
-              "use-vllm-v1": true,
               "structured-output": true,
               "sampling-tests": true,
               "multimodal": false,
@@ -285,7 +190,6 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-llama-text-ver": "tt_transformers",
-              "use-vllm-v1": true,
               "structured-output": true,
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
@@ -300,7 +204,6 @@ jobs:
               "mesh-device": "P150x8",
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--data_parallel_size 8",
-              "use-vllm-v1": true,
               "structured-output": true,
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
@@ -316,9 +219,8 @@ jobs:
               "tt-llama-text-ver": "llama3_70b_galaxy",
               "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
-              "use-vllm-v1": true,
-              "sampling-tests": true,
               "multimodal": false,
+              "sampling-tests": true,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
             },
@@ -333,7 +235,6 @@ jobs:
               "tt-llama-text-ver": "llama3_70b_galaxy",
               "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
-              "use-vllm-v1": true,
               "structured-output": true,
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
@@ -350,7 +251,6 @@ jobs:
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"decode_only\"}",
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--data_parallel_size 16",
-              "use-vllm-v1": true,
               "structured-output": true,
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
@@ -367,7 +267,6 @@ jobs:
               "override-tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
               "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct",
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
-              "use-vllm-v1": true,
               "multimodal": false,
               "co-owner-1-id": "U08CEGF78ET"
             },
@@ -382,7 +281,6 @@ jobs:
               "override-tt-config": "{\"register_test_models\": true, \"sample_on_device_mode\": \"all\"}",
               "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --input-queue-batching-delay 0",
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
-              "use-vllm-v1": true,
               "multimodal": false,
               "owner_id": "U08CEGF78ET"
             }
@@ -499,10 +397,6 @@ jobs:
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
-          USE_V1="${{ matrix.test-group.use-vllm-v1 }}"
-          if [[ "${USE_V1}" == "true" ]]; then
-            export VLLM_USE_V1=1
-          fi
 
           if [ -n "${{ matrix.test-group.tt_mm_throttle_perf }}" ]; then
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
@@ -513,9 +407,6 @@ jobs:
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${OVERRIDE_TT_CONFIG[@]}")
-          if [[ "${USE_V1}" == "true" ]]; then
-            VLLM_SERVER_ARGS+=("--num_scheduler_steps" "1")
-          fi
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
 
