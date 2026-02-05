@@ -151,6 +151,3 @@ Testing
 models/experimental/petr/resources/*.pth
 
 .claude
-
-# exlude models output
-/output/
