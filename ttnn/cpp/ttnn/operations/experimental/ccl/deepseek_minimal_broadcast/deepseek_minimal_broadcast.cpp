@@ -17,9 +17,19 @@ ttnn::Tensor ExecuteDeepseekMinimalBroadcast::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    std::optional<uint32_t> secondary_cluster_axis,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer) {
     return ttnn::prim::deepseek_minimal_broadcast(
-        input_tensor, sender_coord, num_links, memory_config, topology, cluster_axis, subdevice_id);
+        input_tensor,
+        sender_coord,
+        num_links,
+        memory_config,
+        topology,
+        cluster_axis,
+        subdevice_id,
+        secondary_cluster_axis,
+        persistent_output_buffer);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

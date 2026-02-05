@@ -431,7 +431,13 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
         tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::softmax, device, input_spec, dim_arg, output_spec.tensor_layout().get_memory_config());
+            ttnn::softmax,
+            device,
+            input_spec,
+            dim_arg,
+            output_spec.tensor_layout().get_memory_config(),
+            std::nullopt,  // compute_kernel_config
+            true);         // numeric_stable
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
@@ -745,7 +751,14 @@ TEST_P(MatmulOpIfTest, Matmul) {
             false,  // transpose_b
             output_spec.tensor_layout().get_memory_config(),
             output_spec.data_type(),
-            matmul_program_config);
+            matmul_program_config,
+            std::nullopt,   // activation
+            std::nullopt,   // compute_kernel_config
+            std::nullopt,   // core_grid
+            std::nullopt,   // output_tile
+            std::nullopt,   // optional_output_tensor
+            std::nullopt,   // global_cb
+            std::nullopt);  // sub_device_id
 
         log_info(
             tt::LogTest, "query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));

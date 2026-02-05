@@ -33,7 +33,7 @@ jobs:
       matrix:
         test-group: [
             { model: whisper, owner_id: U05RWH3QUPM , cmd: pytest tests/nightly/single_card/whisper },  #Salar Hosseini
-            { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
+            { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 --timeout=1800 }, # Miguel Tairum
           ]
     name: Nightly ${{ inputs.runner-label }} ${{ matrix.test-group.model }}
     runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"]
@@ -95,6 +95,7 @@ jobs:
       matrix:
         test-group: [
             { model: panoptic-deeplab, owner_id: U09LK84G4TF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Nikola Milicevic
+            { model: bevformer, owner_id: U08E1JCMAJF, cmd: pytest models/experimental/bevformer/tests/pcc/ }, # Marko Bezulj
           ]
     name: Nightly P150 110 cores ${{ matrix.test-group.model }}
     # CIv2 to get weights

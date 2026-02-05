@@ -20,8 +20,7 @@ constexpr auto cb_false_values = tt::CBIndex::c_2;
 constexpr auto cb_true_values_out = tt::CBIndex::c_3;
 constexpr auto cb_out = tt::CBIndex::c_4;
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     using namespace ttnn::kernel_utils;
     using namespace ttnn::kernel::eltwise::where_args;
     auto args = make_runtime_struct_from_args<ElemwiseComputeKernelArgs>();
@@ -87,5 +86,3 @@ void MAIN {
         cb_push_back(cb_out, args.per_core_block_size);
     }
 }
-
-}  // namespace NAMESPACE

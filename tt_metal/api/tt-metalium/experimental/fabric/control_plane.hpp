@@ -176,6 +176,8 @@ public:
     // TODO: remove this converter, we should consolidate the directions here
     eth_chan_directions routing_direction_to_eth_direction(RoutingDirection direction) const;
 
+    RoutingDirection eth_direction_to_routing_direction(eth_chan_directions direction) const;
+
     // Return ethernet channels on a chip that face external meshes (inter-mesh exit nodes)
     std::vector<chan_id_t> get_intermesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
     // Return ethernet channels on a chip that face other chips within the same mesh (intra-mesh)

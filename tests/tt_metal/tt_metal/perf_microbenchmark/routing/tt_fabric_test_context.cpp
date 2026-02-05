@@ -161,24 +161,25 @@ void TestContext::setup_latency_test_mode(const TestConfig& config) {
     latency_test_manager_->setup_latency_test_mode(config);
 }
 
-LatencyTestManager::LatencyWorkerLocation TestContext::get_latency_sender_location() {
+LatencyResultsManager::LatencyWorkerLocation TestContext::get_latency_sender_location() {
     TT_FATAL(latency_test_manager_, "Latency manager not initialized");
     return latency_test_manager_->get_latency_sender_location(test_devices_);
 }
 
-LatencyTestManager::LatencyWorkerLocation TestContext::get_latency_receiver_location() {
+LatencyResultsManager::LatencyWorkerLocation TestContext::get_latency_receiver_location() {
     TT_FATAL(latency_test_manager_, "Latency manager not initialized");
     return latency_test_manager_->get_latency_receiver_location(test_devices_);
 }
 
 void TestContext::initialize_latency_results_csv_file() {
     TT_FATAL(latency_test_manager_, "Latency manager not initialized");
-    latency_test_manager_->initialize_latency_results_csv_file();
+    latency_test_manager_->initialize_results_csv_file(true);
 }
 
 void TestContext::generate_latency_summary() {
     TT_FATAL(latency_test_manager_, "Latency manager not initialized");
-    latency_test_manager_->generate_latency_summary();
+    latency_test_manager_->load_golden_csv();
+    latency_test_manager_->generate_summary();
     if (latency_test_manager_->has_failures()) {
         has_test_failures_ = true;
     }
@@ -214,7 +215,7 @@ void TestContext::init(
 
     bandwidth_profiler_ = std::make_unique<BandwidthProfiler>(*fixture_, *fixture_, *fixture_);
     bandwidth_results_manager_ = std::make_unique<BandwidthResultsManager>();
-    latency_test_manager_ = std::make_unique<LatencyTestManager>(*fixture_, sender_memory_map_);
+    latency_test_manager_ = std::make_unique<LatencyResultsManager>(*fixture_, sender_memory_map_);
 }
 
 void TestContext::prepare_for_test(const TestConfig& config) {
@@ -301,7 +302,7 @@ void TestContext::generate_bandwidth_summary() {
 
 void TestContext::initialize_bandwidth_results_csv_file() {
     TT_FATAL(bandwidth_results_manager_, "Bandwidth results manager not initialized");
-    bandwidth_results_manager_->initialize_bandwidth_csv_file(this->telemetry_enabled_);
+    bandwidth_results_manager_->initialize_results_csv_file(this->telemetry_enabled_);
 }
 
 void TestContext::compile_programs() {
@@ -552,6 +553,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 .target_address = dest.target_address,
                 .atomic_inc_address = dest.atomic_inc_address,
                 .link_id = sender.link_id,
+                .noc_id = sender.noc_id,
                 .sender_credit_info = pattern.sender_credit_info,
                 .credit_return_batch_size = pattern.credit_return_batch_size,
             };
@@ -612,7 +614,8 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .atomic_inc_address = atomic_inc_address,
         .dst_noc_encoding = dst_noc_encoding,
         .payload_buffer_size = payload_buffer_size,
-        .link_id = traffic_config.link_id};
+        .link_id = traffic_config.link_id,
+        .noc_id = traffic_config.noc_id};
 
     TestTrafficReceiverConfig receiver_config = {
         .parameters = traffic_config.parameters,
