@@ -53,7 +53,8 @@ struct Gather {
 
     // Sender args (NCRISC): [dest_noc_x, dest_noc_y, data_size_bytes, receiver_semaphore_id,
     //                        src_cb, src_num_pages, sender_grid_start_x, sender_grid_start_y,
-    //                        sender_grid_end_x, sender_grid_end_y, row_major, receiver_data_addr]
+    //                        sender_grid_end_x, sender_grid_end_y, row_major, receiver_data_addr,
+    //                        sender_idx]
     struct SenderArgs {
         uint32_t dest_noc_x;
         uint32_t dest_noc_y;
@@ -67,6 +68,7 @@ struct Gather {
         uint32_t sender_grid_end_y;
         uint32_t row_major;
         uint32_t receiver_data_addr;
+        uint32_t sender_idx;  // Per-core sender index (only used if UsePerCoreSenderIdx=true)
     };
 
     // Compute args (TRISC) - not used for gather (dataflow only)
@@ -81,8 +83,9 @@ struct Gather {
     // IsSenderCore: compile-time flag to distinguish sender vs receiver cores
     // IsReceiverCore: compile-time flag for receiver cores
     // pop_src: whether to pop the source CB after sending
+    // UsePerCoreSenderIdx: compile-time flag for scattered vs grid-based indexing
     // ========================================================================
-    template <bool IsSenderCore, bool IsReceiverCore, bool pop_src>
+    template <bool IsSenderCore, bool IsReceiverCore, bool pop_src, bool UsePerCoreSenderIdx = false>
     class Op {
     public:
         void operator()(const RTArgs& args) { impl(args); }
@@ -100,10 +103,20 @@ struct Gather {
                 // Get source address from CB
                 uint32_t input_data_addr = get_read_ptr(args.src_cb);
 
-                // Compute per-core offset based on logical core coordinates
-                // Note: my_logical_x_/y_ are global variables set by firmware
-                uint32_t core_index = unified_kernels::linear_id_in_grid<true>(
-                    args.sender_grid_start_x, args.sender_grid_start_y, args.sender_grid_end_x, args.sender_grid_end_y);
+                // Compute per-core offset using compile-time branching
+                // For scattered cores (UsePerCoreSenderIdx=true), use the provided sender_idx
+                // For rectangular grids (UsePerCoreSenderIdx=false), compute from grid position
+                uint32_t core_index;
+                if constexpr (UsePerCoreSenderIdx) {
+                    core_index = args.sender_idx;
+                } else {
+                    // Note: my_logical_x_/y_ are global variables set by firmware
+                    core_index = unified_kernels::linear_id_in_grid<true>(
+                        args.sender_grid_start_x,
+                        args.sender_grid_start_y,
+                        args.sender_grid_end_x,
+                        args.sender_grid_end_y);
+                }
                 uint32_t offset = core_index * args.data_size_bytes;
 
                 uint32_t receiver_semaphore_addr = get_semaphore(args.receiver_semaphore_id);
