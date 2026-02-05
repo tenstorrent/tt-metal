@@ -151,7 +151,7 @@ class Attention(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
 
-        # Select rotary embedding implementation
+        # Select rotary embedding implementation for decode
         if self.use_hf_rope and self.use_qk_fused:
             raise NotImplementedError("Fused QK is not implemented for HF-style rope")
             # self.rotary_embedding_decode = self._hf_rope_decode
@@ -161,6 +161,12 @@ class Attention(LightweightModule):
             self.rotary_embedding_decode = self._mllama_rope_fused_qk_decode
         else:
             self.rotary_embedding_decode = self._mllama_rope_decode
+
+        # Select rotary embedding implementation for prefill
+        if self.use_hf_rope:
+            self.rotary_embedding_prefill = self._hf_rope_prefill
+        else:
+            self.rotary_embedding_prefill = self._mllama_rope_prefill
 
         wq_str = f"{layer_name}.wq"
         wk_str = f"{layer_name}.wk"
@@ -543,6 +549,48 @@ class Attention(LightweightModule):
 
         return q_heads_1BQD, k_heads_1BKD
 
+    def _mllama_rope_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
+        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
+            q_heads_1QSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
+        )
+
+        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
+            k_heads_1KSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
+        )
+
+        return q_heads_1QSD, k_heads_1KSD
+
+    def _hf_rope_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
+        # Q Rotary Embeddings - HF-style (no transformation matrix)
+        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+
+        q_heads_1QSD = ttnn.experimental.rotary_embedding(
+            q_heads_1QSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+        )
+
+        # K Rotary Embeddings - HF-style (no transformation matrix)
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+
+        k_heads_1KSD = ttnn.experimental.rotary_embedding(
+            k_heads_1KSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+        )
+
+        return q_heads_1QSD, k_heads_1KSD
+
     def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -902,27 +950,9 @@ class Attention(LightweightModule):
         # Rotary embeddings
         ###
 
-        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
-        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_1QSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
-        )
+        # Apply rotary embeddings using the selected implementation
+        q_heads_1QSD, k_heads_1KSD = self.rotary_embedding_prefill(q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats)
         ttnn.deallocate(q_heads_1QSD_pre_rot)
-
-        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
-
-        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_1KSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
-        )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
         # Fill KV-Cache
