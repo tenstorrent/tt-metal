@@ -159,6 +159,7 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             break;
         case BinaryOpType::LT:
             if (dtype != DataType::INT32) {
+                binary_op = EnumT::SUB;
                 postprocess = unary::UnaryOpType::LTZ;
             } else {
                 binary_op = SfpuBinaryOp::LT;
@@ -166,6 +167,7 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             break;
         case BinaryOpType::GT:
             if (dtype != DataType::INT32) {
+                binary_op = EnumT::SUB;
                 postprocess = unary::UnaryOpType::GTZ;
             } else {
                 binary_op = SfpuBinaryOp::GT;
@@ -173,6 +175,7 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             break;
         case BinaryOpType::GE:
             if (dtype != DataType::INT32) {
+                binary_op = EnumT::SUB;
                 postprocess = unary::UnaryOpType::GEZ;
             } else {
                 binary_op = SfpuBinaryOp::GE;
@@ -180,15 +183,23 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             break;
         case BinaryOpType::LE:
             if (dtype != DataType::INT32) {
+                binary_op = EnumT::SUB;
                 postprocess = unary::UnaryOpType::LEZ;
             } else {
                 binary_op = SfpuBinaryOp::LE;
             }
             break;
         case BinaryOpType::EQ:
-            if (dtype == DataType::FLOAT32) {
-                binary_op = SfpuBinaryOp::EQ;
+            if constexpr (std::is_same_v<EnumT, SfpuBinaryOp>) {
+                if (dtype == DataType::FLOAT32) {
+                    binary_op = SfpuBinaryOp::EQ;
+                } else {
+                    binary_op = EnumT::SUB;
+                    postprocess = unary::UnaryOpType::EQZ;
+                }
             } else {
+                // FPU context: always use SUB + EQZ
+                binary_op = EnumT::SUB;
                 postprocess = unary::UnaryOpType::EQZ;
             }
             break;
