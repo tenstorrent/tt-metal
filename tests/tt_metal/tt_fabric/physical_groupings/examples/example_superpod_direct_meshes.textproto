@@ -1,9 +1,6 @@
 # Example: Superpod Containing Meshes Directly
 # This example shows a superpod skipping pods and containing meshes directly
 
-base_units {
-  # Base units are predefined constants - ASIC_LOCATION_1 through ASIC_LOCATION_8
-}
 
 groupings {
   name: "trays"
