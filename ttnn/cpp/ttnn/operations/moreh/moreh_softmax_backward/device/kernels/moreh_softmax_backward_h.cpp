@@ -80,7 +80,7 @@ void kernel_main() {
 
         // step 2, compute sum(y * dy)
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerBatch>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
                 cb_ydy, cb_bcast_scaler, cb_sum, compute_kernel_lib::ReduceInputBlockShape::col(Ht));
 
         // step 3, compute final result
