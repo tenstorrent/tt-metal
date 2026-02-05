@@ -414,10 +414,6 @@ TEST_F(DPrintMeshFixture, ConfigRegAluTestPrint) {
         .field_values = field_values_alu_config,
         .register_name = ALU_CONFIG};
 
-    if (this->arch_ == ARCH::GRAYSKULL) {
-        GTEST_SKIP() << "Printing ALU CONFIG is not supported on grayskull.";
-    }
-
     // Run the test on the device
     this->RunTestOnDevice(
         [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -432,13 +428,8 @@ TEST_F(DPrintMeshFixture, ConfigRegTileDescriptorTestPrint) {
     std::vector<std::string> field_names_unpack_tile_descriptor;
     std::vector<uint32_t> field_values_unpack_tile_descriptor;
 
-    if (this->arch_ == ARCH::GRAYSKULL) {
-        field_names_unpack_tile_descriptor = field_names_unpack_tile_descriptor_grayskull;
-        field_values_unpack_tile_descriptor = field_values_unpack_tile_descriptor_grayskull;
-    } else {
-        field_names_unpack_tile_descriptor = field_names_unpack_tile_descriptor_wormhole_or_blackhole;
-        field_values_unpack_tile_descriptor = field_values_unpack_tile_descriptor_wormhole_or_blackhole;
-    }
+    field_names_unpack_tile_descriptor = field_names_unpack_tile_descriptor_wormhole_or_blackhole;
+    field_values_unpack_tile_descriptor = field_values_unpack_tile_descriptor_wormhole_or_blackhole;
 
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
@@ -460,13 +451,8 @@ TEST_F(DPrintMeshFixture, ConfigRegUnpackTestPrint) {
     std::vector<std::string> field_names_unpack_config;
     std::vector<uint32_t> field_values_unpack_config;
 
-    if (this->arch_ == ARCH::GRAYSKULL) {
-        field_names_unpack_config = field_names_unpack_config_grayskull;
-        field_values_unpack_config = field_values_unpack_config_grayskull;
-    } else {
-        field_names_unpack_config = field_names_unpack_config_wormhole_or_blackhole;
-        field_values_unpack_config = field_values_unpack_config_wormhole_or_blackhole;
-    }
+    field_names_unpack_config = field_names_unpack_config_wormhole_or_blackhole;
+    field_values_unpack_config = field_values_unpack_config_wormhole_or_blackhole;
 
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
@@ -489,10 +475,7 @@ TEST_F(DPrintMeshFixture, ConfigRegPackTestPrint) {
     std::vector<std::string> field_names_pack_config;
     std::vector<uint32_t> field_values_pack_config;
 
-    if (this->arch_ == ARCH::GRAYSKULL) {
-        field_names_pack_config = field_names_pack_config_grayskull;
-        field_values_pack_config = field_values_pack_config_grayskull;
-    } else if (this->arch_ == ARCH::WORMHOLE_B0) {
+    if (this->arch_ == ARCH::WORMHOLE_B0) {
         field_names_pack_config = field_names_pack_config_wormhole;
         field_values_pack_config = field_values_pack_config_wormhole;
     } else {
@@ -537,10 +520,6 @@ TEST_F(DPrintMeshFixture, ConfigRegReluTestPrint) {
         .field_values = field_values_relu_config,
         .register_name = RELU_CONFIG};
 
-    if (this->arch_ == ARCH::GRAYSKULL) {
-        GTEST_SKIP() << "Printing RELU CONFIG is not supported on grayskull.";
-    }
-
     // Run the test on the device
     this->RunTestOnDevice(
         [&](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -561,10 +540,6 @@ TEST_F(DPrintMeshFixture, ConfigRegDestRdCtrlTestPrint) {
         .field_names = field_names_dest_rd_ctrl,
         .field_values = field_values_dest_rd_ctrl,
         .register_name = DEST_RD_CTRL};
-
-    if (this->arch_ == ARCH::GRAYSKULL) {
-        GTEST_SKIP() << "Printing DEST RD CTRL is not supported on grayskull.";
-    }
 
     // Run the test on the device
     this->RunTestOnDevice(

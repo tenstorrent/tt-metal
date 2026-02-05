@@ -8,7 +8,7 @@ import ttnn
 from loguru import logger
 from models.common.utility_functions import nearest_32, pad_by_zero
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.common.utility_functions import is_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
@@ -151,8 +151,6 @@ class TestUpdateCacheFP32:
     def test_fill_cache_fp32(
         self, seq_len, head_dim, max_seq_len, num_users, num_heads, in_sharded, input_dtype, device
     ):
-        if is_grayskull() and input_dtype == ttnn.float32:
-            pytest.skip("Skipping float32 tests on Grayskull")
         if not in_sharded and num_heads > 1 and seq_len == 1024:
             pytest.skip(
                 "For interleaved, each core can only have 1 tile along seq_len if num_heads > 1, so there is a restriction on max seq_len!"
@@ -215,8 +213,6 @@ class TestUpdateCacheFP32:
         cache_dtype,
         device,
     ):
-        if is_grayskull() and input_dtype == ttnn.float32:
-            pytest.skip("Skipping float32 tests on Grayskull")
         if num_users > 32 or (num_users + batch_offset) > 32:
             pytest.skip("Batch offset is only used when num_users < 32 and batch_offset + num_users <= 32")
         input_shape = [num_users, num_heads, 1, head_dim]

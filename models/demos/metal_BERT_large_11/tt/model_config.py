@@ -8,7 +8,6 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_e75
 
 OP_MEMCFG_KEYS = (
     # EMBEDDINGS
@@ -414,9 +413,6 @@ def get_tt_cache_path(model_version):
 
 
 def skip_unsupported_config(device, model_config_str, batch):
-    if is_e75(device):
-        pytest.skip(f"Bert large 11 is not supported on E75")
-
     grid_size = device.compute_with_storage_grid_size()
     if device.arch() == ttnn.device.Arch.WORMHOLE_B0 and model_config_str != "BFLOAT8_B-SHARDED":
         pytest.skip("Only BFLOAT8_B-SHARDED supported for WH B0")

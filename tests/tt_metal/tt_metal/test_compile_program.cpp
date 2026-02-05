@@ -336,12 +336,9 @@ TEST_F(MeshDispatchFixture, CompileProgramWithModifiedProgram) {
         compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
 
     // Modify compute kernel fp32_dest_acc_en - expect cache miss for compute kernel
-    // Grayskull does not support fp32 accumulation
-    if (dev->arch() != ARCH::GRAYSKULL) {
-        attributes.fp32_dest_acc_en = true;
-        kernel_name_to_hash =
-            compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
-    }
+    attributes.fp32_dest_acc_en = true;
+    kernel_name_to_hash =
+        compile_program_with_modified_kernel(dev, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
 
     // Modify compute kernel math_approx_mode - expect cache miss for compute kernel
     attributes.math_approx_mode = true;

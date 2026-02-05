@@ -13,7 +13,6 @@
 
 inline std::string get_string_lowercase(tt::ARCH arch) {
     switch (arch) {
-        case tt::ARCH::GRAYSKULL: return "grayskull";
         case tt::ARCH::WORMHOLE_B0: return "wormhole_b0";
         case tt::ARCH::BLACKHOLE: return "blackhole";
         case tt::ARCH::Invalid:
