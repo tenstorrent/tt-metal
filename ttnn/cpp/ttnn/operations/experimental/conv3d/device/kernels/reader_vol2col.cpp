@@ -155,7 +155,9 @@ void kernel_main() {
                                                     // and the channel selection is done via offset.
                                                     uint32_t in_page_id = in_page_idx;
                                                     uint32_t in_offset_bytes = c_in_offset_bytes;
-                                                    if constexpr (in_args.is_sharded) {
+                                                    // NOTE: Use the type-level constant so this compiles out cleanly
+                                                    // for interleaved accessors (which don't expose dspec()).
+                                                    if constexpr (decltype(in_args)::is_sharded) {
                                                         // Compute which column-page this C_in_block lives in.
                                                         const uint32_t col_page_idx =
                                                             c_in_offset_bytes / in_row_size_bytes;
