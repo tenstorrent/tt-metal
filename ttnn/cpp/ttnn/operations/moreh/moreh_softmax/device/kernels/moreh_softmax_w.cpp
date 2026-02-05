@@ -106,7 +106,7 @@ void kernel_main() {
 #ifdef LOG
         // log(sum) - pop tiles after reduce
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerBatch>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
                 cb_exps,
                 cb_bcast_scaler,
                 cb_recipsumexps,

@@ -57,7 +57,7 @@
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * See reduce() function documentation for advanced usage examples including:
- * - Different input policies (WaitAndPopPerBatch, NoWaitNoPop, WaitUpfrontNoPop)
+ * - Different input policies (BulkWaitBulkPop, NoWaitNoPop, WaitUpfrontNoPop)
  * - Post-reduce operations (e.g., recip_tile for softmax)
  * - Accumulation for block-wise reduction
  */
@@ -92,16 +92,24 @@ enum class ReduceDataFormatReconfigMode {
  * @brief Input synchronization and consumption policy for reduce operations
  *
  * Controls when to wait for input tiles and whether to pop them after processing:
+ *
  * - WaitAndPopPerTile: Wait/process/pop one tile at a time (streaming, safe for any CB size)
- * - WaitAndPopPerBatch: Wait for batch, process all, pop batch (optimal when pre-loaded per row)
+ *
+ * - BulkWaitBulkPop: Wait for bulk, process all with indexed access, pop bulk.
+ *   Bulk size depends on reduce dimension:
+ *     REDUCE_SCALAR: Bulk = Ht×Wt tiles → 1 output per batch
+ *     REDUCE_ROW:    Bulk = Wt tiles    → 1 output per row
+ *     REDUCE_COL:    Bulk = Ht×chunk    → chunk outputs (chunk = DEST_AUTO_LIMIT)
+ *
  * - WaitUpfrontNoPop: Wait for all tiles upfront, don't pop (persistent, for tile reuse)
+ *
  * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB)
  */
 enum class ReduceInputPolicy {
-    WaitAndPopPerTile,   // Wait/process/pop one tile at a time (streaming)
-    WaitAndPopPerBatch,  // Wait for batch, process all, pop batch
-    WaitUpfrontNoPop,    // Wait for all tiles upfront, don't pop (persistent)
-    NoWaitNoPop          // Caller manages wait/pop (preloaded)
+    WaitAndPopPerTile,  // Wait/process/pop one tile at a time (streaming)
+    BulkWaitBulkPop,    // Wait for bulk, process all, pop bulk (see above for bulk sizes)
+    WaitUpfrontNoPop,   // Wait for all tiles upfront, don't pop (persistent)
+    NoWaitNoPop         // Caller manages wait/pop (preloaded)
 };
 
 // =============================================================================
@@ -183,8 +191,8 @@ struct Accumulate {
     AccumulationConfig config;
     uint32_t iteration = 0;
 
-    constexpr Accumulate(AccumulationConfig cfg, uint32_t iter = 0) : config(cfg), iteration(iter) {}
-    constexpr Accumulate(uint32_t cb, uint32_t iter = 0) : config{cb, 0}, iteration(iter) {}
+    explicit constexpr Accumulate(AccumulationConfig cfg, uint32_t iter = 0) : config(cfg), iteration(iter) {}
+    explicit constexpr Accumulate(uint32_t cb, uint32_t iter = 0) : config{cb, 0}, iteration(iter) {}
 
     // Factory for concise call sites
     static constexpr Accumulate at(uint32_t cb, uint32_t iter, uint32_t dst = 0) {
@@ -309,12 +317,12 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
  *
  * IMPORTANT - REDUCE_COL DATA LAYOUT:
  * - WaitAndPopPerTile policy: Tiles processed one-at-a-time in column-major chunks due to DEST limits.
- * - WaitAndPopPerBatch policy: Tiles batched per chunk (Ht*chunk_size tiles), indexed access.
+ * - BulkWaitBulkPop policy: Tiles batched per chunk (Ht*chunk_size tiles), indexed access.
  * - NoWaitNoPop/WaitUpfrontNoPop policy: Tiles in standard row-major order (batch_offset + ht*stride + wt).
  * - Chunk size is auto-detected from DEST register capacity (DEST_AUTO_LIMIT).
  *
  * INPUT POLICIES: See ReduceInputPolicy enum for detailed mode descriptions.
- * - Use WaitAndPopPerBatch for optimal performance when wait/pop are symmetric with ReduceInputBlockShape.
+ * - Use BulkWaitBulkPop for optimal performance when wait/pop are symmetric with ReduceInputBlockShape.
  * - Use NoWaitNoPop for asymmetric wait/pop (e.g., padding where you wait/pop more than ReduceInputBlockShape).
  * - Use WaitUpfrontNoPop for softmax patterns where tiles are reused in subsequent operations.
  *
@@ -377,9 +385,9 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
  *   // cb_values tiles still available for sub_exp_block_bcast_cols_inplace()
  *
  * @example
- *   // WaitAndPopPerBatch policy (batched wait/pop - optimal for performance)
+ *   // BulkWaitBulkPop policy (bulk wait/pop - optimal for performance)
  *   // Library waits for all Wt tiles per row, processes them with indexed access, then pops all Wt tiles
- *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerBatch>(
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
  *       cb_in, cb_scaler, cb_out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * @example
