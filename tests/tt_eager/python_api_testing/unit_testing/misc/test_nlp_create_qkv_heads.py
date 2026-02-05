@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 
 from models.common.utility_functions import tt2torch_tensor, comp_pcc
-from models.common.utility_functions import is_grayskull
 import torch
 import ttnn
 
@@ -98,8 +97,6 @@ def run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config
     ],
 )
 def test_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, request, device):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
     run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device)
 
 
@@ -265,8 +262,6 @@ def test_nlp_create_qkv_heads_test(
     request,
     device,
 ):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
     if dtype == ttnn.float32 and (batch == 111 or batch == 5) and in_mem_config == ttnn.L1_MEMORY_CONFIG:
         logger.warning("fp32 tensor too large to fit L1")
     else:
@@ -334,8 +329,6 @@ def test_nlp_create_qkv_heads_llama_test(
 ):
     num_q_heads = num_q_heads // parallel_factor
     num_kv_heads = num_kv_heads // parallel_factor
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
     if dtype == ttnn.float32 and (batch == 111 or batch == 5) and in_mem_config == ttnn.L1_MEMORY_CONFIG:
         logger.warning("fp32 tensor too large to fit L1")
     else:
@@ -506,9 +499,6 @@ def test_sharded_nlp_create_qkv_heads_test(
     dtype,
     device,
 ):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
-
     run_sharded_nlp_create_qkv_heads_test(
         batch,
         seq_len,

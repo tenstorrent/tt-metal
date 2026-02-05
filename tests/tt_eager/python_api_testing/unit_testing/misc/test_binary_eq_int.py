@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
-from models.common.utility_functions import is_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
@@ -23,9 +23,6 @@ from models.common.utility_functions import is_grayskull, skip_for_blackhole
 )
 @pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16))
 def test_binary_eq(input_shapes, out_dtype, mem_configs, device):
-    if is_grayskull():
-        pytest.skip("GS does not support fp32/uint32/uint16 data types")
-
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
 
@@ -55,9 +52,6 @@ def test_binary_eq(input_shapes, out_dtype, mem_configs, device):
 )
 @pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16))
 def test_bw_binary_eq_opt_output(input_shapes, device, mem_configs, out_dtype):
-    if is_grayskull():
-        pytest.skip("GS does not support fp32/uint32/uint16 data types")
-
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
     _, out_tensor = data_gen_with_range(input_shapes, -70, 60, device, True)

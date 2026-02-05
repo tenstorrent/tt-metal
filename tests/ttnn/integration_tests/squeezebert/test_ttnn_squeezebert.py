@@ -6,7 +6,7 @@ import ttnn
 import torch
 import pytest
 import transformers
-from models.common.utility_functions import torch_random, is_grayskull
+from models.common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.squeezebert.tt import ttnn_functional_squeezebert
@@ -297,7 +297,7 @@ def test_squeezebert_model(device, model_name, batch_size, sequence_size, reset_
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.98 if is_grayskull() else 0.99)
+    assert_with_pcc(torch_output, output, 0.99)
 
 
 @pytest.mark.parametrize("model_name", ["squeezebert/squeezebert-uncased"])
@@ -352,5 +352,5 @@ def test_squeezebert_for_question_answering(device, model_name, batch_size, sequ
     tt_start_logits = tt_output[..., :, 0]
     tt_end_logits = tt_output[..., :, 1]
 
-    assert_with_pcc(torch_output.start_logits, tt_start_logits, 0.83 if is_grayskull() else 0.88)
-    assert_with_pcc(torch_output.end_logits, tt_end_logits, 0.84 if is_grayskull() else 0.93)
+    assert_with_pcc(torch_output.start_logits, tt_start_logits, 0.88)
+    assert_with_pcc(torch_output.end_logits, tt_end_logits, 0.93)

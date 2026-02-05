@@ -14,7 +14,6 @@ from ttnn.device import Arch
 def test_run_sfpu_eps(device):
     shape = [1, 1, 32, 32]
     eps_mapping = {
-        Arch.GRAYSKULL: 0.001953125,
         Arch.WORMHOLE_B0: 1.1920899822825959e-07,
         Arch.BLACKHOLE: 1.1920899822825959e-07,
     }

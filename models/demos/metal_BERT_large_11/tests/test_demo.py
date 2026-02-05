@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import is_blackhole, is_e75, is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.metal_BERT_large_11.demo.demo import test_demo as demo_json
 from models.demos.metal_BERT_large_11.demo.demo import test_demo_squadv2 as demo_squadv2
 
@@ -18,9 +18,6 @@ from models.demos.metal_BERT_large_11.demo.demo import test_demo_squadv2 as demo
 )
 @pytest.mark.skipif(is_blackhole(), reason="Not functional on BH yet")
 def test_demo_batch_7(batch, input_path, model_location_generator, device):
-    if is_e75(device):
-        pytest.skip(f"Bert large 11 is not supported on E75")
-
     expected_answers = {
         0: "scientific archaeology",
         1: "Richard I",
@@ -53,9 +50,6 @@ def test_demo_batch_7(batch, input_path, model_location_generator, device):
 )
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7525: only runs GS")
 def test_demo_batch_12(batch, input_path, model_location_generator, device):
-    if is_e75(device):
-        pytest.skip(f"Bert large 11 is not supported on E75")
-
     expected_answers = {
         0: "scientific archaeology",
         1: "Richard I",

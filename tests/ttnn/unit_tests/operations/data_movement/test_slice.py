@@ -7,7 +7,6 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_grayskull, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 import math
@@ -289,9 +288,6 @@ def test_run_slice_test(
     dtype,
     slice_step,
 ):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
-
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.ROW_MAJOR_LAYOUT,
         input_tensor_shape_0,
@@ -408,9 +404,6 @@ def test_run_slice_rm_multi_core_test(
     dtype,
     slice_step,
 ):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
-
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.ROW_MAJOR_LAYOUT,
         input_tensor_shape,
