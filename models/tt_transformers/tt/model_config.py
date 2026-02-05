@@ -4022,6 +4022,34 @@ class HfDecoderWrapper:
         [(k, v)] = self.past_key_values.to_legacy_cache()
         return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
+    @property
+    def cache_k(self):
+        [(k, v)] = self.past_key_values.to_legacy_cache()
+        hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+
+        if self.use_hf_rope:
+            # No transformation needed for HF-style RoPE
+            return hf_k
+
+        # Llama-style: apply reverse_permute transformation
+        batch_size, seq_len, n_heads, head_dim = hf_k.shape
+        meta_k = torch.zeros_like(hf_k)
+        for b in range(batch_size):
+            for s in range(seq_len):
+                # Flatten just heads and head_dim
+                flat = hf_k[b, s].flatten()
+                # Apply reverse_permute
+                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                # Restore heads and head_dim shape
+                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+
+        return meta_k
+
+    @property
+    def cache_v(self):
+        [(k, v)] = self.past_key_values.to_legacy_cache()
+        return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+
 
 class HfModelWrapper:
     def __init__(self, model, head_dim, config=None, use_hf_rope=False):
