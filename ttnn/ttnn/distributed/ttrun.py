@@ -259,6 +259,34 @@ ENV_PASSTHROUGH_PREFIXES = (
     "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
 )
 
+# Environment variables that should NOT be passed through even if they match ENV_PASSTHROUGH_PREFIXES.
+# These are either:
+# 1. Explicitly managed by tt-run and derived from rank bindings (not parent environment)
+# 2. Should only be set via rank binding env_overrides (e.g., TT_VISIBLE_DEVICES)
+#
+# TT_VISIBLE_DEVICES: Controls which PCIe devices are visible to a process. This must be set
+# per-rank via env_overrides in rank bindings to ensure each MPI process sees only its assigned
+# devices. Passing through from the parent environment would override per-rank device assignments
+# configured by cluster descriptors and rank bindings, causing incorrect device visibility.
+# See: tech_reports/Programming_Multiple_Meshes/Programming_Multiple_Meshes.md Section 5.2
+#      scripts/scaleout/README_generate_cluster_descriptors.md
+#
+# Note: TT_METAL_HOME, TT_METAL_RUNTIME_ROOT, and TT_METAL_CACHE are NOT blocklisted because
+# they are read from the parent environment (with fallbacks) and should be passed through to
+# support NFS-based distributed workloads where all MPI ranks share the same python_venv.
+ENV_BLOCKLIST = frozenset(
+    {
+        # Managed by tt-run - values derived from rank bindings, not parent environment
+        "TT_MESH_ID",  # Mesh identifier from rank binding
+        "TT_MESH_HOST_RANK",  # Host rank within mesh from rank binding
+        "TT_MESH_GRAPH_DESC_PATH",  # Path to mesh graph descriptor from config
+        "TT_RUN_ORIGINAL_CWD",  # Always set to ORIGINAL_CWD by tt-run
+        "TT_METAL_MOCK_CLUSTER_DESC_PATH",  # Mock cluster path for testing
+        # Should only come from rank binding env_overrides
+        "TT_VISIBLE_DEVICES",  # Per-rank device visibility - must be set via rank bindings
+    }
+)
+
 
 def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
     """Get all environment variables for a specific rank.
@@ -290,17 +318,28 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
 
     # Start with automatic pass-through of TT-related environment variables
     # This ensures variables like ARCH_NAME, WH_ARCH_YAML, TTNN_CONFIG_OVERRIDES are propagated
+    # Variables in ENV_BLOCKLIST are excluded even if they match prefixes
     env = {}
     passthrough_vars = []
+    blocked_vars = []
     for key, value in os.environ.items():
         if key.startswith(ENV_PASSTHROUGH_PREFIXES):
-            env[key] = value
-            passthrough_vars.append(key)
+            if key in ENV_BLOCKLIST:
+                blocked_vars.append(key)
+            else:
+                env[key] = value
+                passthrough_vars.append(key)
 
     if passthrough_vars:
         logger.debug(
             f"{TT_RUN_PREFIX} Auto-propagating {len(passthrough_vars)} environment variables "
             f"with prefixes {ENV_PASSTHROUGH_PREFIXES}: {', '.join(sorted(passthrough_vars))}"
+        )
+
+    if blocked_vars:
+        logger.debug(
+            f"{TT_RUN_PREFIX} Blocked {len(blocked_vars)} environment variables from pass-through "
+            f"(managed by tt-run or rank bindings): {', '.join(sorted(blocked_vars))}"
         )
 
     # Use ORIGINAL_CWD as the default for TT_METAL_HOME when not explicitly set.
@@ -619,6 +658,17 @@ def main(
         - ARCH_*: Architecture variables (e.g., ARCH_NAME)
         - WH_*: Wormhole-specific variables (e.g., WH_ARCH_YAML)
         - TTNN_*: TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+
+        Exception: The following TT_* variables are BLOCKED from automatic pass-through because
+        they are managed by tt-run or should only be set via rank binding env_overrides:
+        - TT_VISIBLE_DEVICES: Must be set per-rank via env_overrides in rank bindings to ensure
+          correct device visibility. Cluster descriptors and rank bindings configure this per-rank.
+        - TT_MESH_ID, TT_MESH_HOST_RANK, TT_MESH_GRAPH_DESC_PATH: Derived from rank bindings/config
+        - TT_RUN_ORIGINAL_CWD, TT_METAL_MOCK_CLUSTER_DESC_PATH: Set by tt-run internally
+
+        Note: TT_METAL_HOME, TT_METAL_RUNTIME_ROOT, and TT_METAL_CACHE ARE passed through from
+        the parent environment to support NFS-based distributed workloads where all MPI ranks
+        share the same python_venv from the launch directory.
 
         You can also specify additional environment variables in the rank binding YAML using
         the `global_env` field (for all ranks) or `env_overrides` field (per-rank).
