@@ -4,6 +4,8 @@
 // Implementation file for reduce_helpers_compute.hpp
 // Do not include directly - include reduce_helpers_compute.hpp instead
 
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
+
 namespace compute_kernel_lib {
 
 // =============================================================================
@@ -81,6 +83,29 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
     }
 }
 
+template <ReduceInputPolicy input_policy>
+ALWI void assert_input_cb_size(uint32_t input_cb, uint32_t tiles_per_bulk, uint32_t total_tiles) {
+    if constexpr (waits_per_tile(input_policy)) {
+        ASSERT(get_cb_num_pages(input_cb) >= 1);
+    } else if constexpr (waits_bulk(input_policy)) {
+        ASSERT(get_cb_num_pages(input_cb) >= tiles_per_bulk);
+        ASSERT(get_cb_num_pages(input_cb) % tiles_per_bulk == 0);
+    } else {  // waits_upfront or no_wait
+        ASSERT(get_cb_num_pages(input_cb) >= total_tiles);
+    }
+}
+
+template <ReduceInputPolicy input_policy>
+ALWI void assert_output_cb_size(uint32_t output_cb, uint32_t total_outputs) {
+    if constexpr (should_pop(input_policy)) {
+        // Per-tile reserve/push: only needs 1 page
+        ASSERT(get_cb_num_pages(output_cb) >= 1);
+    } else {
+        // Bulk reserve upfront: needs all outputs
+        ASSERT(get_cb_num_pages(output_cb) >= total_outputs);
+    }
+}
+
 // =============================================================================
 // Main Reduce Function Implementation
 // =============================================================================
@@ -116,6 +141,12 @@ ALWI void reduce(
     ASSERT(input_cb < NUM_CIRCULAR_BUFFERS);
     ASSERT(scaler_cb < NUM_CIRCULAR_BUFFERS);
     ASSERT(output_cb < NUM_CIRCULAR_BUFFERS);
+    ASSERT(input_cb != output_cb);
+    ASSERT(input_cb != scaler_cb);
+    ASSERT(output_cb != scaler_cb);
+    UNPACK(ASSERT(is_valid_cb_tile_page_size(input_cb, (DataFormat)unpack_src_format[input_cb])));
+    UNPACK(ASSERT(is_valid_cb_tile_page_size(scaler_cb, (DataFormat)unpack_src_format[scaler_cb])));
+    PACK(ASSERT(is_valid_cb_tile_page_size(output_cb, (DataFormat)pack_dst_format[output_cb])));
     ASSERT(input_block_shape.rows > 0);
     ASSERT(input_block_shape.cols > 0);
     ASSERT(input_block_shape.batches > 0);
@@ -159,6 +190,8 @@ ALWI void reduce(
         const uint32_t tiles_per_bulk = Ht * stride;
         const uint32_t total_input_tiles = tiles_per_bulk * num_batches;
         const uint32_t total_output_tiles = num_batches;
+        UNPACK((assert_input_cb_size<input_policy>(input_cb, tiles_per_bulk, total_input_tiles)));
+        PACK((assert_output_cb_size<input_policy>(output_cb, total_output_tiles)));
 
         // No-pop modes: bulk reserve output upfront
         if constexpr (!should_pop(input_policy)) {
@@ -237,6 +270,8 @@ ALWI void reduce(
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
         const uint32_t total_output_tiles = Ht * num_batches;
         const uint32_t total_input_tiles = Ht * stride * num_batches;
+        UNPACK((assert_input_cb_size<input_policy>(input_cb, Wt, total_input_tiles)));
+        PACK((assert_output_cb_size<input_policy>(output_cb, total_output_tiles)));
 
         // No-pop modes: bulk reserve output upfront
         if constexpr (!should_pop(input_policy)) {
@@ -326,6 +361,9 @@ ALWI void reduce(
         const uint32_t tiles_per_bulk = Ht * stride;
         const uint32_t total_output_tiles = Wt * num_batches;
         const uint32_t total_input_tiles = tiles_per_bulk * num_batches;
+        UNPACK((assert_input_cb_size<input_policy>(input_cb, Ht * chunk_size, total_input_tiles)));
+        PACK((assert_output_cb_size<input_policy>(output_cb, total_output_tiles)));
+
         // No-pop modes: bulk reserve output upfront
         if constexpr (!should_pop(input_policy)) {
             cb_reserve_back(output_cb, total_output_tiles);
