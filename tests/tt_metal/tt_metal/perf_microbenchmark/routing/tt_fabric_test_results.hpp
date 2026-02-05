@@ -4,28 +4,11 @@
 
 #pragma once
 
-#include <vector>
+#include <filesystem>
+#include <iosfwd>
 #include <string>
 #include <unordered_map>
-#include <filesystem>
-#include <fstream>
-#include <optional>
-#include <functional>
-#include <map>
-#include <cmath>
-#include <enchantum/enchantum.hpp>
-#include "tt_fabric_test_config.hpp"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
-#include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "tt_fabric_test_common_types.hpp"
-#include "tt_fabric_test_common.hpp"
-#include "tt_fabric_test_interfaces.hpp"
-#include "tt_fabric_test_memory_map.hpp"
-#include "tt_fabric_test_device_setup.hpp"
-#include "tt_fabric_test_traffic.hpp"
-#include "tt_fabric_test_constants.hpp"
+#include <vector>
 
 namespace tt::tt_fabric::fabric_tests {
 

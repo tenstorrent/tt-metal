@@ -5,16 +5,19 @@
 
 #include <cmath>
 #include <filesystem>
-#include <fstream>
-#include <functional>
-#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <enchantum/enchantum.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include "tt_fabric_test_results.hpp"
+#include "tt_fabric_test_common_types.hpp"
+#include "tt_fabric_test_interfaces.hpp"
+#include "tt_fabric_test_memory_map.hpp"
+#include "tt_fabric_test_device_setup.hpp"
+#include "tt_fabric_test_traffic.hpp"
+#include "tt_fabric_test_constants.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
 using Topology = tt::tt_fabric::Topology;
