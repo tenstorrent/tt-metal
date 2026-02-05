@@ -72,19 +72,6 @@ jobs:
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
-              "name": "[WH-T3K] Qwen3-VL-32B-Instruct",
-              "model": "Qwen/Qwen3-VL-32B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 10,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
-              "multimodal": true,
-              "co-owner-1-id": "U08H31YMN4Q"
-            },
-            {
               "name": "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
