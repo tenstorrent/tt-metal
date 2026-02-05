@@ -7,6 +7,7 @@ import math
 import torch
 
 import ttnn
+from models.common.auto_compose import to_torch_auto_compose
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import nearest_32
@@ -59,6 +60,8 @@ class Attention(LightweightModule):
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 
+        self.use_qk_fused = configuration.use_qk_fused
+        self.use_hf_rope = configuration.use_hf_rope
         self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
@@ -147,6 +150,17 @@ class Attention(LightweightModule):
             cache_name = lambda _: None
         else:
             cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
+
+        # Select rotary embedding implementation
+        if self.use_hf_rope and self.use_qk_fused:
+            raise NotImplementedError("Fused QK is not implemented for HF-style rope")
+            # self.rotary_embedding_decode = self._hf_rope_decode
+        if self.use_hf_rope:
+            self.rotary_embedding_decode = self._hf_rope_decode
+        elif self.use_qk_fused:
+            self.rotary_embedding_decode = self._mllama_rope_fused_qk_decode
+        else:
+            self.rotary_embedding_decode = self._mllama_rope_decode
 
         wq_str = f"{layer_name}.wq"
         wk_str = f"{layer_name}.wk"
@@ -479,6 +493,56 @@ class Attention(LightweightModule):
         k_tensor = ttnn.to_memory_config(k_tensor, k_mem_config)
         return q_tensor, k_tensor
 
+    def _mllama_rope_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
+        # Q Rotary Embeddings
+        q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
+            q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
+        )
+
+        # K Rotary Embeddings
+        k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
+            k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
+        )
+        return q_heads_1BQD, k_heads_1BKD
+
+    def _mllama_rope_fused_qk_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
+        q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD = self.to_qk_fused_memory_config(
+            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD
+        )
+
+        q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
+            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
+        )
+        return q_heads_1BQD, k_heads_1BKD
+
+    def _hf_rope_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
+        int_current_pos = int(to_torch_auto_compose(current_pos)[0])
+
+        q_heads_1BQD = ttnn.experimental.rotary_embedding(
+            q_heads_pre_rot_1BQD,
+            rot_mats[0],
+            rot_mats[1],
+            int_current_pos,
+        )
+
+        k_heads_1BKD = ttnn.experimental.rotary_embedding(
+            k_heads_pre_rot_1BKD,
+            rot_mats[0],
+            rot_mats[1],
+            int_current_pos,
+        )
+        # This is done because rotary_embedding outputs are padded in the num_heads dimension both steps
+        # reshape (indicating the padding size) as the slicing are required for attention to work properly
+        q_heads_1BQD = ttnn.reshape(q_heads_1BQD, (1, 1, self.n_local_heads, self.head_dim), (1, 1, 32, self.head_dim))
+        k_heads_1BKD = ttnn.reshape(
+            k_heads_1BKD, (1, 1, self.n_local_kv_heads, self.head_dim), (1, 1, 32, self.head_dim)
+        )
+
+        q_heads_1BQD = q_heads_1BQD[:, :, : self.n_local_heads]
+        k_heads_1BKD = k_heads_1BKD[:, :, : self.n_local_kv_heads]
+
+        return q_heads_1BQD, k_heads_1BKD
+
     def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -563,23 +627,10 @@ class Attention(LightweightModule):
         ttnn.deallocate(xqkv_fused)
 
         # Q, K Rotary Embeddings
-        if self.args.use_qk_fused:
-            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD = self.to_qk_fused_memory_config(
-                q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD
-            )
-            q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
-                q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
-            )
-        else:
-            # Q Rotary Embeddings
-            q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
-                q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
-            )
+        q_heads_1BQD, k_heads_1BKD = self.rotary_embedding_decode(
+            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos
+        )
 
-            # K Rotary Embeddings
-            k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
-                k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
-            )
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
         ###
@@ -596,7 +647,7 @@ class Attention(LightweightModule):
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
 
-        if self.args.use_qk_fused:
+        if self.use_qk_fused:
             ttnn.experimental.paged_fused_update_cache(
                 keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
             )

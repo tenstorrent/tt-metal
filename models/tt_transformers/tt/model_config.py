@@ -595,8 +595,9 @@ class ModelArgs:
         self.processor = None if dummy_weights else self.create_processor()
 
         # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
-        # We currently disable this fusion of ops for vision-capable or multimodal models and when prefetcher is enabled
-        self.use_qk_fused = not self.is_multimodal
+        # We currently disable this fusion of ops for vision-capable or multimodal models
+        # we also disable fused qk when using HF-style roraty embedding
+        self.use_qk_fused = not self.is_multimodal and not self.use_hf_rope
         if self.prefetcher is not None:
             self.use_qk_fused = False
 
