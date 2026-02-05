@@ -37,18 +37,16 @@ void kernel_main() {
     deepseek_b1_ops::LocalReduce::WriterArgs local_reduce_args{};
 
 #elif defined(COMPILE_FOR_TRISC)
-    using LocalReduceCTArgs = deepseek_b1_ops::LocalReduce::ComputeCTArgs;
-
     constexpr uint32_t in_cb = get_named_compile_time_arg_val("local_reduce_in_cb");
     constexpr uint32_t out_cb = get_named_compile_time_arg_val("local_reduce_out_cb");
-    constexpr uint32_t num_tiles = get_named_compile_time_arg_val("local_reduce_num_tiles");
-    constexpr uint32_t apply_silu = get_named_compile_time_arg_val("local_reduce_apply_silu");
+
+    using LocalReduceCTArgs = deepseek_b1_ops::LocalReduce::ComputeCTArgs<
+        get_named_compile_time_arg_val("local_reduce_num_tiles"),
+        get_named_compile_time_arg_val("local_reduce_apply_silu") == 1>;
 
     deepseek_b1_ops::LocalReduce::ComputeArgs local_reduce_args{
         .in_cb = in_cb,
         .out_cb = out_cb,
-        .num_tiles = num_tiles,
-        .apply_silu = apply_silu == 1,
     };
 #endif
 
