@@ -318,13 +318,18 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     // Create circular buffers for fused ternary inputs
     if (use_fused_ternary) {
+        uint32_t ternary_a_cb_id = tt::CBIndex::c_5;
+        uint32_t ternary_c_cb_id = tt::CBIndex::c_6;
+
         // Fused ternary input A - circular buffer c_5
         auto ternary_a_data_format =
             tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_a.value().dtype());
         auto ternary_a_tile_size = tt::tile_size(ternary_a_data_format);
+
+        TT_FATAL(ternary_a_tile_size == in1_tile_size, "ternary_a_tile_size must be equal to in1_tile_size");
+        TT_FATAL(ternary_a_data_format == in1_data_format, "ternary_a_data_format must be equal to in1_data_format");
         uint32_t ternary_a_cb_num_tiles = N_block_tiles;  // Single row (like bias), broadcast across M
 
-        uint32_t ternary_a_cb_id = tt::CBIndex::c_5;
         tt::tt_metal::create_cb(
             ternary_a_cb_id, program, core_grid, ternary_a_tile_size, ternary_a_cb_num_tiles, ternary_a_data_format);
 
@@ -334,7 +339,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         auto ternary_c_tile_size = tt::tile_size(ternary_c_data_format);
         uint32_t ternary_c_cb_num_tiles = out_block_num_tiles;  // Same as output block, not double buffered
 
-        uint32_t ternary_c_cb_id = tt::CBIndex::c_6;
         tt::tt_metal::create_cb(
             ternary_c_cb_id, program, core_grid, ternary_c_tile_size, ternary_c_cb_num_tiles, ternary_c_data_format);
 

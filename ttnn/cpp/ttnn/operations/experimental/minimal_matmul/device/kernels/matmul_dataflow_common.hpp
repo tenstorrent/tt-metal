@@ -226,31 +226,30 @@ void read_ternary_blocks_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
-    uint32_t i = d0_start;
-    uint32_t m_id = 0;
-
     cb_reserve_back(ternary_a_cb, N_block_tiles);
     uint32_t ternary_a_write_ptr = get_write_ptr(ternary_a_cb);
-    const uint32_t n_tile_start = i * shape.logical_d1;
-    const uint32_t n_tile_end = std::min(n_tile_start + N_block_tiles, shape.logical_d1);
-    for (uint32_t n_tile_id = n_tile_start; n_tile_id < n_tile_end; n_tile_id++) {
+    for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
+        if (n_tile_id >= shape.logical_d1) {
+            break;
+        }
+
         noc_async_read_tile(n_tile_id, ternary_a_accessor, ternary_a_write_ptr);
         ternary_a_write_ptr += tile_size_bytes;
     }
     noc_async_read_barrier();
-    volatile uint16_t* ternary_a_accessor_ptr = reinterpret_cast<volatile uint16_t*>(ternary_a_write_ptr);
-    DPRINT << "ternary_a_accessor[0] = " << BF16(ternary_a_accessor_ptr[0]) << ENDL();
 
     cb_push_back(ternary_a_cb, N_block_tiles);
 
+    uint32_t m_id = 0;
+    uint32_t i = d0_start;
     for (; i < d0_end; i++, m_id++) {
         cb_reserve_back(ternary_b_cb, N_block_tiles);
 
         uint32_t ternary_b_write_ptr = get_write_ptr(ternary_b_cb);
-        for (uint32_t j = d1_start, n_id = 0; j < d1_end; j++, n_id++) {
+        for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
-                ternary_b_write_ptr += tile_size_bytes;
-                continue;
+                // ternary_b_write_ptr += tile_size_bytes;
+                break;
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
