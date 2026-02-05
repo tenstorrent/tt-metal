@@ -466,12 +466,13 @@ class Generator:
                     # continue with the next user
                     continue
                 else:
-                    if return_hidden_states:
-                        raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
                     # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
                     # We need to do this here, because we can't do this part in forward() if we have trace enabled
                     # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
                     logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
+            else:
+                if return_hidden_states:
+                    raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
 
             if sampling_enabled:
                 tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(
