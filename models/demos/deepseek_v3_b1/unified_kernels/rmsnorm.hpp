@@ -139,6 +139,7 @@ struct RMSNorm {
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile_block(0, args.output_cb, num_tiles);
+                DPRINT << " RMSNORM push back " << num_tiles << ENDL();
                 cb_push_back(args.output_cb, num_tiles);
                 tile_regs_release();
             }
