@@ -354,7 +354,10 @@ def test_concat_1d(device, layout, dim, input_shapes):
     assert_equal(torch_output_tensor, output)
 
 
+##################
 # DN sharded
+
+
 @pytest.mark.parametrize(
     "num_tensors, tensor_shape, shard_shape, concat_dim, layout",
     [
@@ -417,14 +420,21 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
     ]
     print("\n\ntensors have been created\n\n")
 
-    # Verify tensors have ND sharding
+    # Verify tensors have ND sharding - sanity check
     for tt_tensor in ttnn_tensors:
-        assert tt_tensor.memory_config().is_sharded(), "Input tensor should be sharded"
+        mem_config = tt_tensor.memory_config()
+        assert mem_config.is_sharded(), "Input tensor should be sharded"
+        # Check specifically for ND sharding
+        assert mem_config.nd_shard_spec is not None, "Input tensor should use ND sharding"
+        assert mem_config.shard_spec is None, "Input tensor should NOT use legacy sharding"
+        # verify the shard shape matches initial setup
+        assert mem_config.nd_shard_spec.shard_shape == ttnn.Shape(
+            shard_shape
+        ), f"Shard shape mismatch: expected {shard_shape}, got {mem_config.nd_shard_spec.shard_shape}"
 
     # Compute output shard shape (adjust for concat dimension)
     output_shape = list(tensor_shape)
     output_shape[concat_dim] *= num_tensors
-    output_shard_shape = list(shard_shape)
     # For concat dim, the output shard shape might need adjustment based on memory layout
     # For simplicity, keep same shard shape and let output be interleaved
 

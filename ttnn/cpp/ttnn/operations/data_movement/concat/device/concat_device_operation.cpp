@@ -71,8 +71,10 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     shape_first[args.dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
     bool warn_about_alignment = false;
+    const auto& first_nd_shard_spec = first_input.nd_shard_spec();  // can be nullopt
+    const bool nd_sharded = first_nd_shard_spec.has_value();
 
-    for (int i = 0; i < input_tensors.size(); i++) {
+    for (int i = 0; i < input_tensors.size(); ++i) {
         const Tensor& in_ref = input_tensors[i];
         TT_FATAL(in_ref.buffer(), "Operand to concat needs to be allocated in a buffer on device.");
         TT_FATAL(in_ref.device(), "Operand to concat needs to be on device.");
@@ -93,14 +95,40 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
         TT_FATAL(in_ref.is_sharded() == shard_first, "All tensors must be sharded or all must be interleaved");
         if (shard_first) {
-            if (first_input.nd_shard_spec().has_value()) {
+            if (nd_sharded) {
                 TT_FATAL(in_ref.nd_shard_spec().has_value(), "ND Sharded tensors must have a shard spec.");
-
-                // TODO:Z add nd sharding verification possibility here
-                //  need to be different at the same dimention
                 TT_FATAL(
-                    in_ref.nd_shard_spec().value().grid == first_input.nd_shard_spec().value().grid,
+                    in_ref.nd_shard_spec().value().grid == first_nd_shard_spec.value().grid,
                     "ND Sharded tensors must have the same grid.");
+
+                // Verify that shard shapes differ only in the concat dimension
+                const auto& first_shard_shape = first_nd_shard_spec.value().shard_shape;
+                const auto& curr_shard_shape = in_ref.nd_shard_spec().value().shard_shape;
+                TT_FATAL(
+                    first_shard_shape.rank() == curr_shard_shape.rank(),
+                    "ND Sharded tensors must have shard shapes with the same rank. "
+                    "First tensor shard rank: {}, Current tensor shard rank: {}",
+                    first_shard_shape.rank(),
+                    curr_shard_shape.rank());
+
+                // verify dimensions
+                for (uint32_t dim_idx = 0; dim_idx < first_shard_shape.rank(); ++dim_idx) {
+                    if (dim_idx == args.dim) {
+                        // Concat dimension is allowed to differ
+                        continue;
+                    }
+                    TT_FATAL(
+                        first_shard_shape[dim_idx] == curr_shard_shape[dim_idx],
+                        "ND Sharded tensors must have the same shard shape in all dimensions except the concat "
+                        "dimension (dim={}). "
+                        "Dimension {} differs: first tensor shard shape[{}]={}, current tensor shard shape[{}]={}",
+                        args.dim,
+                        dim_idx,
+                        dim_idx,
+                        first_shard_shape[dim_idx],
+                        dim_idx,
+                        curr_shard_shape[dim_idx]);
+                }  // for dim_idx
             } else {
                 TT_FATAL(in_ref.shard_spec().has_value(), "Sharded tensors must have a shard spec.");
                 TT_FATAL(
@@ -114,6 +142,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 input_tensors.size() > 2 || in_ref.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
                 "Width sharded inputs are not supported for two tensors concat yet");
+            // TODO:Z Next TT_FATAL - to bypass
             TT_FATAL(
                 in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
                 "Block sharded inputs are not supported");
