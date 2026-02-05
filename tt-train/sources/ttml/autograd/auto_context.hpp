@@ -18,64 +18,43 @@ namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
 
+struct DistributedConfig {
+    bool enable_ddp = false;
+    bool enable_tp = false;
+};
+
 class ParallelismContext {
 public:
     // Configure from device config flags
-    // Axis assignment order: DP -> CP -> TP
-    // For DP+TP: dp_axis=0, tp_axis=1
-    // For CP+TP: cp_axis=0, tp_axis=1
+    // For TP+DP: dp_axis=0, tp_axis=1
     // For TP only: tp_axis=0
     // For DP only: dp_axis=0
-    // For CP only: cp_axis=0
-    // Note: DP+CP is not currently supported
-    void configure(ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp, bool enable_cp = false);
-
-    // Mesh device access
-    [[nodiscard]] ttnn::distributed::MeshDevice* get_mesh_device() const {
-        return m_mesh_device;
-    }
+    ParallelismContext(const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config);
 
     // Axis queries
-    [[nodiscard]] std::optional<uint32_t> get_dp_axis() const {
-        return m_dp_axis;
-    }
-    [[nodiscard]] std::optional<uint32_t> get_cp_axis() const {
-        return m_cp_axis;
+    [[nodiscard]] std::optional<uint32_t> get_ddp_axis() const {
+        return m_ddp_axis;
     }
     [[nodiscard]] std::optional<uint32_t> get_tp_axis() const {
         return m_tp_axis;
     }
 
     // Size queries (computed from mesh_device->shape())
-    [[nodiscard]] uint32_t get_dp_size() const;
-    [[nodiscard]] uint32_t get_cp_size() const;
-    [[nodiscard]] uint32_t get_tp_size() const;
+    [[nodiscard]] const uint32_t get_ddp_size() const;
+    [[nodiscard]] const uint32_t get_tp_size() const;
 
-    [[nodiscard]] bool is_tp_enabled() const {
+    [[nodiscard]] const bool is_tp_enabled() const {
         return m_tp_axis.has_value();
     }
-    [[nodiscard]] bool is_dp_enabled() const {
-        return m_dp_axis.has_value();
+    [[nodiscard]] const bool is_ddp_enabled() const {
+        return m_ddp_axis.has_value();
     }
-    [[nodiscard]] bool is_cp_enabled() const {
-        return m_cp_axis.has_value();
-    }
-
-    // Get CP rank tensor - each device's shard contains its rank (0, 1, 2, ..., cp_size-1)
-    // Shape: (1, 1, 1, 1) per device shard, value = device's CP rank
-    // Returns nullopt if CP is not enabled
-    [[nodiscard]] std::optional<ttnn::Tensor> get_cp_rank_tensor() const;
 
 private:
-    void create_cp_rank_tensor();
-
-    ttnn::distributed::MeshDevice* m_mesh_device = nullptr;
-    std::optional<uint32_t> m_dp_axis = std::nullopt;
-    std::optional<uint32_t> m_cp_axis = std::nullopt;
+    std::optional<uint32_t> m_ddp_axis = std::nullopt;
     std::optional<uint32_t> m_tp_axis = std::nullopt;
-
-    // Sharded tensor where device i holds value i (for CP rank)
-    std::optional<ttnn::Tensor> m_cp_rank_tensor = std::nullopt;
+    uint32_t m_num_ddp_devices = 1U;
+    uint32_t m_num_tp_devices = 1U;
 };
 
 class AutoContext {
@@ -129,7 +108,9 @@ public:
     void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
-    [[nodiscard]] ParallelismContext& get_parallelism_context();
+    [[nodiscard]] const ParallelismContext& get_parallelism_context() const;
+
+    void initialize_parallelism_context(const DistributedConfig& config);
 
 private:
     AutoContext();
@@ -149,7 +130,7 @@ private:
 
     std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
 
-    ParallelismContext m_parallelism_context;
+    std::unique_ptr<ParallelismContext> m_parallelism_context;
 
     friend class ttsl::Indestructible<AutoContext>;
 };

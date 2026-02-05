@@ -195,6 +195,7 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
         throw std::runtime_error("Mesh shape is required for multidevice training");
     }
     if (mesh_shape_node) {
+        assert(mesh_shape_node.size() == 2);
         const std::vector<uint32_t> mesh_shape = mesh_shape_node.as<std::vector<uint32_t>>();
         config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape);
     }
@@ -429,7 +430,8 @@ int main(int argc, char **argv) {
     auto *device = &ttml::autograd::ctx().get_device();
 
     // Configure parallelization context from device config
-    ttml::autograd::ctx().get_parallelism_context().configure(device, device_config.enable_dp, device_config.enable_tp);
+    ttml::autograd::ctx().initialize_parallelism_context(
+        {.enable_ddp = device_config.enable_ddp, .enable_tp = device_config.enable_tp});
 
     struct CachedHostData {
         std::vector<uint32_t> data;
@@ -468,12 +470,12 @@ int main(int argc, char **argv) {
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
-                auto &pctx = ttml::autograd::ctx().get_parallelism_context();
+                const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
 
-                if (pctx.is_dp_enabled()) {
+                if (pctx.is_ddp_enabled()) {
                     // Shard batch on DP axis (replicates on TP axis automatically for 2D mesh)
                     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
-                        *device, /*dim=*/0, /*cluster_axis=*/pctx.get_dp_axis());
+                        *device, /*dim=*/0, /*cluster_axis=*/pctx.get_ddp_axis());
                     auto data_tensor =
                         ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                             data,
@@ -553,6 +555,7 @@ int main(int argc, char **argv) {
         },
         model_config.transformer_config);
 
+    fmt::print("Model number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
     ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
 
     if (!safetensors_path.empty()) {
@@ -644,8 +647,8 @@ int main(int argc, char **argv) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
     }
 
-    if (device_config.enable_dp) {
-        auto dp_size = ttml::autograd::ctx().get_parallelism_context().get_dp_size();
+    if (device_config.enable_ddp) {
+        auto dp_size = ttml::autograd::ctx().get_parallelism_context().get_ddp_size();
         if (training_config.batch_size % dp_size != 0) {
             throw std::logic_error(fmt::format(
                 "Batch size must be divisible by the number of devices. Batch size = {}, devices = {}",

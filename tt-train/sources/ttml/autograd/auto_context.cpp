@@ -130,86 +130,48 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
     return *m_socket_manager;
 }
 
-[[nodiscard]] ParallelismContext& AutoContext::get_parallelism_context() {
-    return m_parallelism_context;
-}
-
-void ParallelismContext::configure(
-    ttnn::distributed::MeshDevice* mesh_device, bool enable_dp, bool enable_tp, bool enable_cp) {
+ParallelismContext::ParallelismContext(
+    const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) {
     TT_FATAL(
-        !(enable_dp && enable_cp),
-        "DP and CP cannot be enabled simultaneously. This combination is not currently supported.");
+        (uint32_t)config.enable_ddp + (uint32_t)config.enable_tp == mesh_device.shape().dims(),
+        "The number of parallelization axes must be equal to the number of mesh shape dimensions");
 
-    TT_FATAL(
-        (uint32_t)enable_dp + (uint32_t)enable_cp + (uint32_t)enable_tp <= mesh_device->shape().dims(),
-        "Mesh shape dimensions must be greater than the number of parallelization axes");
-
-    m_mesh_device = mesh_device;
-
-    // Axis assignment order: DP -> CP -> TP
     uint32_t axis = 0;
-    if (enable_dp) {
-        m_dp_axis = axis++;
+    if (config.enable_ddp) {
+        m_ddp_axis = axis++;
+        m_num_ddp_devices = mesh_device.shape()[m_ddp_axis.value()];
     }
-    if (enable_cp) {
-        m_cp_axis = axis++;
-    }
-    if (enable_tp) {
+    if (config.enable_tp) {
         m_tp_axis = axis++;
-    }
-
-    // Create CP rank tensor if CP is enabled
-    if (enable_cp) {
-        create_cp_rank_tensor();
+        m_num_tp_devices = mesh_device.shape()[m_tp_axis.value()];
     }
 }
-
-void ParallelismContext::create_cp_rank_tensor() {
-    if (!m_cp_axis.has_value() || m_mesh_device == nullptr) {
-        return;
+[[nodiscard]] const ParallelismContext& AutoContext::get_parallelism_context() const {
+    if (!m_parallelism_context) {
+        throw std::runtime_error("ParallelismContext is not initialized.");
     }
-
-    uint32_t cp_size = get_cp_size();
-
-    // Create rank values [0, 1, 2, ..., cp_size-1] as float
-    // Shape: (1, 1, 1, cp_size) - will be sharded along last dim so each device gets one value
-    std::vector<float> rank_values(cp_size);
-    for (uint32_t i = 0; i < cp_size; ++i) {
-        rank_values[i] = static_cast<float>(i);
-    }
-
-    // Shard along dim 3 (last dim) on CP axis - each device gets its rank
-    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*m_mesh_device, /*dim=*/3, m_cp_axis);
-    m_cp_rank_tensor = core::from_vector(
-        rank_values, ttnn::Shape({1U, 1U, 1U, cp_size}), m_mesh_device, ttnn::Layout::ROW_MAJOR, mapper.get());
+    return *m_parallelism_context;
 }
 
-std::optional<ttnn::Tensor> ParallelismContext::get_cp_rank_tensor() const {
-    return m_cp_rank_tensor;
+void AutoContext::initialize_parallelism_context(const DistributedConfig& config) {
+    if (m_parallelism_context) {
+        throw std::runtime_error("ParallelismContext is already initialized.");
+    }
+    m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), config);
 }
 
-uint32_t ParallelismContext::get_dp_size() const {
-    if (!m_dp_axis.has_value() || m_mesh_device == nullptr) {
+const uint32_t ParallelismContext::get_ddp_size() const {
+    if (!m_ddp_axis.has_value()) {
         return 1U;
     }
-    return m_mesh_device->shape()[m_dp_axis.value()];
+    return m_num_ddp_devices;
 }
 
-uint32_t ParallelismContext::get_cp_size() const {
-    if (!m_cp_axis.has_value() || m_mesh_device == nullptr) {
-        return 1U;
-    }
-    return m_mesh_device->shape()[m_cp_axis.value()];
-}
-
-uint32_t ParallelismContext::get_tp_size() const {
-    if (m_mesh_device == nullptr) {
-        return 1U;
-    }
+const uint32_t ParallelismContext::get_tp_size() const {
     if (!m_tp_axis.has_value()) {
-        return static_cast<uint32_t>(m_mesh_device->num_devices());
+        return 1U;
     }
-    return m_mesh_device->shape()[m_tp_axis.value()];
+    return m_num_tp_devices;
 }
 
 }  // namespace ttml::autograd

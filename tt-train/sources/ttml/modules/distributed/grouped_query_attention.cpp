@@ -15,7 +15,7 @@ namespace ttml::modules::distributed {
 
 DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConfig& config) :
     m_embedding_dim(config.embedding_dim), m_num_heads(config.num_heads), m_num_groups(config.num_groups) {
-    auto& pctx = autograd::ctx().get_parallelism_context();
+    const auto& pctx = autograd::ctx().get_parallelism_context();
     auto tp_axis = pctx.get_tp_axis();
     auto tp_size = pctx.get_tp_size();
 
