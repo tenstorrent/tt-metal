@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "swiglu_op.hpp"
+
 #include <core/ttnn_all_includes.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 
@@ -19,14 +21,15 @@ autograd::TensorPtr swiglu(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& w1,
     const autograd::TensorPtr& w2,
-    const autograd::TensorPtr& w3) {
+    const autograd::TensorPtr& w3,
+    SwiGLUAlgorithm algorithm) {
     auto a_shape = tensor->get_value().logical_shape();
     if (a_shape.rank() != 4) {
         throw std::runtime_error("swiglu only supports rank-4 input tensors.");
     }
 
     ttnn::Tensor swiglu_fw_result =
-        ttml::metal::swiglu_fw(tensor->get_value(), w1->get_value(), w2->get_value(), w3->get_value());
+        ttml::metal::swiglu_fw(tensor->get_value(), w1->get_value(), w2->get_value(), w3->get_value(), algorithm);
     auto out = autograd::create_tensor(swiglu_fw_result);
 
     autograd::GradFunction grad = [tensor, w1, w2, w3, out]() {

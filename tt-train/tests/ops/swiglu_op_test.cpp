@@ -76,7 +76,8 @@ void CompareKernelVsReference(
     const xt::xarray<float>& input_data,
     const xt::xarray<float>& w1_data,
     const xt::xarray<float>& w2_data,
-    const xt::xarray<float>& w3_data) {
+    const xt::xarray<float>& w3_data,
+    ttml::ops::SwiGLUAlgorithm algorithm = ttml::ops::SwiGLUAlgorithm::AUTO) {
     using namespace ttml;
 
     // Create input tensors for kernel implementation
@@ -85,8 +86,8 @@ void CompareKernelVsReference(
     auto w2_kernel = autograd::create_tensor(core::from_xtensor(w2_data, &autograd::ctx().get_device()));
     auto w3_kernel = autograd::create_tensor(core::from_xtensor(w3_data, &autograd::ctx().get_device()));
 
-    // Forward pass - kernel implementation
-    auto result_kernel = ops::swiglu(input_kernel, w1_kernel, w2_kernel, w3_kernel);
+    // Forward pass - kernel implementation with specified algorithm
+    auto result_kernel = ops::swiglu(input_kernel, w1_kernel, w2_kernel, w3_kernel, algorithm);
     result_kernel->get_value();
     auto result_kernel_xtensor = core::to_xtensor(result_kernel->get_value());
 
@@ -132,8 +133,12 @@ void CompareKernelVsReference(
  *   - S: sequence length (height for transformers)
  *   - C: feature dimension (width/embedding dimension)
  * @param hidden_dim Hidden dimension for the weight matrices
+ * @param algorithm Algorithm to use (default: TRUE_FLASH for testing the optimized path)
  */
-static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input_shape, const uint32_t hidden_dim) {
+static void CompareKernelVsReferenceWithShape(
+    const std::vector<uint32_t>& input_shape,
+    const uint32_t hidden_dim,
+    ttml::ops::SwiGLUAlgorithm algorithm = ttml::ops::SwiGLUAlgorithm::TRUE_FLASH) {
     using namespace ttml;
 
     // Generate random input data using parallel_generate (following RMSNorm pattern)
@@ -161,7 +166,7 @@ static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input
     core::parallel_generate<float>(
         w3_data, [bound]() { return std::uniform_real_distribution<float>(-bound, bound); }, /* seed */ rng());
 
-    CompareKernelVsReference(input_data, w1_data, w2_data, w3_data);
+    CompareKernelVsReference(input_data, w1_data, w2_data, w3_data, algorithm);
 }
 
 }  // namespace
@@ -248,7 +253,8 @@ TEST_F(SwiGLUOpTest, SwiGLU_RepeatedRuns_NoHang) {
 
     const float tolerance = 1e-2f;
     for (int iteration = 0; iteration < 3; ++iteration) {
-        auto output_tensor = ops::swiglu(input_tensor, w1_tensor, w2_tensor, w3_tensor);
+        auto output_tensor =
+            ops::swiglu(input_tensor, w1_tensor, w2_tensor, w3_tensor, ops::SwiGLUAlgorithm::TRUE_FLASH);
         auto value = output_tensor->get_value();
         auto output_xtensor = core::to_xtensor(value);
 

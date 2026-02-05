@@ -120,10 +120,11 @@ ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation::tensor_return
     const ttnn::Tensor& m1,
     const ttnn::Tensor& m2,
     const ttnn::Tensor& m3,
-    const std::optional<ttnn::Tensor>& preallocated_swiglu) {
+    const std::optional<ttnn::Tensor>& preallocated_swiglu,
+    ttml::metal::ops::swiglu_fw::device::SwiGLUAlgorithm algorithm) {
     using OperationType = ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{};
+    auto operation_attributes = OperationType::operation_attributes_t{.algorithm = algorithm};
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor, .w1 = m1, .w2 = m2, .w3 = m3, .preallocated_swiglu = preallocated_swiglu};
 

@@ -9,6 +9,7 @@
 #include "metal/ttnn_all_includes.hpp"
 #include "swiglu_fw_device_operation_types.hpp"
 #include "swiglu_fw_program_factory.hpp"
+#include "swiglu_fw_true_flash_program_factory.hpp"
 
 namespace ttml::metal::ops::swiglu_fw::device {
 
@@ -37,6 +38,8 @@ ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation::tensor_return
     const ttnn::Tensor& m1,
     const ttnn::Tensor& m2,
     const ttnn::Tensor& m3,
-    const std::optional<ttnn::Tensor>& preallocated_swiglu = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_swiglu = std::nullopt,
+    ttml::metal::ops::swiglu_fw::device::SwiGLUAlgorithm algorithm =
+        ttml::metal::ops::swiglu_fw::device::SwiGLUAlgorithm::AUTO);
 
 }  // namespace ttnn::prim

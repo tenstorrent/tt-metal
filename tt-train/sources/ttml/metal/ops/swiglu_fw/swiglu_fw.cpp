@@ -9,13 +9,18 @@
 namespace ttml::metal {
 
 ttnn::Tensor swiglu_fw(
-    const ttnn::Tensor& input_tensor, const ttnn::Tensor& w1, const ttnn::Tensor& w2, const ttnn::Tensor& w3) {
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& w1,
+    const ttnn::Tensor& w2,
+    const ttnn::Tensor& w3,
+    SwiGLUAlgorithm algorithm) {
     return ttnn::prim::ttml_swiglu_fw(
         input_tensor,  // [B, 1, S, C]
         w1,            // [1, 1, C, H]
         w2,            // [1, 1, H, C]
-        w3             // [1, 1, C, H]
-    );
+        w3,            // [1, 1, C, H]
+        std::nullopt,  // preallocated_swiglu
+        algorithm);
 }
 
 }  // namespace ttml::metal
