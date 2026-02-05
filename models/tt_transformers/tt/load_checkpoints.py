@@ -160,6 +160,18 @@ def convert_hf_to_meta(state_dict, head_dim, n_heads=None, n_kv_heads=None):
     return state_dict
 
 
+def convert_hf_to_meta_no_qkv_permute(state_dict, head_dim, n_heads=None, n_kv_heads=None):
+    """Convert HF to Meta format but skip QKV weight permutation.
+
+    This keeps weights in HF format for use with HF-style RoPE.
+    Only key mapping is performed (q_proj -> wq, etc.).
+    """
+    state_dict = split_hf_keys(state_dict, n_heads, n_kv_heads)
+    # SKIP convert_hf_qkv_to_meta_format - keep weights in HF format
+    state_dict = map_hf_to_meta_keys(state_dict)
+    return state_dict
+
+
 def convert_vision_hf_to_meta(state_dict, head_dim):
     state_dict = split_hf_keys(state_dict)
     state_dict = map_vision_hf_to_meta_keys(state_dict, head_dim)
@@ -177,6 +189,19 @@ def convert_hf_qkv_to_meta_format_mllama(state_dict, head_dim):
 def convert_hf_to_meta_mllama(state_dict, head_dim, config):
     state_dict = split_hf_keys(state_dict)
     state_dict = convert_hf_qkv_to_meta_format_mllama(state_dict, head_dim)
+    state_dict = map_hf_to_meta_keys_mllama(state_dict, config)
+    state_dict = convert_pos_embeddings(state_dict)
+    state_dict = flatten_conv_linear(state_dict)
+    return state_dict
+
+
+def convert_hf_to_meta_mllama_no_qkv_permute(state_dict, head_dim, config):
+    """Convert HF to Meta format for multimodal Llama but skip QKV weight permutation.
+
+    This keeps weights in HF format for use with HF-style RoPE.
+    Only key mapping is performed (q_proj -> wq, etc.).
+    """
+    state_dict = split_hf_keys(state_dict)
     state_dict = map_hf_to_meta_keys_mllama(state_dict, config)
     state_dict = convert_pos_embeddings(state_dict)
     state_dict = flatten_conv_linear(state_dict)
@@ -238,6 +263,32 @@ def map_vision_hf_to_meta_keys(state_dict, head_dim):
     vision_state_dict = map_hf_to_meta_keys_vision_only(vision_state_dict)
 
     return {**vision_state_dict, **text_state_dict, **other_state_dict}
+
+
+def map_vision_hf_to_meta_keys_no_qkv_permute(state_dict, head_dim):
+    """Map vision HF to Meta keys but skip QKV format conversion for text portion.
+
+    This keeps text weights in HF format for use with HF-style RoPE.
+    """
+    vision_state_dict, text_state_dict, other_state_dict = map_vision_hf_to_meta_keys_split_to_submodels(state_dict)
+
+    # SKIP convert_hf_qkv_to_meta_format - keep text weights in HF format
+    text_state_dict = map_hf_to_meta_keys(text_state_dict)
+
+    vision_state_dict = map_hf_to_meta_keys_vision_only(vision_state_dict)
+
+    return {**vision_state_dict, **text_state_dict, **other_state_dict}
+
+
+def convert_vision_hf_to_meta_no_qkv_permute(state_dict, head_dim):
+    """Convert vision HF to Meta format but skip QKV weight permutation.
+
+    This keeps weights in HF format for use with HF-style RoPE.
+    Only key mapping is performed (q_proj -> wq, etc.).
+    """
+    state_dict = split_hf_keys(state_dict)
+    state_dict = map_vision_hf_to_meta_keys_no_qkv_permute(state_dict, head_dim)
+    return state_dict
 
 
 def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
