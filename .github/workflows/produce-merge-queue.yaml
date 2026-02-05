@@ -3,11 +3,8 @@ name: "[internal] Produce GitHub Merge Queue data"
 on:
   push:
     branches:
-      - ashah/merge-queue   
-
+      - ashah/merge-queue
   workflow_dispatch:
-
-  # Runs automatically every 5 minutes after merge to main
   schedule:
     - cron: "*/5 * * * *"
 
@@ -23,32 +20,19 @@ jobs:
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # Fetch ALL open PR numbers (pagination prevents truncation)
+      # Fetch ALL open PRs (full objects)
       # ------------------------------------------------------------
-      - name: Fetch open PR numbers
+      - name: Fetch PR objects
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-
-          gh api --paginate \
-            /repos/tenstorrent/tt-metal/pulls \
-            | jq '.[].number' > pr_numbers.txt
-
-      # ------------------------------------------------------------
-      # Fetch FULL PR objects (mergeable_state is computed here)
-      # ------------------------------------------------------------
-      - name: Fetch PR details
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
           gh api --paginate \
             /repos/tenstorrent/tt-metal/pulls \
             > pulls_full.json
+
       # ------------------------------------------------------------
-      # Build merge queue snapshot with REAL state mapping
+      # Build MERGE QUEUE snapshot (auto_merge == true)
       # ------------------------------------------------------------
       - name: Build merge queue snapshot
         run: |
@@ -58,46 +42,39 @@ jobs:
           COLLECTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           jq --arg repo "tenstorrent/tt-metal" --arg ts "$COLLECTED_AT" '
-          def map_state(ms):
-            if ms == "clean" then "PASSED_GATE"
-            elif ms == "blocked" then "IN_QUEUE"
-            elif ms == "unstable" then "FAILED_GATE"
-            elif ms == "dirty" then "FAILED_GATE"
-            else "NOT_QUEUED"
-            end;
-
           {
             repository: $repo,
             collected_at: $ts,
             merge_queue: [
-              .[] | {
-                merge_queue_id: null,
-                pr_number: .number,
-                pr_title: .title,
-                pr_author_login: .user.login,
-                head_sha: .head.sha,
-                state: map_state(.mergeable_state),
-                queue_position: null,
-                enqueued_at: null,
-                estimated_time_to_merge_sec: null,
-                collected_at: $ts
-              }
+              .[]
+              | select(.auto_merge != null)
+              | {
+                  merge_queue_id: null,
+                  pr_number: .number,
+                  pr_title: .title,
+                  pr_author_login: .user.login,
+                  head_sha: .head.sha,
+                  state: "IN_QUEUE",
+                  queue_position: null,
+                  enqueued_at: null,
+                  estimated_time_to_merge_sec: null,
+                  collected_at: $ts
+                }
             ]
           }
           ' pulls_full.json > generated/merge_queue/merge_queue_snapshot.json
 
       # ------------------------------------------------------------
-      # Timestamp filename (prevents overwrite + enables lineage)
+      # Timestamp filename
       # ------------------------------------------------------------
       - name: Timestamp snapshot
         run: |
           TS=$(date -u +"%Y%m%dT%H%M%SZ")
-
           mv generated/merge_queue/merge_queue_snapshot.json \
              generated/merge_queue/${TS}_merge_queue_snapshot.json
 
       # ------------------------------------------------------------
-      # Upload to SFTP (Airflow watches this)
+      # Upload via SFTP
       # ------------------------------------------------------------
       - name: Upload merge queue data via SFTP
         uses: ./.github/actions/upload-data-via-sftp
