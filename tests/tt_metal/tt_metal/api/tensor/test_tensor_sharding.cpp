@@ -27,8 +27,6 @@
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 
-namespace {
-
 using namespace tt::tt_metal;
 
 const CoreCoord grid_size{8, 7};
@@ -39,7 +37,6 @@ struct IllegalShardSpecParams {
     MemoryConfig memory_config;
     std::string expected_err_msg;
 };
-}  // namespace
 
 class IllegalTensorSpecCreationTests : public ::testing::TestWithParam<IllegalShardSpecParams> {};
 
