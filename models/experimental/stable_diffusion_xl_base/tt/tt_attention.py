@@ -24,7 +24,6 @@ class TtAttention(LightweightModule):
     ):
         super().__init__()
         self.device = device
-        self.module_path = module_path
 
         self.inner_dim = out_dim if out_dim is not None else dim_head * heads
         self.inner_kv_dim = self.inner_dim if kv_heads is None else dim_head * kv_heads

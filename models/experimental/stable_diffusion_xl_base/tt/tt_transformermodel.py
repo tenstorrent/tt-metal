@@ -16,7 +16,6 @@ class TtTransformer2DModel(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config, query_dim, num_attn_heads, out_dim):
         super().__init__()
         self.device = device
-        self.module_path = module_path
 
         self.norm_groups = 32
         self.norm_eps = 1e-6

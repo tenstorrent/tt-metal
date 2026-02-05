@@ -12,7 +12,6 @@ class TtGEGLU(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config):
         super().__init__()
         self.device = device
-        self.module_path = module_path
 
         weights = state_dict[f"{module_path}.proj.weight"]
         bias = state_dict[f"{module_path}.proj.bias"]

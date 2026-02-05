@@ -19,7 +19,6 @@ class TtFeedForward(LightweightModule):
     ):
         super().__init__()
         self.device = device
-        self.module_path = module_path
 
         self.tt_geglu = TtGEGLU(device, state_dict, f"{module_path}.net.0", model_config)
 
