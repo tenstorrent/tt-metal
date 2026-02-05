@@ -604,12 +604,12 @@ class RefinerModelOptimisations(ModelOptimisations):
                     fused_activation=None,
                 ),
                 "1D_RESNET_LINEAR_1536": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(6, 8),
-                    in0_block_w=12,
+                    compute_with_storage_grid_size=(3, 8),
+                    in0_block_w=6,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=2,
                     per_core_M=1,
-                    per_core_N=1,
+                    per_core_N=2,
                     mcast_in0=True,
                     fuse_batch=False,
                     fused_activation=None,
@@ -704,6 +704,50 @@ class RefinerModelOptimisations(ModelOptimisations):
                     out_subblock_h=1,
                     out_subblock_w=6,
                     mcast_in0=False,
+                    fuse_batch=False,
+                    fused_activation=None,
+                ),
+                "1D_TIME_EMBEDDING_LINEAR_1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(3, 8),
+                    in0_block_w=4,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    per_core_M=1,
+                    per_core_N=2,
+                    mcast_in0=True,
+                    fuse_batch=False,
+                    fused_activation=ttnn.UnaryOpType.SILU,
+                ),
+                "1D_TIME_EMBEDDING_LINEAR_2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(3, 8),
+                    in0_block_w=6,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    per_core_M=1,
+                    per_core_N=2,
+                    mcast_in0=True,
+                    fuse_batch=False,
+                    fused_activation=None,
+                ),
+                "1D_ADD_EMBEDDING_LINEAR_1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(3, 8),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    per_core_M=1,
+                    per_core_N=2,
+                    mcast_in0=True,
+                    fuse_batch=False,
+                    fused_activation=ttnn.UnaryOpType.SILU,
+                ),
+                "1D_ADD_EMBEDDING_LINEAR_2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(3, 8),
+                    in0_block_w=6,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    per_core_M=1,
+                    per_core_N=2,
+                    mcast_in0=True,
                     fuse_batch=False,
                     fused_activation=None,
                 ),
@@ -889,6 +933,18 @@ class RefinerModelOptimisations(ModelOptimisations):
                 or "up_blocks.1.resnets" in matmul_path
             ):
                 return self.matmul_configs.get("1D_RESNET_LINEAR_1536")
+
+        if "time_embedding" in matmul_path:
+            if "linear_1" in matmul_path:
+                return self.matmul_configs.get("1D_TIME_EMBEDDING_LINEAR_1")
+            elif "linear_2" in matmul_path:
+                return self.matmul_configs.get("1D_TIME_EMBEDDING_LINEAR_2")
+
+        if "add_embedding" in matmul_path:
+            if "linear_1" in matmul_path:
+                return self.matmul_configs.get("1D_ADD_EMBEDDING_LINEAR_1")
+            elif "linear_2" in matmul_path:
+                return self.matmul_configs.get("1D_ADD_EMBEDDING_LINEAR_2")
 
         return None
 
