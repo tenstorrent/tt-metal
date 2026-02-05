@@ -793,8 +793,8 @@ all_gather_minimal_matmul_async_factory_helper(
         // in0 backward sender
         uint32_t mux_core_index_backward =
             ((in0_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
-        if (mux_core_index_backward >= in1_core_order.size()) {
-            mux_core_index_backward = mux_core_index_backward - in1_core_order.size();
+        if (mux_core_index_backward >= full_grid_size.x) {
+            mux_core_index_backward = mux_core_index_backward - full_grid_size.x;
         }
         auto mux_logical_core_backward = CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
         CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
@@ -813,8 +813,8 @@ all_gather_minimal_matmul_async_factory_helper(
         // in0 forward sender
         uint32_t mux_core_index_forward =
             ((in0_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
-        if (mux_core_index_forward >= in1_core_order.size()) {
-            mux_core_index_forward = mux_core_index_forward - in1_core_order.size();
+        if (mux_core_index_forward >= full_grid_size.x) {
+            mux_core_index_forward = mux_core_index_forward - full_grid_size.x;
         }
         auto mux_logical_core_forward = CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
         CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
