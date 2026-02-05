@@ -33,30 +33,15 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     // 1 | ...  |                     |     | L16 = [a] |         |
     // 2 | ...  |                     |     |           | [c] L16 |
 
-    constexpr int a0 = p_sfpu::LREG0;
-    constexpr int a1 = p_sfpu::LREG1;
     constexpr int b = p_sfpu::LREG2;
     constexpr int c = p_sfpu::LREG3;
 
-    load_replay_buf(0, 6, [offset0, offset1, offset2] {
-        // first iteration, with a0, b, c
-        TT_SFPLOADMACRO((0 << 2) | (a0 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0 | (a0 >> 2));
+#pragma GCC unroll 8
+    for (int i = 0; i < ITERATIONS; ++i) {
+        int a = i & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
+        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0 | (a >> 2));
         TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
         TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2 | (c >> 2));
-
-        // second iteration, with a1, b, c
-        TT_SFPLOADMACRO((0 << 2) | (a1 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0 | (a1 >> 2));
-        TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
-        TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2 | (c >> 2));
-    });
-
-#pragma GCC unroll 4
-    for (int i = 0; i < ITERATIONS / 2; ++i) {
-        lltt::replay(0, 6);
-    }
-
-    if constexpr (ITERATIONS & 1) {
-        lltt::replay(0, 3);
     }
 
     TTI_SFPNOP;
