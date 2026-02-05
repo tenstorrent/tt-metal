@@ -39,17 +39,7 @@ struct CompressedStrideBlock {
     uint32_t num_repeats = 0;
 };
 
-struct CorePageRange {
-    CoreCoord core;
-    PageRange range{};
-};
-
-struct CorePageStride {
-    CoreCoord core;
-    PageStride page_stride;
-};
-
-enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF, SECOND_HALF };
+enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF };
 
 std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_reshard(
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page,

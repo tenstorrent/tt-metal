@@ -7,17 +7,6 @@
 #include <fmt/core.h>
 #include <fmt/format.h>
 
-template <>
-struct fmt::formatter<ttnn::operations::experimental::broadcast_to::Lowercase> : fmt::formatter<std::string_view> {
-    auto format(const ttnn::operations::experimental::broadcast_to::Lowercase& value, fmt::format_context& ctx) const {
-        auto out = ctx.out();
-        for (char c : value.view) {
-            *out++ = std::tolower(static_cast<unsigned char>(c));
-        }
-        return out;
-    }
-};
-
 namespace ttnn::operations::experimental::broadcast_to {
 
 BcastToKernelConfig::BcastToKernelConfig(SubtileBroadcastType subtile_broadcast_type) {
