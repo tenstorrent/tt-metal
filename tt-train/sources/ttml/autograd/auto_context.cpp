@@ -7,7 +7,6 @@
 #include <optional>
 
 #include "core/tt_profiler.hpp"
-#include "core/tt_tensor_utils.hpp"
 
 namespace ttml::autograd {
 
