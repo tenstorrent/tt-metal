@@ -8,18 +8,21 @@ Post SDPA fused operation.
 This implements Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 as a fused execution:
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] distributed across 64 cores (8x8 grid)
 - Gather1: Collect results from all 64 cores to [1, 8192] on gather core (11, 9)
-- Mcast: Broadcast [1, 8192] to 96 cores (12x8 grid)
-- Matmul2: [1, 8192] x [8192, 64] -> [1, 64] distributed across 96 cores (12x8 grid)
-- Gather2: Collect results from all 96 cores to [1, 6144] on gather core (11, 9)
+- Mcast: Broadcast [1, 8192] to 117 cores (13x9 grid, rectangular for efficient mcast)
+- Matmul2: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (rows 0-7 full 13 + row 8 cols 0-7)
+- Gather2: Collect results from all 112 active cores to [1, 7168] on gather core (11, 9)
+
+The 13x9 mcast grid contains 117 cores, but only 112 are active for matmul2.
+The 5 inactive cores (row 8, cols 8-12) receive mcast data but skip matmul via is_matmul2_core=false.
 
 CB Layout:
 - CB 0: matmul1_in0 (8x8 grid)
 - CB 1: matmul1_in1 (8x8 grid)
 - CB 2: matmul1_out (8x8 grid)
 - CB 3: gather1_dst = mcast_src (gather core)
-- CB 4: mcast_dst = matmul2_in0 (12x8 grid)
-- CB 5: matmul2_in1 (12x8 grid)
-- CB 6: matmul2_out (12x8 grid)
+- CB 4: mcast_dst = matmul2_in0 (13x9 grid)
+- CB 5: matmul2_in1 (112 active matmul2 cores)
+- CB 6: matmul2_out (112 active matmul2 cores)
 - CB 7: gather2_dst (gather core)
 """
 
@@ -46,10 +49,10 @@ class PostSDPA:
         Args:
             input_tensor: Input tensor (torch.Tensor) [1, 512]
             weights1_tensor: First weights tensor (torch.Tensor) [512, 8192]
-            weights2_tensor: Second weights tensor (torch.Tensor) [8192, 6144]
+            weights2_tensor: Second weights tensor (torch.Tensor) [8192, 7168]
 
         Returns:
-            Output tensor [1, 6144]
+            Output tensor [1, 7168]
         """
         intermediate = input_tensor @ weights1_tensor  # [1, 8192]
         return intermediate @ weights2_tensor  # [1, 6144]
@@ -69,9 +72,9 @@ class PostSDPA:
         Args:
             input_tensor: Input tensor [1, 512] (height-sharded across 8x8 matmul1 cores)
             weights1_tensor: First weights tensor [512, 8192] (width-sharded across 8x8)
-            weights2_tensor: Second weights tensor [8192, 6144] (width-sharded across 12x8)
+            weights2_tensor: Second weights tensor [8192, 7168] (width-sharded across 14x8)
             gather1_output_tensor: Intermediate tensor [1, 8192] for gather1/mcast (on gather core)
-            output_tensor: Final output tensor [1, 6144] (on gather core)
+            output_tensor: Final output tensor [1, 7168] (on gather core)
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
 
         Returns:
@@ -108,25 +111,46 @@ class PostSDPA:
         gather_core = ttnn.CoreCoord(11, 9)
         gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
-        # Matmul2/Mcast grid: 12x8 = 96 cores
+        # Mcast grid: 13x9 = 117 cores (full rectangular for efficient mcast)
+        MCAST_GRID_START_X = 0
+        MCAST_GRID_START_Y = 0
+        MCAST_GRID_END_X = 12  # 13 columns (0-12)
+        MCAST_GRID_END_Y = 8  # 9 rows (0-8)
+        mcast_grid = ttnn.CoreRange(
+            ttnn.CoreCoord(MCAST_GRID_START_X, MCAST_GRID_START_Y),
+            ttnn.CoreCoord(MCAST_GRID_END_X, MCAST_GRID_END_Y),
+        )
+        mcast_core_grid = ttnn.CoreRangeSet([mcast_grid])
+        num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y  # 117
+
+        # Active Matmul2 cores: 112 cores (rows 0-7 full 13 cols + row 8 cols 0-7)
+        # This is a non-rectangular grid defined as two CoreRanges:
+        # - Rows 0-7: all 13 columns = 104 cores
+        # - Row 8: columns 0-7 = 8 cores
+        matmul2_grid_main = ttnn.CoreRange(
+            ttnn.CoreCoord(0, 0),
+            ttnn.CoreCoord(12, 7),  # 13 columns x 8 rows = 104 cores
+        )
+        matmul2_grid_extra = ttnn.CoreRange(
+            ttnn.CoreCoord(0, 8),
+            ttnn.CoreCoord(7, 8),  # 8 columns x 1 row = 8 cores
+        )
+        matmul2_active_core_grid = ttnn.CoreRangeSet([matmul2_grid_main, matmul2_grid_extra])
+        num_matmul2_cores = 112  # 104 + 8 active cores
+
+        # Gather2 sender grid bounds (for offset calculation, use bounding box)
         MATMUL2_GRID_START_X = 0
         MATMUL2_GRID_START_Y = 0
-        MATMUL2_GRID_END_X = 11  # 12 columns (0-11)
-        MATMUL2_GRID_END_Y = 7  # 8 rows (0-7)
-        matmul2_grid = ttnn.CoreRange(
-            ttnn.CoreCoord(MATMUL2_GRID_START_X, MATMUL2_GRID_START_Y),
-            ttnn.CoreCoord(MATMUL2_GRID_END_X, MATMUL2_GRID_END_Y),
-        )
-        matmul2_core_grid = ttnn.CoreRangeSet([matmul2_grid])
-        num_matmul2_cores = matmul2_grid.grid_size().x * matmul2_grid.grid_size().y  # 96
+        MATMUL2_GRID_END_X = 12  # Same as mcast grid for offset calculation
+        MATMUL2_GRID_END_Y = 8
 
         # Full grid (union of all cores for semaphore allocation)
-        full_grid = matmul1_core_grid.merge(gather_core_grid).merge(matmul2_core_grid)
+        full_grid = matmul1_core_grid.merge(gather_core_grid).merge(mcast_core_grid)
 
         # Get NOC coordinates
         gather_dest_noc_core = device.worker_core_from_logical_core(gather_core)
-        mcast_dest_noc_start_core = device.worker_core_from_logical_core(matmul2_grid.start)
-        mcast_dest_noc_end_core = device.worker_core_from_logical_core(matmul2_grid.end)
+        mcast_dest_noc_start_core = device.worker_core_from_logical_core(mcast_grid.start)
+        mcast_dest_noc_end_core = device.worker_core_from_logical_core(mcast_grid.end)
 
         # ========================================================================
         # Matmul1 parameters: [1, 512] x [512, 128] -> [1, 128]
@@ -147,9 +171,9 @@ class PostSDPA:
         matmul1_in1_cb = 1  # Matmul1 weights (8x8)
         matmul1_out_cb = 2  # Matmul1 output (8x8)
         gather1_dst_cb = 3  # Gather1 output = Mcast source (gather core)
-        matmul2_in0_cb = 4  # Mcast dst = Matmul2 input (12x8)
-        matmul2_in1_cb = 5  # Matmul2 weights (12x8)
-        matmul2_out_cb = 6  # Matmul2 output (12x8)
+        matmul2_in0_cb = 4  # Mcast dst = Matmul2 input (13x9 mcast grid)
+        matmul2_in1_cb = 5  # Matmul2 weights (112 active cores)
+        matmul2_out_cb = 6  # Matmul2 output (112 active cores)
         gather2_dst_cb = 7  # Gather2 output = final output (gather core)
 
         # ========================================================================
@@ -162,19 +186,19 @@ class PostSDPA:
         gather1_noc1_num_senders = 0
 
         # ========================================================================
-        # Mcast parameters: [1, 8192] to 96 cores
+        # Mcast parameters: [1, 8192] to 117 cores (13x9 grid)
         # ========================================================================
         mcast_data_size_bytes = gather1_dst_num_pages * tile_1x32_size  # 256 * 64 = 16384 bytes
         mcast_src_num_pages = gather1_dst_num_pages  # 256 pages
         mcast_dst_num_pages = gather1_dst_num_pages  # 256 pages per receiver
-        mcast_is_part_of_receiver_grid = matmul2_grid.contains(gather_core)
+        mcast_is_part_of_receiver_grid = mcast_grid.contains(gather_core)
 
         # ========================================================================
-        # Gather2 parameters: 96 cores -> [1, 6144]
+        # Gather2 parameters: 112 cores -> [1, 7168]
         # ========================================================================
         gather2_data_size_bytes = matmul2_out_w_per_core * tile_1x32_size
         gather2_src_num_pages = matmul2_out_w_per_core  # 2 pages per sender
-        gather2_dst_num_pages = num_matmul2_cores * matmul2_out_w_per_core  # 96 * 2 = 192 pages
+        gather2_dst_num_pages = num_matmul2_cores * matmul2_out_w_per_core  # 112 * 2 = 224 pages
         gather2_noc0_num_senders = num_matmul2_cores
         gather2_noc1_num_senders = 0
 
@@ -262,7 +286,7 @@ class PostSDPA:
             ("mcast_dest_noc_start_y", mcast_dest_noc_start_core.y),
             ("mcast_dest_noc_end_x", mcast_dest_noc_end_core.x),
             ("mcast_dest_noc_end_y", mcast_dest_noc_end_core.y),
-            ("mcast_num_cores", num_matmul2_cores),
+            ("mcast_num_cores", num_mcast_cores),  # 117 cores in mcast grid
             ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
             ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
             ("mcast_data_size_bytes", mcast_data_size_bytes),
@@ -324,24 +348,24 @@ class PostSDPA:
         gather1_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gather1_dst_cb, gather1_output_tensor)
 
         # CB 4: Mcast destination = Matmul2 input (256 tiles of 1x32 per core)
-        # Allocated on matmul2 grid AND gather core (so sender can use get_write_ptr)
+        # Allocated on full mcast grid (13x9) AND gather core (so sender can use get_write_ptr)
         matmul2_in0_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=matmul2_in0_cb,
             data_format=data_format,
             page_size=tile_1x32_size,
             tile=matmul1_out_tile_descriptor,
         )
-        matmul2_in0_cb_grid = matmul2_core_grid.merge(gather_core_grid)
+        matmul2_in0_cb_grid = mcast_core_grid.merge(gather_core_grid)
         matmul2_in0_cb_descriptor = ttnn.CBDescriptor(
             total_size=mcast_dst_num_pages * tile_1x32_size,
             core_ranges=matmul2_in0_cb_grid,
             format_descriptors=[matmul2_in0_cb_format],
         )
 
-        # CB 5: Matmul2 weights (from sharded tensor, 12x8 grid)
+        # CB 5: Matmul2 weights (from sharded tensor, 112 active matmul2 cores)
         matmul2_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul2_in1_cb, weights2_tensor)
 
-        # CB 6: Matmul2 output (2 tiles of 1x32 per core, 12x8 grid)
+        # CB 6: Matmul2 output (2 tiles of 1x32 per core, 112 active matmul2 cores)
         matmul2_out_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=matmul2_out_cb,
             data_format=data_format,
@@ -350,7 +374,7 @@ class PostSDPA:
         )
         matmul2_out_cb_descriptor = ttnn.CBDescriptor(
             total_size=matmul2_out_w_per_core * tile_1x32_size,
-            core_ranges=matmul2_core_grid,
+            core_ranges=matmul2_active_core_grid,
             format_descriptors=[matmul2_out_cb_format],
         )
 
@@ -421,7 +445,13 @@ class PostSDPA:
                 ),
                 UnifiedCompileTimeCoreDescriptor(
                     named_compile_time_arg="is_matmul2_core",
-                    core_range=matmul2_core_grid,
+                    core_range=matmul2_active_core_grid,  # Only 112 active cores
+                    value=1,
+                    other_value=0,
+                ),
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_mcast_receiver_core",
+                    core_range=mcast_core_grid,  # All 117 cores in mcast grid
                     value=1,
                     other_value=0,
                 ),

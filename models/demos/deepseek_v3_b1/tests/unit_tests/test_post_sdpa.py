@@ -8,11 +8,14 @@ TTNN Post SDPA Fused Op Test
 Tests the full post_sdpa fused operation which implements:
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (8x8)
 - Gather1: Collect to [1, 8192] on gather core (11, 9)
-- Mcast: Broadcast [1, 8192] to 96 cores (12x8)
-- Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 96 cores
-- Gather2: Collect to [1, 6144] on gather core (11, 9)
+- Mcast: Broadcast [1, 8192] to 117 cores (13x9 rectangular grid)
+- Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 112 active cores
+- Gather2: Collect to [1, 7168] on gather core (11, 9)
 
-Full operation: [1, 512] @ [512, 8192] @ [8192, 6144] -> [1, 6144]
+The mcast grid (13x9=117 cores) includes 5 inactive cores (row 8, cols 8-12)
+that receive mcast data but skip matmul2 via is_matmul2_core=false.
+
+Full operation: [1, 512] @ [512, 8192] @ [8192, 7168] -> [1, 7168]
 """
 
 import pytest
@@ -27,8 +30,8 @@ from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 @pytest.mark.parametrize(
     "M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype",
     [
-        # Main target shape: [1,512] @ [512,8192] @ [8192,6144] -> [1,6144]
-        (1, 512, 8192, 8192, 6144, ttnn.bfloat16, ttnn.bfloat8_b),
+        # Main target shape: [1,512] @ [512,8192] @ [8192,7168] -> [1,7168]
+        (1, 512, 8192, 8192, 7168, ttnn.bfloat16, ttnn.bfloat8_b),
     ],
 )
 def test_post_sdpa(device, M, K1, intermediate, K2, output_size, in0_dtype, in1_dtype):
@@ -46,27 +49,37 @@ def test_post_sdpa(device, M, K1, intermediate, K2, output_size, in0_dtype, in1_
     MATMUL1_GRID_Y = 8
     num_matmul1_cores = MATMUL1_GRID_X * MATMUL1_GRID_Y  # 64
 
-    # Matmul2/Mcast grid: 12x8 = 96 cores
-    MATMUL2_GRID_X = 12
-    MATMUL2_GRID_Y = 8
-    num_matmul2_cores = MATMUL2_GRID_X * MATMUL2_GRID_Y  # 96
+    # Mcast grid: 13x9 = 117 cores (rectangular for efficient mcast)
+    MCAST_GRID_X = 13
+    MCAST_GRID_Y = 9
+    num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 117
+
+    # Active Matmul2 cores: 112 (rows 0-7 full 13 cols + row 8 cols 0-7)
+    # Non-rectangular grid: 13*8 + 8 = 104 + 8 = 112
+    num_matmul2_cores = 112
 
     # Per-core dimensions
     n1_per_core = intermediate // num_matmul1_cores  # 8192 / 64 = 128
-    n2_per_core = output_size // num_matmul2_cores  # 6144 / 96 = 64
+    n2_per_core = output_size // num_matmul2_cores  # 7168 / 112 = 64
 
     logger.info(f"Testing full post_sdpa fused op:")
     logger.info(f"  Matmul1: [{M}, {K1}] x [{K1}, {intermediate}] on {num_matmul1_cores} cores")
-    logger.info(f"  Mcast: [{M}, {intermediate}] to {num_matmul2_cores} cores")
-    logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} cores")
+    logger.info(f"  Mcast: [{M}, {intermediate}] to {num_mcast_cores} cores (13x9 grid)")
+    logger.info(f"  Matmul2: [{M}, {K2}] x [{K2}, {output_size}] on {num_matmul2_cores} active cores")
     logger.info(f"  Output: [{M}, {output_size}]")
 
     # Create core grids
     matmul1_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(MATMUL1_GRID_X - 1, MATMUL1_GRID_Y - 1))]
     )
+    # Active matmul2 cores: non-rectangular grid (112 cores)
+    # - Rows 0-7: all 13 columns = 104 cores
+    # - Row 8: columns 0-7 = 8 cores
     matmul2_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(MATMUL2_GRID_X - 1, MATMUL2_GRID_Y - 1))]
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 7)),  # 13x8 = 104 cores
+            ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(7, 8)),  # 8x1 = 8 cores
+        ]
     )
     gather_core = ttnn.CoreCoord(11, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
@@ -83,7 +96,7 @@ def test_post_sdpa(device, M, K1, intermediate, K2, output_size, in0_dtype, in1_
     # Weights1: [512, 8192]
     torch_weights1 = torch.randn((K1, intermediate), dtype=torch.bfloat16)
 
-    # Weights2: [8192, 6144]
+    # Weights2: [8192, 7168]
     torch_weights2 = torch.randn((K2, output_size), dtype=torch.bfloat16)
 
     # ========================================================================
@@ -141,12 +154,12 @@ def test_post_sdpa(device, M, K1, intermediate, K2, output_size, in0_dtype, in1_
     logger.info(f"Created weights1 tensor: shard {weights1_shard_shape} on {num_matmul1_cores} cores")
 
     # ========================================================================
-    # Create weights2 tensor (width-sharded across matmul2 cores)
+    # Create weights2 tensor (width-sharded across 112 active matmul2 cores)
     # Each core gets [8192, 64]
     # ========================================================================
     weights2_shard_shape = (K2, n2_per_core)  # [8192, 64] per core
     weights2_shard_spec = ttnn.ShardSpec(
-        matmul2_grid,
+        matmul2_grid,  # Non-rectangular grid of 112 active cores
         weights2_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -162,7 +175,7 @@ def test_post_sdpa(device, M, K1, intermediate, K2, output_size, in0_dtype, in1_
         memory_config=weights2_mem_config,
         tile=b_tile,
     )
-    logger.info(f"Created weights2 tensor: shard {weights2_shard_shape} on {num_matmul2_cores} cores")
+    logger.info(f"Created weights2 tensor: shard {weights2_shard_shape} on {num_matmul2_cores} active cores")
 
     # ========================================================================
     # Create gather1 output tensor (intermediate [1, 8192] on gather core)
@@ -189,9 +202,9 @@ def test_post_sdpa(device, M, K1, intermediate, K2, output_size, in0_dtype, in1_
     logger.info(f"Created gather1 output tensor: {gather1_output_shard_shape} on gather core")
 
     # ========================================================================
-    # Create final output tensor ([1, 6144] on gather core)
+    # Create final output tensor ([1, 7168] on gather core)
     # ========================================================================
-    output_shard_shape = (M, output_size)  # [1, 6144]
+    output_shard_shape = (M, output_size)  # [1, 7168]
     output_shard_spec = ttnn.ShardSpec(
         gather_core_grid,
         output_shard_shape,
@@ -230,7 +243,7 @@ def test_post_sdpa(device, M, K1, intermediate, K2, output_size, in0_dtype, in1_
     # ========================================================================
     # Verify results
     # ========================================================================
-    # Output should be [1, 6144] on gather core
+    # Output should be [1, 7168] on gather core
     expected_shape = (M, output_size)
     assert output_torch.shape == expected_shape, f"Expected shape {expected_shape}, got {output_torch.shape}"
 
