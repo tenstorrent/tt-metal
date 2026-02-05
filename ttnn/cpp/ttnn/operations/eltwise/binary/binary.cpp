@@ -174,33 +174,6 @@ inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
     return std::make_tuple(a, b);
 }
 
-inline auto any_non_llk_row_broadcasted(const Tensor& a, const auto& b) {
-    if constexpr (requires {
-                      b.logical_shape();
-                      b.dtype();
-                  }) {
-        const auto& a_shape = a.logical_shape();
-        const auto& b_shape = b.logical_shape();
-        const auto& a_dtype = a.dtype();
-        const auto& b_dtype = b.dtype();
-
-        if ((a_shape[-2] == 1 and b_shape[-2] > 1 and a_shape[-1] > 1) or
-            (b_shape[-2] == 1 and a_shape[-2] > 1 and b_shape[-1] > 1)) {
-            if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) {
-                return false;
-            }
-            // for float32 to use SFPU, go with binary_ng
-            if (a_dtype == DataType::FLOAT32 and b_dtype == DataType::FLOAT32) {
-                return false;
-            }
-
-            return true;
-        }
-    }
-
-    return false;
-}
-
 inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
     if (a.is_sharded() and is_block_format(a.dtype())) {
         return true;
@@ -234,7 +207,7 @@ inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b)
     return false;
 }
 
-inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binary_op_type) {
+inline auto is_binary_ng_only(const Tensor& a, const auto& b) {
     if constexpr (requires {
                       b.dtype();
                       b.is_sharded();
@@ -258,17 +231,6 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binar
             a.logical_shape()[-1] == 1) {
             return true;
         }
-        // check functionality first, performance second
-        if (any_non_llk_row_broadcasted(a, b) and
-            (binary_op_type != BinaryOpType::ADD and binary_op_type != BinaryOpType::SUB and
-             binary_op_type != BinaryOpType::MUL)) {
-            return true;
-        }
-
-        if (any_non_llk_row_broadcasted(a, b) and (is_block_format(a.dtype()) or is_block_format(b.dtype()))) {
-            // TODO
-            // return true;
-        }
     }
     return false;
 }
@@ -284,8 +246,7 @@ bool is_legacy_only(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations) {
     const auto& output_mem_cfg = memory_config.value_or(output ? output->memory_config() : MemoryConfig{});
 
-    if (detail::any_non_llk_row_broadcasted(lhs, rhs) or detail::any_sharded_block_format(lhs, rhs) or
-        detail::any_subtile_broadcasted_block_format(lhs, rhs)) {
+    if (detail::any_sharded_block_format(lhs, rhs) or detail::any_subtile_broadcasted_block_format(lhs, rhs)) {
         TT_FATAL(
             lhs_activations.size() <= 1,
             "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
@@ -341,7 +302,7 @@ inline auto invoke_binary_ng(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
-                         (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
+                         (not detail::is_binary_ng_only(lhs, rhs))) {
         const std::vector activations(post_activations.begin(), post_activations.end());
         const std::optional lhs_activation =
             lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
@@ -690,7 +651,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
-                         (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
+                         (not detail::is_binary_ng_only(lhs, rhs))) {
         {
             return detail::binary_impl(binary_op_type, lhs, rhs, dtype, memory_config, output);
         }
