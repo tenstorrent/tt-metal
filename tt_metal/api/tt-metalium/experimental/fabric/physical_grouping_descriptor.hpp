@@ -175,6 +175,9 @@ private:
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const;
 
+    // Internal helper to convert proto grouping to GroupingInfo
+    GroupingInfo convert_grouping_to_info(const proto::Grouping& grouping) const;
+
     // Helper for reading files
     static std::string read_file_to_string(const std::filesystem::path& file_path);
 
