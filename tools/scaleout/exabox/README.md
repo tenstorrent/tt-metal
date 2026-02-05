@@ -138,8 +138,6 @@ The mesh shape affects how workloads are distributed across chips. Choose the sc
 ./tools/scaleout/exabox/run_fabric_tests.sh --hosts <hosts> --image <docker-image> --config 8x16
 ```
 
-**Note:** These topology-specific scripts will eventually be replaced with a unified cluster-level descriptor approach.
-
 If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
 
 **Exabox Physical Layout:**

@@ -16,7 +16,8 @@ Optional:
                                             (default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto)
     --deployment-descriptor-path <path>     Path to deployment descriptor file
                                             (default: /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto)
-    --iterations <number>                   Number of validation iterations to run (default: 50)
+    --iterations <number>                   Number of times to run the full validation sequence (default: 50)
+                                            Each iteration runs run_cluster_validation with 10 internal iterations
     --output <directory>                    Output directory for log files (default: validation_output)
     --help                                  Display this help message and exit
 
@@ -143,6 +144,8 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
         echo "Running tt-smi -glx_reset..."
         mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+
+        sleep 5
 
         echo ""
         echo "Running cluster validation..."
