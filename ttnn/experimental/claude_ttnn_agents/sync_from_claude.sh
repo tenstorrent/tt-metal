@@ -21,15 +21,13 @@ fi
 # Sync agent definitions
 echo "Syncing agent definitions..."
 if [ -d "$REPO_ROOT/.claude/agents" ]; then
-    cp "$REPO_ROOT/.claude/agents/ttnn-operation-analyzer.md" "$SCRIPT_DIR/agents/" 2>/dev/null || true
-    cp "$REPO_ROOT/.claude/agents/ttnn-operation-planner.md" "$SCRIPT_DIR/agents/" 2>/dev/null || true
-    cp "$REPO_ROOT/.claude/agents/ttnn-operation-scaffolder.md" "$SCRIPT_DIR/agents/" 2>/dev/null || true
-    cp "$REPO_ROOT/.claude/agents/ttnn-factory-builder.md" "$SCRIPT_DIR/agents/" 2>/dev/null || true
-    cp "$REPO_ROOT/.claude/agents/ttnn-kernel-designer.md" "$SCRIPT_DIR/agents/" 2>/dev/null || true
-    cp "$REPO_ROOT/.claude/agents/ttnn-kernel-writer.md" "$SCRIPT_DIR/agents/" 2>/dev/null || true
-    cp "$REPO_ROOT/.claude/agents/ttnn-riscv-debugger.md" "$SCRIPT_DIR/agents/" 2>/dev/null || true
-    cp "$REPO_ROOT/.claude/agents/ttnn-pipeline-analyzer.md" "$SCRIPT_DIR/agents/" 2>/dev/null || true
-    echo "  - Synced agent definitions"
+    mkdir -p "$SCRIPT_DIR/agents"
+    for agent in "$REPO_ROOT/.claude/agents/"*.md; do
+        if [ -f "$agent" ]; then
+            cp "$agent" "$SCRIPT_DIR/agents/"
+            echo "  - $(basename "$agent")"
+        fi
+    done
 else
     echo "  - Skipping agents (directory not found)"
 fi
@@ -37,6 +35,7 @@ fi
 # Sync scaffolder scripts
 echo "Syncing scaffolder scripts..."
 if [ -d "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder" ]; then
+    mkdir -p "$SCRIPT_DIR/scripts/ttnn-operation-scaffolder"
     cp -r "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/"* "$SCRIPT_DIR/scripts/ttnn-operation-scaffolder/"
     echo "  - Synced scaffolder scripts"
 else
@@ -46,6 +45,7 @@ fi
 # Sync logging scripts
 echo "Syncing logging scripts..."
 if [ -d "$REPO_ROOT/.claude/scripts/logging" ]; then
+    mkdir -p "$SCRIPT_DIR/scripts/logging"
     cp -r "$REPO_ROOT/.claude/scripts/logging/"* "$SCRIPT_DIR/scripts/logging/"
     echo "  - Synced logging scripts"
 else
@@ -55,14 +55,23 @@ fi
 # Sync reference documents
 echo "Syncing reference documents..."
 if [ -d "$REPO_ROOT/.claude/references" ]; then
-    cp "$REPO_ROOT/.claude/references/"*.md "$SCRIPT_DIR/references/" 2>/dev/null || true
+    mkdir -p "$SCRIPT_DIR/references"
+    # Sync top-level references
+    for ref in "$REPO_ROOT/.claude/references/"*.md; do
+        if [ -f "$ref" ]; then
+            cp "$ref" "$SCRIPT_DIR/references/"
+            echo "  - $(basename "$ref")"
+        fi
+    done
     # Sync logging subdirectory
     if [ -d "$REPO_ROOT/.claude/references/logging" ]; then
         mkdir -p "$SCRIPT_DIR/references/logging"
-        cp "$REPO_ROOT/.claude/references/logging/"*.md "$SCRIPT_DIR/references/logging/" 2>/dev/null || true
-        echo "  - Synced reference documents (including logging/)"
-    else
-        echo "  - Synced reference documents"
+        for ref in "$REPO_ROOT/.claude/references/logging/"*.md; do
+            if [ -f "$ref" ]; then
+                cp "$ref" "$SCRIPT_DIR/references/logging/"
+                echo "  - logging/$(basename "$ref")"
+            fi
+        done
     fi
 else
     echo "  - Skipping references (directory not found)"
@@ -72,7 +81,7 @@ fi
 echo "Syncing workflow documentation..."
 if [ -f "$REPO_ROOT/.claude/subagent_breakdown.md" ]; then
     cp "$REPO_ROOT/.claude/subagent_breakdown.md" "$SCRIPT_DIR/"
-    echo "  - Synced subagent_breakdown.md"
+    echo "  - subagent_breakdown.md"
 else
     echo "  - Skipping subagent_breakdown.md (file not found)"
 fi
@@ -81,8 +90,14 @@ fi
 echo "Syncing skills..."
 if [ -d "$REPO_ROOT/.claude/skills" ]; then
     mkdir -p "$SCRIPT_DIR/skills"
-    cp -r "$REPO_ROOT/.claude/skills/"* "$SCRIPT_DIR/skills/"
-    echo "  - Synced skills"
+    for skill_dir in "$REPO_ROOT/.claude/skills/"*/; do
+        if [ -d "$skill_dir" ]; then
+            skill_name=$(basename "$skill_dir")
+            mkdir -p "$SCRIPT_DIR/skills/$skill_name"
+            cp -r "$skill_dir"* "$SCRIPT_DIR/skills/$skill_name/"
+            echo "  - $skill_name"
+        fi
+    done
 else
     echo "  - Skipping skills (directory not found)"
 fi
@@ -94,7 +109,7 @@ if [ -f "$REPO_ROOT/CLAUDE.md" ]; then
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         cp "$REPO_ROOT/CLAUDE.md" "$SCRIPT_DIR/"
-        echo "  - Synced CLAUDE.md"
+        echo "  - CLAUDE.md"
     else
         echo "  - Skipping CLAUDE.md"
     fi

@@ -18,45 +18,69 @@ mkdir -p "$REPO_ROOT/.claude/logs"
 
 # Copy agent definitions
 echo "Installing agent definitions..."
-cp "$SCRIPT_DIR/agents/ttnn-operation-analyzer.md" "$REPO_ROOT/.claude/agents/"
-cp "$SCRIPT_DIR/agents/ttnn-operation-planner.md" "$REPO_ROOT/.claude/agents/"
-cp "$SCRIPT_DIR/agents/ttnn-operation-scaffolder.md" "$REPO_ROOT/.claude/agents/"
-cp "$SCRIPT_DIR/agents/ttnn-factory-builder.md" "$REPO_ROOT/.claude/agents/"
-cp "$SCRIPT_DIR/agents/ttnn-kernel-designer.md" "$REPO_ROOT/.claude/agents/"
-cp "$SCRIPT_DIR/agents/ttnn-kernel-writer.md" "$REPO_ROOT/.claude/agents/"
-cp "$SCRIPT_DIR/agents/ttnn-riscv-debugger.md" "$REPO_ROOT/.claude/agents/"
-cp "$SCRIPT_DIR/agents/ttnn-pipeline-analyzer.md" "$REPO_ROOT/.claude/agents/"
+for agent in "$SCRIPT_DIR/agents/"*.md; do
+    if [ -f "$agent" ]; then
+        cp "$agent" "$REPO_ROOT/.claude/agents/"
+        echo "  - $(basename "$agent")"
+    fi
+done
 
 # Copy scaffolder scripts (used by ttnn-operation-scaffolder agent)
 echo "Installing scaffolder scripts..."
-cp -r "$SCRIPT_DIR/scripts/ttnn-operation-scaffolder" "$REPO_ROOT/.claude/scripts/"
-chmod +x "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/"*.py
-chmod +x "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/"*.sh
+if [ -d "$SCRIPT_DIR/scripts/ttnn-operation-scaffolder" ]; then
+    cp -r "$SCRIPT_DIR/scripts/ttnn-operation-scaffolder" "$REPO_ROOT/.claude/scripts/"
+    chmod +x "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/"*.py 2>/dev/null || true
+    chmod +x "$REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/"*.sh 2>/dev/null || true
+    echo "  - ttnn-operation-scaffolder/"
+fi
 
 # Copy logging scripts (used by agents for structured logging)
 echo "Installing logging scripts..."
-cp -r "$SCRIPT_DIR/scripts/logging" "$REPO_ROOT/.claude/scripts/"
+if [ -d "$SCRIPT_DIR/scripts/logging" ]; then
+    cp -r "$SCRIPT_DIR/scripts/logging" "$REPO_ROOT/.claude/scripts/"
+    chmod +x "$REPO_ROOT/.claude/scripts/logging/"*.sh 2>/dev/null || true
+    echo "  - logging/"
+fi
 
-# Copy reference documents (used by ttnn-riscv-debugger agent)
+# Copy reference documents
 echo "Installing reference documents..."
-cp "$SCRIPT_DIR/references/"*.md "$REPO_ROOT/.claude/references/"
+mkdir -p "$REPO_ROOT/.claude/references"
+for ref in "$SCRIPT_DIR/references/"*.md; do
+    if [ -f "$ref" ]; then
+        cp "$ref" "$REPO_ROOT/.claude/references/"
+        echo "  - $(basename "$ref")"
+    fi
+done
 
 # Copy reference subdirectories
 if [ -d "$SCRIPT_DIR/references/logging" ]; then
     mkdir -p "$REPO_ROOT/.claude/references/logging"
-    cp "$SCRIPT_DIR/references/logging/"*.md "$REPO_ROOT/.claude/references/logging/"
-    echo "  - Installed logging references"
+    for ref in "$SCRIPT_DIR/references/logging/"*.md; do
+        if [ -f "$ref" ]; then
+            cp "$ref" "$REPO_ROOT/.claude/references/logging/"
+            echo "  - logging/$(basename "$ref")"
+        fi
+    done
 fi
 
 # Copy workflow documentation
 echo "Installing workflow documentation..."
-cp "$SCRIPT_DIR/subagent_breakdown.md" "$REPO_ROOT/.claude/"
+if [ -f "$SCRIPT_DIR/subagent_breakdown.md" ]; then
+    cp "$SCRIPT_DIR/subagent_breakdown.md" "$REPO_ROOT/.claude/"
+    echo "  - subagent_breakdown.md"
+fi
 
 # Copy skills (user-invocable slash commands)
+echo "Installing skills..."
 if [ -d "$SCRIPT_DIR/skills" ]; then
-    echo "Installing skills..."
-    cp -r "$SCRIPT_DIR/skills" "$REPO_ROOT/.claude/"
-    echo "  - Installed skills"
+    mkdir -p "$REPO_ROOT/.claude/skills"
+    for skill_dir in "$SCRIPT_DIR/skills/"*/; do
+        if [ -d "$skill_dir" ]; then
+            skill_name=$(basename "$skill_dir")
+            cp -r "$skill_dir" "$REPO_ROOT/.claude/skills/"
+            echo "  - $skill_name"
+        fi
+    done
 fi
 
 # Copy CLAUDE.md to repo root
@@ -84,6 +108,7 @@ fi
 echo "Configuring Claude Code settings..."
 
 # Use Python to safely configure all JSON files
+export REPO_ROOT
 python3 << 'PYTHON_SCRIPT'
 import json
 import os
@@ -172,23 +197,7 @@ echo "=============================================="
 echo "Claude TTNN Agents activated successfully!"
 echo "=============================================="
 echo ""
-echo "Installed files:"
-echo "  - $REPO_ROOT/CLAUDE.md"
-echo "  - $REPO_ROOT/.claude/subagent_breakdown.md"
-echo "  - $REPO_ROOT/.claude/agents/ttnn-operation-analyzer.md"
-echo "  - $REPO_ROOT/.claude/agents/ttnn-operation-planner.md"
-echo "  - $REPO_ROOT/.claude/agents/ttnn-operation-scaffolder.md"
-echo "  - $REPO_ROOT/.claude/agents/ttnn-factory-builder.md"
-echo "  - $REPO_ROOT/.claude/agents/ttnn-kernel-designer.md"
-echo "  - $REPO_ROOT/.claude/agents/ttnn-kernel-writer.md"
-echo "  - $REPO_ROOT/.claude/agents/ttnn-riscv-debugger.md"
-echo "  - $REPO_ROOT/.claude/agents/ttnn-pipeline-analyzer.md"
-echo "  - $REPO_ROOT/.claude/scripts/ttnn-operation-scaffolder/ (scripts + templates)"
-echo "  - $REPO_ROOT/.claude/scripts/logging/ (structured logging)"
-echo "  - $REPO_ROOT/.claude/references/ (agent reference docs)"
-echo "  - $REPO_ROOT/.claude/references/logging/ (logging reference docs)"
-echo "  - $REPO_ROOT/.claude/skills/ (user-invocable slash commands)"
-echo "  - $REPO_ROOT/.claude/logs/ (agent debug logs)"
+echo "Installed to: $REPO_ROOT/.claude/"
 echo ""
 echo "DeepWiki MCP configured in:"
 echo "  - ~/.claude.json (MCP server + project context)"
@@ -197,14 +206,5 @@ echo ""
 echo "To use the agents, restart Claude Code in the repository root."
 echo "The agents will be available via the Task tool."
 echo ""
-echo "Workflow:"
-echo "  1. ttnn-operation-analyzer  -> Analyze reference operation"
-echo "  2. ttnn-operation-planner   -> Design new operation (USER REVIEW)"
-echo "  3. ttnn-operation-scaffolder -> Build Stages 1-3 (uses scripts)"
-echo "  4. ttnn-factory-builder     -> Build Stages 4-6"
-echo "  5. ttnn-kernel-designer     -> Design kernel implementation strategy (USER REVIEW)"
-echo "  6. ttnn-kernel-writer       -> Implement kernels from design"
-echo "  7. ttnn-riscv-debugger      -> Debug kernel issues (hangs, wrong output)"
-echo "  8. ttnn-pipeline-analyzer   -> Analyze pipeline blocking and performance"
-echo ""
 echo "See .claude/subagent_breakdown.md for detailed workflow documentation."
+echo ""

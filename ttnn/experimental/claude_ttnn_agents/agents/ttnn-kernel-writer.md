@@ -96,6 +96,14 @@ compute_kernel_lib::reduce<...>(cb_tilized, cb_scaler, cb_reduced, ...);
 
 ## Implementation Process
 
+### Step 0: Check Logging Status (DO THIS FIRST)
+
+```bash
+.claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
+```
+
+**If LOGGING_ENABLED**: Read `.claude/references/logging/kernel-writer.md` and initialize breadcrumbs before proceeding.
+
 ### Step 1: Read the Design Document
 ```
 Read: {operation_dir}/kernel_design.md
@@ -147,7 +155,7 @@ Create or update `test_stage7_kernel_correctness.py` with tests that verify:
 
 ```bash
 pkill -9 -f pytest || true
-tt-smi -r 0
+tt-smi -r
 timeout 30 pytest {operation_dir}/test_dev/test_stage7_kernel_correctness.py -v
 ```
 
@@ -298,6 +306,7 @@ Report:
 3. Stage 7 correctness tests: {path to test_stage7_kernel_correctness.py}
 4. Test results: {pass/fail with details}
 5. Any deviations from design (should be NONE, or justified)
+6. Logging status: {ENABLED - execution log written | DISABLED}
 
 ---
 
@@ -342,11 +351,19 @@ tests: {stage7 results}
 
 ## Breadcrumbs (Conditional)
 
-Check if logging is enabled at startup:
+Check if logging is enabled at startup (Step 0):
 ```bash
 .claude/scripts/logging/check_logging_enabled.sh "{operation_path}" && echo "LOGGING_ENABLED" || echo "LOGGING_DISABLED"
 ```
 
 **If DISABLED**: Skip breadcrumb steps. Git commits still required.
 
-**If ENABLED**: Read `.claude/references/logging/common.md` and `.claude/references/logging/kernel-writer.md` for logging protocol. You MUST log `design_compliance_summary` before completing.
+**If ENABLED**: Read `.claude/references/logging/kernel-writer.md` for full protocol. Key requirements:
+
+1. **Initialize breadcrumbs** at start
+2. **Log every test run** - pass, fail, or hang
+3. **Log all debugging** - for each failure, log: hypothesis → investigation → fix → result
+4. **Log `design_compliance_summary`** before completing
+5. **Write execution log** to `{operation_path}/agent_logs/ttnn-kernel-writer_execution_log.md`
+
+**No silent debugging.** Every hypothesis and fix attempt must be logged.
