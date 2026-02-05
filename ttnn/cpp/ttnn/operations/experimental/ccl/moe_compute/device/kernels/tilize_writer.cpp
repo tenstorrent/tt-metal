@@ -150,18 +150,13 @@ void kernel_main() {
     // Semaphores
     constexpr uint32_t matmul_chunk_available_semaphore_id =
         get_named_compile_time_arg_val("matmul_chunk_available_semaphore_id");
-    constexpr uint32_t tilize_chunk_ready_first_half_buffer_semaphore_id =
-        get_named_compile_time_arg_val("tilize_chunk_ready_first_half_buffer_semaphore_id");
-    constexpr uint32_t tilize_chunk_ready_second_half_buffer_semaphore_id =
-        get_named_compile_time_arg_val("tilize_chunk_ready_second_half_buffer_semaphore_id");
+    constexpr uint32_t tilize_chunk_ready_semaphore_id =
+        get_named_compile_time_arg_val("tilize_chunk_ready_semaphore_id");
     constexpr uint32_t matmul_chunk_ready_semaphore_id =
         get_named_compile_time_arg_val("matmul_chunk_ready_semaphore_id");
 
     uint32_t matmul_chunk_available_semaphore_addr = get_semaphore(matmul_chunk_available_semaphore_id);
-    uint32_t tilize_chunk_ready_first_half_buffer_semaphore_addr =
-        get_semaphore(tilize_chunk_ready_first_half_buffer_semaphore_id);
-    uint32_t tilize_chunk_ready_second_half_buffer_semaphore_addr =
-        get_semaphore(tilize_chunk_ready_second_half_buffer_semaphore_id);
+    uint32_t tilize_chunk_ready_semaphore_addr = get_semaphore(tilize_chunk_ready_semaphore_id);
     uint32_t matmul_chunk_ready_semaphore_addr = get_semaphore(matmul_chunk_ready_semaphore_id);
 
     // Runtime arguments
@@ -434,18 +429,21 @@ void kernel_main() {
         matmul_mcast_box_two_end_x,
         matmul_mcast_box_two_end_y,
         second_half_buffer_addr);
+    uint32_t bytes_to_mcast = tiles_per_chunk * tilize_output_page_size;
 
     // What value the drain-sync-core waits on (from the non-drain-sync cores) before signalling to the
     // matmul cores that a chunk has arrived. Need to double buffer the semaphores so that a given tilize
     // core can write into a free second buffer, while the tilize drain-sync core hasn't yet signalled that
     // the first buffer is completely full (ex: one tilize core lags behind filling the first buffer).
-    uint32_t tilize_chunk_ready_first_half_buffer_wait_value = num_tilize_cores - 1;
-    uint32_t tilize_chunk_ready_second_half_buffer_wait_value = num_tilize_cores - 1;
-
-    uint64_t first_half_buffer_drain_semaphore_noc_addr =
-        get_noc_addr(drain_core_noc_x, drain_core_noc_y, tilize_chunk_ready_first_half_buffer_semaphore_addr);
-    uint64_t second_half_buffer_drain_semaphore_noc_addr =
-        get_noc_addr(drain_core_noc_x, drain_core_noc_y, tilize_chunk_ready_second_half_buffer_semaphore_addr);
+    uint32_t tilize_chunk_ready_wait_value = num_tilize_cores - 1;
+    uint64_t tilize_chunk_ready_drain_semaphore_noc_addr =
+        get_noc_addr(drain_core_noc_x, drain_core_noc_y, tilize_chunk_ready_semaphore_addr);
+    uint64_t tilze_chunk_ready_mcast_addr = get_safe_multicast_noc_addr(
+        tilize_mcast_start_x,
+        tilize_mcast_start_y,
+        tilize_mcast_end_x,
+        tilize_mcast_end_y,
+        tilize_chunk_ready_semaphore_addr);
 
     // Process each expert's chunks
     // Order matches reader: all chunks for expert 0, then expert 1, etc.
@@ -460,6 +458,9 @@ void kernel_main() {
 
             /*
              * Send chunks to MM cores;
+             * 0) Wait for previous chunk to be fully delivered to MM cores
+             *    - Only applicable to non-drain-sync cores, as drain-sync waits
+             *      before signalling to MM cores that all chunks have arrived
              * 1) Wait for buffer on matmul cores to be free
              *    - Can skip for the first two chunks
              * 2) Send the chunk
@@ -469,6 +470,14 @@ void kernel_main() {
              *
              * NOTE: Steps 4 & 5 required as we don't have a noc_multicast_sem_inc available to use yet
              */
+
+            // == 0 ==
+            if (!is_drain_tilize_core && num_chunks_sent != 0) {
+                noc_semaphore_wait(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr),
+                    tilize_chunk_ready_wait_value);
+                tilize_chunk_ready_wait_value += (num_tilize_cores - 1);
+            }
 
             // == 1 ==
             // skip for the first two chunks (2 chunks are allocated, and both are initially empty)
@@ -500,35 +509,18 @@ void kernel_main() {
 
             // mcast data
             noc_async_write_multicast(
-                l1_read_addr,
-                matmul_chunk_input_mcast_box_one_addr,
-                tiles_per_chunk * tilize_output_page_size,
-                num_matmul_bounding_box_one_cores);
+                l1_read_addr, matmul_chunk_input_mcast_box_one_addr, bytes_to_mcast, num_matmul_bounding_box_one_cores);
             noc_async_write_multicast(
-                l1_read_addr,
-                matmul_chunk_input_mcast_box_two_addr,
-                tiles_per_chunk * tilize_output_page_size,
-                num_matmul_bounding_box_two_cores);
+                l1_read_addr, matmul_chunk_input_mcast_box_two_addr, bytes_to_mcast, num_matmul_bounding_box_two_cores);
 
             // barrier required as chunk multicasts are issued from all cores, while semaphore multicast indicating
             // chunks have arrived are only issued from the drain-sync core, so we can't guarantee serial ordering (i.e.
             // chunks arrive before semaphore)
             noc_async_write_barrier();
 
-            /* Setup for steps 3, 4, 5 */
-
-            // determine which semaphore we're using to coordinate with drain-sync core
-            uint32_t tilize_chunk_ready_semaphore_addr = use_second_half_buffer
-                                                             ? tilize_chunk_ready_second_half_buffer_semaphore_addr
-                                                             : tilize_chunk_ready_first_half_buffer_semaphore_addr;
-
             if (is_drain_tilize_core) {
                 if (num_tilize_cores > 1) {
                     // == 4 ==
-                    uint32_t& tilize_chunk_ready_wait_value = use_second_half_buffer
-                                                                  ? tilize_chunk_ready_second_half_buffer_wait_value
-                                                                  : tilize_chunk_ready_first_half_buffer_wait_value;
-
                     noc_semaphore_wait(
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr),
                         tilize_chunk_ready_wait_value);
@@ -551,11 +543,16 @@ void kernel_main() {
                     matmul_chunk_ready_semaphore_addr,
                     matmul_chunk_ready_semaphore_mcast_box_two_addr,
                     num_matmul_bounding_box_one_cores);
+
+                if (num_tilize_cores > 1) {
+                    // signal to non-drain-sync cores that they can start sending the next chunk
+                    // use local value (no need to explicitly set it)
+                    noc_semaphore_set_multicast(
+                        tilize_chunk_ready_semaphore_addr, tilze_chunk_ready_mcast_addr, num_tilize_cores - 1);
+                }
             } else {
                 // == 3 ==
-                uint64_t drain_semaphore_noc_addr = use_second_half_buffer ? second_half_buffer_drain_semaphore_noc_addr
-                                                                           : first_half_buffer_drain_semaphore_noc_addr;
-                noc_semaphore_inc(drain_semaphore_noc_addr, 1);
+                noc_semaphore_inc(tilize_chunk_ready_drain_semaphore_noc_addr, 1);
             }
 
             // Pop the tiles from CB

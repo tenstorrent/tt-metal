@@ -136,8 +136,6 @@ MoEComputeMeshWorkloadFactory::create_at(
     const ttnn::MeshCoordinateRangeSet&) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    constexpr uint32_t supported_num_experts_per_device = 2;
-
     // Alignment
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
@@ -270,18 +268,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
 
     // Non-drain-sync cores signal to drain-sync core that partial chunk has been sent to the matmul cores.
-    // Need to double buffer the semaphores so that a given tilize core can write into a free second buffer,
-    // while the tilize drain-sync core hasn't yet signalled that the first buffer is completely full
-    // (ex: one tilize core lags behind filling the first buffer).
-    TT_FATAL(
-        experts_per_device <= supported_num_experts_per_device,
-        "requires a semaphore per expert, expected {} experts per device but got {}",
-        supported_num_experts_per_device,
-        experts_per_device);
-    auto tilize_chunk_ready_first_half_buffer_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
-    auto tilize_chunk_ready_second_half_buffer_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
+    // Drain-sync core then signals to non-drain-sync core that they can begin sending the next chunk.
+    auto tilize_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Matmul semaphores
@@ -683,8 +671,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"partial_metadata_ready_semaphore_id", tilize_partial_metadata_ready_semaphore_id},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
         {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
-        {"tilize_chunk_ready_first_half_buffer_semaphore_id", tilize_chunk_ready_first_half_buffer_semaphore_id},
-        {"tilize_chunk_ready_second_half_buffer_semaphore_id", tilize_chunk_ready_second_half_buffer_semaphore_id},
+        {"tilize_chunk_ready_semaphore_id", tilize_chunk_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
     };
 
