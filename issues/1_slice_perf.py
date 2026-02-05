@@ -2,6 +2,13 @@ import torch
 import ttnn
 import pytest
 
+from models.common.utility_functions import (
+    is_wormhole_b0,
+    is_blackhole,
+    skip_for_wormhole_b0,
+    skip_for_blackhole,
+)
+
 torch.manual_seed(0)
 
 
@@ -269,6 +276,10 @@ def test_slice_v2_boltz(device, shape, layout, in_memory_config, dtype):
     [ttnn.bfloat16],
 )
 def test_sample(device, shape, layout, in_memory_config, dtype):
+    if is_blackhole():
+        num_banks = device.dram_grid_size().x
+        print(f"num_banks: {num_banks}")
+
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(ttnn.bfloat16, shape)
 
