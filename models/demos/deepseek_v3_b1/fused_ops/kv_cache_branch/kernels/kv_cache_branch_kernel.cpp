@@ -276,6 +276,7 @@ void kernel_main() {
         uint32_t tile_size = get_tile_size(k_rope_output_cb);
 
         cb_wait_front(k_rope_output_cb, Wt);
+        DPRINT << TSLICE(k_rope_output_cb, 0, SliceRange::h0_w0_32(), TSLICE_INPUT_CB, TSLICE_RD_PTR) << ENDL();
         uint32_t l1_read_addr = get_read_ptr(k_rope_output_cb);
 
         uint32_t rope_offset = get_absolute_logical_y() - 8;  // yea...

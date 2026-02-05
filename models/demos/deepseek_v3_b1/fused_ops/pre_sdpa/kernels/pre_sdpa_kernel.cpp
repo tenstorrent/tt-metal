@@ -34,6 +34,7 @@
 #include "../../../unified_kernels/gather_heads.hpp"
 #include "../../../unified_kernels/rope.hpp"
 #include "../../../unified_kernels/broadcast.hpp"
+#include "../../../unified_kernels/kv_cache_update.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
@@ -184,13 +185,13 @@ void kernel_main() {
     constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
 
     // Reader args: CB indices for sharded input signaling
-    deepseek_b1_ops::Rope::ReaderArgs krope_args{
-        .in_cb = krope_input_cb,
-        .cos_cb = krope_cos_cb,
-        .sin_cb = krope_sin_cb,
-        .trans_mat_cb = krope_trans_mat_cb,
-    };
+    deepseek_b1_ops::Rope::ReaderArgs krope_args{};
 
+    deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{
+        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(2),
+        .kv_rmsnorm_output_cb = get_common_arg_val<uint32_t>(3),
+        .krope_output_cb = get_common_arg_val<uint32_t>(4),
+    };
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
 // Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
@@ -370,6 +371,16 @@ void kernel_main() {
 
     // Writer args (empty - no-op)
     deepseek_b1_ops::Rope::WriterArgs krope_args{};
+
+    deepseek_b1_ops::KVCacheUpdate::WriterArgs kv_cache_update_args{
+        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
+        .position_id = get_common_arg_val<uint32_t>(1),
+        .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
+        .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
+        .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
+        .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
+        .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
+    };
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
 // Named compile-time args: rmsnorm compute, matmul compute
@@ -526,6 +537,15 @@ void kernel_main() {
         .cos_interm_cb = krope_cos_interm_cb,
         .sin_interm_cb = krope_sin_interm_cb,
         .out_cb = krope_output_cb,
+    };
+
+    deepseek_b1_ops::KVCacheUpdate::ComputeArgs kv_cache_update_args{
+        .kv_cache_num_tiles = get_common_arg_val<uint32_t>(4),
+        .kv_cache_input_cb = get_common_arg_val<uint32_t>(5),
+        .kv_cache_output_cb = get_common_arg_val<uint32_t>(6),
+        .kv_cache_intermed_cb = get_common_arg_val<uint32_t>(7),
+        .kv_rmsnorm_output_cb = get_common_arg_val<uint32_t>(8),
+        .krope_output_cb = get_common_arg_val<uint32_t>(9),
     };
 #endif
 
@@ -797,7 +817,7 @@ void kernel_main() {
         }
     }
     {
-        // ========================================================================o
+        // ========================================================================
         // KV Cache Branch - Matmul
         // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
         // ========================================================================
@@ -832,6 +852,15 @@ void kernel_main() {
             DeviceZoneScopedN("K_ROPE");
             deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
             krope(krope_args);
+        }
+        // ========================================================================
+        // KV Cache Update: Write results to DRAM interleaved tensor
+        // BRISC handles writing from output CBs to DRAM
+        // ========================================================================
+        {
+            DeviceZoneScopedN("KV_CACHE_UPDATE");
+            deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_krope_core> kv_cache_update;
+            kv_cache_update(kv_cache_update_args);
         }
     }
 }
