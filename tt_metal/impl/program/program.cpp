@@ -85,11 +85,9 @@
 namespace tt {
 class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
-namespace tt_metal {
-namespace experimental {
+namespace tt_metal::experimental {
 class GlobalCircularBuffer;
-}  // namespace experimental
-}  // namespace tt_metal
+}  // namespace tt_metal::experimental
 }  // namespace tt
 
 namespace {
