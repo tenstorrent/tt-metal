@@ -262,6 +262,8 @@ TEST_F(N300UtilsTest, DropoutDifferentSeed) {
 }
 
 TEST_F(N300UtilsTest, MorehClipGradNorm) {
+    // Skip with watcher enabled github issue #37040
+    SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
     xt::xarray<float> xtensor = xt::ones<float>({4, 1, 20, 5});

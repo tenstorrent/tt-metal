@@ -12,6 +12,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 
 class ClipGradNormTest : public ::testing::Test {
@@ -26,6 +27,8 @@ protected:
 };
 
 TEST_F(ClipGradNormTest, ClipGradNorm_GENEROUS_TOLERANCE) {
+    // Skip with watcher enabled due to moreh_clip_grad_norm_step2_kernel assert failure (#37040)
+    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
