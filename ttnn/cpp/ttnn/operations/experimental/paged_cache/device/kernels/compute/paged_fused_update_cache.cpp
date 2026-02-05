@@ -57,9 +57,9 @@ void kernel_main() {
             out_cb,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-            cache_cb>(Wt, 1);
+            compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard>(Wt, 1);
 
+        reconfig_data_format_srca(untilized_cache2_cb, cache_cb);
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }
 }

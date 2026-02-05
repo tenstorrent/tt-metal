@@ -68,6 +68,7 @@ void kernel_main() {
                 cb_pop_front(cb_in0, Kt);
 
                 // cb_intermed2 comes from reader; untilized row-major tile
+                reconfig_data_format_srca(cb_in1, cb_intermed2);
                 pack_reconfig_data_format(cb_intermed1, out_cb_id);
 
                 // tilize CB::intermed2 and write to CBIndex::c_16
@@ -76,9 +77,9 @@ void kernel_main() {
                     out_cb_id,
                     compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                    compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-                    cb_in1>(onetile, 1);
+                    compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard>(onetile, 1);
 
+                reconfig_data_format_srca(cb_intermed2, cb_in1);
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
             }

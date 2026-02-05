@@ -45,17 +45,17 @@ void kernel_main() {
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-        // Wait on writer to update block. Tilize with DT reconfiguration.
+        // Wait on writer to update block. Tilize.
         compute_kernel_lib::tilize<
             untilized_cache2_cb,  // input_cb
             out_cb,               // output_cb
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
-            cache_cb>(  // reconfig_from_cb (for DT restoration)
-            Wt,         // block_width_tiles
-            1);         // num_blocks
+            compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard>(
+            Wt,  // block_width_tiles
+            1);  // num_blocks
 
+        reconfig_data_format_srca(untilized_cache2_cb, cache_cb);
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }
 }
