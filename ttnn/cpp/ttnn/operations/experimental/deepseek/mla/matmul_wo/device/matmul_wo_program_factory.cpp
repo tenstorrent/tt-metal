@@ -29,14 +29,29 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
             tt::tt_metal::NOC::RISCV_0_default);
 
     const uint32_t num_cores = dram_bank2core_coords.size();
-    auto all_cores = tt::tt_metal::CoreRangeSet(dram_bank2core_coords);
+    auto dram_cores = CoreRangeSet(dram_bank2core_coords);
+
+    // If (4,2) is taken, use (4,3) as collector core
+    auto collector_core_coord = CoreCoord(4, 2);
+    if (std::find(dram_bank2core_coords.begin(), dram_bank2core_coords.end(), collector_core_coord) !=
+        dram_bank2core_coords.end()) {
+        collector_core_coord = CoreCoord(4, 3);
+    }
+
+    // If that is taken as well, complain loudly
+    if (std::find(dram_bank2core_coords.begin(), dram_bank2core_coords.end(), collector_core_coord) !=
+        dram_bank2core_coords.end()) {
+        TT_FATAL(false, "Collector core (4,2) and (4,3) are both taken, this Op is not supported on this device");
+    }
+
+    auto all_cores = dram_cores.merge(CoreRangeSet(collector_core_coord));
 
     // CBs used in the Matmul WO operation
     /*
         ------------------------------------------------------------------------------------
         |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
         ------------------------------------------------------------------------------------
-        | cb_r2c_w0      | CBIndex::c_0  | Bfp8_b     | true  |    7*3*3 |      45696      |
+        | cb_r2c_w0      | CBIndex::c_0  | Bfp8_b     | true  |    7*3*2 |      45696      |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    512   |      1048576    |
         | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
         | cb_w2c_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
@@ -46,7 +61,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in is handled separately as it is sharded CB
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 7 * 3 * 3},
+        {"cb_r2c_w0", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 7 * 3 * 2},
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
     };
@@ -86,15 +101,15 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     }
 
     // Create semaphores for reducing the partials at the end
-    const auto reduce_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
-    const auto collector_coord =
-        tensor_args.input_tensor.device()->worker_core_from_logical_core(dram_bank2core_coords[0]);
+    const auto reduce_semaphore_id = tt::tt_metal::CreateSemaphore(program, collector_core_coord, 0);
+    const auto collector_coord_phy =
+        tensor_args.input_tensor.device()->worker_core_from_logical_core(collector_core_coord);
 
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"layer_id", operation_attributes.layer_id},
         {"num_cores", static_cast<uint32_t>(num_cores)},
-        {"collector_physical_x", static_cast<uint32_t>(collector_coord.x)},
-        {"collector_physical_y", static_cast<uint32_t>(collector_coord.y)},
+        {"collector_physical_x", static_cast<uint32_t>(collector_coord_phy.x)},
+        {"collector_physical_y", static_cast<uint32_t>(collector_coord_phy.y)},
         {"reduce_semaphore_id", reduce_semaphore_id},
     };
 
@@ -102,7 +117,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     auto dm0_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm0.cpp",
-        all_cores,
+        dram_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_0,
@@ -112,7 +127,7 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
     auto dm1_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm1.cpp",
-        all_cores,
+        dram_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
@@ -121,8 +136,34 @@ MatmulWOProgramFactory::cached_program_t MatmulWOProgramFactory::create(
 
     auto compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute_dummy.cpp",
-        all_cores,
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute.cpp",
+        dram_cores,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::LoFi,
+            .fp32_dest_acc_en = false,
+            .dst_full_sync_en = false,
+            .bfp8_pack_precise = false,
+            .math_approx_mode = true,
+            .compile_args = compile_args,
+            .named_compile_args = named_compile_time_args});
+
+    //-------------------------------------------------------------------------
+    // Collector core - this one collects all data and reduces them.
+    //-------------------------------------------------------------------------
+    tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/dm1_collector.cpp",
+        collector_core_coord,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::NOC_1,
+            .compile_args = compile_args,
+            .named_compile_args = named_compile_time_args});
+
+    tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/device/kernels/compute_collector.cpp",
+        collector_core_coord,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::LoFi,
             .fp32_dest_acc_en = false,

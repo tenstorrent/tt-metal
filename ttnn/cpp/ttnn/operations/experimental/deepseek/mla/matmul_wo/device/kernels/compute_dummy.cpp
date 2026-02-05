@@ -42,10 +42,9 @@ void kernel_main() {
     constexpr uint32_t w_tiles_per_txn = matmul_wo_ring::W_TILES_PER_TXN;
     constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
     const uint32_t num_iters = num_w_tiles_w / num_n_tiles_per_iter;
-    const uint32_t w_total_blocks = num_tiles_h * num_iters * num_n_tiles_per_iter / w_tiles_per_block;
-
-    const uint32_t last_block_tiles = (num_tiles_h * num_n_tiles_per_iter) % w_tiles_per_block;
-    const uint32_t last_block_txns = (last_block_tiles + w_tiles_per_txn - 1) / w_tiles_per_txn;
+    const uint32_t num_blocks_per_iter =
+        (num_tiles_h * num_n_tiles_per_iter + w_tiles_per_block - 1) / w_tiles_per_block;
+    const uint32_t w_total_blocks = num_blocks_per_iter * num_iters;
 
     //-------------------------------------------------------------------------
     // Dummy compute
