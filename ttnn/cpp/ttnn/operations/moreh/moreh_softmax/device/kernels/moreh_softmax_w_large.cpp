@@ -97,7 +97,7 @@ void kernel_main() {
 #ifdef LOG
         // compute log(sum) - pop tile after reduce
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerBatch>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
                 cb_add,
                 cb_bcast_scaler,
                 cb_recipsumexps,
@@ -111,7 +111,7 @@ void kernel_main() {
 #else
         // compute 1/sum(exp(x)) - pop tile after reduce
         compute_kernel_lib::
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerBatch>(
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
                 cb_add,
                 cb_bcast_scaler,
                 cb_recipsumexps,
