@@ -152,13 +152,15 @@ jobs:
   define-ttsim-ttnn-tests:
     if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: ubuntu-latest
+    env:
+      TTNN_TESTS_YAML: .github/ttnn-tests.yaml
     outputs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
     steps:
       - name: Checkout repository for test definitions
         uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/ttnn-tests.yaml
+          sparse-checkout: ${{ env.TTNN_TESTS_YAML }}
           sparse-checkout-cone-mode: false
 
       - name: Compute TTSim-compatible tests
@@ -168,8 +170,8 @@ jobs:
           set -euo pipefail
 
           # Read test definitions from shared YAML file and filter for ttsim-compatible tests
-          echo "[info] Reading test definitions from .github/ttnn-tests.yaml"
-          ttsim_tests=$(yq -o=json '.tests | [.[] | select(.ttsim == true)]' .github/ttnn-tests.yaml)
+          echo "[info] Reading test definitions from $TTNN_TESTS_YAML"
+          ttsim_tests=$(yq -o=json '.tests | [.[] | select(.ttsim == true)]' "$TTNN_TESTS_YAML")
           echo "[info] TTSim-compatible tests:"
           echo "$ttsim_tests" | jq
 
@@ -184,6 +186,8 @@ jobs:
     needs: define-ttsim-ttnn-tests
     if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: ubuntu-latest
+    env:
+      TTSIM_SKIP_LIST_YAML: .github/ttsim-skip-list.yaml
     timeout-minutes: ${{ matrix.test-group.timeout || inputs.job-timeout }}
     name: "TTNN ${{ matrix.test-group.name }} - ${{ matrix.arch.name }}"
     strategy:
@@ -263,8 +267,8 @@ jobs:
         id: skip-list
         run: |
           ARCH="${{ matrix.arch.name }}"
-          SKIP_ARGS=$(yq -r ".${ARCH}[]" .github/ttsim-skip-list.yaml | sed 's/^/--deselect=/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-          echo "[info] Loaded skip list for arch: $ARCH"
+          SKIP_ARGS=$(yq -r ".${ARCH}[]" "$TTSIM_SKIP_LIST_YAML" | sed 's/^/--deselect=/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+          echo "[info] Loaded skip list for arch: $ARCH from $TTSIM_SKIP_LIST_YAML"
           echo "[info] Skip args count: $(echo $SKIP_ARGS | wc -w)"
           echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
 

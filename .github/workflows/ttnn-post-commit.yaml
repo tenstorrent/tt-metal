@@ -71,13 +71,15 @@ on:
 jobs:
   define-ttnn-tests:
     runs-on: ubuntu-latest
+    env:
+      TTNN_TESTS_YAML: .github/ttnn-tests.yaml
     outputs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
     steps:
       - name: Checkout repository for test definitions
         uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/ttnn-tests.yaml
+          sparse-checkout: ${{ env.TTNN_TESTS_YAML }}
           sparse-checkout-cone-mode: false
 
       - name: Compute tests
@@ -87,8 +89,8 @@ jobs:
           set -euo pipefail
 
           # Read test definitions from shared YAML file
-          echo "[info] Reading test definitions from .github/ttnn-tests.yaml"
-          default_ttnn_tests=$(yq -o=json '.tests' .github/ttnn-tests.yaml)
+          echo "[info] Reading test definitions from $TTNN_TESTS_YAML"
+          default_ttnn_tests=$(yq -o=json '.tests' "$TTNN_TESTS_YAML")
           echo "[info] Loaded tests:"
           echo "$default_ttnn_tests" | jq
 
