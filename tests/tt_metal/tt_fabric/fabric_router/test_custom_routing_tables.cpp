@@ -18,7 +18,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
-using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
 
 namespace {
 
