@@ -103,7 +103,7 @@ def test_refiner_unet(
         ),
         (
             "pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet",
-            280_283_912 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+            244_107_203 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
             "sdxl_refiner_unet",
             "sdxl_refiner_unet",
             1,
