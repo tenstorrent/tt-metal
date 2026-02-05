@@ -109,6 +109,83 @@ CONFIG_TO_TEST_ID = {
     "4xGLX_14b_720p_emulated": "4xGLX_emulated",
 }
 
+# Common pytest parametrize decorators
+MESH_DEVICE_PARAMS = pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [[MESH_SHAPE, line_params]],
+    ids=["bh_4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+
+CONFIG_WITH_SEQ_LEN_PARAMS = pytest.mark.parametrize(
+    "config_name, seq_len",
+    [
+        ("1xGLX_14b_720p", SEQ_LEN_1XGLX),
+        ("4xGLX_14b_720p_emulated", SEQ_LEN_4XGLX_EMULATED),
+    ],
+    ids=["1xGLX", "4xGLX_emulated"],
+)
+
+CONFIG_ONLY_PARAMS = pytest.mark.parametrize(
+    "config_name",
+    ["1xGLX_14b_720p", "4xGLX_14b_720p_emulated"],
+    ids=["1xGLX", "4xGLX_emulated"],
+)
+
+
+# =============================================================================
+# Helper functions
+# =============================================================================
+
+
+def create_ccl_manager(mesh_device: ttnn.MeshDevice) -> CCLManager:
+    """Create a CCL manager with standard configuration."""
+    return CCLManager(
+        mesh_device=mesh_device,
+        num_links=NUM_LINKS,
+        topology=TOPOLOGY,
+    )
+
+
+def create_distributed_rmsnorm(mesh_device: ttnn.MeshDevice, ccl_manager: CCLManager) -> DistributedRMSNorm:
+    """Create a DistributedRMSNorm with standard configuration and dummy weights."""
+    norm = DistributedRMSNorm(
+        embedding_dim=WAN_DIM,
+        norm_eps=WAN_EPS,
+        norm_elementwise_affine=True,
+        bias=False,
+        mesh_axis=TP_AXIS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+    )
+    # Load dummy weights
+    torch.manual_seed(0)
+    norm.load_state_dict({"weight": torch.randn(WAN_DIM)})
+    return norm
+
+
+def run_perf_test(test_name: str, config_name: str, seq_len: int, title: str, ops: list) -> None:
+    """
+    Run a performance test with Tracy profiler and print results.
+
+    Args:
+        test_name: Name of the test_run_* function to profile
+        config_name: Configuration name (1xGLX or 4xGLX)
+        seq_len: Sequence length for display
+        title: Title for the results table
+        ops: List of (op_code, short_name) tuples
+    """
+    command = build_test_command(test_name, config_name)
+
+    run_device_profiler_quiet(
+        command,
+        PROFILER_OUTPUT_DIR,
+        device_analysis_types=["device_kernel_duration"],
+    )
+
+    results = analyze_op_group(PROFILER_OUTPUT_DIR, ops)
+    print_perf_table(title, config_name, seq_len, ops, results)
+
 
 def run_device_profiler_quiet(
     command: str,
@@ -297,22 +374,8 @@ def build_test_command(test_name: str, config_name: str) -> str:
 # =============================================================================
 
 
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        [MESH_SHAPE, line_params],
-    ],
-    ids=["bh_4x8"],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize(
-    "config_name, seq_len",
-    [
-        ("1xGLX_14b_720p", SEQ_LEN_1XGLX),
-        ("4xGLX_14b_720p_emulated", SEQ_LEN_4XGLX_EMULATED),
-    ],
-    ids=["1xGLX", "4xGLX_emulated"],
-)
+@MESH_DEVICE_PARAMS
+@CONFIG_WITH_SEQ_LEN_PARAMS
 def test_run_spatial_layernorm(
     mesh_device: ttnn.MeshDevice,
     config_name: str,
@@ -321,27 +384,12 @@ def test_run_spatial_layernorm(
 ) -> None:
     """
     Run spatial layernorm (norm1) in Wan transformer layer.
-
-    This test is meant to be run with Tracy profiler via test_spatial_layernorm_perf.
-    It runs the DistributedLayerNorm with dynamic affine parameters.
+    Profiled via test_spatial_layernorm_perf.
     """
-    torch_dtype = torch.float32
+    logger.info(f"Running spatial layernorm: {config_name}, seq_len={seq_len}")
 
-    sp_factor = MESH_SHAPE[SP_AXIS]  # 8
-    tp_factor = MESH_SHAPE[TP_AXIS]  # 4
+    ccl_manager = create_ccl_manager(mesh_device)
 
-    logger.info(f"Running spatial layernorm: {config_name}")
-    logger.info(f"  Sequence length: {seq_len}")
-    logger.info(f"  SP factor: {sp_factor}, TP factor: {tp_factor}")
-
-    # Create CCL manager
-    ccl_manager = CCLManager(
-        mesh_device=mesh_device,
-        num_links=NUM_LINKS,
-        topology=TOPOLOGY,
-    )
-
-    # Create DistributedLayerNorm (norm1 in transformer block)
     norm = DistributedLayerNorm(
         embedding_dim=WAN_DIM,
         norm_eps=WAN_EPS,
@@ -356,60 +404,27 @@ def test_run_spatial_layernorm(
     torch.manual_seed(0)
     batch_size = 1
 
-    spatial_torch = torch.randn((1, batch_size, seq_len, WAN_DIM), dtype=torch_dtype)
-    dynamic_weight_torch = torch.randn((1, batch_size, 1, WAN_DIM), dtype=torch_dtype)
-    dynamic_bias_torch = torch.randn((1, batch_size, 1, WAN_DIM), dtype=torch_dtype)
+    spatial_torch = torch.randn((1, batch_size, seq_len, WAN_DIM), dtype=torch.float32)
+    dynamic_weight_torch = torch.randn((1, batch_size, 1, WAN_DIM), dtype=torch.float32)
+    dynamic_bias_torch = torch.randn((1, batch_size, 1, WAN_DIM), dtype=torch.float32)
 
-    # Convert to TT tensors with proper sharding
-    tt_spatial = bf16_tensor_2dshard(
-        spatial_torch,
-        device=mesh_device,
-        shard_mapping={SP_AXIS: 2, TP_AXIS: 3},
-    )
-    tt_dynamic_weight = bf16_tensor(
-        dynamic_weight_torch,
-        device=mesh_device,
-        mesh_axis=TP_AXIS,
-        shard_dim=3,
-    )
-    tt_dynamic_bias = bf16_tensor(
-        dynamic_bias_torch,
-        device=mesh_device,
-        mesh_axis=TP_AXIS,
-        shard_dim=3,
-    )
+    tt_spatial = bf16_tensor_2dshard(spatial_torch, device=mesh_device, shard_mapping={SP_AXIS: 2, TP_AXIS: 3})
+    tt_dynamic_weight = bf16_tensor(dynamic_weight_torch, device=mesh_device, mesh_axis=TP_AXIS, shard_dim=3)
+    tt_dynamic_bias = bf16_tensor(dynamic_bias_torch, device=mesh_device, mesh_axis=TP_AXIS, shard_dim=3)
 
-    logger.info(f"  TT spatial shape: {tt_spatial.shape}")
-
-    # Warmup iterations
+    # Warmup
     for _ in range(NUM_WARMUP_ITERS):
         _ = norm(tt_spatial, dynamic_weight=tt_dynamic_weight, dynamic_bias=tt_dynamic_bias)
     ttnn.synchronize_device(mesh_device)
 
-    # Measurement iterations
+    # Measurement
     for _ in range(NUM_MEASUREMENT_ITERS):
         _ = norm(tt_spatial, dynamic_weight=tt_dynamic_weight, dynamic_bias=tt_dynamic_bias)
     ttnn.synchronize_device(mesh_device)
 
-    logger.info(f"Completed {NUM_WARMUP_ITERS} warmup + {NUM_MEASUREMENT_ITERS} measurement iterations")
 
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        [MESH_SHAPE, line_params],
-    ],
-    ids=["bh_4x8"],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize(
-    "config_name, seq_len",
-    [
-        ("1xGLX_14b_720p", SEQ_LEN_1XGLX),
-        ("4xGLX_14b_720p_emulated", SEQ_LEN_4XGLX_EMULATED),
-    ],
-    ids=["1xGLX", "4xGLX_emulated"],
-)
+@MESH_DEVICE_PARAMS
+@CONFIG_WITH_SEQ_LEN_PARAMS
 def test_run_spatial_rmsnorm(
     mesh_device: ttnn.MeshDevice,
     config_name: str,
@@ -417,70 +432,35 @@ def test_run_spatial_rmsnorm(
     reset_seeds,
 ) -> None:
     """
-    Run spatial RMSNorm (norm_q/norm_k) in Wan attention.
-
-    This test is meant to be run with Tracy profiler via test_spatial_rmsnorm_perf.
-    It runs the DistributedRMSNorm with optional fused RoPE, as used for Q/K normalization
-    in the self-attention path.
+    Run spatial RMSNorm (norm_q/norm_k) with fused RoPE in Wan self-attention.
+    Profiled via test_spatial_rmsnorm_perf.
     """
     tp_factor = MESH_SHAPE[TP_AXIS]
     n_local_heads = WAN_NUM_HEADS // tp_factor
-
-    logger.info(f"Running spatial RMSNorm: {config_name}")
-    logger.info(f"  Sequence length: {seq_len}")
-    logger.info(f"  TP factor: {tp_factor}, local heads: {n_local_heads}")
-
-    # Create CCL manager
-    ccl_manager = CCLManager(
-        mesh_device=mesh_device,
-        num_links=NUM_LINKS,
-        topology=TOPOLOGY,
-    )
-
-    # Create DistributedRMSNorm (norm_q/norm_k in attention)
-    norm = DistributedRMSNorm(
-        embedding_dim=WAN_DIM,
-        norm_eps=WAN_EPS,
-        norm_elementwise_affine=True,
-        bias=False,
-        mesh_axis=TP_AXIS,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-    )
-
-    # Load dummy weights via state dict
-    torch.manual_seed(0)
-    dummy_state_dict = {"weight": torch.randn(WAN_DIM)}
-    norm.load_state_dict(dummy_state_dict)
-
-    # Create input tensor (shape after Q/K projection, fractured on TP)
-    # Input is [1, B, N, D] fractured on TP for D dimension
-    batch_size = 1
     local_dim = WAN_DIM // tp_factor
     seq_len_local = seq_len // MESH_SHAPE[SP_AXIS]
 
+    logger.info(f"Running spatial RMSNorm: {config_name}, seq_len={seq_len}")
+
+    ccl_manager = create_ccl_manager(mesh_device)
+    norm = create_distributed_rmsnorm(mesh_device, ccl_manager)
+
+    # Create input tensor [1, B, N_local, D_local]
+    batch_size = 1
     input_torch = torch.randn((1, batch_size, seq_len_local, local_dim), dtype=torch.float32)
     tt_input = bf16_tensor(input_torch, device=mesh_device)
 
-    # Create RoPE tensors for fused RoPE variant
-    # rope_cos/rope_sin shape: [1, B, N, A*H] where A=local_heads, H=head_dim
-    # Actually looking at the code, after create_heads it becomes [B, A, N, H]
-    # But the norm takes the pre-split input and rope
-    rope_dim = WAN_HEAD_DIM
-    rope_cos_torch = torch.randn((1, batch_size, seq_len_local, rope_dim), dtype=torch.float32)
-    rope_sin_torch = torch.randn((1, batch_size, seq_len_local, rope_dim), dtype=torch.float32)
-
+    # Create RoPE tensors
+    rope_cos_torch = torch.randn((1, batch_size, seq_len_local, WAN_HEAD_DIM), dtype=torch.float32)
+    rope_sin_torch = torch.randn((1, batch_size, seq_len_local, WAN_HEAD_DIM), dtype=torch.float32)
     tt_rope_cos = bf16_tensor(rope_cos_torch, device=mesh_device)
     tt_rope_sin = bf16_tensor(rope_sin_torch, device=mesh_device)
 
-    # Create transformation matrix for RoPE (typically identity or rotation)
-    # trans_mat shape is [1, 1, head_dim, head_dim]
+    # Transformation matrix [1, 1, 32, 32]
     trans_mat_torch = torch.eye(32, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
     tt_trans_mat = bf16_tensor(trans_mat_torch, device=mesh_device)
 
-    logger.info(f"  TT input shape: {tt_input.shape}")
-
-    # Warmup iterations
+    # Warmup
     for _ in range(NUM_WARMUP_ITERS):
         _ = norm(
             tt_input,
@@ -491,7 +471,7 @@ def test_run_spatial_rmsnorm(
         )
     ttnn.synchronize_device(mesh_device)
 
-    # Measurement iterations
+    # Measurement
     for _ in range(NUM_MEASUREMENT_ITERS):
         _ = norm(
             tt_input,
@@ -502,89 +482,41 @@ def test_run_spatial_rmsnorm(
         )
     ttnn.synchronize_device(mesh_device)
 
-    logger.info(f"Completed {NUM_WARMUP_ITERS} warmup + {NUM_MEASUREMENT_ITERS} measurement iterations")
 
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        [MESH_SHAPE, line_params],
-    ],
-    ids=["bh_4x8"],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize(
-    "config_name",
-    [
-        "1xGLX_14b_720p",
-        "4xGLX_14b_720p_emulated",
-    ],
-    ids=["1xGLX", "4xGLX_emulated"],
-)
+@MESH_DEVICE_PARAMS
+@CONFIG_ONLY_PARAMS
 def test_run_prompt_rmsnorm(
     mesh_device: ttnn.MeshDevice,
     config_name: str,
     reset_seeds,
 ) -> None:
     """
-    Run prompt RMSNorm (norm_k on prompt K) in Wan cross-attention.
-
-    This test is meant to be run with Tracy profiler via test_prompt_rmsnorm_perf.
-    It runs the DistributedRMSNorm without RoPE, as used for K normalization
-    in the cross-attention path.
+    Run prompt RMSNorm (norm_k on prompt K) without RoPE in Wan cross-attention.
+    Profiled via test_prompt_rmsnorm_perf.
     """
     tp_factor = MESH_SHAPE[TP_AXIS]
     n_local_heads = WAN_NUM_HEADS // tp_factor
-
-    logger.info(f"Running prompt RMSNorm: {config_name}")
-    logger.info(f"  Prompt length: {PROMPT_SEQ_LEN}")
-    logger.info(f"  TP factor: {tp_factor}, local heads: {n_local_heads}")
-
-    # Create CCL manager
-    ccl_manager = CCLManager(
-        mesh_device=mesh_device,
-        num_links=NUM_LINKS,
-        topology=TOPOLOGY,
-    )
-
-    # Create DistributedRMSNorm (norm_k in cross-attention)
-    norm = DistributedRMSNorm(
-        embedding_dim=WAN_DIM,
-        norm_eps=WAN_EPS,
-        norm_elementwise_affine=True,
-        bias=False,
-        mesh_axis=TP_AXIS,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-    )
-
-    # Load dummy weights via state dict
-    torch.manual_seed(0)
-    dummy_state_dict = {"weight": torch.randn(WAN_DIM)}
-    norm.load_state_dict(dummy_state_dict)
-
-    # Create input tensor (shape after K projection on prompt, fractured on TP)
-    # Prompt is replicated on SP, but K projection output is fractured on TP
-    # Input is [1, B, L, D_local] where L=prompt_len, D_local = D / TP
-    batch_size = 1
     local_dim = WAN_DIM // tp_factor
 
+    logger.info(f"Running prompt RMSNorm: {config_name}, prompt_len={PROMPT_SEQ_LEN}")
+
+    ccl_manager = create_ccl_manager(mesh_device)
+    norm = create_distributed_rmsnorm(mesh_device, ccl_manager)
+
+    # Create input tensor [1, B, L, D_local]
+    batch_size = 1
     input_torch = torch.randn((1, batch_size, PROMPT_SEQ_LEN, local_dim), dtype=torch.float32)
     tt_input = bf16_tensor(input_torch, device=mesh_device)
 
-    logger.info(f"  TT input shape: {tt_input.shape}")
-
-    # Warmup iterations (no RoPE for prompt/cross-attention)
+    # Warmup (no RoPE for cross-attention)
     for _ in range(NUM_WARMUP_ITERS):
         _ = norm(tt_input, num_heads_per_device=n_local_heads)
     ttnn.synchronize_device(mesh_device)
 
-    # Measurement iterations
+    # Measurement
     for _ in range(NUM_MEASUREMENT_ITERS):
         _ = norm(tt_input, num_heads_per_device=n_local_heads)
     ttnn.synchronize_device(mesh_device)
-
-    logger.info(f"Completed {NUM_WARMUP_ITERS} warmup + {NUM_MEASUREMENT_ITERS} measurement iterations")
 
 
 # =============================================================================
@@ -598,16 +530,8 @@ SPATIAL_LAYERNORM_OPS = [
     ("PostAllGatherDeviceOperation", "post_allgather"),
 ]
 
-# Spatial RMSNorm: DistributedRMSNorm with fused RoPE (norm_q/norm_k in self-attention)
-SPATIAL_RMSNORM_OPS = [
-    ("FusedRMSNormPreAllGatherDeviceOperation", "pre_allgather"),
-    ("AllGatherAsyncDeviceOperation", "all_gather"),
-    ("FusedRMSNormPostAllGatherDeviceOperation", "post_allgather"),
-]
-
-# Prompt RMSNorm: DistributedRMSNorm without RoPE (norm_k on prompt K in cross-attention)
-# Uses same ops as spatial RMSNorm, just without RoPE in post_allgather
-PROMPT_RMSNORM_OPS = [
+# RMSNorm ops (used for both spatial and prompt RMSNorm)
+RMSNORM_OPS = [
     ("FusedRMSNormPreAllGatherDeviceOperation", "pre_allgather"),
     ("AllGatherAsyncDeviceOperation", "all_gather"),
     ("FusedRMSNormPostAllGatherDeviceOperation", "post_allgather"),
@@ -619,86 +543,19 @@ PROMPT_RMSNORM_OPS = [
 # =============================================================================
 
 
-@pytest.mark.parametrize(
-    "config_name, seq_len",
-    [
-        ("1xGLX_14b_720p", SEQ_LEN_1XGLX),
-        ("4xGLX_14b_720p_emulated", SEQ_LEN_4XGLX_EMULATED),
-    ],
-    ids=["1xGLX", "4xGLX_emulated"],
-)
+@CONFIG_WITH_SEQ_LEN_PARAMS
 def test_spatial_layernorm_perf(config_name: str, seq_len: int) -> None:
-    """
-    Measure device performance for spatial layernorm using Tracy profiler.
-
-    This test:
-    1. Runs test_run_spatial_layernorm with Tracy profiler
-    2. Parses the profiler output
-    3. Aggregates device times (max for non-CCL, min for CCL ops)
-    4. Prints a performance summary table
-    """
-    command = build_test_command("test_run_spatial_layernorm", config_name)
-
-    run_device_profiler_quiet(
-        command,
-        PROFILER_OUTPUT_DIR,
-        device_analysis_types=["device_kernel_duration"],
-    )
-
-    results = analyze_op_group(PROFILER_OUTPUT_DIR, SPATIAL_LAYERNORM_OPS)
-    print_perf_table("SPATIAL LAYERNORM", config_name, seq_len, SPATIAL_LAYERNORM_OPS, results)
+    """Measure device performance for spatial layernorm (DistributedLayerNorm)."""
+    run_perf_test("test_run_spatial_layernorm", config_name, seq_len, "SPATIAL LAYERNORM", SPATIAL_LAYERNORM_OPS)
 
 
-@pytest.mark.parametrize(
-    "config_name, seq_len",
-    [
-        ("1xGLX_14b_720p", SEQ_LEN_1XGLX),
-        ("4xGLX_14b_720p_emulated", SEQ_LEN_4XGLX_EMULATED),
-    ],
-    ids=["1xGLX", "4xGLX_emulated"],
-)
+@CONFIG_WITH_SEQ_LEN_PARAMS
 def test_spatial_rmsnorm_perf(config_name: str, seq_len: int) -> None:
-    """
-    Measure device performance for spatial RMSNorm using Tracy profiler.
-
-    This benchmarks DistributedRMSNorm with fused RoPE, as used for Q/K
-    normalization in the self-attention path.
-    """
-    command = build_test_command("test_run_spatial_rmsnorm", config_name)
-
-    run_device_profiler_quiet(
-        command,
-        PROFILER_OUTPUT_DIR,
-        device_analysis_types=["device_kernel_duration"],
-    )
-
-    results = analyze_op_group(PROFILER_OUTPUT_DIR, SPATIAL_RMSNORM_OPS)
-    print_perf_table("SPATIAL RMSNORM", config_name, seq_len, SPATIAL_RMSNORM_OPS, results)
+    """Measure device performance for spatial RMSNorm with fused RoPE."""
+    run_perf_test("test_run_spatial_rmsnorm", config_name, seq_len, "SPATIAL RMSNORM", RMSNORM_OPS)
 
 
-@pytest.mark.parametrize(
-    "config_name",
-    [
-        "1xGLX_14b_720p",
-        "4xGLX_14b_720p_emulated",
-    ],
-    ids=["1xGLX", "4xGLX_emulated"],
-)
+@CONFIG_ONLY_PARAMS
 def test_prompt_rmsnorm_perf(config_name: str) -> None:
-    """
-    Measure device performance for prompt RMSNorm using Tracy profiler.
-
-    This benchmarks DistributedRMSNorm without RoPE, as used for K
-    normalization on prompt in the cross-attention path.
-    """
-    test_id = CONFIG_TO_TEST_ID[config_name]
-    command = f"pytest {TEST_MODULE}::test_run_prompt_rmsnorm[blackhole-{test_id}-bh_4x8] -v"
-
-    run_device_profiler_quiet(
-        command,
-        PROFILER_OUTPUT_DIR,
-        device_analysis_types=["device_kernel_duration"],
-    )
-
-    results = analyze_op_group(PROFILER_OUTPUT_DIR, PROMPT_RMSNORM_OPS)
-    print_perf_table("PROMPT RMSNORM", config_name, PROMPT_SEQ_LEN, PROMPT_RMSNORM_OPS, results)
+    """Measure device performance for prompt RMSNorm without RoPE."""
+    run_perf_test("test_run_prompt_rmsnorm", config_name, PROMPT_SEQ_LEN, "PROMPT RMSNORM", RMSNORM_OPS)
