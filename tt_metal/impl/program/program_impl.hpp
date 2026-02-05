@@ -106,18 +106,18 @@ struct KernelGroup {
 
 // Contains the program's worker memory map
 struct ProgramConfig {
-    uint32_t rta_offset;
+    uint32_t rta_offset{};
     std::vector<uint32_t> crta_offsets;
     std::vector<uint32_t> crta_sizes;
-    uint32_t sem_offset;
-    uint32_t sem_size;
-    uint32_t cb_offset;
-    uint32_t cb_size;
-    uint32_t dfb_offset;
-    uint32_t dfb_size;
-    uint32_t local_cb_size;
-    uint32_t kernel_text_offset;  // offset of first kernel bin
-    uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
+    uint32_t sem_offset{};
+    uint32_t sem_size{};
+    uint32_t cb_offset{};
+    uint32_t cb_size{};
+    uint32_t dfb_offset{};
+    uint32_t dfb_size{};
+    uint32_t local_cb_size{};
+    uint32_t kernel_text_offset{};  // offset of first kernel bin
+    uint32_t kernel_text_size{};    // max size of all kernel bins across all kernel groups
 };
 
 // Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
