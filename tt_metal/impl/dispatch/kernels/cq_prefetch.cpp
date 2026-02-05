@@ -1991,6 +1991,10 @@ CBReaderWithManualRelease<
 
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
 inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, uint32_t& local_downstream_data_ptr) {
+    // In initial return, we return the header bytes as well
+    uint32_t initial_data_to_clear = sizeof(CQPrefetchHToPrefetchDHeader);
+    data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
+    wlength -= sizeof(CQPrefetchHToPrefetchDHeader);
     // Stream data to downstream as it arrives. Acquire upstream pages incrementally.
     while (wlength > 0) {
         // Ensure at least one upstream page is available
@@ -2023,7 +2027,9 @@ inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, u
         // Release upstream pages so prefetch_h can make more available. Ensure to flush the writes just made to prevent
         // data race.
         noc_async_writes_flushed();
-        uint32_t pages_to_free = (can_read_now + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
+        // wait_for_available_data always returns up to a page boundary, so the rounding only matters on the final chunk and lets us return the final bytes in the page early.
+        uint32_t pages_to_free = (can_read_now + initial_data_to_clear + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
+        initial_data_to_clear = 0;
         // data_ptr may not be page-aligned mid-stream, so allow it to be up to one page ahead
         relay_client.release_pages<
             my_noc_index,
@@ -2060,8 +2066,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
 
         if (cmd_ptr->header.raw_copy) {
             uint64_t wlength = cmd_ptr->header.length;
-            data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
-            relay_raw_data_to_downstream(data_ptr, wlength - sizeof(CQPrefetchHToPrefetchDHeader), downstream_data_ptr);
+            relay_raw_data_to_downstream(data_ptr, wlength, downstream_data_ptr);
         } else {
             uint32_t length = cmd_ptr->header.length;
             // Ensure the entire command payload is present before returning
