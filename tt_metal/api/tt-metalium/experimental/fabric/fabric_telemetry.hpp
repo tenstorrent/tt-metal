@@ -74,6 +74,7 @@ struct FabricTelemetryDynamicInfo {
  * @brief Static information that identifies a router.
  */
 struct FabricTelemetryStaticInfo {
+    std::uint32_t version = 0;
     std::uint16_t mesh_id = 0;
     std::uint16_t neighbor_mesh_id = 0;
     std::uint8_t device_id = 0;

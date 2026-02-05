@@ -6,6 +6,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 
 
 class TtGEGLU(LightweightModule):
@@ -13,6 +14,11 @@ class TtGEGLU(LightweightModule):
         super().__init__()
 
         self.device = device
+
+        self.module_path = module_path
+
+        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
+
         weights = state_dict[f"{module_path}.proj.weight"]
         bias = state_dict[f"{module_path}.proj.bias"]
         w1, w2 = weights.chunk(2, dim=0)  # Each: [out_dim // 2, in_dim]
@@ -56,5 +62,9 @@ class TtGEGLU(LightweightModule):
         )
 
         ttnn.deallocate(input_tensor)
-        hidden_states = ttnn.mul_(hidden_states, gate, use_legacy=False, fast_and_approximate_mode=True)
+        if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
+            # gate is L1 BS, hidden_states is L1 interleaved; mul_ will output its result in L1 BS
+            hidden_states = ttnn.mul_(gate, hidden_states, use_legacy=False, fast_and_approximate_mode=True)
+        else:
+            hidden_states = ttnn.mul_(hidden_states, gate, use_legacy=False, fast_and_approximate_mode=True)
         return hidden_states

@@ -2685,6 +2685,7 @@ void initialize_fabric_telemetry() {
     fabric_telemetry->static_info.mesh_id = routing_table_l1->my_mesh_id;
     fabric_telemetry->static_info.device_id = routing_table_l1->my_device_id;
     fabric_telemetry->static_info.direction = static_cast<uint8_t>(my_direction);
+    fabric_telemetry->static_info.version = FABRIC_TELEMETRY_VERSION;
     fabric_telemetry->static_info.fabric_config = 0;  // Reserved for future use
 
     // Initialize neighbor info to sentinel values (will be populated during handshake)

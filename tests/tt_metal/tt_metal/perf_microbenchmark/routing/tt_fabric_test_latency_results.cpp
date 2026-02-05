@@ -2,20 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_latency_manager.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_latency_results.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <numeric>
 #include <sstream>
+#include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_common.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_constants.hpp"
+namespace tt::tt_fabric::fabric_tests {
 
-LatencyTestManager::LatencyTestManager(TestFixture& fixture, SenderMemoryMap& sender_memory_map) :
-    fixture_(fixture), sender_memory_map_(sender_memory_map) {}
+LatencyResultsManager::LatencyResultsManager(TestFixture& fixture, SenderMemoryMap& sender_memory_map) :
+    fixture_(fixture), sender_memory_map_(sender_memory_map) {
+    performance_t = PerformanceMetric::Latency;
+}
 
-void LatencyTestManager::create_latency_kernels_for_device(
+void LatencyResultsManager::create_latency_kernels_for_device(
     TestDevice& test_device, std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
     const auto& senders = test_device.get_senders();
     const auto& receivers = test_device.get_receivers();
@@ -94,27 +101,7 @@ void LatencyTestManager::create_latency_kernels_for_device(
     }
 }
 
-std::ofstream LatencyTestManager::init_diff_csv_file(
-    std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type) {
-    std::filesystem::path output_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        std::string(OUTPUT_DIR);
-    std::ostringstream diff_oss;
-    auto arch_name = tt::tt_metal::hal::get_arch_name();
-    diff_oss << test_type << "_diff_" << arch_name << ".csv";
-    diff_csv_path = output_path / diff_oss.str();
-
-    std::ofstream diff_csv_stream(diff_csv_path, std::ios::out | std::ios::trunc);
-    if (!diff_csv_stream.is_open()) {
-        log_error(tt::LogTest, "Failed to create {} diff CSV file: {}", test_type, diff_csv_path.string());
-    } else {
-        diff_csv_stream << csv_header << "\n";
-        log_info(tt::LogTest, "Initialized {} diff CSV file: {}", test_type, diff_csv_path.string());
-    }
-    return diff_csv_stream;
-}
-
-void LatencyTestManager::setup_latency_test_mode(const TestConfig& config) {
+void LatencyResultsManager::setup_latency_test_mode(const TestConfig& config) {
     TT_FATAL(
         config.performance_test_mode == PerformanceTestMode::LATENCY,
         "setup_latency_test_mode called when latency test mode is not enabled");
@@ -145,7 +132,7 @@ void LatencyTestManager::setup_latency_test_mode(const TestConfig& config) {
         pattern.num_packets.value());
 }
 
-void LatencyTestManager::setup_latency_test_workers(
+void LatencyResultsManager::setup_latency_test_workers(
     TestConfig& config, std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
     log_debug(tt::LogTest, "Latency test mode: manually populating sender and receiver workers");
 
@@ -235,19 +222,19 @@ void LatencyTestManager::setup_latency_test_workers(
     }
 }
 
-LatencyTestManager::LatencyWorkerLocation LatencyTestManager::get_latency_sender_location(
+LatencyResultsManager::LatencyWorkerLocation LatencyResultsManager::get_latency_sender_location(
     std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
     return find_latency_worker_device(
         test_devices, [](TestDevice& d) -> const auto& { return d.get_senders(); }, "sender");
 }
 
-LatencyTestManager::LatencyWorkerLocation LatencyTestManager::get_latency_receiver_location(
+LatencyResultsManager::LatencyWorkerLocation LatencyResultsManager::get_latency_receiver_location(
     std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
     return find_latency_worker_device(
         test_devices, [](TestDevice& d) -> const auto& { return d.get_receivers(); }, "receiver");
 }
 
-void LatencyTestManager::collect_latency_results(std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
+void LatencyResultsManager::collect_latency_results(std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
     log_info(tt::LogTest, "Collecting latency results from sender and responder devices");
 
     // Find sender and responder locations
@@ -276,7 +263,7 @@ void LatencyTestManager::collect_latency_results(std::unordered_map<MeshCoordina
     log_info(tt::LogTest, "Collected {} latency samples from sender and responder", num_samples);
 }
 
-void LatencyTestManager::report_latency_results(
+void LatencyResultsManager::report_latency_results(
     const TestConfig& config, std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
     log_info(tt::LogTest, "Reporting latency results for test: {}", config.parametrized_name);
 
@@ -453,50 +440,50 @@ void LatencyTestManager::report_latency_results(
     log_info(tt::LogTest, "========================================================================");
     log_info(tt::LogTest, "");
 
-    // Populate LatencyResult structure for CSV export
-    LatencyResult latency_result;
-    latency_result.test_name = config.parametrized_name;
+    // Populate LatencyResultSummary structure for CSV export
+    LatencyResultSummary latency_summary;
+    latency_summary.test_name = config.parametrized_name;
 
     // Extract ftype and ntype from first sender's first pattern
     const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
-    latency_result.ftype = fetch_pattern_ftype(first_pattern);
-    latency_result.ntype = fetch_pattern_ntype(first_pattern);
+    latency_summary.ftype = fetch_pattern_ftype(first_pattern);
+    latency_summary.ntype = fetch_pattern_ntype(first_pattern);
 
-    latency_result.topology = enchantum::to_string(config.fabric_setup.topology);
-    latency_result.num_devices = test_devices.size();
-    latency_result.num_links = config.fabric_setup.num_links;
-    latency_result.num_samples = raw_latencies_cycles.size();
-    latency_result.payload_size = payload_size;
+    latency_summary.topology = enchantum::to_string(config.fabric_setup.topology);
+    latency_summary.num_devices = test_devices.size();
+    latency_summary.num_links = config.fabric_setup.num_links;
+    latency_summary.num_samples = raw_latencies_cycles.size();
+    latency_summary.payload_size = payload_size;
 
     // Net latency statistics (most important)
-    latency_result.net_min_ns = net_stats.min * ns_per_cycle;
-    latency_result.net_max_ns = net_stats.max * ns_per_cycle;
-    latency_result.net_avg_ns = net_stats.avg * ns_per_cycle;
-    latency_result.net_p99_ns = net_stats.p99 * ns_per_cycle;
+    latency_summary.net_min_ns = net_stats.min * ns_per_cycle;
+    latency_summary.net_max_ns = net_stats.max * ns_per_cycle;
+    latency_summary.net_avg_ns = net_stats.avg * ns_per_cycle;
+    latency_summary.net_p99_ns = net_stats.p99 * ns_per_cycle;
 
     // Responder processing time statistics
-    latency_result.responder_min_ns = responder_stats.min * ns_per_cycle;
-    latency_result.responder_max_ns = responder_stats.max * ns_per_cycle;
-    latency_result.responder_avg_ns = responder_stats.avg * ns_per_cycle;
-    latency_result.responder_p99_ns = responder_stats.p99 * ns_per_cycle;
+    latency_summary.responder_min_ns = responder_stats.min * ns_per_cycle;
+    latency_summary.responder_max_ns = responder_stats.max * ns_per_cycle;
+    latency_summary.responder_avg_ns = responder_stats.avg * ns_per_cycle;
+    latency_summary.responder_p99_ns = responder_stats.p99 * ns_per_cycle;
 
     // Raw latency statistics
-    latency_result.raw_min_ns = raw_stats.min * ns_per_cycle;
-    latency_result.raw_max_ns = raw_stats.max * ns_per_cycle;
-    latency_result.raw_avg_ns = raw_stats.avg * ns_per_cycle;
-    latency_result.raw_p99_ns = raw_stats.p99 * ns_per_cycle;
+    latency_summary.raw_min_ns = raw_stats.min * ns_per_cycle;
+    latency_summary.raw_max_ns = raw_stats.max * ns_per_cycle;
+    latency_summary.raw_avg_ns = raw_stats.avg * ns_per_cycle;
+    latency_summary.raw_p99_ns = raw_stats.p99 * ns_per_cycle;
 
     // Per-hop latency statistics
-    latency_result.per_hop_min_ns = per_hop_latency_stats.min * ns_per_cycle;
-    latency_result.per_hop_max_ns = per_hop_latency_stats.max * ns_per_cycle;
-    latency_result.per_hop_avg_ns = per_hop_latency_stats.avg * ns_per_cycle;
-    latency_result.per_hop_p99_ns = per_hop_latency_stats.p99 * ns_per_cycle;
+    latency_summary.per_hop_min_ns = per_hop_latency_stats.min * ns_per_cycle;
+    latency_summary.per_hop_max_ns = per_hop_latency_stats.max * ns_per_cycle;
+    latency_summary.per_hop_avg_ns = per_hop_latency_stats.avg * ns_per_cycle;
+    latency_summary.per_hop_p99_ns = per_hop_latency_stats.p99 * ns_per_cycle;
 
-    // Add to results vector
-    latency_results_.push_back(latency_result);
+    // Add to results_summary_ vector (not results_)
+    results_summary_.push_back(latency_summary);
 }
 
-void LatencyTestManager::initialize_latency_results_csv_file() {
+void LatencyResultsManager::initialize_results_csv_file(bool telemetry_enabled_ [[maybe_unused]]) {
     // Create output directory
     std::filesystem::path tt_metal_home =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
@@ -511,17 +498,13 @@ void LatencyTestManager::initialize_latency_results_csv_file() {
     // similar to how bandwidth_summary_results_*.csv is created in generate_bandwidth_summary_csv()
     auto arch_name = tt::tt_metal::hal::get_arch_name();
     std::ostringstream oss;
-    oss << "latency_results_" << arch_name << ".csv";
-    latency_csv_file_path_ = latency_results_path / oss.str();
+    oss << get_perf_metric_name() + "_results_" << arch_name << ".csv";
+    csv_file_path_ = latency_results_path / oss.str();
 
-    log_info(tt::LogTest, "Initialized latency CSV file path: {}", latency_csv_file_path_.string());
-}
-
-void LatencyTestManager::generate_latency_results_csv() {
-    // Open CSV file in write mode (truncate existing file, similar to bandwidth)
-    std::ofstream csv_stream(latency_csv_file_path_, std::ios::out | std::ios::trunc);
+    // Create detailed CSV file with header
+    std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
     if (!csv_stream.is_open()) {
-        log_error(tt::LogTest, "Failed to open latency CSV file for writing: {}", latency_csv_file_path_.string());
+        log_error(tt::LogTest, "Failed to create {} CSV file: {}", get_perf_metric_name(), csv_file_path_.string());
         return;
     }
 
@@ -532,8 +515,36 @@ void LatencyTestManager::generate_latency_results_csv() {
                   "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
                   "per_hop_min_ns,per_hop_max_ns,per_hop_avg_ns,per_hop_p99_ns,tolerance_percent\n";
 
+    csv_stream.close();
+
+    log_info(tt::LogTest, "Initialized {} CSV file path: {}", get_perf_metric_name(), csv_file_path_.string());
+}
+
+void LatencyResultsManager::write_summary_csv_to_file(
+    const std::filesystem::path& csv_path, bool include_upload_columns) {
+    std::ofstream csv_stream(csv_path, std::ios::out | std::ios::trunc);
+    if (!csv_stream.is_open()) {
+        log_error(tt::LogTest, "Failed to create CSV file: {}", csv_path.string());
+        return;
+    }
+
+    if (include_upload_columns) {
+        csv_stream << "file_name,machine_type,test_ts,";
+    }
+    csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
+                  "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
+                  "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
+                  "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
+                  "per_hop_min_ns,per_hop_max_ns,per_hop_avg_ns,per_hop_p99_ns,tolerance_percent\n";
+    log_info(tt::LogTest, "Initialized latency CSV file: {}", csv_path.string());
+
     // Write all results
-    for (const auto& result : latency_results_) {
+    for (const auto& result : results_summary_) {
+        if (include_upload_columns) {
+            csv_stream << result.file_name.value() << "," << result.machine_type.value() << ","
+                       << result.test_ts.value() << ",";
+        }
+
         csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology << ","
                    << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
                    << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
@@ -565,38 +576,26 @@ void LatencyTestManager::generate_latency_results_csv() {
     }
 
     csv_stream.close();
-    log_info(tt::LogTest, "Latency results written to CSV file: {}", latency_csv_file_path_.string());
+    log_info(tt::LogTest, "Latency results written to CSV file: {}", csv_file_path_.string());
 }
 
-std::string LatencyTestManager::get_golden_latency_csv_filename() {
-    auto arch_name = tt::tt_metal::hal::get_arch_name();
-    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-
-    // Convert cluster type enum to lowercase string
-    std::string cluster_name = std::string(enchantum::to_string(cluster_type));
-    std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
-
-    std::string file_name = "golden_latency_" + arch_name + "_" + cluster_name + ".csv";
-    return file_name;
-}
-
-bool LatencyTestManager::load_golden_latency_csv() {
+void LatencyResultsManager::load_golden_csv() {
     golden_latency_entries_.clear();
 
-    std::string golden_filename = get_golden_latency_csv_filename();
+    std::string golden_filename = get_golden_csv_filename();
     std::filesystem::path golden_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden" / golden_filename;
 
     if (!std::filesystem::exists(golden_path)) {
         log_warning(tt::LogTest, "Golden latency CSV file not found: {}", golden_path.string());
-        return false;
+        return;
     }
 
     std::ifstream golden_file(golden_path);
     if (!golden_file.is_open()) {
         log_error(tt::LogTest, "Failed to open golden latency CSV file: {}", golden_path.string());
-        return false;
+        return;
     }
 
     std::string line;
@@ -684,23 +683,22 @@ bool LatencyTestManager::load_golden_latency_csv() {
     golden_file.close();
     log_info(
         tt::LogTest, "Loaded {} golden latency entries from: {}", golden_latency_entries_.size(), golden_path.string());
-    return true;
 }
 
-void LatencyTestManager::compare_latency_results_with_golden() {
+void LatencyResultsManager::compare_latency_results_with_golden() {
     if (golden_latency_entries_.empty()) {
         log_warning(tt::LogTest, "Skipping golden latency comparison - no golden file found");
         return;
     }
-    if (latency_results_.size() != golden_latency_entries_.size()) {
+    if (results_summary_.size() != golden_latency_entries_.size()) {
         log_warning(
             tt::LogTest,
             "Number of latency results ({}) does not match number of golden entries ({})",
-            latency_results_.size(),
+            results_summary_.size(),
             golden_latency_entries_.size());
     }
 
-    for (const auto& test_result : latency_results_) {
+    for (const auto& test_result : results_summary_) {
         auto golden_it = std::find_if(
             golden_latency_entries_.begin(), golden_latency_entries_.end(), [&](const GoldenLatencyEntry& golden) {
                 return golden.test_name == test_result.test_name && golden.ftype == test_result.ftype &&
@@ -742,7 +740,7 @@ void LatencyTestManager::compare_latency_results_with_golden() {
 
     // Initialize diff CSV file using common helper
     auto diff_csv_stream = init_diff_csv_file(
-        latency_diff_csv_file_path_,
+        diff_csv_file_path_,
         "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
         "current_per_hop_avg_ns,golden_per_hop_avg_ns,difference_percent,status",
         "latency");
@@ -756,12 +754,11 @@ void LatencyTestManager::compare_latency_results_with_golden() {
                             << result.difference_percent() << "," << result.status << "\n";
         }
         diff_csv_stream.close();
-        log_info(
-            tt::LogTest, "Latency comparison diff CSV results written to: {}", latency_diff_csv_file_path_.string());
+        log_info(tt::LogTest, "Latency comparison diff CSV results written to: {}", diff_csv_file_path_.string());
     }
 }
 
-void LatencyTestManager::validate_against_golden() {
+void LatencyResultsManager::validate_against_golden() {
     bool has_latency_results = !latency_comparison_results_.empty();
 
     // Report latency failures separately
@@ -817,12 +814,10 @@ void LatencyTestManager::validate_against_golden() {
     }
 }
 
-void LatencyTestManager::generate_latency_summary() {
-    // Load golden latency CSV file
-    load_golden_latency_csv();
-
+void LatencyResultsManager::generate_summary() {
     // Generate latency results CSV file with all results
-    generate_latency_results_csv();
+    generate_summary_csv();
+    generate_summary_upload_csv();
 
     // Compare latency results with golden CSV
     compare_latency_results_with_golden();
@@ -831,7 +826,7 @@ void LatencyTestManager::generate_latency_summary() {
     validate_against_golden();
 }
 
-void LatencyTestManager::setup_ci_artifacts() {
+void LatencyResultsManager::setup_ci_artifacts() {
     std::filesystem::path tt_metal_home =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
     std::filesystem::path ci_artifacts_path = tt_metal_home / std::string(CI_ARTIFACTS_DIR);
@@ -846,7 +841,7 @@ void LatencyTestManager::setup_ci_artifacts() {
     }
 
     // Latency artifacts
-    for (const std::filesystem::path& csv_filepath : {latency_csv_file_path_, latency_diff_csv_file_path_}) {
+    for (const std::filesystem::path& csv_filepath : {csv_file_path_, diff_csv_file_path_}) {
         if (csv_filepath.empty()) {
             continue;
         }
@@ -866,8 +861,46 @@ void LatencyTestManager::setup_ci_artifacts() {
     log_trace(tt::LogTest, "Copied latency CSV files to CI artifacts directory: {}", ci_artifacts_path.string());
 }
 
-void LatencyTestManager::reset_state() {
+void LatencyResultsManager::reset_state() {
     latency_comparison_results_.clear();
     all_failed_latency_tests_.clear();
     has_failures_ = false;
 }
+
+// Template definitions
+template <typename GetWorkersMapFunc>
+LatencyResultsManager::LatencyWorkerLocation LatencyResultsManager::find_latency_worker_device(
+    std::unordered_map<MeshCoordinate, TestDevice>& test_devices,
+    GetWorkersMapFunc get_workers_map,
+    const std::string& worker_type) {
+    LatencyWorkerLocation info;
+    for (auto& [coord, device] : test_devices) {
+        const auto& workers_map = get_workers_map(device);
+        if (!workers_map.empty()) {
+            info.device = &device;
+            info.mesh_coord = coord;
+            info.core = workers_map.begin()->first;
+            info.node_id = device.get_node_id();
+            break;
+        }
+    }
+    TT_FATAL(info.device != nullptr, "Could not find latency {} device", worker_type);
+    return info;
+}
+
+template <typename CompResultType, typename GoldenIterType>
+void LatencyResultsManager::populate_comparison_tolerance_and_status(
+    CompResultType& comp_result, GoldenIterType golden_it, GoldenIterType golden_end, double golden_tolerance_default) {
+    double test_tolerance = golden_tolerance_default;
+    if (golden_it != golden_end) {
+        test_tolerance = golden_it->tolerance_percent;
+        comp_result.within_tolerance = std::abs(comp_result.difference_percent()) <= test_tolerance;
+        comp_result.status = comp_result.within_tolerance ? "PASS" : "FAIL";
+    } else {
+        log_warning(tt::LogTest, "Golden entry not found for test {}", comp_result.test_name);
+        comp_result.within_tolerance = false;
+        comp_result.status = "NO_GOLDEN";
+    }
+}
+
+}  // namespace tt::tt_fabric::fabric_tests
