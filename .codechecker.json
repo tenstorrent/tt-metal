@@ -2,6 +2,7 @@
   "analyze": [
     "--analyzers", "clangsa",
     "--skip", "/work/.codechecker.skiplist",
-    "--drop-reports-from-skipped-files"
+    "--drop-reports-from-skipped-files",
+    "--enable-all"
   ]
 }
