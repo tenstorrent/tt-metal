@@ -29,6 +29,11 @@ common:
   - tests/ttnn/unit_tests/base_functionality/test_tilize_untilize_2D.py
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
 
+  # Slow tests (Tier 3-4: 5-20+ minutes, would cause CI timeouts)
+  - tests/ttnn/unit_tests/operations/reduce/test_topk.py
+  - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
+
   # Eltwise - data format limitations (INT32/UINT32/FLOAT32/UINT16)
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint32.py
@@ -85,8 +90,12 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/pool/test_rotate.py
 
-  # Conv tests (timeout on specific tests)
+  # Conv tests (slow - Tier 2-4)
   - tests/ttnn/unit_tests/operations/conv/test_conv1d.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
+  - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
+  - tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py
 
   # Matmul tests
   - tests/ttnn/unit_tests/operations/matmul/test_addmm.py
@@ -101,6 +110,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
+  - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
 
   # Transformers tests
   - tests/ttnn/unit_tests/operations/transformers/test_transformer.py
@@ -156,7 +166,6 @@ blackhole:
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
   - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
 
   # Transformers tests (same as wormhole + BH-specific)
