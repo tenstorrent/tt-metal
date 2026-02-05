@@ -1541,7 +1541,7 @@ class MoeRoutedExpert:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 input_cb_descriptor,
                 gate_mm_input_cb_descriptor,
