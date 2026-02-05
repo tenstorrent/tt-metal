@@ -16,7 +16,8 @@ void kernel_main() {
     constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
-    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
+    // CB index - configurable via named compile-time args for kernel chaining support
+    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
 
