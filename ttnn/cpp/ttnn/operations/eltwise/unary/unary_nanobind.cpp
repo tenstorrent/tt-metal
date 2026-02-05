@@ -1219,7 +1219,7 @@ void bind_sigmoid_accurate(nb::module_& mod) {
             ttnn.Tensor: the output tensor.
 
         Note:
-            When fast_and_approximate_mode if False, this is the same as ttnn.sigmoid.
+            When fast_and_approximate_mode is False, this is the same as ttnn.sigmoid.
 
             Supported dtypes, layouts, and ranks:
 
