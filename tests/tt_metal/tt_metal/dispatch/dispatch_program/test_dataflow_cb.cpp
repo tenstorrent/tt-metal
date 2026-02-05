@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/device_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 
 #include <chrono>
 #include <cstdint>
