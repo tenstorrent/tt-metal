@@ -38,22 +38,42 @@ OUTPUT_DIR="validation_output"
 while [[ $# -gt 0 ]]; do
     case $1 in
         --hosts)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --hosts requires a non-empty value"
+                exit 1
+            fi
             HOSTS="$2"
             shift 2
             ;;
         --image)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --image requires a non-empty value"
+                exit 1
+            fi
             DOCKER_IMAGE="$2"
             shift 2
             ;;
         --cabling-descriptor-path)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --cabling-descriptor-path requires a non-empty value"
+                exit 1
+            fi
             CABLING_DESCRIPTOR_PATH="$2"
             shift 2
             ;;
         --deployment-descriptor-path)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --deployment-descriptor-path requires a non-empty value"
+                exit 1
+            fi
             DEPLOYMENT_DESCRIPTOR_PATH="$2"
             shift 2
             ;;
         --iterations)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --iterations requires a non-empty value"
+                exit 1
+            fi
             if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
                 echo "Error: --iterations must be a positive integer, got '$2'"
                 exit 1
@@ -62,6 +82,10 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --output)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --output requires a non-empty value"
+                exit 1
+            fi
             OUTPUT_DIR="$2"
             shift 2
             ;;

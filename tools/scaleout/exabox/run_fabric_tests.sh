@@ -44,14 +44,26 @@ TEST_CONFIG="tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_
 while [[ $# -gt 0 ]]; do
     case $1 in
         --hosts)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --hosts requires a non-empty value"
+                exit 1
+            fi
             HOSTS="$2"
             shift 2
             ;;
         --image)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --image requires a non-empty value"
+                exit 1
+            fi
             DOCKER_IMAGE="$2"
             shift 2
             ;;
         --config)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --config requires a non-empty value"
+                exit 1
+            fi
             CONFIG="$2"
             if [[ "$CONFIG" != "4x32" && "$CONFIG" != "8x16" ]]; then
                 echo "Error: --config must be either '4x32' or '8x16'"
@@ -62,19 +74,35 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --output)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --output requires a non-empty value"
+                exit 1
+            fi
             OUTPUT_DIR="$2"
             shift 2
             ;;
         --mesh-graph-desc-path)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --mesh-graph-desc-path requires a non-empty value"
+                exit 1
+            fi
             MESH_GRAPH_DESC_PATH="$2"
             MESH_GRAPH_DESC_PATH_EXPLICIT=true
             shift 2
             ;;
         --test-binary)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --test-binary requires a non-empty value"
+                exit 1
+            fi
             TEST_BINARY="$2"
             shift 2
             ;;
         --test-config)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --test-config requires a non-empty value"
+                exit 1
+            fi
             TEST_CONFIG="$2"
             shift 2
             ;;
