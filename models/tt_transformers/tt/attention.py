@@ -135,7 +135,7 @@ class Attention(LightweightModule):
         )
 
         if self.args.needed_padding:
-            #Lower math fidelity for gemma3 decode with padding to make it more efficient
+            # Lower math fidelity for gemma3 decode with padding to make it more efficient
             self.li_qkv_decode_compute_kernel_cfg.math_fidelity = ttnn.MathFidelity.HiFi2
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
@@ -320,7 +320,7 @@ class Attention(LightweightModule):
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
- 
+
         if self.args.needed_padding:
             pt_wo_decode = F.pad(pt_wo, (0, self.args.padded_dim - self.args.dim))
             self.wo_decode = ttnn.as_tensor(
@@ -328,14 +328,18 @@ class Attention(LightweightModule):
                 dtype=self.wo_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG
+                if (self.use_fused_all_gather_matmul or self.TG)
+                else wo_mem_config,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device,
                     dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                     mesh_shape=configuration.cluster_shape,
                 ),
                 cache_file_name=(
-                    cache_name("wo_decode_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo_decode")
+                    cache_name("wo_decode_width_sharded_2d_padded")
+                    if (self.use_fused_all_gather_matmul or self.TG)
+                    else cache_name("wo_decode")
                 ),
             )
         if not use_paged_kv_cache:
@@ -650,7 +654,9 @@ class Attention(LightweightModule):
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                     num_links=1,
                     memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
-                    memory_config_mm= self.model_config["DECODE_RESIDUAL_MEMCFG"] if not self.args.needed_padding else self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"],
+                    memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"]
+                    if not self.args.needed_padding
+                    else self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"],
                     program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
                     compute_kernel_config=self.compute_kernel_config_hifi2,
                     chunks_per_sync=10,
@@ -683,7 +689,9 @@ class Attention(LightweightModule):
                 ttnn.deallocate(all_gather_output)
             ttnn.deallocate(attn_output_cat)
             if not self.args.needed_padding:
-                dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+                dense_out_sharded = ttnn.to_memory_config(
+                    dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"]
+                )
             return dense_out_sharded
 
         else:

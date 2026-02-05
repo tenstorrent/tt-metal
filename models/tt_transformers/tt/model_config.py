@@ -1349,8 +1349,9 @@ class ModelArgs:
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_nearest_padded_dim(self):
-        """Round up self.dim to nearest power of 2."""
-        return 2 ** math.ceil(math.log2(self.dim))
+        """Round up self.dim to nearest multiple of tile_size * num_devices^2."""
+        stride = self.tile_size * self.num_devices * self.num_devices
+        return ((self.dim + stride - 1) // stride) * stride
 
     @property
     def needed_padding(self):

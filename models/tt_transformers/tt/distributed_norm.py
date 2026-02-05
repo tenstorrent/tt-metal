@@ -70,7 +70,7 @@ class DistributedNorm(LightweightModule):
                 )
 
         input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-        if x.shape[3] == self.args.padded_dim//self.args.mesh_device.get_num_devices() and self.args.needed_padding:
+        if x.shape[3] == self.args.padded_dim // self.args.mesh_device.get_num_devices() and self.args.needed_padding:
             input_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
@@ -87,7 +87,7 @@ class DistributedNorm(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
-            if x.shape[3] == 8192 and self.args.needed_padding:
+            if x.shape[3] == self.args.padded_dim and self.args.needed_padding:
                 x = x[:, :, :, : self.args.dim]
                 x = ttnn.interleaved_to_sharded(x, self.args.model_config["SHARDED_MLP_INPUT_MEMCFG"])
         else:
