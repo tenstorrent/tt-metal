@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Tenstorrent, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """
 Compare workflow run results between current branch and main.
 
