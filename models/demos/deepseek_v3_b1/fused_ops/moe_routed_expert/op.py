@@ -495,6 +495,143 @@ def setup_sram_matmul(
     }
 
 
+def setup_eltwise_add(
+    in0_tensor,
+    in1_tensor,
+    out_tensor,
+    cb_in0_index,
+    cb_in1_index,
+    cb_out_index,
+):
+    """
+    Set up parameters and CB descriptors for element-wise add with per-core indexing.
+
+    Used after down_proj to add fused_add tensor. Each core uses sender_index to
+    offset into the replicated in1 tensor.
+
+    Args:
+        in0_tensor: First input tensor (e.g., down_proj output), WIDTH_SHARDED
+        in1_tensor: Second input tensor (e.g., fused_add), HEIGHT_SHARDED (replicated)
+        out_tensor: Output tensor, WIDTH_SHARDED (padded to 32x32 tile)
+        cb_in0_index: CB index for first input (aliased with 32x32 tile format)
+        cb_in1_index: CB index for second input (replicated tensor)
+        cb_out_index: CB index for output
+
+    Returns:
+        Dictionary with eltwise_add parameters and CB descriptors
+    """
+    # Get core ranges from in0_tensor (same as previous mm)
+    core_ranges = in0_tensor.memory_config().shard_spec.grid
+    compute_cores_list = ttnn.corerange_to_cores(core_ranges, row_wise=True)
+    # Get tensor info
+    in0_dtype = in0_tensor.dtype
+    in0_shard_shape = in0_tensor.memory_config().shard_spec.shape
+    in1_shard_shape = in1_tensor.memory_config().shard_spec.shape
+
+    # Dimensions
+    width_per_core = in0_shard_shape[1]  # per-core width (e.g., 896)
+    total_width = in1_shard_shape[1]  # full width of replicated tensor (e.g., 7168)
+
+    # Element size
+    if in0_dtype == ttnn.bfloat16:
+        element_size_bytes = 2
+    else:
+        raise ValueError(f"Unsupported dtype: {in0_dtype}")
+
+    slice_size_bytes = width_per_core * element_size_bytes
+
+    # Use 32x32 tile view for CB (not tensor's actual tile format)
+    # This is CB aliasing - tensor uses 1x32 tiles but CB views as 32x32
+    cb_tile_h = 32
+    cb_tile_w = 32
+    cb_tile_size_bytes = cb_tile_h * cb_tile_w * element_size_bytes
+    cb_tile = ttnn.Tile([cb_tile_h, cb_tile_w])
+    cb_tile_desc = ttnn.TileDescriptor(cb_tile)
+
+    # CB sizes
+    in0_size_bytes = slice_size_bytes
+    in1_size_bytes = total_width * element_size_bytes
+
+    # Number of pages for CB wait (total_size / page_size)
+    # cb_in0: 1 page (in0_size_bytes / in0_size_bytes = 1)
+    # cb_in1: multiple pages (in1_size_bytes / in0_size_bytes)
+    in0_wait_tiles = in0_size_bytes // in0_size_bytes  # 1
+    in1_wait_tiles = in1_size_bytes // in0_size_bytes
+
+    # Number of output tiles (based on 32x32 CB view, not tensor tile format)
+    out_shard_shape = out_tensor.memory_config().shard_spec.shape
+    out_shard_elements = out_shard_shape[0] * out_shard_shape[1]
+    cb_tile_elements = cb_tile_h * cb_tile_w
+    num_tiles = out_shard_elements // cb_tile_elements
+    assert num_tiles == 1, f"Expected 1 tile (32x32 view), got {num_tiles}"
+
+    # CB for in0: down_proj output aliased with 32x32 tile format
+    cb_in0_format = ttnn.CBFormatDescriptor(
+        buffer_index=cb_in0_index,
+        data_format=in0_dtype,
+        page_size=in0_size_bytes,
+        tile=cb_tile_desc,
+    )
+    cb_in0_descriptor = ttnn.CBDescriptor(
+        total_size=in0_size_bytes,
+        core_ranges=core_ranges,
+        format_descriptors=[cb_in0_format],
+    )
+    cb_in0_descriptor.set_buffer_from_tensor(in0_tensor)
+
+    # CB for in1: replicated tensor (tensor-backed)
+    cb_in1_format = ttnn.CBFormatDescriptor(
+        buffer_index=cb_in1_index,
+        data_format=in0_dtype,
+        page_size=in0_size_bytes,  # page_size = slice size for reading
+        tile=cb_tile_desc,
+    )
+    cb_in1_descriptor = ttnn.CBDescriptor(
+        total_size=in1_size_bytes,
+        core_ranges=core_ranges,
+        format_descriptors=[cb_in1_format],
+    )
+    cb_in1_descriptor.set_buffer_from_tensor(in1_tensor)
+
+    # CB for out: output (tensor-backed, uses 32x32 CB view)
+    cb_out_format = ttnn.CBFormatDescriptor(
+        buffer_index=cb_out_index,
+        data_format=in0_dtype,
+        page_size=cb_tile_size_bytes,
+        tile=cb_tile_desc,
+    )
+    cb_out_descriptor = ttnn.CBDescriptor(
+        total_size=num_tiles * cb_tile_size_bytes,
+        core_ranges=core_ranges,
+        format_descriptors=[cb_out_format],
+    )
+    cb_out_descriptor.set_buffer_from_tensor(out_tensor)
+
+    # Per-core sender_index values
+    sender_index_core_values = []
+    for idx, core in enumerate(compute_cores_list):
+        sender_index_core_values.append((core, idx))
+
+    return {
+        # CB indices
+        "cb_in0": cb_in0_index,
+        "cb_in1": cb_in1_index,
+        "cb_out": cb_out_index,
+        # Dimensions
+        "num_tiles": num_tiles,
+        "slice_size_bytes": slice_size_bytes,
+        # Wait tiles
+        "cb_in0_wait_tiles": in0_wait_tiles,
+        "cb_in1_wait_tiles": in1_wait_tiles,
+        # CB descriptors
+        "cb_in0_descriptor": cb_in0_descriptor,
+        "cb_in1_descriptor": cb_in1_descriptor,
+        "cb_out_descriptor": cb_out_descriptor,
+        # Per-core values
+        "sender_index_core_values": sender_index_core_values,
+    }
+
+
 def setup_gate(
     input_cb,
     bias_cb,
@@ -584,6 +721,7 @@ class MoeRoutedExpert:
         gate_proj_weights_dict=None,
         up_proj_weights_dict=None,
         down_proj_weights_dict=None,
+        fused_add_tensor=None,
         eps=1e-20,
         scaling_factor=2.5,
         use_hardcoded_expert_index=False,
@@ -598,6 +736,7 @@ class MoeRoutedExpert:
             gate_proj_weights_dict: Dict mapping expert_idx -> gate_proj weights [1, 1, K, N_expert] (optional)
             up_proj_weights_dict: Dict mapping expert_idx -> up_proj weights [1, 1, K, N_expert] (optional)
             down_proj_weights_dict: Dict mapping expert_idx -> down_proj weights [1, 1, N_expert, K] (optional)
+            fused_add_tensor: Tensor to add after down_proj [1, 1, 1, K] (optional)
             eps: Epsilon for numerical stability in gate
             scaling_factor: Scaling factor for gate scores
 
@@ -605,7 +744,8 @@ class MoeRoutedExpert:
             If gate_proj_weights_dict is None:
                 Tuple of (top8_scores, top8_indices) tensors
             Else:
-                Tuple of (top8_scores, top8_indices, down_proj_output) tensors
+                Tuple of (top8_scores, top8_indices, final_output) tensors
+                final_output = down_proj_output + fused_add (if fused_add provided)
                 down_proj_output = (silu(gate_proj) * up_proj) @ down_proj_weights
         """
         import torch
@@ -651,6 +791,11 @@ class MoeRoutedExpert:
             if down_proj_weights_dict is not None:
                 down_proj_weights = down_proj_weights_dict[selected_expert_idx]
                 down_proj_output = fused_output @ down_proj_weights.float()
+
+                # Add fused_add if provided
+                if fused_add_tensor is not None:
+                    final_output = down_proj_output + fused_add_tensor.float()
+                    return top8_scores, top8_indices, final_output
                 return top8_scores, top8_indices, down_proj_output
 
             return top8_scores, top8_indices, fused_output
@@ -679,6 +824,8 @@ class MoeRoutedExpert:
         down_proj_mcast_output_tensor,
         down_proj_weights_tensor,
         down_proj_output_tensor,
+        fused_add_tensor,
+        final_output_tensor,
         use_hardcoded_expert_index=False,  # For testing: always use expert index 0
     ):
         """
@@ -708,9 +855,11 @@ class MoeRoutedExpert:
             down_proj_mcast_output_tensor: Mcasted fused output [1, N_expert] on mcast grid
             down_proj_weights_tensor: down_proj weights [N_expert, K] width-sharded in DRAM (first expert)
             down_proj_output_tensor: down_proj output [1, K] width-sharded on DRAM matmul cores
+            fused_add_tensor: fused_add tensor [1, K] height-sharded (replicated on all gate_proj cores)
+            final_output_tensor: final output [1, K] width-sharded on gate_proj cores (padded to 32x32 tile)
 
         Returns:
-            Tuple of (gate_output_scores_tensor, gate_output_indices_tensor, down_proj_output_tensor)
+            Tuple of (gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor)
         """
         # Get tensor properties
         input_shape = input_tensor.shape
@@ -773,6 +922,12 @@ class MoeRoutedExpert:
         # Scalar multiply CBs for expert scale
         mul_cb_scalar_src = 21  # Receives mcasted expert scale (tensor-backed on gate_proj cores)
         mul_cb_scalar = 22  # Working buffer for scalar multiply (16x16 tile format)
+        # Eltwise add CBs (after down_proj)
+        # Note: add_cb_in0 must be separate CB with 32x32 tile format (not reusing down_proj_cb_out)
+        # because down_proj_cb_out has 1x32 tile format but eltwise_add needs 32x32 view
+        add_cb_in0 = 23  # down_proj output aliased with 32x32 tile format
+        add_cb_in1 = 24  # fused_add (tensor-backed, replicated on all gate_proj cores)
+        add_cb_out = 25  # final output (tensor-backed)
 
         # ========== Input Mcast Setup ==========
         input_mcast_data_size_bytes = num_tiles_k * tile_1x32_size
@@ -988,6 +1143,19 @@ class MoeRoutedExpert:
         down_proj_cb_in1_descriptor = down_proj_params["cb_in1_descriptor"]
         down_proj_cb_out_descriptor = down_proj_params["cb_out_descriptor"]
 
+        # ========== Eltwise Add Setup (down_proj + fused_add) ==========
+        add_params = setup_eltwise_add(
+            in0_tensor=down_proj_output_tensor,
+            in1_tensor=fused_add_tensor,
+            out_tensor=final_output_tensor,
+            cb_in0_index=add_cb_in0,
+            cb_in1_index=add_cb_in1,
+            cb_out_index=add_cb_out,
+        )
+        add_cb_in0_descriptor = add_params["cb_in0_descriptor"]
+        add_cb_in1_descriptor = add_params["cb_in1_descriptor"]
+        add_cb_out_descriptor = add_params["cb_out_descriptor"]
+
         # Named compile-time args for NCRISC (mcast receiver + matmul reader + gather sender + index mcast receiver)
         ncrisc_named_compile_time_args = [
             # Mcast sender sharded buffer setup (for sender core)
@@ -1047,6 +1215,11 @@ class MoeRoutedExpert:
             ("down_proj_mcast_receiver_semaphore", down_proj_mcast_params["receiver_semaphore_id"]),
             ("down_proj_mcast_dst_cb", down_proj_mcast_params["dst_cb"]),
             ("down_proj_mcast_dst_num_pages", down_proj_mcast_params["dst_num_pages"]),
+            # Eltwise add args (CB indices and wait tiles for setup_sharded_buffer)
+            ("add_cb_in0", add_cb_in0),
+            ("add_cb_in1", add_cb_in1),
+            ("add_cb_in0_wait_tiles", add_params["cb_in0_wait_tiles"]),
+            ("add_cb_in1_wait_tiles", add_params["cb_in1_wait_tiles"]),
         ]
 
         # Named compile-time args for BRISC (mcast sender + gather receiver + index mcast sender + dram matmul writer)
@@ -1206,6 +1379,14 @@ class MoeRoutedExpert:
             ("down_proj_fp32_dest_acc_en", 1),  # Use FP32 accumulation for down_proj
             # Testing flag: use hardcoded expert index 0 instead of gate output
             ("use_hardcoded_expert_index", 1 if use_hardcoded_expert_index else 0),
+            # Eltwise add compute args (down_proj + fused_add)
+            ("add_cb_in0", add_cb_in0),
+            ("add_cb_in1", add_cb_in1),
+            ("add_cb_out", add_cb_out),
+            ("add_num_tiles", add_params["num_tiles"]),
+            ("add_cb_in0_wait_tiles", add_params["cb_in0_wait_tiles"]),
+            ("add_cb_in1_wait_tiles", add_params["cb_in1_wait_tiles"]),
+            ("add_slice_size_bytes", add_params["slice_size_bytes"]),
         ]
 
         # Semaphore descriptors
@@ -1349,6 +1530,12 @@ class MoeRoutedExpert:
                     core_values=sender_idx_core_values,
                     other_value=0,
                 ),
+                # Per-core sender_index for eltwise_add (to offset into fused_add)
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="add_sender_index",
+                    core_values=add_params["sender_index_core_values"],
+                    other_value=0,
+                ),
             ],
         )
 
@@ -1379,6 +1566,9 @@ class MoeRoutedExpert:
                 down_proj_mcast_dst_cb_descriptor,
                 down_proj_cb_in1_descriptor,
                 down_proj_cb_out_descriptor,
+                add_cb_in0_descriptor,
+                add_cb_in1_descriptor,
+                add_cb_out_descriptor,
             ],
             semaphores=[
                 mcast_sender_semaphore_descriptor,
@@ -1412,7 +1602,9 @@ class MoeRoutedExpert:
             down_proj_mcast_output_tensor,
             down_proj_weights_tensor,
             down_proj_output_tensor,
+            fused_add_tensor,
+            final_output_tensor,
         ]
         ttnn.generic_op(io_tensors, program_descriptor)
 
-        return gate_output_scores_tensor, gate_output_indices_tensor, down_proj_output_tensor
+        return gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor
