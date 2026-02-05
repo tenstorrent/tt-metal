@@ -1,0 +1,48 @@
+# Example: Pod Containing Multiple Meshes
+# This example shows a pod containing 2 meshes instead of 1
+
+base_units {
+  # Base units are predefined constants - ASIC_LOCATION_1 through ASIC_LOCATION_8
+}
+
+groupings {
+  name: "trays"
+  items: [
+    { asic_location: ASIC_LOCATION_1 },
+    { asic_location: ASIC_LOCATION_2 },
+    { asic_location: ASIC_LOCATION_3 },
+    { asic_location: ASIC_LOCATION_4 },
+    { asic_location: ASIC_LOCATION_5 },
+    { asic_location: ASIC_LOCATION_6 },
+    { asic_location: ASIC_LOCATION_7 },
+    { asic_location: ASIC_LOCATION_8 }
+  ]
+}
+
+groupings {
+  name: "hosts"
+  items: [
+    { grouping_ref { grouping_name: "trays" count: 4 } }
+  ]
+}
+
+groupings {
+  name: "meshes"
+  items: [
+    { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh = 1 host (meshes can have 1 item)
+  ]
+}
+
+groupings {
+  name: "pods"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Each pod contains 2 meshes (instead of 1)
+  ]
+}
+
+groupings {
+  name: "superpods"
+  items: [
+    { grouping_ref { grouping_name: "pods" count: 2 } }  # Each superpod contains 2 pods
+  ]
+}
