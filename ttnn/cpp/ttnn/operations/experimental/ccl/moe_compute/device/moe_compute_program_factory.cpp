@@ -703,13 +703,27 @@ MoEComputeMeshWorkloadFactory::create_at(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_reader.cpp",
         tilize_core_range_set,
-        tt::tt_metal::ReaderDataMovementConfig(tilize_compile_time_args, {}, tilize_named_compile_time_args));
+        tt::tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::NOC_1,
+            .noc_mode = NOC_MODE::DM_DYNAMIC_NOC,
+            .compile_args = tilize_compile_time_args,
+            .defines = {},
+            .named_compile_args = tilize_named_compile_time_args,
+            .opt_level = KernelBuildOptLevel::O2});
 
     tt::tt_metal::KernelHandle tilize_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_writer.cpp",
         tilize_core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(tilize_compile_time_args, {}, tilize_named_compile_time_args));
+        tt::tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::NOC_1,
+            .noc_mode = NOC_MODE::DM_DYNAMIC_NOC,
+            .compile_args = tilize_compile_time_args,
+            .defines = {},
+            .named_compile_args = tilize_named_compile_time_args,
+            .opt_level = KernelBuildOptLevel::O2});
 
     // Compute kernel compile-time args for tilization
     std::unordered_map<std::string, uint32_t> compute_tilize_named_compile_time_args = {

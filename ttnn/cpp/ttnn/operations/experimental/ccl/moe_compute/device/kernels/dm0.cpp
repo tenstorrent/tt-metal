@@ -158,9 +158,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
     uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
-    uint32_t NUM_CHUNKS_PER_EXPERT[num_experts] = {
-        ((encoded_metadata_value & 0x1FF) + tokens_per_chunk - 1) / tokens_per_chunk,
-        (((encoded_metadata_value >> 9) & 0x1FF) + tokens_per_chunk - 1) / tokens_per_chunk};
+
+    constexpr uint32_t BITS_PER_EXPERT = 10;
+    constexpr uint32_t EXPERT_MASK = 0x3FFu;
+    uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
+    for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+        uint32_t num_tokens = (encoded_metadata_value >> (1 + BITS_PER_EXPERT * expert_id)) & EXPERT_MASK;
+        NUM_CHUNKS_PER_EXPERT[expert_id] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
+    }
 
     //-------------------------------------------------------------------------
     // Start pipeline
