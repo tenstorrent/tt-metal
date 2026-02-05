@@ -21,7 +21,6 @@ from tests.scripts.common import (
     get_git_home_dir_str,
     filter_empty,
     void_for_whb0,
-    void_for_gs,
     void_for_bh,
 )
 from tests.scripts.cmdline_args import (

@@ -1,4 +1,5 @@
-set(UNIT_TESTS_MISC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_tilize_untilize.cpp)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 # Create the test executable
 add_executable(unit_tests_misc ${UNIT_TESTS_MISC_SRC})
