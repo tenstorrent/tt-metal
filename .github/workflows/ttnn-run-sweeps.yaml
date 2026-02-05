@@ -740,7 +740,7 @@ jobs:
         run: |
           # Reconstruct from ttnn_ops schema (V1 format for backward compatibility)
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct \
-            model_tracer/traced_operations/ttnn_operations_master.json \
+            model_tracer/traced_operations/ttnn_operations_master_reconstructed.json \
             ttnn_ops
 
       - name: Generate JSON from database (V2 - new format)
@@ -749,7 +749,7 @@ jobs:
         run: |
           # Reconstruct from ttnn_ops_v2 schema (V2 format with per-tensor placement)
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct \
-            model_tracer/traced_operations/ttnn_operations_master_v2.json \
+            model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json \
             ttnn_ops_v2
 
       - name: Upload master JSON artifacts
@@ -757,8 +757,8 @@ jobs:
         with:
           name: ttnn-operations-master-json
           path: |
-            model_tracer/traced_operations/ttnn_operations_master.json
-            model_tracer/traced_operations/ttnn_operations_master_v2.json
+            model_tracer/traced_operations/ttnn_operations_master_reconstructed.json
+            model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json
           retention-days: 1
 
   ttnn-generate-sweeps:
