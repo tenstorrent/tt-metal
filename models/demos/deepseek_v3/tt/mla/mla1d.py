@@ -51,7 +51,7 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 class MLA1D(AbstractModule):
     """
-    Pipeline-Parallel Multi-Latent Attention Module for 1D tensor parallelism.
+    Multi-Latent Attention Module for 1D tensor parallelism.
     """
 
     @classmethod
@@ -1041,7 +1041,7 @@ class MLA1D(AbstractModule):
         # Strategy: Process each chunk independently to keep all_gather buffers small
         SEQ_LEN_CHUNK_SIZE = 8192
         if seq_len > SEQ_LEN_CHUNK_SIZE:
-            num_heads_local = v_out.shape[2]
+            num_heads = v_out.shape[2]
             v_head_dim = v_out.shape[3]
             # Use ceiling division instead of even_int_div to handle non-multiples of 8192
             num_chunks = (seq_len + SEQ_LEN_CHUNK_SIZE - 1) // SEQ_LEN_CHUNK_SIZE
@@ -1053,15 +1053,11 @@ class MLA1D(AbstractModule):
                 v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
 
             output_chunks = []
-            num_heads = cfg["num_heads"]
             hidden_dim = num_heads * v_head_dim
             for chunk_idx in range(num_chunks):
                 start = chunk_idx * SEQ_LEN_CHUNK_SIZE
                 end = start + SEQ_LEN_CHUNK_SIZE
-                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads_local, v_head_dim))
-                v_chunk = ttnn.experimental.all_gather_async(
-                    v_chunk, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
-                )  # [1, chunk_size, num_heads, v_head_dim]
+                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads, v_head_dim))
                 v_chunk = ttnn.reshape(v_chunk, (1, 1, SEQ_LEN_CHUNK_SIZE, hidden_dim))
                 out_chunk = ttnn.linear(v_chunk, **cfg["wo"])  # [1, 1, chunk_size, dim]
                 output_chunks.append(out_chunk)
@@ -1222,29 +1218,29 @@ class MLA1D(AbstractModule):
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
         # 1,1,32,3072, L1 interleaved
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
-        # 1,32,16,128 L1 interleaved
+        # 32,1,16,192 L1 interleaved
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
-        # 1,32,16,192 L1 interleaved
+        # 32,1,16,128 L1 interleaved
         tt_q_rope = ttnn.slice(
             tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim], **cfg["q_rope_slice"]
         )
-        # 1,32,16,64 height sharded 8x4 [32,64]
+        # 32,1,16,64 height sharded 8x4 [32,64]
 
         # Q Rope: wkv_b1
-        # 1,32,16,192 L1 interleaved
+        # 32,1,16,128 L1 interleaved
         tt_q_nope = ttnn.permute(tt_q_nope, (1, 2, 0, 3))  # [1, num_heads_local, bsz, qk_nope_head_dim]
-        # 1,16,32,192 L1 interleaved
+        # 1,16,32,128 L1 interleaved
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, bsz, kv_lora_rank]
         # 1,16,32,512 L1 interleaved
         tt_q_nope = ttnn.permute(tt_q_nope, (0, 2, 1, 3))  # [1, bsz, num_heads_local, qk_nope_head_dim]
-        # 1,132,16,512 L1 interleaved
+        # 1,32,16,512 L1 interleaved
 
         # Q RoPE
-        # 1,32,16,64 height sharded 8x4 [32,64]
+        # 32,1,16,64 height sharded 8x4 [32,64]
         tt_q_rope = ttnn.permute(
             tt_q_rope, **cfg["q_rope_permute"]
         )  # [1, bsz, num_heads_local, qk_rope_head_dim], should be no-op
-        # 32,1,16,64 height sharded 8x4 [32,64]
+        # 1,32,16,64 height sharded 8x4 [32,64]
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
             tt_q_rope,
             rope_tensors["cos_matrix"],
@@ -1252,12 +1248,12 @@ class MLA1D(AbstractModule):
             rope_tensors["trans_matrix"],
             is_decode_mode=True,
         )
-        # 32,1,16,64 width sharded 8x4 [32,64]
+        # 1,32,16,64 width sharded 8x4 [32,64]
         tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_out_reshard"])
-        # 32,1,16,64 L1 interleaved
+        # 1,32,16,64 L1 interleaved
 
         # Concat Q Nope and Q Rope
-        # 1,32,16,512 L1 interleaved | # 32,1,16,64 L1 interleaved
+        # 1,32,16,512 L1 interleaved | # 1,32,16,64 L1 interleaved
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], **cfg["q_concat"])
         # 1,32,16,576 L1 interleaved
         return tt_q

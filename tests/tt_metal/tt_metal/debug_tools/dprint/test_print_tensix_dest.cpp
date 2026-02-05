@@ -454,10 +454,6 @@ protected:
     void TearDown() override { DPrintMeshFixture::TearDown(); }
 
     void RunDestPrintTest(const DestPrintTestConfig& config) {
-        if (config.data_format == tt::DataFormat::Float32 && this->arch_ == ARCH::GRAYSKULL) {
-            GTEST_SKIP() << "Float32 dest is not supported on grayskull.";
-        }
-
         if (config.data_format == tt::DataFormat::Int32 && this->arch_ != ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Int32 dest is not supported on non-blackhole.";
         }

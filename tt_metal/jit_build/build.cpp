@@ -88,6 +88,7 @@ void JitBuildEnv::init(
     uint64_t build_key,
     size_t fw_compile_hash,
     tt::ARCH arch,
+    uint32_t max_cbs,
     const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
@@ -95,6 +96,7 @@ void JitBuildEnv::init(
     this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
 
     this->arch_ = arch;
+    this->max_cbs_ = max_cbs;
 
 #ifndef GIT_COMMIT_HASH
     log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
@@ -194,7 +196,7 @@ void JitBuildEnv::init(
         }
         this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
     }
-    if (rtoptions.get_experimental_device_debug_dump_enabled()) {
+    if (rtoptions.get_experimental_noc_debug_dump_enabled()) {
         this->defines_ += "-DDEVICE_DEBUG_DUMP=1 ";
     }
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
