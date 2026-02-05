@@ -9,6 +9,20 @@
 #include "api/dataflow/dataflow_api.h"
 #endif
 
+// Profiler zone macros for measuring transfer time
+// These create named zones in Tracy profiler output when TT_METAL_DEVICE_PROFILER=1
+// Zones measured:
+//   - McastInit: One-time sender setup (cmd buffer configuration)
+//   - McastDataSend: NOC write issue time for data + semaphore
+//   - McastTeardown: Cleanup including barrier and safety delay
+//   - McastSemWait: Receiver wait time (measures end-to-end transfer latency)
+#if defined(PROFILE_KERNEL)
+#include "tools/profiler/kernel_profiler.hpp"
+#define MCAST_ZONE_SCOPED(name) DeviceZoneScopedN(name)
+#else
+#define MCAST_ZONE_SCOPED(name)
+#endif
+
 namespace deepseek_b1_ops {
 
 // ============================================================================
@@ -124,6 +138,8 @@ FORCE_INLINE void init_persistent_mcast_sender(
     uint64_t mcast_flag_noc_addr,
     uint32_t data_sender_semaphore_addr,
     volatile tt_l1_ptr uint32_t* data_sender_semaphore_addr_ptr) {
+    // PROFILER: "McastInit" measures one-time setup overhead
+    MCAST_ZONE_SCOPED("McastInit");
     mcast_send_set_state<mcast_num_cores, loopback, is_part_of_receiver_grid, true, true, false, false, write_cmd_buf>(
         0, mcast_flag_noc_addr, 0);
     mcast_send_set_state<
@@ -150,6 +166,8 @@ FORCE_INLINE void init_persistent_mcast_sender(
 
 template <uint32_t mcast_num_cores, bool loopback, bool is_part_of_receiver_grid>
 FORCE_INLINE void teardown_persistent_mcast_sender(uint64_t mcast_flag_noc_addr) {
+    // PROFILER: "McastTeardown" measures cleanup overhead (includes barrier + safety delay)
+    MCAST_ZONE_SCOPED("McastTeardown");
     mcast_send_set_state<
         mcast_num_cores,
         loopback,
@@ -332,6 +350,8 @@ struct Mcast {
                 uint64_t mcast_data_noc_addr = noc_coord_ | (uint64_t)args.mcast_receiver_data_addr;
 
                 // Send data with state
+                // PROFILER: "McastDataSend" measures NOC write issue time
+                MCAST_ZONE_SCOPED("McastDataSend");
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -368,7 +388,11 @@ struct Mcast {
 
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(data_receiver_semaphore_addr);
-                noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
+                // PROFILER: "McastSemWait" measures time from wait start until data arrives
+                {
+                    MCAST_ZONE_SCOPED("McastSemWait");
+                    noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
+                }
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
 
                 // Push to destination CB after data arrived
@@ -378,7 +402,11 @@ struct Mcast {
 
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(data_receiver_semaphore_addr);
-                noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
+                // PROFILER: "McastSemWait" measures time from wait start until data arrives
+                {
+                    MCAST_ZONE_SCOPED("McastSemWait");
+                    noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
+                }
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
             }
 #endif
