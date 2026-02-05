@@ -849,6 +849,8 @@ np_dtypes_for_from_numpy = [
     np.float32,
     np.int32,
     np.uint32,
+    np.uint16,
+    np.uint8,
     ml_dtypes.bfloat16,
 ]
 
@@ -857,6 +859,8 @@ np_to_tt_dtype_default = {
     np.float32: ttnn.float32,
     np.int32: ttnn.int32,
     np.uint32: ttnn.uint32,
+    np.uint16: ttnn.uint16,
+    np.uint8: ttnn.uint8,
     ml_dtypes.bfloat16: ttnn.bfloat16,
 }
 
@@ -865,6 +869,8 @@ tt_dtypes_for_from_numpy = [
     ttnn.float32,
     ttnn.int32,
     ttnn.uint32,
+    ttnn.uint16,
+    ttnn.uint8,
     ttnn.bfloat16,
 ]
 
@@ -1340,6 +1346,115 @@ def test_to_numpy_backward_compatibility(shape, tt_dtype):
         assert np.allclose(np_tensor, result)
     else:
         assert np.array_equal(np_tensor.astype(result.dtype), result)
+
+
+# ============================================================================
+# UINT8/UINT16 to_numpy tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "tt_dtype,data,expected_np_dtype",
+    [
+        (ttnn.uint8, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], np.uint8),
+        (
+            ttnn.uint16,
+            [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600],
+            np.uint16,
+        ),
+    ],
+    ids=["uint8", "uint16"],
+)
+def test_to_numpy_uint8_uint16_source(tt_dtype, data, expected_np_dtype):
+    """Test to_numpy with UINT8 and UINT16 tensors created from Python lists.
+
+    Note: from_numpy doesn't support creating UINT8/UINT16 tensors from numpy arrays,
+    so these tensors must be created from Python lists.
+    """
+    shape = [2, 2, 2, 2]
+    tt_tensor = ttnn.Tensor(data, shape, tt_dtype, ttnn.ROW_MAJOR_LAYOUT)
+
+    result = tt_tensor.to_numpy()
+
+    assert result.dtype == expected_np_dtype
+    assert list(result.shape) == list(shape)
+    assert np.array_equal(result.flatten(), np.array(data, dtype=expected_np_dtype))
+
+
+# ============================================================================
+# Block float format to_numpy tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "tt_dtype,tol",
+    [
+        (ttnn.bfloat8_b, 2**-7),  # 7 bits mantissa
+        (ttnn.bfloat4_b, 2**-3),  # 3 bits mantissa
+    ],
+    ids=["bfloat8_b", "bfloat4_b"],
+)
+def test_to_numpy_block_float_source(tt_dtype, tol, device):
+    """Test to_numpy with block float tensors (BFLOAT8_B, BFLOAT4_B) as source.
+
+    Block float formats share exponents across tiles and are unpacked to float32
+    on the host side. They require TILE_LAYOUT and tile-aligned shapes.
+    """
+    # Block float types require TILE_LAYOUT and tile-aligned shapes
+    shape = (1, 1, 32, 32)
+    np.random.seed(0)
+    data = np.random.random(shape).astype(np.float32) * 10  # Scale to reasonable range
+
+    # Create block float tensor
+    tt_tensor = ttnn.Tensor(data.flatten().tolist(), shape, tt_dtype, ttnn.TILE_LAYOUT)
+    tt_tensor = tt_tensor.to(device)
+    tt_tensor = tt_tensor.cpu()
+
+    # Convert to numpy - should return float32 (default for block floats)
+    result = tt_tensor.to_numpy()
+
+    assert result.dtype == np.float32
+    assert list(result.shape) == list(shape)
+
+    # Values should be close within block float precision
+    scale = np.max(np.abs(data))
+    atol = tol * scale
+    assert np.allclose(data, result, atol=atol, rtol=0.1)
+
+
+@pytest.mark.parametrize(
+    "tt_dtype,target_dtype,expected_np_dtype,tol",
+    [
+        (ttnn.bfloat8_b, ttnn.float32, np.float32, 2**-7),
+        (ttnn.bfloat4_b, ttnn.float32, np.float32, 2**-3),
+        (ttnn.bfloat8_b, ttnn.bfloat16, ml_dtypes.bfloat16, 2**-7),
+        (ttnn.bfloat4_b, ttnn.bfloat16, ml_dtypes.bfloat16, 2**-3),
+        (ttnn.bfloat8_b, ttnn.int32, np.int32, 2**-7),
+        (ttnn.bfloat4_b, ttnn.int32, np.int32, 2**-3),
+    ],
+    ids=[
+        "bfloat8_b->float32",
+        "bfloat4_b->float32",
+        "bfloat8_b->bfloat16",
+        "bfloat4_b->bfloat16",
+        "bfloat8_b->int32",
+        "bfloat4_b->int32",
+    ],
+)
+def test_to_numpy_block_float_with_target_dtype(tt_dtype, target_dtype, expected_np_dtype, tol, device):
+    """Test to_numpy with block float tensors converting to explicit target dtypes."""
+    shape = (1, 1, 32, 32)
+    np.random.seed(0)
+    data = np.random.random(shape).astype(np.float32) * 10
+
+    tt_tensor = ttnn.Tensor(data.flatten().tolist(), shape, tt_dtype, ttnn.TILE_LAYOUT)
+    tt_tensor = tt_tensor.to(device)
+    tt_tensor = tt_tensor.cpu()
+
+    result = tt_tensor.to_numpy(dtype=target_dtype)
+
+    assert result.dtype == expected_np_dtype
+    assert list(result.shape) == list(shape)
 
 
 # ============================================================================

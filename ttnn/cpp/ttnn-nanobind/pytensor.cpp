@@ -462,6 +462,12 @@ Tensor tensor_from_numpy(nb::ndarray<nb::numpy> numpy_data, Layout target_layout
                 case DataType::UINT32:
                     return create_tensor_from_numpy_span<NumpyType, uint32_t>(
                         numpy_data_span, shape_container, tensor_data_type, target_layout);
+                case DataType::UINT16:
+                    return create_tensor_from_numpy_span<NumpyType, uint16_t>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
+                case DataType::UINT8:
+                    return create_tensor_from_numpy_span<NumpyType, uint8_t>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
                 case DataType::FLOAT32:
                     return create_tensor_from_numpy_span<NumpyType, float>(
                         numpy_data_span, shape_container, tensor_data_type, target_layout);
@@ -472,12 +478,18 @@ Tensor tensor_from_numpy(nb::ndarray<nb::numpy> numpy_data, Layout target_layout
             }
         };
 
-    // Map dtype codes to appropriate handlers
+    // Map dtype codes to appropriate handlers based on dtype code and bit width
     switch (numpy_data_type.code) {
         case static_cast<uint8_t>(nb::dlpack::dtype_code::Int):
             return impl.operator()<int32_t>(new_type.value_or(DataType::INT32));
         case static_cast<uint8_t>(nb::dlpack::dtype_code::UInt):
-            return impl.operator()<uint32_t>(new_type.value_or(DataType::UINT32));
+            // Handle different unsigned integer bit widths
+            switch (numpy_data_type.bits) {
+                case 8: return impl.operator()<uint8_t>(new_type.value_or(DataType::UINT8));
+                case 16: return impl.operator()<uint16_t>(new_type.value_or(DataType::UINT16));
+                case 32: return impl.operator()<uint32_t>(new_type.value_or(DataType::UINT32));
+                default: TT_THROW("Unsupported unsigned integer bit width: {} bits", numpy_data_type.bits);
+            }
         case static_cast<uint8_t>(nb::dlpack::dtype_code::Float):
             return impl.operator()<float>(new_type.value_or(DataType::FLOAT32));
         case static_cast<uint8_t>(nb::dlpack::dtype_code::Bfloat):
@@ -573,6 +585,12 @@ Tensor tensor_from_numpy_custom_dtype(
                         numpy_data_span, shape_container, tensor_data_type, target_layout);
                 case DataType::UINT32:
                     return create_tensor_from_numpy_span<NumpyType, uint32_t>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
+                case DataType::UINT16:
+                    return create_tensor_from_numpy_span<NumpyType, uint16_t>(
+                        numpy_data_span, shape_container, tensor_data_type, target_layout);
+                case DataType::UINT8:
+                    return create_tensor_from_numpy_span<NumpyType, uint8_t>(
                         numpy_data_span, shape_container, tensor_data_type, target_layout);
                 case DataType::FLOAT32:
                     return create_tensor_from_numpy_span<NumpyType, float>(
@@ -798,7 +816,13 @@ nb::object tensor_to_numpy_impl(
 
     const auto& tensor_spec = tensor.tensor_spec();
     const auto tensor_type = tensor_spec.data_type();
-    const auto target_type = target_dtype.value_or(tensor_type);
+
+    // Determine target type: use provided dtype, or default to tensor's dtype.
+    // For block float formats, default to FLOAT32 since they can't be represented in numpy.
+    auto target_type = target_dtype.value_or(tensor_type);
+    if (!target_dtype.has_value() && (tensor_type == DataType::BFLOAT8_B || tensor_type == DataType::BFLOAT4_B)) {
+        target_type = DataType::FLOAT32;
+    }
 
     return dispatch_to_numpy_conversion(tensor_type, target_type, impl, tensor);
 }
