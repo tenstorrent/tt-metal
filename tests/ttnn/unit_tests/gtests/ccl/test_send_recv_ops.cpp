@@ -138,6 +138,7 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     std::cout << "Start Device ID: " << mesh_device->get_device(start_device_coord)->id() << std::endl;
     std::cout << "Intermed Device ID: " << mesh_device->get_device(intermed_device_coord)->id() << std::endl;
     std::cout << "Intermed Device 2 ID: " << mesh_device->get_device(intermed_device_coord_2)->id() << std::endl;
+    std::cout << "Intermed Device 3 ID: " << mesh_device->get_device(intermed_device_coord_3)->id() << std::endl;
     std::cout << "End Device ID: " << mesh_device->get_device(end_device_coord)->id() << std::endl;
 
     // Create connections for:
@@ -241,8 +242,12 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     uint32_t base_addr = barrier_buffer->address();
     cluster.read_core(
         latencies.data(), sizeof(uint64_t) * 100, tt_cxy_pair(start_device_id, start_core_coord), base_addr);
+
+    int freq_mhz = cluster.get_device_aiclk(start_device_id);
     for (uint32_t i = 0; i < 100; i++) {
-        std::cout << "Iteration " << i << " latency: " << latencies[i] << std::endl;
+        double latency_us = (float)latencies[i] / freq_mhz;
+        std::cout << "Iteration " << i << " RTT latency (us): " << latency_us
+                  << " Per hop latency (us): " << latency_us / 4.0f << std::endl;
     }
 }
 

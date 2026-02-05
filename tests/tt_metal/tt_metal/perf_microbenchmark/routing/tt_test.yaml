@@ -1,0 +1,70 @@
+
+  Tests:
+  - name: "SR01"
+    fabric_setup:
+      topology: Mesh
+
+    latency_test_mode: true
+
+    defaults:
+      ftype: unicast # This default applies to both patterns above
+      ntype: unicast_write
+
+    senders:
+      - device: 0
+        patterns:
+          # First traffic stream from core [1,1]
+          - ntype: unicast_write
+            destination:
+              device: 1
+
+  - name: "SR15"
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast # This default applies to both patterns above
+      ntype: unicast_write
+
+    latency_test_mode: true
+    senders:
+      - device: 1
+        patterns:
+          # First traffic stream from core [1,1]
+          - ntype: unicast_write
+            destination:
+              device: 5
+
+  - name: SR54
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast # This default applies to both patterns above
+      ntype: unicast_write
+
+    latency_test_mode: true
+    senders:
+      - device: 5
+        patterns:
+          # First traffic stream from core [1,1]
+          - ntype: unicast_write
+            destination:
+              device: 4
+
+  - name: SR40
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast # This default applies to both patterns above
+      ntype: unicast_write
+
+    latency_test_mode: true
+    senders:
+      - device: 4
+        patterns:
+          # First traffic stream from core [1,1]
+          - ntype: unicast_write
+            destination:
+              device: 0
