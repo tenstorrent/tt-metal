@@ -475,42 +475,55 @@ jobs:
     needs: [generate-test-matrix, run-tests]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Export model configuration
         run: |
           # Get model config from matrix generation
           MODEL_CONFIG='${{ needs.generate-test-matrix.outputs.model-config }}'
           echo "$MODEL_CONFIG" > device-model-config.json
 
-          # Extract standalone display names for chart generation
+          # Extract standalone display names and test paths for chart generation
           DEVICE="${{ inputs.device-type }}"
           STANDALONE_KEYS=$(echo "$MODEL_CONFIG" | jq -r '.standalone_keys[]' 2>/dev/null || echo '[]')
 
-          # Map keys to display names
+          # Source the standalone model paths from the implementation
+          source <(grep -E 'standalone_test_paths\[|standalone_test_args\[|standalone_display_names\[' .github/workflows/all-models-demo-tests-impl.yaml | sed 's/^[[:space:]]*//' | tr -d '\r')
+
+          # Build JSON with display names and test commands
           DISPLAY_NAMES='[]'
+          TEST_COMMANDS='{}'
+
           for key in $STANDALONE_KEYS; do
-            # Extract display name (everything before variant suffix)
-            case "$key" in
-              *-wh|*-bh|*-ttnn|*-t3000)
-                # Remove architecture suffix
-                display=$(echo "$key" | sed -E 's/-(wh|bh|ttnn|t3000)$//')
-                ;;
-              *)
-                # No suffix, use as-is
-                display="$key"
-                ;;
-            esac
-            DISPLAY_NAMES=$(echo "$DISPLAY_NAMES" | jq --arg name "$display" '. + [$name]')
+            # Get test path and args (using bash associative arrays wouldn't work in this context)
+            # Instead, extract from the workflow file directly
+            test_path=$(grep "standalone_test_paths\\[\"$key\"\\]=" .github/workflows/all-models-demo-tests-impl.yaml | sed -E 's/.*="(.*)"/\1/')
+            test_args=$(grep "standalone_test_args\\[\"$key\"\\]=" .github/workflows/all-models-demo-tests-impl.yaml | sed -E 's/.*="(.*)"/\1/')
+            display=$(grep "standalone_display_names\\[\"$key\"\\]=" .github/workflows/all-models-demo-tests-impl.yaml | sed -E 's/.*="(.*)"/\1/')
+
+            if [ -n "$display" ] && [ -n "$test_path" ]; then
+              DISPLAY_NAMES=$(echo "$DISPLAY_NAMES" | jq --arg name "$display" '. + [$name]')
+
+              # Build pytest command
+              if [ -n "$test_args" ]; then
+                test_cmd="pytest --disable-warnings -v $test_path $test_args"
+              else
+                test_cmd="pytest --disable-warnings -v $test_path"
+              fi
+
+              TEST_COMMANDS=$(echo "$TEST_COMMANDS" | jq --arg model "$display" --arg cmd "$test_cmd" '. + {($model): $cmd}')
+            fi
           done
 
-          # Create final config with display names
+          # Remove duplicates from display names (multiple variants map to same display name)
+          DISPLAY_NAMES=$(echo "$DISPLAY_NAMES" | jq 'unique')
+
+          # Create final config with display names and test commands
           FINAL_CONFIG=$(echo "$MODEL_CONFIG" | jq \
             --argjson standalone "$DISPLAY_NAMES" \
-            '.standalone = $standalone | del(.standalone_keys)')
-
-          echo "$FINAL_CONFIG" > device-model-config.json
-
-          cat device-model-config.json
-
+            --argjson test_commands "$TEST_COMMANDS" \
+            '.standalone = $standalone | .standalone_test_commands = $test_commands | del(.standalone_keys)')
       - name: Upload device model configuration
         uses: actions/upload-artifact@v4
         with:

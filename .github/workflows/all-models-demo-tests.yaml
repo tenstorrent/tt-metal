@@ -314,6 +314,7 @@ jobs:
           print("=== Loading model configurations ===")
           all_tt_transformers_models = {}
           all_standalone_models = {}
+          standalone_test_commands = {}  # Map of device -> {model: command}
 
           config_files = glob.glob('model-configs/**/device-model-config.json', recursive=True)
           print(f"Found {len(config_files)} config files")
@@ -331,10 +332,7 @@ jobs:
                       if device in devices:
                           all_tt_transformers_models[device] = config.get('tt_transformers', [])
                           all_standalone_models[device] = config.get('standalone', [])
-              except Exception as e:
-                  print(f"  Error loading config: {e}")
-
-          # Filter to only available devices
+                          standalone_test_commands[device] = config.get('standalone_test_commands', {})
           tt_transformers_models = {device: models for device, models in all_tt_transformers_models.items() if device in available_devices}
           standalone_models = {device: models for device, models in all_standalone_models.items() if device in available_devices}
 
@@ -351,6 +349,7 @@ jobs:
 
           # Parse test results
           test_results = defaultdict(lambda: defaultdict(list))  # test_results[device][model] = [test_results]
+          failed_tests = defaultdict(list)  # failed_tests[device] = [(model, test_name, test_path, test_args)]
 
           # Find and parse XML files
           parsed_files = 0
@@ -385,7 +384,10 @@ jobs:
                           # Join all parts between device and test name to get full model name
                           model = '-'.join(parts[1:test_start_index])
 
-                          print(f"  Extracted - Device: '{device}', Model: '{model}'")
+                          # Extract test name from remaining parts
+                          test_name = '-'.join(parts[test_start_index:]) if test_start_index < len(parts) else "Demo-Test"
+
+                          print(f"  Extracted - Device: '{device}', Model: '{model}', Test: '{test_name}'")
 
                           # Get test result from <testsuite> element (not root <testsuites>)
                           testsuite = root.find('testsuite')
@@ -409,6 +411,29 @@ jobs:
                           print(f"  Storing in test_results['{device}']['{model}']")
 
                           test_results[device][model].append(passed)
+
+                          # Track failed tests
+                          if not passed and tests > 0:
+                              # Determine test type and construct command
+                              if model in tt_transformers_models.get(device, []):
+                                  # TT-Transformers test
+                                  test_key_map = {
+                                      'Batch-1-CI': 'performance and ci-1',
+                                      'Batch-32-CI': 'performance and ci-32',
+                                      'Long-Context-16K': 'performance and ci-long-context-16k'
+                                  }
+                                  test_key = test_key_map.get(test_name, test_name)
+                                  test_command = f'pytest models/tt_transformers/demo/simple_text_demo.py -k "{test_key}" --timeout 1000'
+                              else:
+                                  # Standalone test - look up from config
+                                  test_command = standalone_test_commands.get(device, {}).get(model, f'# Standalone test for {model} (command not found in config)')
+
+                              failed_tests[device].append({
+                                  'model': model,
+                                  'test_name': test_name,
+                                  'test_command': test_command
+                              })
+
                           parsed_files += 1
                       else:
                           print(f"  ERROR: Not enough parts in filename (expected at least 2, got {len(parts)})")
@@ -552,6 +577,36 @@ jobs:
           print("Generated model status files:")
           print("- model-status.json")
           print("- model-status-report.md")
+
+          # Generate failed tests summary
+          if any(failed_tests.values()):
+              with open('failed-tests-summary.txt', 'w') as f:
+                  f.write("=" * 80 + "\n")
+                  f.write("FAILED TESTS SUMMARY\n")
+                  f.write("=" * 80 + "\n\n")
+
+                  for device in sorted(failed_tests.keys()):
+                      if failed_tests[device]:
+                          f.write(f"\n{'=' * 80}\n")
+                          f.write(f"DEVICE: {device}\n")
+                          f.write(f"{'=' * 80}\n\n")
+
+                          for failure in failed_tests[device]:
+                              f.write(f"Model: {failure['model']}\n")
+                              f.write(f"Test: {failure['test_name']}\n")
+                              f.write(f"Command:\n")
+                              f.write(f"  {failure['test_command']}\n")
+                              f.write("-" * 80 + "\n\n")
+
+              print("- failed-tests-summary.txt")
+          else:
+              # Create empty file if no failures
+              with open('failed-tests-summary.txt', 'w') as f:
+                  f.write("=" * 80 + "\n")
+                  f.write("FAILED TESTS SUMMARY\n")
+                  f.write("=" * 80 + "\n\n")
+                  f.write("No test failures detected. All tests passed! ✅\n")
+              print("- failed-tests-summary.txt (no failures)")
           EOF
 
       - name: Upload Model Status Chart
@@ -561,4 +616,5 @@ jobs:
           path: |
             model-status.json
             model-status-report.md
+            failed-tests-summary.txt
           retention-days: 30
