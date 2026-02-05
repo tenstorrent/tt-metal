@@ -263,9 +263,6 @@ jobs:
       - name: Install pytest-xdist for parallel execution
         run: uv pip install pytest-xdist
 
-      - name: Install yq for YAML parsing
-        run: uv pip install yq
-
       # Note: The skip list YAML is available from the full checkout above (line 227-230).
       # No sparse checkout is needed because the ttnn-pytests job does a full checkout with submodules.
       - name: Build skip list arguments
