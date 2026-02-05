@@ -162,6 +162,12 @@ class Attention(LightweightModule):
         else:
             self.rotary_embedding_decode = self._mllama_rope_decode
 
+        # Select rotary embedding implementation for prefill
+        if self.use_hf_rope:
+            self.rotary_embedding_prefill = self._hf_rope_prefill
+        else:
+            self.rotary_embedding_prefill = self._mllama_rope_prefill
+
         wq_str = f"{layer_name}.wq"
         wk_str = f"{layer_name}.wk"
         wv_str = f"{layer_name}.wv"
