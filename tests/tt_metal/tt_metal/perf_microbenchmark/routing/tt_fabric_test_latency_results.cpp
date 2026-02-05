@@ -5,10 +5,8 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_latency_results.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <fstream>
-#include <functional>
 #include <iomanip>
 #include <numeric>
 #include <sstream>
@@ -16,7 +14,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_common.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_config.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_constants.hpp"
 namespace tt::tt_fabric::fabric_tests {
 
@@ -486,7 +483,7 @@ void LatencyResultsManager::report_latency_results(
     results_summary_.push_back(latency_summary);
 }
 
-void LatencyResultsManager::initialize_results_csv_file(bool telemetry_enabled_) {
+void LatencyResultsManager::initialize_results_csv_file(bool telemetry_enabled_ [[maybe_unused]]) {
     // Create output directory
     std::filesystem::path tt_metal_home =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());

@@ -12,8 +12,6 @@
 #include <optional>
 #include <functional>
 #include <map>
-#include <optional>
-#include <string>
 #include <cmath>
 #include <enchantum/enchantum.hpp>
 #include "tt_fabric_test_config.hpp"
@@ -21,7 +19,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_fabric_test_common.hpp"
 #include "tt_fabric_test_interfaces.hpp"
@@ -29,7 +26,6 @@
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_fabric_test_traffic.hpp"
 #include "tt_fabric_test_constants.hpp"
-#include "tt_fabric_test_results.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -46,7 +42,7 @@ const std::unordered_map<PerformanceMetric, std::string> PerformanceMetricString
 template <typename T, typename U>
 class ResultsManager {
 protected:
-    PerformanceMetric performance_t;
+    PerformanceMetric performance_t{};
     std::vector<T> results_;
     std::vector<U> results_summary_;
     std::filesystem::path csv_summary_file_path_;
