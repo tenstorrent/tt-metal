@@ -85,13 +85,9 @@
 namespace tt {
 class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
-namespace tt_metal {
-class CommandQueue;
-class EnqueueProgramCommand;
-namespace experimental {
+namespace tt_metal::experimental {
 class GlobalCircularBuffer;
-}  // namespace experimental
-}  // namespace tt_metal
+}  // namespace tt_metal::experimental
 }  // namespace tt
 
 namespace {
@@ -113,7 +109,7 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     //      - tensix kernels cannot be on dispatch cores
     //  Fast dispatch (ethernet):
     //      - eth kernels cannot be on idle eth cores
-    bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+    bool slow_dispatch = !(MetalContext::instance().rtoptions().get_fast_dispatch());
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     tt::CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
@@ -1286,7 +1282,7 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
     auto& sub_device_ids_map = this->sub_device_ids_[device->id()];
     auto sub_device_ids = sub_device_ids_map.find(sub_device_manager_id);
     if (this->compiled_.empty() || sub_device_ids == sub_device_ids_map.end()) {
-        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr ||
+        if (!MetalContext::instance().rtoptions().get_fast_dispatch() ||
             sub_device_manager_id == device->get_default_sub_device_manager_id()) {
             // No sub device manager, nothing to validate
             auto [sub_device_ids, _] =
@@ -1539,11 +1535,11 @@ uint32_t detail::ProgramImpl::get_cb_base_addr(IDevice* device, CoreCoord /*logi
                            .cb_offset;
 }
 
-void detail::ProgramImpl::set_last_used_command_queue_for_testing(CommandQueue* queue) {
+void detail::ProgramImpl::set_last_used_command_queue_for_testing(HWCommandQueue* queue) {
     this->last_used_command_queue_for_testing = queue;
 }
 
-CommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
+HWCommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
     return this->last_used_command_queue_for_testing;
 }
 
@@ -1689,16 +1685,10 @@ void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
     program_config_sizes_[programmable_core_count_ + 1] = runs_on_noc_unicast_only_cores();
     set_launch_msg_sem_offsets();
     // TODO: This check is wrong - it populates dispatch data for dispatch kernels
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         populate_dispatch_data(device);  // TODO: maybe rename
     }
 }
-
-using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
-using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
-using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
-using DataflowBuffersGetter =
-    std::function<const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>&()>;
 
 void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     if (is_finalized()) {
@@ -1706,18 +1696,18 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     }
 
     // Create proper function objects that capture 'this'
-    KernelsGetter kernels_getter =
+    detail::KernelsGetter kernels_getter =
         [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
         return this->get_kernels(index);
     };
 
-    KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
+    detail::KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
         return this->get_kernel_groups(index);
     };
 
-    SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
 
-    DataflowBuffersGetter dataflow_buffers_getter =
+    detail::DataflowBuffersGetter dataflow_buffers_getter =
         [this]() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
         return this->dataflow_buffers_;
     };

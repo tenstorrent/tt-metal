@@ -8,7 +8,6 @@ import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_e75
 from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
@@ -205,9 +204,6 @@ def test_perf_bare_metal(
     model_config_str,
     model_location_generator,
 ):
-    if is_e75(device) and batch == 32:
-        pytest.skip("Falcon batch 32 is not supported on E75")
-
     ttnn.device.EnableMemoryReports()
 
     model_config = get_model_config(model_config_str)

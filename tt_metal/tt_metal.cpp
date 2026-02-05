@@ -62,7 +62,6 @@
 #include "impl/buffers/circular_buffer.hpp"
 
 namespace tt::tt_metal {
-enum class FabricConfig : uint32_t;
 struct RuntimeArgsData;
 struct TraceDescriptor;
 
@@ -1049,7 +1048,8 @@ IDevice* CreateDeviceMinimal(
     ZoneScoped;
     MetalContext::instance().initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
     auto* dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
-    MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
+    auto& control_plane = MetalContext::instance().get_control_plane();
+    MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
     return dev;
 }
 

@@ -64,4 +64,9 @@ struct IntraMeshAdjacencyMap {
 void serialize_mesh_coordinates_to_file(
     const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path);
 
+// Serialize ASIC ID to Fabric node ID mappings to a YAML file
+// Categorizes mappings by mesh and host, showing which ASICs map to which Fabric nodes
+void serialize_asic_to_fabric_node_mapping_to_file(
+    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path);
+
 }  // namespace tt::tt_fabric
