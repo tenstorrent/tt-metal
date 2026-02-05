@@ -153,13 +153,13 @@ def gpt_oss_experts_mlp_reference(
     Returns:
         Expert output tensor [num_experts_per_device, B, S, H]
     """
-    num_tokens = batch_size * seq_len
+    total_tokens = batch_size * seq_len
     num_experts = w1.shape[0]
     hidden_size = config.hidden_size
     intermediate_size = config.intermediate_size
 
     # Reshape input: [1, 1, B*S, H] -> [B*S, H]
-    x = post_dispatch.reshape(num_tokens, hidden_size)
+    x = post_dispatch.reshape(total_tokens, hidden_size)
 
     # Expand for all experts: [B*S, H] -> [num_experts, B*S, H]
     x_expanded = x.unsqueeze(0).expand(num_experts, -1, -1)
@@ -196,8 +196,7 @@ def gpt_oss_experts_mlp_ttnn(
     config: ThroughputExpertConfig,
     program_config: ThroughputProgramConfig,
     memory_config: ttnn.MemoryConfig,
-    batch_size: int,
-    seq_len: int,
+    total_tokens: int,
     mesh_device=None,
     save_intermediate: bool = False,
 ) -> ttnn.Tensor:
@@ -227,8 +226,7 @@ def gpt_oss_experts_mlp_ttnn(
         config=config,
         program_config=program_config,
         memory_config=memory_config,
-        batch_size=batch_size,
-        seq_len=seq_len,
+        total_tokens=total_tokens,
         mesh_device=mesh_device,
         save_intermediate=save_intermediate,
     )
@@ -482,13 +480,13 @@ def _run_experts_mlp_test(
 
     # Create input tensor (post_dispatch output)
     # Shape: [1, 1, B*S, H]
-    num_tokens = batch_size * seq_len
-    post_dispatch_torch = torch.randn(1, 1, num_tokens, hidden_size, dtype=torch.bfloat16)
+    total_tokens = batch_size * seq_len
+    post_dispatch_torch = torch.randn(1, 1, total_tokens, hidden_size, dtype=torch.bfloat16)
 
     # Create sparsity tensor - for reference we'll compute dense
     # In practice sparsity indicates which (token_block, expert) pairs are active
     # For this test, we'll assume all tokens are active for all experts (dense case)
-    num_sparse_blocks = num_tokens // throughput_config.sparsity_block_size
+    num_sparse_blocks = total_tokens // throughput_config.sparsity_block_size
     num_experts_per_device = throughput_config.num_experts_per_device
 
     # Create full sparsity tensor (all ones = all active)
@@ -536,8 +534,7 @@ def _run_experts_mlp_test(
         config=throughput_config,
         program_config=program_config,
         memory_config=memory_config,
-        batch_size=batch_size,
-        seq_len=seq_len,
+        total_tokens=total_tokens,
         mesh_device=mesh_device,
     )
 
@@ -572,8 +569,7 @@ def _run_experts_mlp_test(
             config=throughput_config,
             program_config=program_config,
             memory_config=memory_config,
-            batch_size=batch_size,
-            seq_len=seq_len,
+            total_tokens=total_tokens,
             mesh_device=mesh_device,
         )
 
@@ -819,11 +815,11 @@ def test_gpt_oss_experts_mlp_single_device(
     w2_ref = state_dict["down_proj"]
 
     # Create input tensor
-    num_tokens = batch_size_per_device * seq_len
-    post_dispatch_torch = torch.randn(1, 1, num_tokens, hidden_size, dtype=torch.bfloat16)
+    total_tokens = batch_size_per_device * seq_len
+    post_dispatch_torch = torch.randn(1, 1, total_tokens, hidden_size, dtype=torch.bfloat16)
 
     # Create sparsity tensor
-    num_sparse_blocks = num_tokens // throughput_config.sparsity_block_size
+    num_sparse_blocks = total_tokens // throughput_config.sparsity_block_size
     num_experts_per_device = throughput_config.num_experts_per_device
     sparsity_torch = torch.ones(num_sparse_blocks, 1, 1, num_experts_per_device, dtype=torch.bfloat16)
 

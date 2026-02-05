@@ -108,8 +108,7 @@ def expert_mlp_forward(
     config: ThroughputExpertConfig,
     program_config: ThroughputProgramConfig,
     memory_config: ttnn.MemoryConfig,
-    batch_size: int,
-    seq_len: int,
+    total_tokens: int,
     mesh_device=None,
     save_intermediate: bool = False,
 ) -> ttnn.Tensor:
@@ -139,8 +138,7 @@ def expert_mlp_forward(
     """
     # Reshape to sparse block format for matmul
     # Note: reshape returns a view - don't deallocate post_dispatch separately
-    num_tokens = batch_size * seq_len
-    num_sparse_blocks = num_tokens // config.sparsity_block_size
+    num_sparse_blocks = total_tokens // config.sparsity_block_size
     reshaped_expert_input = ttnn.reshape(
         experts_input,
         shape=(1, num_sparse_blocks, config.sparsity_block_size, config.hidden_size),
@@ -174,7 +172,7 @@ def expert_mlp_forward(
 
     # Up projection (w3): same shape as gate
     w3_out = ttnn.sparse_matmul(
-        expert_input,
+        reshaped_expert_input,
         weights.w3,
         sparsity=sparsity,
         memory_config=memory_config,
@@ -183,7 +181,7 @@ def expert_mlp_forward(
         is_input_b_sparse=True,
         output_tile=ttnn.Tile([config.sparsity_block_size, ttnn.TILE_SIZE]),
     )
-    ttnn.deallocate(expert_input)
+    ttnn.deallocate(reshaped_expert_input)
 
     # Add up bias
     # w3_out shape: [1, num_sparse_blocks, 1, num_experts_per_device, block_size, intermediate]
@@ -306,7 +304,7 @@ def decode_forward(
     topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint32)
     topk_expert_indices = ttnn.reshape(topk_expert_indices, (-1, 1, 1, config.num_experts_per_tok))
     topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
-    
+
     topk_expert_weights = ttnn.reshape(topk_expert_weights, (-1, 1, 1, config.num_experts_per_tok))
 
     num_dispatch_devices = (
@@ -410,8 +408,7 @@ def decode_forward(
         config=config,
         program_config=program_config,
         memory_config=dispatch_config.memory_config,
-        batch_size=batch_size,
-        seq_len=seq_len,
+        total_tokens=total_tokens,
         mesh_device=mesh_device,
         save_intermediate=False,
     )
