@@ -1,4 +1,3 @@
-
 Lab 3: Multicast for Improved Data Reuse in Multi Core Matrix Multiplication
 ############################################################################
 
