@@ -8,7 +8,7 @@ import pytest
 import ttnn
 import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.common.utility_functions import skip_for_blackhole, is_watcher_enabled
+from models.common.utility_functions import skip_for_blackhole, skip_with_watcher
 
 
 def _out_size(in_size, pad, stride, k):
@@ -172,6 +172,7 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
 @pytest.mark.parametrize("stride", [(1, 1, 1), (2, 2, 2)], ids=["stride_111", "stride_222"])
 @pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
     input_shape = (B, C_in, T, H, W)
     out_channels = C_out
@@ -189,6 +190,7 @@ def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, strid
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache updates the addresses of the inputs
     grid_size = device.compute_with_storage_grid_size()
@@ -206,6 +208,7 @@ def test_conv3d_cache_address(device, input_shape, out_channels, kernel_size, st
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
 def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     # Test that program cache does not re-use the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
@@ -234,6 +237,7 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
     ],
     ids=["qwen_exact_with_blocking"],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #29024")
 def test_conv3d_qwen_shapes(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, blocking):
     """Test Conv3d with exact Qwen2.5-VL-3B parameters (issue #35201).
 
@@ -241,8 +245,6 @@ def test_conv3d_qwen_shapes(device, input_shape, out_channels, kernel_size, stri
     the large kernel=(2, 14, 14) in L1 memory. This is a full-spatial convolution
     that reduces 2×14×14 input to 1×1×1 output with 1280 output channels.
     """
-    if is_watcher_enabled():
-        pytest.skip("Skipping test_conv3d_qwen_shapes due to watcher being enabled, github issue #29024")
     C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
 
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
