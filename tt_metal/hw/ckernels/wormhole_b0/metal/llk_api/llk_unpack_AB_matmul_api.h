@@ -40,6 +40,21 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const uint32_t unpB_num_faces =
         partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
+    if (is_unpacker_configured_correctly(
+            unpack_src_format[operandB_id],
+            unpack_dst_format[operandB_id],
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpA_face_r_dim,
+            unpB_face_r_dim,
+            unpA_num_faces,
+            unpB_num_faces)) {
+        DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul_init - Unpacker already configured correctly." << ENDL());
+    } else {
+        DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul_init - Need to reconfigure unpacker for AB matmul." << ENDL());
+        LLK_ASSERT(false, "Unpacker not configured correctly for llk_unpack_AB_matmul.");
+    }
+
     _llk_unpack_AB_matmul_init_(
         transpose,
         ct_dim,
@@ -66,17 +81,38 @@ inline void llk_unpack_AB_matmul(
 
     volatile uint* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
-    const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t operandB_id = get_operand_id(operandB);
+    const uint32_t operandA_id = get_operand_id(operandB);
+    const uint32_t operandB_id = get_operand_id(operandA);
 
     // TODO: remove partial_face flag, as this is easily to be confused with the partial face flag in math kernel
-    const bool partial_face_a = get_operand_partial_face(operandB_id);  // In1/InB -> srcA
-    const bool partial_face_b = get_operand_partial_face(operandA_id);  // In0/InA -> srcB`
+    const bool partial_face_a = get_operand_partial_face(operandA_id);  // In1/InB -> srcA
+    const bool partial_face_b = get_operand_partial_face(operandB_id);  // In0/InA -> srcB
 
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
     std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
     std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
+
+    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
+    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const uint32_t unpA_num_faces = partial_face_a ? 1 : get_operand_num_faces(operandA_id);
+    const uint32_t unpB_num_faces =
+        partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
+
+    if (is_unpacker_configured_correctly(
+            unpack_src_format[operandA_id],
+            unpack_dst_format[operandA_id],
+            unpack_src_format[operandB_id],
+            unpack_dst_format[operandB_id],
+            unpA_face_r_dim,
+            unpB_face_r_dim,
+            unpA_num_faces,
+            unpB_num_faces)) {
+        DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul - Unpacker already configured correctly." << ENDL());
+    } else {
+        DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul - Need to reconfigure unpacker for AB matmul." << ENDL());
+        LLK_ASSERT(false, "Unpacker not configured correctly for llk_unpack_AB_matmul.");
+    }
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(
