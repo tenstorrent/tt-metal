@@ -32,7 +32,7 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_map_logical(const
     };
 
     // Iterate over all mesh IDs from the mesh graph
-    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
         AdjacencyGraph<FabricNodeId>::AdjacencyMap logical_adjacency_map;
         for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
             auto fabric_node_id = FabricNodeId(mesh_id, chip_id);

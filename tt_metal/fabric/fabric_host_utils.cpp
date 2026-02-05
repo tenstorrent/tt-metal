@@ -12,6 +12,7 @@
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "erisc_datamover_builder.hpp"
 #include <set>
 #include <vector>
@@ -183,6 +184,142 @@ void serialize_mesh_coordinates_to_file(
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized physical chip mesh coordinate mapping to file: {}", output_file_path.string());
+}
+
+void serialize_asic_to_fabric_node_mapping_to_file(
+    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path) {
+    // Ensure output directory exists
+    std::filesystem::create_directories(output_file_path.parent_path());
+
+    const auto& mesh_graph = topology_mapper.get_mesh_graph();
+
+    // Structure: hostname -> mesh_id -> umd_chip_id -> {asic_position, fabric_node_id, asic_id}
+    struct AsicMapping {
+        tt::tt_metal::TrayID tray_id;
+        tt::tt_metal::ASICLocation asic_location;
+        FabricNodeId fabric_node_id;
+        tt::tt_metal::AsicID asic_id;
+    };
+    std::map<HostName, std::map<MeshId, std::map<ChipId, AsicMapping>>> mappings_by_host_mesh_and_chip;
+
+    // Iterate through all meshes
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        // Iterate through all fabric nodes in this mesh
+        for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+
+            try {
+                // Get ASIC ID for this fabric node
+                tt::tt_metal::AsicID asic_id = topology_mapper.get_asic_id_from_fabric_node_id(fabric_node_id);
+
+                // Get physical chip ID (UMD chip ID) for this fabric node
+                ChipId umd_chip_id = topology_mapper.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+
+                // Get ASIC position (tray_id and asic_location) from TopologyMapper's MappedChipInfo
+                tt::tt_metal::TrayID tray_id = topology_mapper.get_tray_id_for_fabric_node_id(fabric_node_id);
+                tt::tt_metal::ASICLocation asic_location =
+                    topology_mapper.get_asic_location_for_fabric_node_id(fabric_node_id);
+
+                // Get hostname for this fabric node
+                HostName hostname = topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id);
+
+                // Add to the mapping structure, indexed by umd_chip_id (physical chip ID)
+                AsicMapping mapping{tray_id, asic_location, fabric_node_id, asic_id};
+                mappings_by_host_mesh_and_chip[hostname][mesh_id].emplace(umd_chip_id, mapping);
+            } catch (...) {
+                // Skip unmapped fabric nodes
+                continue;
+            }
+        }
+    }
+
+    // Write to file using YAML emitter
+    std::ofstream out_file(output_file_path);
+    if (!out_file.is_open()) {
+        TT_THROW("Failed to open output file: {}", output_file_path.string());
+    }
+
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "asic_to_fabric_node_mapping";
+    emitter << YAML::Value;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "hostnames";
+    emitter << YAML::Value << YAML::BeginSeq;
+
+    // Emit each hostname as a list item
+    for (const auto& [hostname, mesh_mappings] : mappings_by_host_mesh_and_chip) {
+        emitter << YAML::BeginMap;
+        emitter << YAML::Key << "hostname";
+        emitter << YAML::Value << hostname;
+
+        // Emit mesh as a key with a list value
+        emitter << YAML::Key << "mesh";
+        emitter << YAML::Value << YAML::BeginSeq;
+
+        // Emit each mesh within this hostname
+        for (const auto& [mesh_id, chip_mappings] : mesh_mappings) {
+            // First emit mesh entry
+            emitter << YAML::BeginMap;
+            emitter << YAML::Key << "mesh";
+            emitter << YAML::Value << *mesh_id;
+            emitter << YAML::EndMap;
+
+            // Then emit chips entry
+            emitter << YAML::BeginMap;
+            emitter << YAML::Key << "chips";
+            emitter << YAML::Value << YAML::BeginSeq;
+
+            // Emit each umd_chip_id mapping (physical chip ID)
+            for (const auto& [umd_chip_id, mapping] : chip_mappings) {
+                emitter << YAML::BeginMap;
+
+                // Emit umd_chip_id field
+                emitter << YAML::Key << "umd_chip_id";
+                emitter << YAML::Value << umd_chip_id;
+
+                // Emit asic_position
+                emitter << YAML::Key << "asic_position";
+                emitter << YAML::Value;
+                emitter << YAML::BeginMap;
+                emitter << YAML::Key << "tray_id";
+                emitter << YAML::Value << *mapping.tray_id;
+                emitter << YAML::Key << "asic_location";
+                emitter << YAML::Value << *mapping.asic_location;
+                emitter << YAML::EndMap;
+
+                // Emit fabric_node_id
+                emitter << YAML::Key << "fabric_node_id";
+                emitter << YAML::Value;
+                emitter << YAML::BeginMap;
+                emitter << YAML::Key << "mesh_id";
+                emitter << YAML::Value << *mapping.fabric_node_id.mesh_id;
+                emitter << YAML::Key << "chip_id";
+                emitter << YAML::Value << mapping.fabric_node_id.chip_id;
+                emitter << YAML::EndMap;
+
+                // Emit asic_id as the last field
+                emitter << YAML::Key << "asic_id";
+                emitter << YAML::Value << *mapping.asic_id;
+
+                emitter << YAML::EndMap;
+            }
+
+            emitter << YAML::EndSeq;
+            emitter << YAML::EndMap;
+        }
+
+        emitter << YAML::EndSeq;
+        emitter << YAML::EndMap;
+    }
+
+    emitter << YAML::EndSeq;
+    emitter << YAML::EndMap;
+    emitter << YAML::EndMap;
+    out_file << emitter.c_str();
+    out_file.close();
+
+    log_debug(tt::LogFabric, "Serialized ASIC to Fabric node ID mapping to file: {}", output_file_path.string());
 }
 
 }  // namespace tt::tt_fabric
