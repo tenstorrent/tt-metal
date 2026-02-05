@@ -14,7 +14,7 @@
 #include <map>
 
 #include <tt-logger/tt-logger.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_stl/tt_stl/assert.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
@@ -23,6 +23,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "experimental/fabric/routing_table_generator.hpp"
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <fmt/format.h>
 #include <cmath>
 #include <chrono>
@@ -60,19 +61,9 @@ FabricNodeId decode_fabric_node_id(std::uint64_t encoded_value) {
         static_cast<std::uint32_t>(encoded_value & 0xFFFFFFFF));
 }
 
-// Helper function to get timeout duration for topology mapping operations
-std::chrono::duration<float> get_topology_mapping_timeout() {
-    auto timeout = tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
-    if (timeout.count() <= 0.0f) {
-        timeout = std::chrono::duration<float>(60.0f);
-    }
-    return timeout;
-}
-
 // Generic timeout mechanism that can handle different types of operations
 template <typename OperationType, typename... Args>
-void execute_with_timeout(OperationType&& operation, const std::string& operation_description, Args&&... args) {
-    auto timeout = get_topology_mapping_timeout();
+void execute_with_timeout(OperationType&& operation, const std::string& operation_description, std::chrono::duration<float> timeout, Args&&... args) {
     std::atomic<bool> operation_completed{false};
     std::atomic<bool> operation_failed{false};
     std::exception_ptr exception_ptr{nullptr};
@@ -118,8 +109,7 @@ void execute_with_timeout(OperationType&& operation, const std::string& operatio
 
 // Specialized wrapper for request-based operations (like irecv)
 template<typename RequestType>
-void wait_for_request_with_timeout(RequestType& req, const std::string& operation_description, int rank) {
-    auto timeout = get_topology_mapping_timeout();
+void wait_for_request_with_timeout(RequestType& req, const std::string& operation_description, int rank, std::chrono::duration<float> timeout) {
     auto start = std::chrono::steady_clock::now();
 
     while (!req->test()) {
@@ -143,12 +133,14 @@ void all_gather_with_timeout(
     const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& context,
     tt::stl::Span<std::byte> send_buf,
     tt::stl::Span<std::byte> recv_buf,
-    const std::string& operation_description) {
+    const std::string& operation_description,
+    std::chrono::duration<float> timeout) {
     execute_with_timeout(
         [&context](tt::stl::Span<std::byte> send, tt::stl::Span<std::byte> recv) {
             context->all_gather(send, recv);
         },
         operation_description,
+        timeout,
         send_buf, recv_buf);
 }
 }  // namespace
@@ -180,9 +172,15 @@ tt::tt_metal::AsicID TopologyMapper::get_asic_id_from_fabric_node_id(const Fabri
 }
 
 TopologyMapper::TopologyMapper(
+    const ::tt::Cluster& cluster,
+    const ::tt::llrt::RunTimeOptions& rtoptions,
+    const ::tt::tt_metal::Hal& hal,
     const MeshGraph& mesh_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const LocalMeshBinding& local_mesh_binding) :
+    cluster_(cluster),
+    rtoptions_(rtoptions),
+    hal_(hal),
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
@@ -198,10 +196,16 @@ TopologyMapper::TopologyMapper(
 
 // Removed bus-id pinning constructor
 TopologyMapper::TopologyMapper(
+    const ::tt::Cluster& cluster,
+    const ::tt::llrt::RunTimeOptions& rtoptions,
+    const ::tt::tt_metal::Hal& hal,
     const MeshGraph& mesh_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const LocalMeshBinding& local_mesh_binding,
     const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings) :
+    cluster_(cluster),
+    rtoptions_(rtoptions),
+    hal_(hal),
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
@@ -216,10 +220,16 @@ TopologyMapper::TopologyMapper(
 
 // Constructor that skips discovery and builds mapping directly from provided logical to physical chip mapping
 TopologyMapper::TopologyMapper(
+    const ::tt::Cluster& cluster,
+    const ::tt::llrt::RunTimeOptions& rtoptions,
+    const ::tt::tt_metal::Hal& hal,
     const MeshGraph& mesh_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const LocalMeshBinding& local_mesh_binding,
     const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) :
+    cluster_(cluster),
+    rtoptions_(rtoptions),
+    hal_(hal),
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
@@ -241,7 +251,6 @@ TopologyMapper::TopologyMapper(
 
     // Build fabric node id to asic id mapping directly from the provided logical to physical chip mapping
     // Update chip_topology_mapping_ entries with the mapping information
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     for (const auto& [fabric_node_id, physical_chip_id] : logical_mesh_chip_id_to_physical_chip_id_mapping) {
         // Convert physical chip id to asic id
         // First try to find it in the local cluster (for local chips)
@@ -341,6 +350,14 @@ TopologyMapper::TopologyMapper(
     // mesh_host_rank_to_mpi_rank_ for meshes this rank doesn't participate in
     auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const std::size_t world_size = *global_context->size();
+    auto timeout = [&]() {
+        auto t = rtoptions_.get().get_timeout_duration_for_operations();
+        if (t.count() <= 0.0f) {
+            t = std::chrono::duration<float>(60.0f);
+        }
+        return t;
+    }();
+
     if (world_size > 1) {
         // Gather mesh_id and host_rank from all ranks
         const std::uint32_t local_count = static_cast<std::uint32_t>(local_mesh_binding_.mesh_ids.size());
@@ -350,7 +367,8 @@ TopologyMapper::TopologyMapper(
             ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(const_cast<std::uint32_t*>(&local_count)), sizeof(std::uint32_t)),
             ttsl::as_writable_bytes(ttsl::Span<std::uint32_t>(counts.data(), counts.size())),
-            "mesh count all_gather");
+            "mesh count all_gather",
+            timeout);
 
         const std::uint32_t max_count = counts.empty() ? 0 : *std::max_element(counts.begin(), counts.end());
         const std::uint64_t sentinel = std::numeric_limits<std::uint64_t>::max();
@@ -368,7 +386,8 @@ TopologyMapper::TopologyMapper(
                 ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(send_values.data()), send_values.size() * sizeof(std::uint64_t)),
                 ttsl::as_writable_bytes(ttsl::Span<std::uint64_t>(gathered.data(), gathered.size())),
-                "mesh binding all_gather");
+                "mesh binding all_gather",
+                timeout);
         }
 
         // Decode and populate mesh_host_rank_to_mpi_rank_ from gathered data
@@ -389,11 +408,9 @@ ChipId TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID as
 }
 
 void TopologyMapper::build_asic_physical_chip_id_mappings() {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
     // Check the physical chip asic ids from UMD cluster with the physical chip asic ids from the physical system
     // descriptor
-    for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
+    for (const auto& [physical_chip_id, unique_id] : cluster_.get().get_unique_chip_ids()) {
         tt::tt_metal::AsicID asic_id{unique_id};
         auto asic_ids_for_host =
             physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
@@ -414,7 +431,6 @@ void TopologyMapper::initialize_chip_topology_mapping_map() {
     const auto& asic_descriptors = physical_system_descriptor_.get_asic_descriptors();
 
     // Get local cluster for physical_chip_id lookup
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& my_host = physical_system_descriptor_.my_host_name();
 
     // Create MappedChipInfo entry for each ASIC
@@ -428,7 +444,7 @@ void TopologyMapper::initialize_chip_topology_mapping_map() {
         // Fill in physical_chip_id if this ASIC is on the local host
         if (asic_descriptor.host_name == my_host) {
             // Look up physical_chip_id from cluster
-            for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
+            for (const auto& [physical_chip_id, unique_id] : cluster_.get().get_unique_chip_ids()) {
                 if (unique_id == *asic_id) {
                     info.physical_chip_id = physical_chip_id;
                     break;
@@ -520,6 +536,13 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
     std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> mapping;
     auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const std::size_t world_size = *global_context->size();
+    auto timeout = [&]() {
+        auto t = rtoptions_.get().get_timeout_duration_for_operations();
+        if (t.count() <= 0.0f) {
+            t = std::chrono::duration<float>(60.0f);
+        }
+        return t;
+    }();
 
     if (generate_mapping_locally_ || world_size <= 1) {
         auto host_rank = local_mesh_binding_.host_rank;
@@ -552,7 +575,8 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
         ttsl::Span<std::byte>(
             reinterpret_cast<std::byte*>(const_cast<std::uint32_t*>(&local_count)), sizeof(std::uint32_t)),
         ttsl::as_writable_bytes(ttsl::Span<std::uint32_t>(counts.data(), counts.size())),
-        "mesh count all_gather");
+        "mesh count all_gather",
+        timeout);
 
     const std::uint32_t max_count = counts.empty() ? 0 : *std::max_element(counts.begin(), counts.end());
 
@@ -572,7 +596,8 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
             ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(send_values.data()), send_values.size() * sizeof(std::uint64_t)),
             ttsl::as_writable_bytes(ttsl::Span<std::uint64_t>(gathered.data(), gathered.size())),
-            "mesh binding all_gather");
+            "mesh binding all_gather",
+            timeout);
     }
 
     // Step 3: Use the gathered mesh bindings directly to build the mapping
@@ -799,6 +824,13 @@ void TopologyMapper::broadcast_mapping_to_all_hosts() {
 void TopologyMapper::receive_mapping_from_host(int rank) {
     using namespace tt::tt_metal::distributed::multihost;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    auto timeout = [&]() {
+        auto t = rtoptions_.get().get_timeout_duration_for_operations();
+        if (t.count() <= 0.0f) {
+            t = std::chrono::duration<float>(60.0f);
+        }
+        return t;
+    }();
 
     // If not in distributed context, nothing to receive
     if (*distributed_context.size() <= 1) {
@@ -818,7 +850,7 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
             Rank{static_cast<int>(rank)},
             Tag{0});
 
-        wait_for_request_with_timeout(req, "topology mapping header", rank);
+        wait_for_request_with_timeout(req, "topology mapping header", rank, timeout);
     }
 
     // Don't clear chip_topology_mapping_ - we want to keep initialized entries and update them
@@ -852,7 +884,7 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
                 Tag{1});  // Use Tag{1} for size messages
 
             wait_for_request_with_timeout(
-                req, "topology mapping record size " + std::to_string(i + 1) + " of " + std::to_string(count), rank);
+                req, "topology mapping record size " + std::to_string(i + 1) + " of " + std::to_string(count), rank, timeout);
         }
 
         TT_FATAL(
@@ -871,7 +903,7 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
             Tag{0});  // Use Tag{0} for data messages
 
         wait_for_request_with_timeout(
-            req, "topology mapping record " + std::to_string(i + 1) + " of " + std::to_string(count), rank);
+            req, "topology mapping record " + std::to_string(i + 1) + " of " + std::to_string(count), rank, timeout);
 
         std::size_t idx = 0;
 
@@ -926,12 +958,11 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
 
     // Fill in physical_chip_id for ASICs that belong to this host
     // (The controller may have set it to 0 for ASICs on other hosts)
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& my_host = physical_system_descriptor_.my_host_name();
     for (auto& info : chip_topology_mapping_) {
         if (info.physical_chip_id == 0 && !info.hostname.empty() && info.hostname == my_host) {
             // This ASIC belongs to this host, look up its physical chip ID
-            for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
+            for (const auto& [physical_chip_id, unique_id] : cluster_.get().get_unique_chip_ids()) {
                 if (unique_id == *info.asic_id) {
                     info.physical_chip_id = physical_chip_id;
                     break;
@@ -1370,7 +1401,11 @@ InterMeshConnectivity TopologyMapper::get_inter_mesh_connectivity(MeshId mesh_id
     return connectivity;
 }
 
+}  // namespace tt::tt_fabric
+
 namespace {
+using tt::tt_fabric::MeshShape;
+
 /**
  * @brief Determines the maximum number of local Ethernet connections per direction between ASICs in the system.
  *
@@ -1381,10 +1416,9 @@ namespace {
  * @param psd The PhysicalSystemDescriptor representing the system's ASICs and their interconnections.
  * @return The maximum number of local Ethernet connections per direction between any two ASICs.
  */
-std::uint32_t get_num_connections_per_direction(const tt::tt_metal::PhysicalSystemDescriptor& psd) {
+std::uint32_t get_num_connections_per_direction(const ::tt::Cluster& cluster, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     // Check the number of connections per direction for each asic
     std::uint32_t num_connections_per_direction = 1;  // Default to 1 connection per direction
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     for (const auto& [asic_id, asic_descriptor] : psd.get_asic_descriptors()) {
         auto neighbors = psd.get_asic_neighbors(asic_id);
         for (const auto& neighbor : neighbors) {
@@ -1476,30 +1510,31 @@ std::vector<MeshShape> generate_possible_cluster_shapes(std::uint32_t total_numb
 }
 }  // namespace
 
-MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor, FabricConfig fabric_config) {
+namespace tt::tt_metal::experimental::tt_fabric {
+::tt::tt_fabric::MeshGraph generate_mesh_graph_from_physical_system_descriptor(
+    const ::tt::tt_fabric::ControlPlane& control_plane, const ::tt::Cluster& cluster, const ::tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor, ::tt::tt_fabric::FabricConfig fabric_config) {
     // Come up with the biggest mesh that can be formed by the physical system descriptor based on number of chips
-    FabricType fabric_type = get_fabric_type(fabric_config);
+    ::tt::tt_fabric::FabricType fabric_type = get_fabric_type(fabric_config);
 
     // Detect the number of connections per direction using the psd
-    const auto number_of_connections = get_num_connections_per_direction(physical_system_descriptor);
+    const auto number_of_connections = get_num_connections_per_direction(cluster, physical_system_descriptor);
 
     // Get the total number of chips in the physical system descriptor
     const auto total_number_of_chips = physical_system_descriptor.get_asic_descriptors().size();
 
     // Extract ASIC IDs from the descriptors map
-    std::vector<tt::tt_metal::AsicID> all_asic_ids;
+    std::vector<tt_metal::AsicID> all_asic_ids;
     for (const auto& [asic_id, _] : physical_system_descriptor.get_asic_descriptors()) {
         all_asic_ids.push_back(asic_id);
     }
 
     // Form physical adjacency matrix from physical system descriptor
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    asic_id_to_mesh_rank[MeshId{0}] = std::map<tt::tt_metal::AsicID, MeshHostRankId>();
+    std::map<MeshId, std::map<::tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}] = std::map<::tt::tt_metal::AsicID, MeshHostRankId>();
     for (const auto& asic_id : all_asic_ids) {
         asic_id_to_mesh_rank[MeshId{0}][asic_id] = MeshHostRankId{0};
     }
-    auto physical_adjacency_matrix = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_physical(
+    auto physical_adjacency_matrix = tt_metal::experimental::tt_fabric::build_adjacency_map_physical(
         physical_system_descriptor, asic_id_to_mesh_rank);
 
     // Generate possible mesh shapes
@@ -1508,8 +1543,8 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     // Try all possible mesh shapes
     const MeshId mesh_id{0};
     for (const auto& mesh_shape : mesh_shapes_to_try) {
-        auto mesh_graph = MeshGraph::generate_mesh_graph_of_shape(mesh_shape, fabric_type, number_of_connections);
-        auto logical_adjacency_matrix = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_logical(mesh_graph);
+        auto mesh_graph = ::tt::tt_fabric::MeshGraph::generate_mesh_graph_of_shape(control_plane, cluster, mesh_shape, fabric_type, number_of_connections);
+        auto logical_adjacency_matrix = tt_metal::experimental::tt_fabric::build_adjacency_map_logical(mesh_graph);
 
         // Extract adjacency maps for this mesh_id
         if (!logical_adjacency_matrix.contains(mesh_id) || !physical_adjacency_matrix.contains(mesh_id)) {
@@ -1532,10 +1567,10 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         const auto& asic_to_host_rank = asic_id_to_mesh_rank.at(mesh_id);
 
         // Do the mapping and see if its successful
-        tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
+        tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
         config.strict_mode = false;  // Use relaxed mode for initial matching
 
-        auto mapping_result = tt::tt_metal::experimental::tt_fabric::map_mesh_to_physical(
+        auto mapping_result = tt_metal::experimental::tt_fabric::map_mesh_to_physical(
             mesh_id, logical_adj, physical_adj, node_to_host_rank, asic_to_host_rank, config);
 
         // Return mesh_graph if mapping is successful
@@ -1553,7 +1588,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
                 }
 
                 log_warning(
-                    tt::LogFabric,
+                    LogFabric,
                     "TopologyMapper auto-discovery: Downgrading to mesh shape {} ({} total nodes) for {} physical "
                     "chips. "
                     "Some physical chips may not be used. This may indicate connectivity issues, topology mismatches, "
@@ -1569,5 +1604,4 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     // Throw if no possible mesh shape is found to match, this means there are no devices! This should never happen
     TT_THROW("No possible mesh shape found to match physical adjacency matrix");
 }
-
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::tt_fabric

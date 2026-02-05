@@ -459,7 +459,8 @@ std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_conne
 std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    const auto& fabric_tensix_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
     const auto& fabric_router_config =
         fabric_context.get_builder_context().get_fabric_router_config(fabric_tensix_config);
 
@@ -879,7 +880,8 @@ FabricTensixDatamoverMuxBuilder::FabricTensixDatamoverMuxBuilder(
 }
 
 const char* FabricTensixDatamoverMuxBuilder::get_kernel_file_path() const {
-    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    const auto& fabric_tensix_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         return "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_udm_mux_extension.cpp";
     }
@@ -917,7 +919,8 @@ void FabricTensixDatamoverMuxBuilder::append_upstream_routers_noc_xy(uint32_t no
 }
 
 void FabricTensixDatamoverMuxBuilder::create_and_compile(tt::tt_metal::Program& program) {
-    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    const auto& fabric_tensix_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
 
     // Select processor and NOC based on core type
     tt::tt_metal::DataMovementProcessor processor = (core_id_ == FabricTensixCoreType::MUX)
@@ -1065,7 +1068,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
 std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
-    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    const auto& fabric_tensix_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
     const auto& fabric_router_config = builder_context.get_fabric_router_config(fabric_tensix_config);
 
     // Call config's get_compile_time_args with fabric node, routing plane, and direction
@@ -1118,7 +1122,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
 
 std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_runtime_args(tt::tt_metal::Program& program) const {
     std::vector<uint32_t> runtime_args;
-    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    const auto& fabric_tensix_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         TT_FATAL(
             upstream_routers_noc_x_.empty() && upstream_routers_noc_y_.empty(),
@@ -1206,7 +1211,8 @@ void FabricTensixDatamoverRelayBuilder::create_and_compile(tt::tt_metal::Program
 
 std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_compile_time_args() const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    const auto& fabric_tensix_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
     TT_FATAL(
         fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM,
         "Relay builder should only be used in UDM mode");

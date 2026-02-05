@@ -147,16 +147,16 @@ struct PhysicalConnectivityGraph {
 class PhysicalSystemDescriptor {
 public:
     PhysicalSystemDescriptor(
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        const std::unique_ptr<::tt::umd::Cluster>& cluster,
         const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
         const Hal* hal,
-        const tt::llrt::RunTimeOptions& rtoptions,
+        const ::tt::llrt::RunTimeOptions& rtoptions,
         bool run_discovery = true);
     PhysicalSystemDescriptor(
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        const std::unique_ptr<::tt::umd::Cluster>& cluster,
         const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
         const Hal* hal,
-        tt::TargetDevice target_device_type,
+        ::tt::TargetDevice target_device_type,
         bool run_discovery = true);
     // Constructor generating a PhysicalSystemDescriptor based on a protobuf
     // descriptor (can be used entirely offline).
@@ -204,8 +204,8 @@ public:
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
     const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
-    const tt::umd::semver_t& get_ethernet_firmware_version() const { return ethernet_firmware_version_; }
-    tt::TargetDevice get_target_device_type() const { return target_device_type_; }
+    const ::tt::umd::semver_t& get_ethernet_firmware_version() const { return ethernet_firmware_version_; }
+    ::tt::TargetDevice get_target_device_type() const { return target_device_type_; }
     LocalEthernetMetrics query_local_ethernet_metrics() const;
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
@@ -213,9 +213,9 @@ public:
     std::unordered_map<std::string, std::string>& get_host_mobo_name_map() { return host_to_mobo_name_; }
     std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() { return host_to_rank_; }
     ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
-    tt::umd::semver_t& get_ethernet_firmware_version() { return ethernet_firmware_version_; }
+    ::tt::umd::semver_t& get_ethernet_firmware_version() { return ethernet_firmware_version_; }
 
-    static const std::unique_ptr<tt::umd::Cluster> null_cluster;
+    static const std::unique_ptr<::tt::umd::Cluster> null_cluster;
 
     // Utility APIs to Print Physical System Descriptor
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
@@ -237,23 +237,23 @@ private:
     void resolve_hostname_uniqueness();
     void validate_graphs();
     void validate_eth_fw_versions(
-        const tt::umd::semver_t& peer_ethernet_firmware_version,
+        const ::tt::umd::semver_t& peer_ethernet_firmware_version,
         const std::string& my_host_name,
         const std::string& peer_host_name);
 
-    const std::unique_ptr<tt::umd::Cluster>& cluster_;
+    const std::unique_ptr<::tt::umd::Cluster>& cluster_;
     std::unique_ptr<umd::ClusterDescriptor> cluster_desc_ = nullptr;
 
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     const Hal* hal_;
-    tt::TargetDevice target_device_type_;
+    ::tt::TargetDevice target_device_type_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
     std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;
     bool all_hostnames_unique_ = true;
-    tt::umd::semver_t ethernet_firmware_version_;
+    ::tt::umd::semver_t ethernet_firmware_version_;
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> pcie_devices_per_tray_;
 };
 

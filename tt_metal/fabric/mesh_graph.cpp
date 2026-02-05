@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include "experimental/fabric/control_plane.hpp"
 #include "experimental/fabric/routing_table_generator.hpp"
 #include "fabric_host_utils.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
@@ -864,16 +865,13 @@ bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
  */
 
 MeshGraph MeshGraph::generate_mesh_graph_of_shape(
-    MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type, std::uint32_t num_connections_per_direction) {
+    const ControlPlane& control_plane, const tt::Cluster& cluster, MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type, std::uint32_t num_connections_per_direction) {
     MeshGraph mesh_graph;
 
-    // Get chip spec from MetalContext
-    const auto& metal_context = tt::tt_metal::MetalContext::instance();
-    const auto& cluster = metal_context.get_cluster();
     tt::ARCH arch = cluster.get_cluster_desc()->get_arch();
 
     // Get reliability mode from fabric config (stored in MetalContext)
-    tt::tt_fabric::FabricReliabilityMode reliability_mode = metal_context.get_fabric_reliability_mode();
+    tt::tt_fabric::FabricReliabilityMode reliability_mode = control_plane.get_fabric_reliability_mode();
 
     // Use the provided num_connections_per_direction
     std::uint32_t num_eth_ports_per_direction = num_connections_per_direction;

@@ -1675,7 +1675,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
 
     // Check topology and fabric config
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config();
     ASSERT_TRUE(
         (topology == Topology::Linear || topology == Topology::Ring) &&
         (fabric_config == tt_fabric::FabricConfig::FABRIC_1D ||

@@ -43,12 +43,12 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const RouterLocation& location,
     std::shared_ptr<ConnectionRegistry> connection_registry) {
     // Get fabric context and config
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
     const auto topology = fabric_context.get_fabric_topology();
 
     // Convert RoutingDirection to eth_chan_directions
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto eth_direction = control_plane.routing_direction_to_eth_direction(location.direction);
 
     // Get SOC descriptor for eth core lookup
@@ -56,7 +56,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     auto eth_logical_core = soc_desc.get_eth_core_for_channel(location.eth_chan, CoordSystem::LOGICAL);
 
     // Determine tensix config
-    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
     bool fabric_tensix_extension_enabled = fabric_tensix_config != FabricTensixConfig::DISABLED;
     bool fabric_tensix_extension_mux_mode = fabric_tensix_config == FabricTensixConfig::MUX;
     bool fabric_tensix_extension_udm_mode = fabric_tensix_config == FabricTensixConfig::UDM;
@@ -70,7 +70,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
     // Determine the router variant
-    bool has_z_router = fabric_context.has_z_router_on_device(local_node);
+    bool has_z_router = fabric_context.has_z_router_on_device(control_plane, local_node);
     RouterVariant variant = (location.direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
 
     // Create channel mapping EARLY (needed for computing injection flags)

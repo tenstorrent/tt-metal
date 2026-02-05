@@ -68,10 +68,16 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         GTEST_SKIP();
     }
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         dual_galaxy_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -134,10 +140,16 @@ TEST(MultiHost, TestDual2x4ControlPlaneInit) {
         log_info(tt::LogTest, "This test is only for T3K");
         GTEST_SKIP();
     }
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         dual_galaxy_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
@@ -198,10 +210,16 @@ TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
         GTEST_SKIP();
     }
 
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path split_2x2_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         split_2x2_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -259,10 +277,16 @@ TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
         GTEST_SKIP();
     }
 
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path big_mesh_2x4_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         big_mesh_2x4_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
@@ -333,10 +357,16 @@ TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path quad_galaxy_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_galaxy_torus_xy_graph_descriptor.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         quad_galaxy_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -492,10 +522,16 @@ TEST(MultiHost, TestQuadGalaxyControlPlaneInit) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         GTEST_SKIP();
     }
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path quad_galaxy_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_mesh_graph_descriptor.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         quad_galaxy_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -602,10 +638,16 @@ TEST(MultiHost, TestBHQB4x4ControlPlaneInit) {
         GTEST_SKIP();
     }
 
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path bhqb_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         bhqb_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -673,10 +715,16 @@ TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
 }
 
 TEST(MultiHost, TestClosetBox3PodTTSwitchControlPlaneInit) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -692,10 +740,16 @@ TEST(MultiHost, TestBHQB4x4RelaxedControlPlaneInit) {
     }
 
     // Get the mesh graph descriptor path for the BHQB 4x4 mesh
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path bhqb_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_4x4_relaxed_mesh_graph_descriptor.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         bhqb_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -704,11 +758,14 @@ TEST(MultiHost, TestBHQB4x4RelaxedControlPlaneInit) {
 }
 
 TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
 
-    auto control_plane = std::make_unique<ControlPlane>(mesh_graph_desc_path.string());
+    auto control_plane = std::make_unique<ControlPlane>(cluster, rtoptions, hal, mesh_graph_desc_path.string());
     const auto& mesh_graph = control_plane->get_mesh_graph();
 
     // ========== MeshGraph API Tests ==========
@@ -797,10 +854,16 @@ TEST(MultiHost, BHDualGalaxyControlPlaneInit) {
         log_info(tt::LogTest, "This test is only for Blackhole Galaxy");
         GTEST_SKIP();
     }
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path dual_bh_galaxy_experimental_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_bh_galaxy_experimental_mesh_graph_descriptor.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         dual_bh_galaxy_experimental_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -864,10 +927,16 @@ TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
 }
 
 TEST(MultiHost, T3K2x2AssignZDirectionControlPlaneInit) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path t3k_2x2_assign_z_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_assign_z_direction_mesh_graph_descriptor.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         t3k_2x2_assign_z_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
@@ -963,10 +1032,16 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
 }
 
 TEST(MultiHost, TestBHBlitzPipelineControlPlaneInit) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path bh_blitz_pipeline_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto";
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         bh_blitz_pipeline_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -1013,11 +1088,17 @@ TEST(MultiHost, TestBHBlitzPipelineFabric1DSanity) {
 }
 
 TEST(MultiHost, TestTriplePod16x8QuadBHGalaxyControlPlaneInit) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const std::filesystem::path triple_pod_16x8_quad_bh_galaxy_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(rtoptions.get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/triple_pod_16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
 
     auto control_plane = std::make_unique<ControlPlane>(
+        cluster,
+        rtoptions,
+        hal,
         triple_pod_16x8_quad_bh_galaxy_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);

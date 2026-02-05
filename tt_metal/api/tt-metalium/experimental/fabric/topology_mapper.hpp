@@ -11,9 +11,13 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+
+namespace tt {
+class Cluster;
+}  // namespace tt
 
 namespace tt::tt_metal {
-
 class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
@@ -75,6 +79,9 @@ public:
      * @param local_mesh_binding Reference to the local mesh binding object containing mesh binding information
      */
     TopologyMapper(
+        const ::tt::Cluster& cluster,
+        const ::tt::llrt::RunTimeOptions& rtoptions,
+        const ::tt::tt_metal::Hal& hal,
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding);
@@ -82,6 +89,9 @@ public:
     // Construct a TopologyMapper with fixed ASIC-position pinnings (tray, location).
     // These pins must reference devices on the current host; if infeasible, construction will throw with details.
     TopologyMapper(
+        const ::tt::Cluster& cluster,
+        const ::tt::llrt::RunTimeOptions& rtoptions,
+        const ::tt::tt_metal::Hal& hal,
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
@@ -90,6 +100,9 @@ public:
     // Construct a TopologyMapper from a pre-provided logical mesh chip to physical chip mapping.
     // Skips discovery and builds fabric node id to asic id mapping directly from the provided mapping.
     TopologyMapper(
+        const ::tt::Cluster& cluster,
+        const ::tt::llrt::RunTimeOptions& rtoptions,
+        const ::tt::tt_metal::Hal& hal,
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding,
@@ -262,19 +275,6 @@ public:
 
     InterMeshConnectivity get_inter_mesh_connectivity(MeshId mesh_id) const;
 
-    /**
-     * @brief Generate a mesh graph from a physical system descriptor
-     *
-     * This static function creates a mesh graph by trying different mesh shapes and finding
-     * one that matches the physical topology described by the physical system descriptor.
-     *
-     * @param physical_system_descriptor The physical system descriptor containing ASIC topology
-     * @param fabric_config The fabric configuration
-     * @return MeshGraph A mesh graph that matches the physical topology
-     */
-    static MeshGraph generate_mesh_graph_from_physical_system_descriptor(
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor, FabricConfig fabric_config);
-
 private:
     /**
      * @brief Build the mapping between fabric node IDs and physical ASIC IDs
@@ -363,6 +363,10 @@ private:
      * @brief Receive the mapping from the 1st host
      */
     void receive_mapping_from_host(int rank);
+
+    std::reference_wrapper<const ::tt::Cluster> cluster_;
+    std::reference_wrapper<const ::tt::llrt::RunTimeOptions> rtoptions_;
+    std::reference_wrapper<const ::tt::tt_metal::Hal> hal_;
 
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;

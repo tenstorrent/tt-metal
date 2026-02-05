@@ -109,8 +109,10 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
             fabric_node_id.mesh_id.get(), fabric_node_id.chip_id};
     }
 
-    topology_json["fabric_config"] = enchantum::to_string(tt::tt_metal::MetalContext::instance().get_fabric_config());
-    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
+    topology_json["fabric_config"] =
+        enchantum::to_string(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config());
+    if (tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config() !=
+        tt_fabric::FabricConfig::DISABLED) {
         topology_json["routing_planes"] = nlohmann::ordered_json::array();
         for (auto physical_chip_id : cluster.get_cluster_desc()->get_all_chips()) {
             auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(physical_chip_id);

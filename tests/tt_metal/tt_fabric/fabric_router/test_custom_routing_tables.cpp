@@ -20,9 +20,11 @@ constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D;
 constexpr auto k_ReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
-    auto control_plane =
-        std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string(), k_FabricConfig, k_ReliabilityMode);
-    control_plane->initialize_fabric_context(tt::tt_fabric::FabricRouterConfig{});
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
+        cluster, rtoptions, hal, graph_desc.string(), k_FabricConfig, k_ReliabilityMode);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     return control_plane;
 }

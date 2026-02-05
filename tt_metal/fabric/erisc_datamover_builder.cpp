@@ -99,7 +99,8 @@ bool is_fabric_two_erisc_enabled() {
     bool arch_bh = hal.get_arch() == tt::ARCH::BLACKHOLE;
 
     // out of stack size issue on the erisc, to be investigated
-    bool tensix_extensions_enabled = mc.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool tensix_extensions_enabled =
+        mc.get_control_plane().get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     bool single_erisc_dispatch = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) < 2;
 
@@ -729,8 +730,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const auto& receiver_counts =
         actual_receiver_channels_per_vc.value_or(this->config.num_used_receiver_channels_per_vc);
 
-    bool is_mux_mode = has_tensix_extension && (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
-                                                tt::tt_fabric::FabricTensixConfig::MUX);
+    bool is_mux_mode = has_tensix_extension &&
+                       (tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config() ==
+                        tt::tt_fabric::FabricTensixConfig::MUX);
 
     size_t num_riscv_cores = this->config.risc_configs.size();
     for (size_t risc_id = 0; risc_id < num_riscv_cores; ++risc_id) {
@@ -949,8 +951,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     }
 
     bool update_pkt_hdr_on_rx_ch = true;
-    bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                           tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool fabric_tensix_extension_enabled =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config() !=
+        tt::tt_fabric::FabricTensixConfig::DISABLED;
     bool support_pkt_hdr_update_on_sender_channel =
         !fabric_tensix_extension_enabled &&
         (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Mesh);
@@ -1002,7 +1005,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // unsure which one we should prefer at the moment
     // bool z_routers_enabled = fabric_context.get_builder_context().get_intermesh_vc_config().router_type ==
     // IntermeshRouterType::Z_INTERMESH;
-    bool z_router_enabled = fabric_context.has_z_router_on_device(local_fabric_node_id);
+    bool z_router_enabled = fabric_context.has_z_router_on_device(control_plane, local_fabric_node_id);
 
     log_debug(
         LogFabric,

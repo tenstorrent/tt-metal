@@ -212,8 +212,9 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
         tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_builder_context();
     const auto& fabric_router_config = builder_context.get_fabric_router_config();
 
-    bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                 tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool tensix_config_enabled =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config() !=
+        tt::tt_fabric::FabricTensixConfig::DISABLED;
     // current mux will connect to the fabric mux extension
     if (tensix_config_enabled) {
         const auto& fabric_tensix_config = builder_context.get_tensix_config();

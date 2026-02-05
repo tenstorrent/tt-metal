@@ -28,7 +28,11 @@
 #include <yaml-cpp/yaml.h>
 #include <tt_stl/assert.hpp>
 
+#include "llrt/tt_cluster.hpp"
+#include "llrt/rtoptions.hpp"
+#include "llrt/hal.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include "core_coord.hpp"
 #include "compressed_direction_table.hpp"
 #include "compressed_routing_path.hpp"
@@ -67,11 +71,6 @@
 namespace tt::tt_fabric {
 
 namespace {
-
-// Get the physical chip ids for a mesh
-std::unordered_map<ChipId, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(ChipId chip_id) {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(chip_id);
-}
 
 // Generate fixed ASIC position pinnings for Galaxy topology to ensure QSFP links align with fabric mesh corner nodes.
 // This is a performance optimization to ensure that MGD mapping does not bisect a device.
@@ -209,7 +208,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(const IntraMeshConnec
         }
     };
 
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     // For each mesh in the system
     for (auto mesh_id : user_meshes) {
         const auto& mesh_shape = this->get_physical_mesh_shape(MeshId{mesh_id});
@@ -245,15 +243,15 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(const IntraMeshConnec
             // Collect row and column mins from all hosts in a BigMesh
             auto rows_min = *std::min_element(row_min_planes.begin(), row_min_planes.end());
             auto cols_min = *std::min_element(col_min_planes.begin(), col_min_planes.end());
-            std::vector<size_t> rows_min_buf(*distributed_context.size());
-            std::vector<size_t> cols_min_buf(*distributed_context.size());
-            distributed_context.all_gather(
+            std::vector<size_t> rows_min_buf(*distributed_context_.get().size());
+            std::vector<size_t> cols_min_buf(*distributed_context_.get().size());
+            distributed_context_.get().all_gather(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&rows_min), sizeof(size_t)),
                 tt::stl::as_writable_bytes(tt::stl::Span<size_t>{rows_min_buf.data(), rows_min_buf.size()}));
-            distributed_context.all_gather(
+            distributed_context_.get().all_gather(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
                 tt::stl::as_writable_bytes(tt::stl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
-            distributed_context.barrier();
+            distributed_context_.get().barrier();
             const auto global_rows_min = std::min_element(rows_min_buf.begin(), rows_min_buf.end());
             const auto global_cols_min = std::min_element(cols_min_buf.begin(), cols_min_buf.end());
             // TODO: specialize by topology for better perf
@@ -293,7 +291,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     // the MeshGraphDescriptor. Single Host Multi-Mesh is only used for testing purposes.
     const char* mesh_id_str = std::getenv("TT_MESH_ID");
     if (mesh_id_str == nullptr) {
-        const auto& ctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+        const auto& ctx = distributed_context_.get();
         TT_FATAL(
             *ctx.size() == 1 && *ctx.rank() == 0,
             "Not specifying both TT_MESH_ID and TT_MESH_HOST_RANK is only supported for single host systems.");
@@ -406,7 +404,7 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) con
         return cache_it->second;
     }
 
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = cluster_.get();
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
 
     for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
@@ -429,24 +427,26 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) con
 }
 
 void ControlPlane::init_control_plane(
+    const tt::Cluster& cluster,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    const tt::tt_metal::Hal& hal,
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
     // Create mesh_graph first
     this->mesh_graph_ = std::make_unique<MeshGraph>(mesh_graph_desc_file, this->fabric_config_);
 
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+    this->physical_system_descriptor_ =
+        std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(driver, distributed_context, &hal, rtoptions);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
         // Initialize topology mapper with provided mapping, skipping discovery
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+            cluster, rtoptions, hal,
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
             this->local_mesh_binding_,
@@ -478,6 +478,7 @@ void ControlPlane::init_control_plane(
         }
 
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+            cluster, rtoptions, hal,
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
             this->local_mesh_binding_,
@@ -511,11 +512,12 @@ void ControlPlane::init_control_plane(
     this->mesh_graph_->print_connectivity();
 }
 
-void ControlPlane::init_control_plane_auto_discovery() {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+void ControlPlane::init_control_plane_auto_discovery(
+    const tt::Cluster& cluster, const tt::llrt::RunTimeOptions& rtoptions, const tt::tt_metal::Hal& hal) {
+    log_info(tt::LogMetal, "Initializing control plane auto discovery");
+    log_info(tt::LogMetal, "Cluster: {}", cluster.get_cluster_type());
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
     // NOTE: This algorithm is only supported for single host systems for now
     TT_FATAL(
@@ -525,14 +527,14 @@ void ControlPlane::init_control_plane_auto_discovery() {
         *distributed_context->size());
 
     // Initialize physical system descriptor
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+    this->physical_system_descriptor_ =
+        std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(driver, distributed_context, &hal, rtoptions);
 
     // Generate Mesh graph based on physical system descriptor
     // Reliability mode is obtained from MetalContext inside the function
     this->mesh_graph_ = std::make_unique<tt::tt_fabric::MeshGraph>(
-        tt::tt_fabric::TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
-            *this->physical_system_descriptor_, this->fabric_config_));
+        tt::tt_metal::experimental::tt_fabric::generate_mesh_graph_from_physical_system_descriptor(
+            *this, cluster, *this->physical_system_descriptor_, this->fabric_config_));
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
@@ -553,6 +555,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
         fixed_asic_position_pinnings = get_galaxy_fixed_asic_position_pinnings(board_size);
     }
     this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+        cluster, rtoptions, hal,
         *this->mesh_graph_,
         *this->physical_system_descriptor_,
         this->local_mesh_binding_,
@@ -585,28 +588,81 @@ void ControlPlane::init_control_plane_auto_discovery() {
 }
 
 ControlPlane::ControlPlane(
-    FabricConfig fabric_config, FabricReliabilityMode reliability_mode, FabricTensixConfig fabric_tensix_config) :
-    fabric_config_(fabric_config), reliability_mode_(reliability_mode), fabric_tensix_config_(fabric_tensix_config) {
-    init_control_plane_auto_discovery();
+    const tt::Cluster& cluster,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    const tt::tt_metal::Hal& hal,
+    tt_metal::distributed::multihost::DistributedContext& distributed_context,
+    tt_metal::distributed::multihost::DistributedContext& compute_only_distributed_context,
+    FabricConfig fabric_config,
+    FabricReliabilityMode reliability_mode,
+    FabricTensixConfig fabric_tensix_config,
+    FabricRouterConfig router_config,
+    FabricUDMMode fabric_udm_mode) :
+    cluster_(cluster),
+    rtoptions_(rtoptions),
+    hal_(hal),
+    distributed_context_(distributed_context),
+    compute_only_distributed_context_(compute_only_distributed_context),
+    fabric_config_(fabric_config),
+    fabric_tensix_config_(fabric_tensix_config),
+    fabric_udm_mode_(fabric_udm_mode),
+    fabric_router_config_(router_config),
+    fabric_reliability_mode_(reliability_mode) {
+    init_control_plane_auto_discovery(cluster, rtoptions, hal);
+    initialize_fabric_context(router_config, fabric_tensix_config, fabric_udm_mode);
 }
 
 ControlPlane::ControlPlane(
+    const tt::Cluster& cluster,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    const tt::tt_metal::Hal& hal,
+    tt_metal::distributed::multihost::DistributedContext& distributed_context,
+    tt_metal::distributed::multihost::DistributedContext& compute_only_distributed_context,
     const std::string& mesh_graph_desc_file,
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode,
-    FabricTensixConfig fabric_tensix_config) :
-    fabric_config_(fabric_config), reliability_mode_(reliability_mode), fabric_tensix_config_(fabric_tensix_config) {
-    init_control_plane(mesh_graph_desc_file, std::nullopt);
+    FabricTensixConfig fabric_tensix_config,
+    FabricRouterConfig router_config,
+    FabricUDMMode fabric_udm_mode) :
+    cluster_(cluster),
+    rtoptions_(rtoptions),
+    hal_(hal),
+    distributed_context_(distributed_context),
+    compute_only_distributed_context_(compute_only_distributed_context),
+    fabric_config_(fabric_config),
+    fabric_tensix_config_(fabric_tensix_config),
+    fabric_udm_mode_(fabric_udm_mode),
+    fabric_router_config_(router_config),
+    fabric_reliability_mode_(reliability_mode) {
+    init_control_plane(cluster, rtoptions, hal, mesh_graph_desc_file, std::nullopt);
+    initialize_fabric_context(router_config, fabric_tensix_config, fabric_udm_mode);
 }
 
 ControlPlane::ControlPlane(
+    const tt::Cluster& cluster,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    const tt::tt_metal::Hal& hal,
+    tt_metal::distributed::multihost::DistributedContext& distributed_context,
+    tt_metal::distributed::multihost::DistributedContext& compute_only_distributed_context,
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode,
-    FabricTensixConfig fabric_tensix_config) :
-    fabric_config_(fabric_config), reliability_mode_(reliability_mode), fabric_tensix_config_(fabric_tensix_config) {
-    init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
+    FabricTensixConfig fabric_tensix_config,
+    FabricRouterConfig router_config,
+    FabricUDMMode fabric_udm_mode) :
+    cluster_(cluster),
+    rtoptions_(rtoptions),
+    hal_(hal),
+    distributed_context_(distributed_context),
+    compute_only_distributed_context_(compute_only_distributed_context),
+    fabric_config_(fabric_config),
+    fabric_tensix_config_(fabric_tensix_config),
+    fabric_udm_mode_(fabric_udm_mode),
+    fabric_router_config_(router_config),
+    fabric_reliability_mode_(reliability_mode) {
+    init_control_plane(cluster, rtoptions, hal, mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
+    initialize_fabric_context(router_config, fabric_tensix_config, fabric_udm_mode);
 }
 
 void ControlPlane::load_physical_chip_mapping(
@@ -624,7 +680,7 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
     auto validate_chip_connections = [&](const MeshCoordinate& mesh_coord, const MeshCoordinate& other_mesh_coord) {
         ChipId physical_chip_id = get_physical_chip_id(mesh_coord);
         ChipId physical_chip_id_other = get_physical_chip_id(other_mesh_coord);
-        auto eth_links = get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
+        auto eth_links = cluster_.get().get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
         auto eth_links_to_other = eth_links.find(physical_chip_id_other);
         TT_FATAL(
             eth_links_to_other != eth_links.end(),
@@ -704,7 +760,7 @@ chan_id_t ControlPlane::get_downstream_eth_chan_id(
     // If no match found, return a channel from candidate_target_chans
     // Enabled for TG Dispatch on Fabric
     // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
+    if (cluster_.get().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
         while (src_routing_plane_id >= candidate_target_chans.size()) {
             src_routing_plane_id = src_routing_plane_id % candidate_target_chans.size();
         }
@@ -731,11 +787,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
             for (const auto& [_, src_fabric_chip_id] : local_mesh_chip_id_container) {
                 const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
                 auto physical_chip_id = get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-                num_ports_per_chip = tt::tt_metal::MetalContext::instance()
-                                         .get_cluster()
-                                         .get_soc_desc(physical_chip_id)
-                                         .get_cores(CoreType::ETH)
-                                         .size();
+                num_ports_per_chip = cluster_.get().get_soc_desc(physical_chip_id).get_cores(CoreType::ETH).size();
                 break;
             }
         }
@@ -856,8 +908,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 void ControlPlane::order_ethernet_channels() {
     for (auto& [fabric_node_id, eth_chans_by_dir] : this->router_port_directions_to_physical_eth_chan_map_) {
         auto phys_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
-        const auto src_asic_id = tt::tt_metal::AsicID{
-            tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(phys_chip_id)};
+        const auto src_asic_id = tt::tt_metal::AsicID{cluster_.get().get_unique_chip_ids().at(phys_chip_id)};
         const auto& asic_neighbors = physical_system_descriptor_->get_asic_neighbors(src_asic_id);
         for (auto& [direction, eth_chans] : eth_chans_by_dir) {
             std::optional<tt::tt_metal::AsicID> neighbor_asic_id;
@@ -875,7 +926,7 @@ void ControlPlane::order_ethernet_channels() {
                     break;
                 }
             }
-            const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(phys_chip_id);
+            const auto& soc_desc = cluster_.get().get_soc_desc(phys_chip_id);
             if (neighbor_asic_id.has_value() && src_asic_id > neighbor_asic_id.value()) {
                 std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
                     auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
@@ -885,8 +936,7 @@ void ControlPlane::order_ethernet_channels() {
             } else if (neighbor_asic_id.has_value()) {
                 // Find the physical chip ID for the neighbor AsicID
                 ChipId neighbor_phys_chip_id = 0;
-                const auto& chip_unique_ids =
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
+                const auto& chip_unique_ids = cluster_.get().get_unique_chip_ids();
                 for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
                     if (tt::tt_metal::AsicID{unique_id} == neighbor_asic_id.value()) {
                         neighbor_phys_chip_id = physical_chip_id;
@@ -894,8 +944,7 @@ void ControlPlane::order_ethernet_channels() {
                     }
                 }
                 // Get the soc_desc for the neighbor chip
-                const auto& neighbor_soc_desc =
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(neighbor_phys_chip_id);
+                const auto& neighbor_soc_desc = cluster_.get().get_soc_desc(neighbor_phys_chip_id);
                 std::sort(
                     eth_connections.begin(), eth_connections.end(), [&neighbor_soc_desc](const auto& a, const auto& b) {
                         auto translated_coords_a =
@@ -1020,9 +1069,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                         FabricNodeId(mesh_id, logical_connected_chip_id));
 
                     const auto& connected_chips_and_eth_cores =
-                        tt::tt_metal::MetalContext::instance()
-                            .get_cluster()
-                            .get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
+                        cluster_.get().get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
                     // If connected_chips_and_eth_cores contains physical_connected_chip_id then atleast one connection
                     // exists to physical_connected_chip_id
@@ -1127,7 +1174,7 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
 
     // Stub: For mock devices, return a synthetic FabricNodeId for any unmapped chip
     // Required for large mock clusters (32+ chips) where fabric config may not be fully populated
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (cluster_.get().get_target_device_type() == tt::TargetDevice::Mock) {
         return FabricNodeId(MeshId{0}, physical_chip_id);
     }
 
@@ -1459,6 +1506,8 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction
 }
 
 void write_to_worker_or_fabric_tensix_cores(
+    const ::tt::Cluster& cluster,
+    const ::tt::tt_metal::Hal& hal,
     FabricContext& fabric_context,
     FabricTensixConfig fabric_tensix_config,
     const void* worker_data,
@@ -1468,13 +1517,12 @@ void write_to_worker_or_fabric_tensix_cores(
     tt::tt_metal::HalL1MemAddrType addr_type,
     ChipId physical_chip_id) {
     TT_FATAL(
-        size ==
-            tt_metal::MetalContext::instance().hal().get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, addr_type),
+        size == hal.get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, addr_type),
         "ControlPlane: Tensix core data size mismatch expected {} but got {}",
         size,
-        tt_metal::MetalContext::instance().hal().get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, addr_type));
+        hal.get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, addr_type));
 
-    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
+    const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
     const std::vector<tt::umd::CoreCoord>& all_tensix_cores =
         soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
 
@@ -1520,23 +1568,23 @@ void write_to_worker_or_fabric_tensix_cores(
         CoreType core_type = get_core_type(core_coord);
         const void* data_to_write = select_data(core_type);
 
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        cluster.write_core(
             data_to_write,
             size,
             tt_cxy_pair(physical_chip_id, core_coord),
-            tt_metal::MetalContext::instance().hal().get_dev_addr(
-                tt_metal::HalProgrammableCoreType::TENSIX, addr_type));
+            hal.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, addr_type));
     }
 }
 
 static void write_to_all_cores(
+    const ::tt::Cluster& cluster,
+    const ::tt::tt_metal::Hal& hal,
+    const ControlPlane& control_plane,
     const void* data,
     size_t size,
     tt::tt_metal::HalL1MemAddrType addr_type,
     ChipId physical_chip_id,
     tt::tt_metal::HalProgrammableCoreType core_type) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
     const char* type_label = "Unknown";
     switch (core_type) {
         case tt::tt_metal::HalProgrammableCoreType::TENSIX: type_label = "Tensix"; break;
@@ -1546,10 +1594,10 @@ static void write_to_all_cores(
     }
 
     TT_FATAL(
-        size == tt::tt_metal::MetalContext::instance().hal().get_dev_size(core_type, addr_type),
+        size == hal.get_dev_size(core_type, addr_type),
         "ControlPlane: {} core data size mismatch expected {} but got {}",
         type_label,
-        tt::tt_metal::MetalContext::instance().hal().get_dev_size(core_type, addr_type),
+        hal.get_dev_size(core_type, addr_type),
         size);
 
     switch (core_type) {
@@ -1558,11 +1606,11 @@ static void write_to_all_cores(
             const std::vector<tt::umd::CoreCoord>& tensix_cores =
                 soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
             for (const auto& tensix_core : tensix_cores) {
-                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                cluster.write_core(
                     data,
                     size,
                     tt_cxy_pair(physical_chip_id, CoreCoord(tensix_core.x, tensix_core.y)),
-                    tt::tt_metal::MetalContext::instance().hal().get_dev_addr(core_type, addr_type));
+                    hal.get_dev_addr(core_type, addr_type));
             }
             break;
         }
@@ -1570,18 +1618,16 @@ static void write_to_all_cores(
         case tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH: {
             std::unordered_set<CoreCoord> logical_eth_cores =
                 (core_type == tt::tt_metal::HalProgrammableCoreType::IDLE_ETH)
-                    ? tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(
-                          physical_chip_id)
-                    : tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(
-                          physical_chip_id);
+                    ? control_plane.get_inactive_ethernet_cores(physical_chip_id)
+                    : control_plane.get_active_ethernet_cores(physical_chip_id);
             for (const CoreCoord& logical_eth_core : logical_eth_cores) {
                 CoreCoord virtual_eth_core = cluster.get_virtual_coordinate_from_logical_coordinates(
                     physical_chip_id, logical_eth_core, CoreType::ETH);
-                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                cluster.write_core(
                     data,
                     size,
                     tt_cxy_pair(physical_chip_id, CoreCoord(virtual_eth_core.x, virtual_eth_core.y)),
-                    tt::tt_metal::MetalContext::instance().hal().get_dev_addr(core_type, addr_type));
+                    hal.get_dev_addr(core_type, addr_type));
             }
             break;
         }
@@ -1728,24 +1774,33 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
 
     // Finally, write the full routing info to all Tensix cores and mirror to IDLE_ETH routing table
     write_to_all_cores(
+        cluster_.get(),
+        hal_.get(),
+        *this,
         &routing_info,
         sizeof(routing_info),
         tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE,
         physical_chip_id,
         tt::tt_metal::HalProgrammableCoreType::TENSIX);
     write_to_all_cores(
+        cluster_.get(),
+        hal_.get(),
+        *this,
         &routing_info,
         sizeof(routing_info),
         tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE,
         physical_chip_id,
         tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
     write_to_all_cores(
+        cluster_.get(),
+        hal_.get(),
+        *this,
         &routing_info,
         sizeof(routing_info),
         tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE,
         physical_chip_id,
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_chip_id);
+    cluster_.get().l1_barrier(physical_chip_id);
 }
 
 // Write connection info to Tensix cores' L1 on a specific chip
@@ -1766,7 +1821,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
     tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_tensix_connections = {};
 
     // Get all physically connected ethernet channels directly from the cluster
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = cluster_.get();
     const auto& connected_chips_and_eth_cores = cluster.get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
     size_t num_eth_endpoint = 0;
@@ -1819,6 +1874,8 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
     } else {
         // Non UDM mode: same connection info for all workers
         write_to_worker_or_fabric_tensix_cores(
+            cluster_.get(),
+            hal_.get(),
             this->get_fabric_context(),
             this->fabric_tensix_config_,
             &fabric_worker_connections,      // worker_data - goes to mux cores
@@ -1864,7 +1921,7 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     auto active_ethernet_cores = this->get_active_ethernet_cores(physical_chip_id);
 
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = hal_.get();
     const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
     auto telemetry = factory.create<::tt::tt_fabric::fabric_telemetry::FabricTelemetryStaticOnly>();
@@ -1877,25 +1934,21 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     static_view.supported_stats() = ::tt::tt_fabric::fabric_telemetry::DynamicStatistics::NONE;
 
     for (const auto& active_ethernet_core : active_ethernet_cores) {
-        auto chan_id = tt::tt_metal::MetalContext::instance()
-                           .get_cluster()
-                           .get_soc_desc(physical_chip_id)
-                           .logical_eth_core_to_chan_map.at(active_ethernet_core);
+        auto chan_id =
+            cluster_.get().get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(active_ethernet_core);
 
         // auto routing_direction = get_eth_chan_direction(fabric_node_id, chan_id);
         // static_view.direction() = static_cast<std::uint8_t>(routing_direction);
 
-        CoreCoord virtual_eth_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-                physical_chip_id, chan_id);
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        CoreCoord virtual_eth_core = cluster_.get().get_virtual_eth_core_from_channel(physical_chip_id, chan_id);
+        cluster_.get().write_core(
             telemetry.data(),
             telemetry.size(),
             tt_cxy_pair(physical_chip_id, virtual_eth_core),
             hal.get_dev_addr(
                 tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY));
     }
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_chip_id);
+    cluster_.get().l1_barrier(physical_chip_id);
 }
 
 void ControlPlane::write_routing_tables_to_all_chips() const {
@@ -1922,7 +1975,7 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
 // TODO: remove this after TG is deprecated
 std::vector<MeshId> ControlPlane::get_user_physical_mesh_ids() const {
     std::vector<MeshId> physical_mesh_ids;
-    const auto user_chips = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    const auto user_chips = cluster_.get().user_exposed_chip_ids();
     for (const auto& [fabric_node_id, physical_chip_id] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
         if (user_chips.contains(physical_chip_id) and
             std::find(physical_mesh_ids.begin(), physical_mesh_ids.end(), fabric_node_id.mesh_id) ==
@@ -1989,12 +2042,20 @@ void ControlPlane::print_ethernet_channels() const {
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
-void ControlPlane::initialize_fabric_context(const FabricRouterConfig& router_config) {
+void ControlPlane::initialize_fabric_context(
+    const FabricRouterConfig& router_config,
+    FabricTensixConfig fabric_tensix_config,
+    tt::tt_fabric::FabricUDMMode fabric_udm_mode) {
+    if (!tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+        // Fabric disabled
+        return;
+    }
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
     TT_FATAL(
         this->fabric_config_ != tt_fabric::FabricConfig::DISABLED,
         "Do not initialize fabric context with disabled fabric config");
-    this->fabric_context_ = std::make_unique<FabricContext>(this->fabric_config_, router_config);
+    this->fabric_context_ = std::make_unique<FabricContext>(
+        *this, this->fabric_config_, router_config, fabric_udm_mode, fabric_tensix_config);
 }
 
 FabricContext& ControlPlane::get_fabric_context() const {
@@ -2010,9 +2071,14 @@ std::map<std::string, std::string> ControlPlane::get_fabric_kernel_defines() con
     return this->fabric_context_->get_fabric_kernel_defines();
 }
 
-void ControlPlane::clear_fabric_context() {
+void ControlPlane::clear_fabric_context_and_reset_fabric_config() {
     this->fabric_context_.reset(nullptr);
     asic_id_to_fabric_node_cache_.clear();
+    this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+    this->fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    this->fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
+    this->fabric_router_config_ = tt_fabric::FabricRouterConfig{};
+    this->fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
 }
 
 void ControlPlane::initialize_fabric_tensix_datamover_config() {
@@ -2021,12 +2087,12 @@ void ControlPlane::initialize_fabric_tensix_datamover_config() {
 }
 
 bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const {
-    auto asic_id = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(chip_id);
+    auto asic_id = cluster_.get().get_unique_chip_ids().at(chip_id);
     return this->physical_system_descriptor_->is_cross_host_eth_link(tt::tt_metal::AsicID{asic_id}, chan_id);
 }
 
 std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores) const {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = cluster_.get();
 
     std::unordered_set<CoreCoord> active_ethernet_cores;
     const auto& cluster_desc = cluster.get_cluster_desc();
@@ -2087,7 +2153,7 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chi
 }
 
 std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(ChipId chip_id) const {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = cluster_.get();
     std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
     std::unordered_set<CoreCoord> inactive_ethernet_cores;
 
@@ -2103,8 +2169,7 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
     const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction) {
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
-    auto fabric_router_channels_on_chip =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(*this, physical_chip_id);
+    auto fabric_router_channels_on_chip = cluster_.get().get_fabric_ethernet_channels(*this, physical_chip_id);
 
     // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
     if (fabric_router_channels_on_chip.contains(chan_id)) {
@@ -2122,10 +2187,7 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
 void ControlPlane::assign_direction_to_fabric_eth_core(
     const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction) {
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
-    auto chan_id = tt::tt_metal::MetalContext::instance()
-                       .get_cluster()
-                       .get_soc_desc(physical_chip_id)
-                       .logical_eth_core_to_chan_map.at(eth_core);
+    auto chan_id = cluster_.get().get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
     this->assign_direction_to_fabric_eth_chan(fabric_node_id, chan_id, direction);
 }
 
@@ -2233,7 +2295,7 @@ void ControlPlane::populate_fabric_connection_info(
     chan_id_t eth_channel_id) const {
     constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID =
         tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = cluster_.get();
     const auto& fabric_context = this->get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
     // Sender channel 0 is always for local worker in the new design
@@ -2280,7 +2342,7 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     ChipId physical_chip_id,
     const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_mux_connections,
     const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_dispatcher_connections) const {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& cluster = cluster_.get();
     const auto& fabric_context = this->get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
@@ -2329,7 +2391,7 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
             data_to_write,
             sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
             tt_cxy_pair(physical_chip_id, core_coord),
-            tt_metal::MetalContext::instance().hal().get_dev_addr(
+            hal_.get().get_dev_addr(
                 tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS));
 
         // Initialize fabric connection sync region (lock=0, initialized=0, connection_storage zeroed)
@@ -2338,14 +2400,13 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
             &sync_init,
             sizeof(sync_init),
             tt_cxy_pair(physical_chip_id, core_coord),
-            tt_metal::MetalContext::instance().hal().get_dev_addr(
+            hal_.get().get_dev_addr(
                 tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::FABRIC_CONNECTION_LOCK));
     }
 }
 
 void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
-    if (*distributed_context.size() == 1) {
+    if (*distributed_context_.get().size() == 1) {
         // No need to collect from other hosts when running a single process
         return;
     }
@@ -2358,30 +2419,30 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
 
     auto serialized_data = tt::tt_fabric::serialize_router_port_directions_to_bytes(local_data);
     std::vector<uint8_t> serialized_remote_data;
-    auto my_rank = *(distributed_context.rank());
+    auto my_rank = *(distributed_context_.get().rank());
 
-    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
+    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context_.get().size()); ++bcast_root) {
         if (my_rank == bcast_root) {
             // Issue the broadcast from the current process to all other processes in the world
             int local_data_size_bytes = serialized_data.size();  // Send data size first
-            distributed_context.broadcast(
+            distributed_context_.get().broadcast(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
-                distributed_context.rank());
+                distributed_context_.get().rank());
 
-            distributed_context.broadcast(
+            distributed_context_.get().broadcast(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_data.data(), serialized_data.size())),
-                distributed_context.rank());
+                distributed_context_.get().rank());
         } else {
             // Acknowledge the broadcast issued by the root
             int remote_data_size_bytes = 0;  // Receive the size of the serialized data
-            distributed_context.broadcast(
+            distributed_context_.get().broadcast(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
             serialized_remote_data.clear();
             serialized_remote_data.resize(remote_data_size_bytes);
-            distributed_context.broadcast(
+            distributed_context_.get().broadcast(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_remote_data.data(), serialized_remote_data.size())),
                 tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
@@ -2416,7 +2477,7 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
         }
         // Barrier here for safety - Ensure that all ranks have completed the bcast op before proceeding to the next
         // root
-        distributed_context.barrier();
+        distributed_context_.get().barrier();
     }
 }
 
@@ -2440,7 +2501,7 @@ void ControlPlane::generate_intermesh_connectivity() {
     };
 
     if (!generate_mapping_locally_ &&
-        *(tt_metal::MetalContext::instance().full_world_distributed_context().size()) > 1) {
+        *(distributed_context_.get().size()) > 1) {
         // Intermesh Connectivity generation for the multi-host case
         auto exit_node_port_descriptors = this->generate_port_descriptors_for_exit_nodes();
         intermesh_connections = this->convert_port_desciptors_to_intermesh_connections(exit_node_port_descriptors);
@@ -2640,19 +2701,18 @@ void ControlPlane::forward_descriptors_to_controller(
     PortDescriptorTable& port_descriptors, uint32_t my_rank, const std::string& my_host) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t CONTROLLER_RANK = 0;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     const auto& physical_system_descriptor = this->physical_system_descriptor_;
     std::size_t serialized_table_size = 0;
     std::vector<uint8_t> serialized_table;
     if (my_rank != CONTROLLER_RANK) {
         serialized_table = serialize_to_bytes(port_descriptors);
         serialized_table_size = serialized_table.size();
-        distributed_context.send(
+        distributed_context_.get().send(
             tt::stl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
             Rank{CONTROLLER_RANK},
             Tag{0});
-        distributed_context.send(
+        distributed_context_.get().send(
             tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
             Rank{CONTROLLER_RANK},
             Tag{0});
@@ -2662,13 +2722,13 @@ void ControlPlane::forward_descriptors_to_controller(
                 continue;
             }
             auto peer_rank = physical_system_descriptor->get_rank_for_hostname(hostname);
-            distributed_context.recv(
+            distributed_context_.get().recv(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
                 Rank{static_cast<int>(peer_rank)},
                 Tag{0});
             serialized_table.resize(serialized_table_size);
-            distributed_context.recv(
+            distributed_context_.get().recv(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
                 Rank{static_cast<int>(peer_rank)},
                 Tag{0});
@@ -2702,12 +2762,11 @@ void ControlPlane::forward_descriptors_to_controller(
             }
         }
     }
-    distributed_context.barrier();
+    distributed_context_.get().barrier();
 }
 
 void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedIntermeshConnections& intermesh_connections) {
     using namespace tt::tt_metal::distributed::multihost;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     constexpr uint32_t CONTROLLER_RANK = 0;
     const auto& my_host = physical_system_descriptor_->my_host_name();
     auto my_rank = physical_system_descriptor_->get_rank_for_hostname(my_host);
@@ -2721,32 +2780,32 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
             auto peer_rank = physical_system_descriptor_->get_rank_for_hostname(hostname);
             serialized_connections = serialize_intermesh_connections_to_bytes(intermesh_connections);
             serialized_table_size = serialized_connections.size();
-            distributed_context.send(
+            distributed_context_.get().send(
                 tt::stl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
                 Rank{static_cast<int>(peer_rank)},
                 Tag{0});
-            distributed_context.send(
+            distributed_context_.get().send(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
                 Rank{static_cast<int>(peer_rank)},
                 Tag{0});
         }
     } else {
-        distributed_context.recv(
+        distributed_context_.get().recv(
             tt::stl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
             Rank{0},
             Tag{0});
         serialized_connections.resize(serialized_table_size);
-        distributed_context.recv(
+        distributed_context_.get().recv(
             tt::stl::as_writable_bytes(
                 tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
             Rank{0},
             Tag{0});
         intermesh_connections = deserialize_intermesh_connections_from_bytes(serialized_connections);
     }
-    distributed_context.barrier();
+    distributed_context_.get().barrier();
 }
 
 AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const PortDescriptorTable& port_descriptors) {
@@ -2900,8 +2959,7 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
         // Pair the exit nodes from the current mesh with the exit nodes from the neighboring meshes
         for (const auto& node : exit_nodes) {
             auto physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_.at(node);
-            auto asic_id =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
+            auto asic_id = cluster_.get().get_unique_chip_ids().at(physical_chip_id);
             const auto& asic_neighbors = physical_system_descriptor->get_asic_neighbors(tt::tt_metal::AsicID{asic_id});
 
             for (const auto& asic_neighbor : asic_neighbors) {
@@ -3061,7 +3119,7 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
 }
 
 std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const {
-    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    auto cluster_type = cluster_.get().get_cluster_type();
     TT_FATAL(
         cluster_type == tt::tt_metal::ClusterType::GALAXY,
         "get_galaxy_cabling_descriptor_path is only supported on Galaxy systems, but cluster type is {}",
@@ -3084,7 +3142,7 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
         cabling_map.begin(), cabling_map.end(), [fabric_type](const auto& pair) { return pair.first == fabric_type; });
     TT_FATAL(it != cabling_map.end(), "Unknown torus configuration: {}", enchantum::to_string(fabric_config));
 
-    const auto& root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
+    const auto& root_dir = rtoptions_.get().get_root_dir();
     return root_dir + std::string(it->second);
 }
 
@@ -3135,6 +3193,16 @@ std::vector<ChipId> ControlPlane::get_switch_mesh_device_ids() const {
 tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
     return topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
 }
+
+tt::tt_fabric::FabricConfig ControlPlane::get_fabric_config() const { return fabric_config_; }
+
+tt::tt_fabric::FabricRouterConfig ControlPlane::get_fabric_router_config() const { return fabric_router_config_; }
+
+tt::tt_fabric::FabricReliabilityMode ControlPlane::get_fabric_reliability_mode() const { return reliability_mode_; }
+
+tt::tt_fabric::FabricTensixConfig ControlPlane::get_fabric_tensix_config() const { return fabric_tensix_config_; }
+
+tt::tt_fabric::FabricUDMMode ControlPlane::get_fabric_udm_mode() const { return fabric_udm_mode_; }
 
 ControlPlane::~ControlPlane() = default;
 

@@ -12,9 +12,18 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
+namespace tt {
+class Cluster;
+}  // namespace tt
+
 namespace tt::tt_metal {
 class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
+
+namespace tt::tt_fabric {
+class ControlPlane;
+class MeshGraph;
+}  // namespace tt::tt_fabric
 
 namespace tt::tt_metal::experimental::tt_fabric {
 
@@ -25,14 +34,14 @@ using ::tt::tt_fabric::MeshId;
 
 // Type aliases for adjacency maps used in topology mapping
 using LogicalAdjacencyMap = std::map<FabricNodeId, std::vector<FabricNodeId>>;
-using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
+using PhysicalAdjacencyMap = std::map<::tt::tt_metal::AsicID, std::vector<::tt::tt_metal::AsicID>>;
 
 // Use ASICPosition from tt::tt_metal namespace
-using AsicPosition = tt::tt_metal::ASICPosition;
+using AsicPosition = ::tt::tt_metal::ASICPosition;
 
 // Map from AsicID to its physical position (TrayID, ASICLocation)
 // Required only when using pinning constraints
-using AsicPositionMap = std::map<tt::tt_metal::AsicID, AsicPosition>;
+using AsicPositionMap = std::map<::tt::tt_metal::AsicID, AsicPosition>;
 
 // Pinning constraint: maps an ASIC position to a FabricNodeId
 // This constrains which physical ASIC a logical node can be mapped to
@@ -64,8 +73,8 @@ struct TopologyMappingResult {
     std::string error_message;
 
     // Bidirectional mappings between logical fabric nodes and physical ASICs
-    std::map<FabricNodeId, tt::tt_metal::AsicID> fabric_node_to_asic;
-    std::map<tt::tt_metal::AsicID, FabricNodeId> asic_to_fabric_node;
+    std::map<FabricNodeId, ::tt::tt_metal::AsicID> fabric_node_to_asic;
+    std::map<::tt::tt_metal::AsicID, FabricNodeId> asic_to_fabric_node;
 };
 
 /**
@@ -125,7 +134,7 @@ TopologyMappingResult map_mesh_to_physical(
     const LogicalAdjacencyMap& logical_adjacency,
     const PhysicalAdjacencyMap& physical_adjacency,
     const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
-    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const std::map<::tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
     const TopologyMappingConfig& config = {});
 
 /**
@@ -154,7 +163,25 @@ std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt
  * @return std::map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
  */
 std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+    const ::tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<::tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+
+/**
+ * @brief Generate a mesh graph from a physical system descriptor
+ *
+ * This function creates a mesh graph by trying different mesh shapes and finding
+ * one that matches the physical topology described by the physical system descriptor.
+ *
+ * @param control_plane The control plane instance
+ * @param cluster The cluster instance
+ * @param physical_system_descriptor The physical system descriptor containing ASIC topology
+ * @param fabric_config The fabric configuration
+ * @return MeshGraph A mesh graph that matches the physical topology
+ */
+::tt::tt_fabric::MeshGraph generate_mesh_graph_from_physical_system_descriptor(
+    const ::tt::tt_fabric::ControlPlane& control_plane,
+    const ::tt::Cluster& cluster,
+    const ::tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    ::tt::tt_fabric::FabricConfig fabric_config);
 
 }  // namespace tt::tt_metal::experimental::tt_fabric

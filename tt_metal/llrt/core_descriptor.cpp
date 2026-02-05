@@ -71,7 +71,7 @@ inline std::string get_core_descriptor_file(
     } else {
         // Check if fabric tensix is enabled based on fabric tensix config
         tt_fabric::FabricTensixConfig fabric_tensix_config =
-            tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
         bool use_fabric_tensix = (fabric_tensix_config != tt_fabric::FabricTensixConfig::DISABLED);
 
         auto core_type = get_core_type_from_config(dispatch_core_config);
@@ -137,7 +137,7 @@ const core_descriptor_t& get_core_descriptor_config(
     }
 
     tt_fabric::FabricTensixConfig fabric_tensix_config =
-        tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
     std::unordered_map<uint8_t, core_descriptor_t>& config_by_num_cqs =
         config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];
     if (config_by_num_cqs.contains(num_hw_cqs)) {

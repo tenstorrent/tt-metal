@@ -108,7 +108,7 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
 void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
     const std::vector<tt_metal::IDevice*>& all_active_devices) {
     const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    const auto& fabric_tensix_config = control_plane.get_fabric_tensix_config();
 
     // Create per-device channel mappings using real ethernet channel IDs
     for (const auto& device : all_active_devices) {
@@ -339,7 +339,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
 
     // Set num_used_riscs_per_tensix based on mode
     // This determines how many core types we use on each tensix core
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
     switch (fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::MUX:
             // MUX mode: only 1 core type (MUX on BRISC) is used per tensix core
@@ -432,7 +432,7 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
     const std::vector<tt_metal::IDevice*>& all_active_devices) {
     std::map<ChannelTypes, uint32_t> channel_counts;
 
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
 
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         // UDM mode: calculate channels based on compute grid
@@ -589,7 +589,7 @@ std::shared_ptr<FabricTensixDatamoverRelayConfig> FabricTensixDatamoverConfig::c
 
 void FabricTensixDatamoverConfig::create_configs() {
     // Get the fabric tensix config mode
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
 
     switch (fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::MUX:
@@ -915,7 +915,7 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
 
     // Get core for this ethernet channel
     CoreCoord my_core_logical = tensix_config.get_core_for_channel(device->id(), ethernet_channel_id);
@@ -985,7 +985,7 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build_for_missing_dir
     const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
 
     // This method is only valid for UDM mode
     TT_FATAL(

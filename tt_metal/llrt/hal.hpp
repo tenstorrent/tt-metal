@@ -158,7 +158,7 @@ private:
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
     dev_msgs::Factory dev_msgs_factory_;
-    tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory_;
+    ::tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory_;
 
 public:
     HalCoreInfoType(
@@ -174,7 +174,7 @@ public:
         bool supports_dfbs,
         bool supports_receiving_multicast_cmds,
         dev_msgs::Factory dev_msgs_factory,
-        tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory) :
+        ::tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory) :
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
@@ -199,7 +199,7 @@ public:
     const std::string& get_processor_class_name(uint32_t processor_index, bool is_abbreviated) const;
     uint32_t get_processor_class_num_fw_binaries(uint32_t processor_class_idx) const;
     const dev_msgs::Factory& get_dev_msgs_factory() const;
-    const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory() const;
+    const ::tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory() const;
 };
 
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
@@ -232,7 +232,7 @@ inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
 
 inline const dev_msgs::Factory& HalCoreInfoType::get_dev_msgs_factory() const { return this->dev_msgs_factory_; }
 
-inline const tt::tt_fabric::fabric_telemetry::Factory& HalCoreInfoType::get_fabric_telemetry_factory() const {
+inline const ::tt::tt_fabric::fabric_telemetry::Factory& HalCoreInfoType::get_fabric_telemetry_factory() const {
     return this->fabric_telemetry_factory_;
 }
 
@@ -518,7 +518,7 @@ public:
         return this->core_info_[index].get_dev_msgs_factory();
     }
 
-    const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory(
+    const ::tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory(
         HalProgrammableCoreType programmable_core_type) const {
         TT_ASSERT(programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH);
         auto index = get_programmable_core_type_index(programmable_core_type);

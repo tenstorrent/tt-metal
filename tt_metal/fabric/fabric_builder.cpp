@@ -233,7 +233,7 @@ void FabricBuilder::compile_ancillary_kernels() {
 
 void FabricBuilder::compile_kernels_for_missing_directions() {
     // Only applicable in UDM mode
-    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config();
     if (fabric_tensix_config != FabricTensixConfig::UDM) {
         return;
     }

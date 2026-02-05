@@ -97,7 +97,12 @@ public:
     void reinitialize_for_real_hardware();
 
     // Control plane accessors
-    void initialize_control_plane();
+    void initialize_control_plane(
+        tt_fabric::FabricConfig fabric_config,
+        tt_fabric::FabricReliabilityMode reliability_mode,
+        tt_fabric::FabricTensixConfig fabric_tensix_config,
+        tt_fabric::FabricRouterConfig fabric_router_config,
+        tt_fabric::FabricUDMMode fabric_udm_mode);
     tt::tt_fabric::ControlPlane& get_control_plane();
     void set_custom_fabric_topology(
         const std::string& mesh_graph_desc_file,
@@ -112,21 +117,15 @@ public:
         tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED,
         tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT,
         tt_fabric::FabricRouterConfig router_config = tt_fabric::FabricRouterConfig{});
+    // Do not call this manually. This is called by set_fabric_config. Don't call this unless you know what you are
+    // doing.
+    void initialize_fabric_config();
+    // Call this after adding devices to the pool
     void initialize_fabric_tensix_datamover_config();
-    tt_fabric::FabricConfig get_fabric_config() const;
-    tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
-    const tt_fabric::FabricRouterConfig& get_fabric_router_config() const;
 
     const distributed::multihost::DistributedContext& global_distributed_context();
     const distributed::multihost::DistributedContext& full_world_distributed_context() const;
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
-
-    // Fabric tensix configuration
-    void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
-    tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
-
-    // Fabric UDM mode configuration
-    tt_fabric::FabricUDMMode get_fabric_udm_mode() const;
 
     // Fabric manager mode configuration
     tt_fabric::FabricManagerMode get_fabric_manager() const;
@@ -150,9 +149,26 @@ private:
     void clear_l1_state(ChipId device_id);
     void clear_dram_state(ChipId device_id);
     void clear_launch_messages_on_eth_cores(ChipId device_id);
-    void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
-    void construct_control_plane();
-    void initialize_control_plane_impl();  // Private implementation without mutex
+    void construct_control_plane(
+        const std::filesystem::path& mesh_graph_desc_path,
+        tt_fabric::FabricConfig fabric_config,
+        tt_fabric::FabricReliabilityMode reliability_mode,
+        tt_fabric::FabricTensixConfig fabric_tensix_config,
+        tt_fabric::FabricRouterConfig fabric_router_config,
+        tt_fabric::FabricUDMMode fabric_udm_mode);
+    void construct_control_plane(
+        tt_fabric::FabricConfig fabric_config,
+        tt_fabric::FabricReliabilityMode reliability_mode,
+        tt_fabric::FabricTensixConfig fabric_tensix_config,
+        tt_fabric::FabricRouterConfig fabric_router_config,
+        tt_fabric::FabricUDMMode fabric_udm_mode);
+    // Private implementation without mutex
+    void initialize_control_plane_impl(
+        tt_fabric::FabricConfig fabric_config,
+        tt_fabric::FabricReliabilityMode reliability_mode,
+        tt_fabric::FabricTensixConfig fabric_tensix_config,
+        tt_fabric::FabricRouterConfig fabric_router_config,
+        tt_fabric::FabricUDMMode fabric_udm_mode);
     void teardown_fabric_config();
     void teardown_base_objects();
     void initialize_base_objects();
@@ -238,10 +254,6 @@ private:
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
-    tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
-    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
-    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
-    tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     std::shared_ptr<distributed::multihost::DistributedContext> compute_only_distributed_context_;
 
@@ -250,11 +262,6 @@ private:
     // but to also easily push/pop ids to temporarily change the current cq id.
     static thread_local CommandQueueIdStack command_queue_id_stack_for_thread_;
 
-    // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
-    // is expected that any downed devices/links will result in some sort of error condition being
-    // reported. When set to false, the control plane is free to instantiate fewer routing planes
-    // according to which links are available.
-    tt_fabric::FabricReliabilityMode fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
     uint8_t num_fabric_active_routing_planes_ = 0;
     std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;

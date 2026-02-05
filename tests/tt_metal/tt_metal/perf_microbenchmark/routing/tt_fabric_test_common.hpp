@@ -1772,9 +1772,6 @@ private:
             tt::tt_fabric::FabricManagerMode::DEFAULT,
             router_config);
 
-        // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
-        // first need to re-init contorl plane so that it checks out the latest fabric config.
-        tt::tt_metal::MetalContext::instance().initialize_control_plane();
         local_host_rank_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding();
 
         // Initialize mesh and device info that was deferred from init()

@@ -501,6 +501,7 @@ void MetalContext::reinitialize_for_real_hardware() {
 
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
+    control_plane_.reset();
     distributed_context_.reset();
     // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
     inspector_data_.reset();
@@ -725,22 +726,13 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 }
 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
-    bool need_fabric_context_init = false;
-    {
-        std::lock_guard<std::mutex> lock(control_plane_mutex_);
-        if (!control_plane_) {
-            // Initialize control plane (creates stub for mock devices)
-            this->initialize_control_plane_impl();
-            // Mark that we need to initialize fabric context after releasing the mutex
-            // to avoid deadlock (initialize_fabric_context may call back into get_control_plane).
-            // Since we just created the control plane, we know fabric context is not initialized.
-            need_fabric_context_init = tt::tt_fabric::is_tt_fabric_config(this->fabric_config_);
-        }
-    }
-    // Initialize fabric context outside the mutex to avoid deadlock
-    if (need_fabric_context_init) {
-        control_plane_->initialize_fabric_context(this->fabric_router_config_);
-        control_plane_->configure_routing_tables_for_fabric_ethernet_channels();
+    if (!control_plane_) {
+        initialize_control_plane(
+            tt_fabric::FabricConfig::DISABLED,
+            tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+            tt_fabric::FabricTensixConfig::DISABLED,
+            tt_fabric::FabricRouterConfig{},
+            tt_fabric::FabricUDMMode::DISABLED);
     }
     return *control_plane_;
 }
@@ -754,7 +746,9 @@ void MetalContext::set_custom_fabric_topology(
     // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
     custom_mesh_graph_desc_path_ = mesh_graph_desc_file;
-    this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    this->set_fabric_config(
+        this->get_control_plane().get_fabric_config(),
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 void MetalContext::set_default_fabric_topology() {
@@ -772,18 +766,19 @@ void MetalContext::set_default_fabric_topology() {
     } else {
         custom_mesh_graph_desc_path_ = std::nullopt;
     }
-    this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    this->set_fabric_config(
+        this->get_control_plane().get_fabric_config(),
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 void MetalContext::teardown_fabric_config() {
-    this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
-    this->cluster_->configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
+    this->cluster_->configure_ethernet_cores_for_fabric_routers(tt_fabric::FabricConfig::DISABLED);
     this->num_fabric_active_routing_planes_ = 0;
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
     //     rtoptions_.set_erisc_iram_enabled(false);
     // }
     // Stub control plane for mock devices will make this a no-op
-    this->get_control_plane().clear_fabric_context();
+    this->get_control_plane().clear_fabric_context_and_reset_fabric_config();
 }
 
 void MetalContext::set_fabric_config(
@@ -797,23 +792,23 @@ void MetalContext::set_fabric_config(
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     // Only set force_reinit_ when the fabric config actually changes to avoid unnecessary teardown.
-    if (this->fabric_config_ != fabric_config) {
+    if (!this->control_plane_ || this->get_control_plane().get_fabric_config() != fabric_config) {
         force_reinit_ = true;
     }
 
-    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
-        fabric_config == tt_fabric::FabricConfig::DISABLED) {
-        this->fabric_config_ = fabric_config;
-        this->fabric_reliability_mode_ = reliability_mode;
-    } else {
-        TT_FATAL(
-            this->fabric_config_ == fabric_config,
-            "Tried to override previous value of fabric config: {}, with: {}",
-            this->fabric_config_,
-            fabric_config);
+    if (this->control_plane_) {
+        auto current_state = this->get_control_plane().get_fabric_config();
+        // Allow overriding the previous state if it was disabled, or we are now disabling Fabric
+        if (current_state != tt_fabric::FabricConfig::DISABLED && fabric_config != tt_fabric::FabricConfig::DISABLED) {
+            TT_FATAL(
+                current_state == fabric_config,
+                "Tried to override previous value of fabric config: {}, with: {}",
+                current_state,
+                fabric_config);
+        }
     }
 
-    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
+    if (fabric_config == tt_fabric::FabricConfig::DISABLED) {
         if (num_routing_planes.has_value()) {
             log_warning(
                 tt::LogMetal,
@@ -850,25 +845,28 @@ void MetalContext::set_fabric_config(
     }
     this->num_fabric_active_routing_planes_ = new_val;
 
-    // Set the fabric tensix config
-    this->set_fabric_tensix_config(fabric_tensix_config);
-    this->fabric_udm_mode_ = fabric_udm_mode;
     this->fabric_manager_ = fabric_manager;
-    this->fabric_router_config_ = router_config;
 
-    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
+    this->cluster_->configure_ethernet_cores_for_fabric_routers(fabric_config, this->num_fabric_active_routing_planes_);
+    initialize_control_plane_impl(
+        fabric_config, reliability_mode, fabric_tensix_config, router_config, fabric_udm_mode);
+    initialize_fabric_config();
+}
+
+void MetalContext::initialize_fabric_config() {
+    auto fabric_config = this->get_control_plane().get_fabric_config();
+    if (fabric_config == tt_fabric::FabricConfig::DISABLED) {
         return;
     }
 
-    this->cluster_->configure_ethernet_cores_for_fabric_routers(
-        this->fabric_config_, this->num_fabric_active_routing_planes_);
-    // get_control_plane() will lazily initialize the control plane including
-    // fabric context and routing tables via initialize_control_plane_impl()
-    this->get_control_plane();
+    this->cluster_->configure_ethernet_cores_for_fabric_routers(fabric_config, this->num_fabric_active_routing_planes_);
+    auto& control_plane = this->get_control_plane();
+    control_plane.configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 void MetalContext::initialize_fabric_tensix_datamover_config() {
-    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
+    auto fabric_config = this->get_control_plane().get_fabric_config();
+    if (fabric_config == tt_fabric::FabricConfig::DISABLED) {
         return;
     }
 
@@ -877,47 +875,54 @@ void MetalContext::initialize_fabric_tensix_datamover_config() {
     }
 
     // Initialize fabric tensix config after routing tables are configured and devices are available
-    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+    if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
         auto& control_plane = this->get_control_plane();
         control_plane.initialize_fabric_tensix_datamover_config();
     }
 }
 
-tt_fabric::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
-
-tt_fabric::FabricReliabilityMode MetalContext::get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
-
-const tt_fabric::FabricRouterConfig& MetalContext::get_fabric_router_config() const { return fabric_router_config_; }
-
-void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    fabric_tensix_config_ = fabric_tensix_config;
-}
-
-tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { return fabric_tensix_config_; }
-
-tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabric_udm_mode_; }
-
 tt_fabric::FabricManagerMode MetalContext::get_fabric_manager() const { return fabric_manager_; }
 
-void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
+void MetalContext::construct_control_plane(
+    const std::filesystem::path& mesh_graph_desc_path,
+    tt_fabric::FabricConfig fabric_config,
+    tt_fabric::FabricReliabilityMode reliability_mode,
+    tt_fabric::FabricTensixConfig fabric_tensix_config,
+    tt_fabric::FabricRouterConfig fabric_router_config,
+    tt_fabric::FabricUDMMode fabric_udm_mode) {
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         log_info(tt::LogDistributed, "Using custom Fabric Node Id to physical chip mapping.");
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
+            *cluster_,
+            rtoptions_,
+            *hal_,
             mesh_graph_desc_path.string(),
             logical_mesh_chip_id_to_physical_chip_id_mapping_,
-            this->fabric_config_,
-            this->fabric_reliability_mode_,
-            this->fabric_tensix_config_);
+            fabric_config,
+            reliability_mode,
+            fabric_tensix_config,
+            fabric_router_config,
+            fabric_udm_mode);
     } else {
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
+            *cluster_,
+            rtoptions_,
+            *hal_,
             mesh_graph_desc_path.string(),
-            this->fabric_config_,
-            this->fabric_reliability_mode_,
-            this->fabric_tensix_config_);
+            fabric_config,
+            reliability_mode,
+            fabric_tensix_config,
+            fabric_router_config,
+            fabric_udm_mode);
     }
 }
 
-void MetalContext::construct_control_plane() {
+void MetalContext::construct_control_plane(
+    tt_fabric::FabricConfig fabric_config,
+    tt_fabric::FabricReliabilityMode reliability_mode,
+    tt_fabric::FabricTensixConfig fabric_tensix_config,
+    tt_fabric::FabricRouterConfig fabric_router_config,
+    tt_fabric::FabricUDMMode fabric_udm_mode) {
     // Use auto-discovery to generate mesh graph from physical system descriptor
     // This uses MeshGraph::generate_from_physical_system_descriptor which internally
     // uses map_mesh_to_physical to find a valid mapping
@@ -930,15 +935,33 @@ void MetalContext::construct_control_plane() {
     }
     log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
     control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-        this->fabric_config_, this->fabric_reliability_mode_, this->fabric_tensix_config_);
+        *cluster_,
+        rtoptions_,
+        *hal_,
+        fabric_config,
+        reliability_mode,
+        fabric_tensix_config,
+        fabric_router_config,
+        fabric_udm_mode);
 }
 
-void MetalContext::initialize_control_plane() {
+void MetalContext::initialize_control_plane(
+    tt_fabric::FabricConfig fabric_config,
+    tt_fabric::FabricReliabilityMode reliability_mode,
+    tt_fabric::FabricTensixConfig fabric_tensix_config,
+    tt_fabric::FabricRouterConfig fabric_router_config,
+    tt_fabric::FabricUDMMode fabric_udm_mode) {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
-    initialize_control_plane_impl();
+    initialize_control_plane_impl(
+        fabric_config, reliability_mode, fabric_tensix_config, fabric_router_config, fabric_udm_mode);
 }
 
-void MetalContext::initialize_control_plane_impl() {
+void MetalContext::initialize_control_plane_impl(
+    tt_fabric::FabricConfig fabric_config,
+    tt_fabric::FabricReliabilityMode reliability_mode,
+    tt_fabric::FabricTensixConfig fabric_tensix_config,
+    tt_fabric::FabricRouterConfig fabric_router_config,
+    tt_fabric::FabricUDMMode fabric_udm_mode) {
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
@@ -948,16 +971,23 @@ void MetalContext::initialize_control_plane_impl() {
             mesh_graph_desc_path.string());
 
         log_info(tt::LogDistributed, "Using custom mesh graph descriptor: {}", mesh_graph_desc_path.string());
-        this->construct_control_plane(mesh_graph_desc_path);
+        this->construct_control_plane(
+            mesh_graph_desc_path,
+            fabric_config,
+            reliability_mode,
+            fabric_tensix_config,
+            fabric_router_config,
+            fabric_udm_mode);
     } else {
         // If no custom mesh graph descriptor use auto discovery to generate mesh graph
         log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
 
         if (*distributed_context_->size() == 1) {
-            this->construct_control_plane();
+            this->construct_control_plane(
+                fabric_config, reliability_mode, fabric_tensix_config, fabric_router_config, fabric_udm_mode);
         } else {
             auto cluster_type = cluster_->get_cluster_type();
-            auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
+            auto fabric_type = tt::tt_fabric::get_fabric_type(fabric_config);
             std::filesystem::path mesh_graph_desc_path =
                 tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
                     cluster_type, rtoptions_.get_root_dir(), fabric_type);
@@ -969,8 +999,18 @@ void MetalContext::initialize_control_plane_impl() {
                 std::filesystem::exists(mesh_graph_desc_path),
                 "Mesh graph descriptor file not found: {}",
                 mesh_graph_desc_path.string());
-            this->construct_control_plane(mesh_graph_desc_path);
+            this->construct_control_plane(
+                mesh_graph_desc_path,
+                fabric_config,
+                reliability_mode,
+                fabric_tensix_config,
+                fabric_router_config,
+                fabric_udm_mode);
         }
+    }
+
+    if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
+        control_plane_->configure_routing_tables_for_fabric_ethernet_channels();
     }
 }
 

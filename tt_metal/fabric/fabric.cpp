@@ -429,7 +429,9 @@ tt::tt_fabric::Topology get_fabric_topology() {
     return control_plane.get_fabric_context().get_fabric_topology();
 }
 
-FabricConfig GetFabricConfig() { return tt::tt_metal::MetalContext::instance().get_fabric_config(); }
+FabricConfig GetFabricConfig() {
+    return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config();
+}
 
 void SetFabricConfig(
     FabricConfig fabric_config,

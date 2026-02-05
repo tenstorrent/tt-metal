@@ -108,17 +108,16 @@ FabricStatus get_fabric_status() {
     FabricStatus status;
 
     try {
-        auto& context = tt::tt_metal::MetalContext::instance();
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
         // Get SetFabricConfig parameters from MetalContext
-        status.fabric_config = context.get_fabric_config();
+        status.fabric_config = control_plane.get_fabric_config();
         status.fabric_configured = (status.fabric_config != tt::tt_fabric::FabricConfig::DISABLED);
-        status.fabric_tensix_config = context.get_fabric_tensix_config();
-        status.fabric_udm_mode = context.get_fabric_udm_mode();
-        status.fabric_manager = context.get_fabric_manager();
+        status.fabric_tensix_config = control_plane.get_fabric_tensix_config();
+        status.fabric_udm_mode = control_plane.get_fabric_udm_mode();
+        status.fabric_manager = tt::tt_metal::MetalContext::instance().get_fabric_manager();
 
         // Print fabric node IDs
-        auto& control_plane = context.get_control_plane();
         const auto& cluster = tt_metal::MetalContext::instance().get_cluster();
 
         log_output_rank("Fabric Node IDs:");

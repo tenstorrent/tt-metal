@@ -298,7 +298,8 @@ void write_socket_configs(
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
     const SocketSenderSize sender_size;
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt_fabric::FabricConfig fabric_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config();
     const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();

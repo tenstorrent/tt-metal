@@ -13,6 +13,7 @@
 #include <limits>
 #include <memory>
 #include <map>
+#include "experimental/fabric/control_plane.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 
@@ -37,8 +38,13 @@ public:
     static constexpr auto routing_directions = {
         RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W, RoutingDirection::Z};
 
+    // Initialize a FabricContext with the given control plane.
     explicit FabricContext(
-        tt::tt_fabric::FabricConfig fabric_config, const FabricRouterConfig& router_config = FabricRouterConfig{});
+        ControlPlane& control_plane,
+        tt::tt_fabric::FabricConfig fabric_config,
+        const FabricRouterConfig& router_config = FabricRouterConfig{},
+        tt::tt_fabric::FabricUDMMode fabric_udm_mode = tt::tt_fabric::FabricUDMMode::DISABLED,
+        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED);
     ~FabricContext();
 
     // Non-copyable, non-movable
@@ -61,8 +67,8 @@ public:
 
     // ============ Z Router Queries ============
     // Check if a fabric node has Z router channels
-    // Queries control plane to see if any ethernet channels are assigned Z direction
-    bool has_z_router_on_device(const FabricNodeId& fabric_node_id) const;
+    // Queries using the provided control plane to see if any ethernet channels are assigned Z direction
+    bool has_z_router_on_device(const ControlPlane& control_plane, const FabricNodeId& fabric_node_id) const;
 
     // ============ Tensix Config Query ============
     // Returns true if tensix is enabled (MUX or UDM mode)
@@ -135,7 +141,7 @@ private:
     };
 
     // ============ Private Implementation ============
-    std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;
+    std::unordered_map<MeshId, bool> check_for_wrap_around_mesh(ControlPlane& control_plane) const;  // used during init
     size_t compute_packet_header_size_bytes() const;
     size_t compute_max_payload_size_bytes() const;
     size_t validate_and_apply_packet_size(size_t requested_size) const;
@@ -144,11 +150,11 @@ private:
     void compute_routing_mode();
 
     // Topology-based sizing
-    uint32_t get_max_1d_hops_from_topology() const;
-    uint32_t get_max_2d_hops_from_topology() const;
+    uint32_t get_max_1d_hops_from_topology(const ControlPlane& control_plane) const;
+    uint32_t get_max_2d_hops_from_topology(const ControlPlane& control_plane) const;
     uint32_t compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const;
     uint32_t compute_2d_pkt_hdr_route_buffer_size(uint32_t max_hops) const;
-    void compute_packet_specifications();
+    void compute_packet_specifications(const ControlPlane& control_plane);
 
     // Header size helpers (use explicit template instantiation for type safety)
     size_t get_1d_header_size(uint32_t extension_words) const;
@@ -162,6 +168,7 @@ private:
     bool is_2D_routing_enabled_ = false;
     bool bubble_flow_control_enabled_ = false;
     bool tensix_enabled_ = false;
+    tt::tt_fabric::FabricUDMMode udm_mode_ = tt::tt_fabric::FabricUDMMode::DISABLED;
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_;
 

@@ -303,17 +303,14 @@ void DeviceManager::initialize_devices(const std::vector<ChipId>& device_ids) {
 
     // Need to reserve eth cores for fabric before we initialize individual devices to maintain consistent state
     // while initializing default sub device state.
-    // Only set default FABRIC_1D if no fabric config has been set yet.
     // May be called again below
-    if (tt::tt_metal::MetalContext::instance().get_fabric_config() == tt::tt_fabric::FabricConfig::DISABLED) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
-    }
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Mock devices don't support fabric operations
     bool is_mock =
         tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
     if (any_remote_devices && !is_mock) {
-        auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+        auto fabric_config = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
             fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
             tt::tt_fabric::SetFabricConfig(
@@ -399,7 +396,8 @@ void DeviceManager::compile_and_load_fabric() {
     const auto& active_devices = this->get_all_active_devices();
 
     // Activate fabric (must be before FD)
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt_fabric::FabricConfig fabric_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
             log_info(tt::LogMetal, "Skipping fabric initialization for mock devices");
@@ -641,7 +639,8 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     }
 
     // Only can launch Fabric if all devices are active
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt_fabric::FabricConfig fabric_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config) and
         (tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().size() !=
          tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().size())) {
@@ -681,7 +680,8 @@ uint32_t DeviceManager::get_fabric_router_sync_timeout_ms() {
 }
 
 void DeviceManager::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt_fabric::FabricConfig fabric_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config();
     if (!tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
         return;
     }
@@ -970,7 +970,7 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     if (has_flag(
             tt::tt_metal::MetalContext::instance().get_fabric_manager(),
             tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
-        const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+        const auto fabric_config = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config();
         if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
             const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
             const auto& fabric_context = control_plane.get_fabric_context();
@@ -980,8 +980,9 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
 
             // Terminate fabric tensix configs (mux cores) if enabled
             // TODO: issue #26855, move the termination process to device
-            bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                         tt::tt_fabric::FabricTensixConfig::DISABLED;
+            bool tensix_config_enabled =
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_tensix_config() !=
+                tt::tt_fabric::FabricTensixConfig::DISABLED;
             if (tensix_config_enabled) {
                 const auto& tensix_config = builder_ctx.get_tensix_config();
 

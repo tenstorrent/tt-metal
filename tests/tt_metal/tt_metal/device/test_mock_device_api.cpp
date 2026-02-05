@@ -113,6 +113,7 @@ TEST_F(MockDeviceAPIFixture, SwitchFromMockToRealHardwareWithDeviceCreation) {
     experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
     EXPECT_TRUE(experimental::is_mock_mode_registered());
 
+    log_info(tt::LogMetal, "Creating and closing a device to populate device-specific maps");
     // Create and close a device to populate device-specific maps
     {
         auto device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
@@ -123,15 +124,18 @@ TEST_F(MockDeviceAPIFixture, SwitchFromMockToRealHardwareWithDeviceCreation) {
     // Disable mock mode - should reinitialize MetalContext for real hardware
     // This clears device-specific maps (dram_bank_offset_map_, l1_bank_offset_map_, etc.)
     // and reinitializes base objects (cluster_, hal_) with real hardware
+    log_info(tt::LogMetal, "Disabling mock mode");
     experimental::disable_mock_mode();
     EXPECT_FALSE(experimental::is_mock_mode_registered());
     EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
 
     // Create real hardware device - verifies full reinitialization worked correctly
     // including cleanup and reinitialization of device-specific data structures
+    log_info(tt::LogMetal, "Creating a real hardware device");
     {
         auto real_device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
         EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), tt::TargetDevice::Silicon);
+        log_info(tt::LogMetal, "Closing real hardware device");
         real_device->close();
         real_device.reset();
     }

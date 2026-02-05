@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/dispatch/dispatch_core_common.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -13,7 +14,8 @@ namespace tt::tt_metal {
 
 DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
     if (MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
-        if (MetalContext::instance().get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
+        if (MetalContext::instance().get_control_plane().get_fabric_tensix_config() ==
+            tt_fabric::FabricTensixConfig::DISABLED) {
             return DispatchCoreAxis::COL;
         }
     }
