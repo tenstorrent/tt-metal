@@ -24,8 +24,6 @@ class TtTimestepEmbedding(LightweightModule):
 
         self.linear_1_program_config = model_config.get_matmul_config(f"{module_path}.linear_1")
         self.linear_2_program_config = model_config.get_matmul_config(f"{module_path}.linear_2")
-        assert self.linear_1_program_config is not None
-        assert self.linear_2_program_config is not None
 
     def forward(self, sample):
         sample = ttnn.linear(
