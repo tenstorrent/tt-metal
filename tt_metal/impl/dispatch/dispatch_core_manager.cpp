@@ -246,17 +246,19 @@ void dispatch_core_manager::reset_dispatch_core_manager(
 }
 
 CoreCoord dispatch_core_manager::get_next_available_dispatch_core(ChipId device_id) {
-    if (!this->available_dispatch_cores_by_device.contains(device_id)) {
+    auto it = this->available_dispatch_cores_by_device.find(device_id);
+    if (it == this->available_dispatch_cores_by_device.end()) {
         TT_THROW("Invalid device ID to assign dispatch cores {}", device_id);
     }
-    if (this->available_dispatch_cores_by_device.at(device_id).empty()) {
+    auto& cores = it->second;
+    if (cores.empty()) {
         TT_THROW(
             "No more available dispatch cores on device {} to assign. Expand dispatch cores specified in core "
             "descriptor YAML",
             device_id);
     }
-    CoreCoord avail_dispatch_core = this->available_dispatch_cores_by_device.at(device_id).front();
-    this->available_dispatch_cores_by_device.at(device_id).pop_front();
+    CoreCoord avail_dispatch_core = cores.front();
+    cores.pop_front();
     return avail_dispatch_core;
 }
 

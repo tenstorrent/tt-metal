@@ -541,11 +541,11 @@ void DeviceManager::activate_device(ChipId id) {
     if (!device) {
         log_debug(tt::LogMetal, "DeviceManager new device {}", id);
         // For mock devices, these maps may not be populated, use defaults
-        int worker_core_thread_core =
-            this->worker_thread_to_cpu_core_map_.contains(id) ? this->worker_thread_to_cpu_core_map_.at(id) : -1;
-        int completion_queue_reader_core = this->completion_queue_reader_to_cpu_core_map_.contains(id)
-                                               ? this->completion_queue_reader_to_cpu_core_map_.at(id)
-                                               : -1;
+        auto worker_it = this->worker_thread_to_cpu_core_map_.find(id);
+        int worker_core_thread_core = worker_it != this->worker_thread_to_cpu_core_map_.end() ? worker_it->second : -1;
+        auto cq_it = this->completion_queue_reader_to_cpu_core_map_.find(id);
+        int completion_queue_reader_core =
+            cq_it != this->completion_queue_reader_to_cpu_core_map_.end() ? cq_it->second : -1;
         device = new Device(
             id,
             this->num_hw_cqs_,

@@ -241,10 +241,12 @@ const std::vector<uint32_t>& AllocatorImpl::get_bank_ids_from_dram_channel(uint3
 const std::vector<uint32_t>& AllocatorImpl::get_bank_ids_from_logical_core(
     BufferType buffer_type, const CoreCoord& logical_core) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!logical_core_to_bank_ids_.at(buffer_type).contains(logical_core)) {
+    const auto& core_to_bank_ids = logical_core_to_bank_ids_.at(buffer_type);
+    auto it = core_to_bank_ids.find(logical_core);
+    if (it == core_to_bank_ids.end()) {
         TT_THROW("No {} bank exists for core {}", enchantum::to_string(buffer_type), logical_core.str());
     }
-    return logical_core_to_bank_ids_.at(buffer_type).at(logical_core);
+    return it->second;
 }
 
 const AllocatorConfig& AllocatorImpl::get_config() const { return *config_; }

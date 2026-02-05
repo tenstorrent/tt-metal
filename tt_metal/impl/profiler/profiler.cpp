@@ -2646,8 +2646,9 @@ void DeviceProfiler::pollDebugDumpResults(
 
         std::map<CoreCoord, std::set<tracy::RiscType>> cores_with_data_in_current_buffer;
         for (const auto& [virtual_core, risc_types] : stalled_cores_with_data) {
+            const auto& risc_to_buffer = this->active_dram_buffer_per_core_risc_map.at(virtual_core);
             for (const auto& risc_type : risc_types) {
-                if (this->active_dram_buffer_per_core_risc_map.at(virtual_core).at(risc_type) == buffer_index) {
+                if (risc_to_buffer.at(risc_type) == buffer_index) {
                     cores_with_data_in_current_buffer[virtual_core].insert(risc_type);
                 }
             }

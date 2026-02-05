@@ -593,6 +593,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
 
     // Connect the graph with upstream/downstream kernels
     for (const auto& node : nodes) {
+        auto& current_kernel = node_id_to_kernel.at(node.id);
         for (int idx = 0; idx < node.upstream_ids.size(); idx++) {
             if (node.upstream_ids[idx] >= 0) {
                 TT_ASSERT(
@@ -600,7 +601,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
                     "Upstream kernel id {} out of bounds (max = {})",
                     node.upstream_ids[idx],
                     node_id_to_kernel.size());
-                node_id_to_kernel.at(node.id)->AddUpstreamKernel(node_id_to_kernel.at(node.upstream_ids[idx]));
+                current_kernel->AddUpstreamKernel(node_id_to_kernel.at(node.upstream_ids[idx]));
             }
         }
         for (int idx = 0; idx < node.downstream_ids.size(); idx++) {
@@ -610,7 +611,7 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
                     "Downstream kernel id {} out of bounds (max = {})",
                     node.downstream_ids[idx],
                     node_id_to_kernel.size());
-                node_id_to_kernel.at(node.id)->AddDownstreamKernel(node_id_to_kernel.at(node.downstream_ids[idx]));
+                current_kernel->AddDownstreamKernel(node_id_to_kernel.at(node.downstream_ids[idx]));
             }
         }
     }
@@ -806,10 +807,8 @@ const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId d
 }
 
 const std::unordered_set<TerminationInfo>& get_registered_termination_cores(ChipId dev_id) {
-    if (!termination_info.contains(dev_id)) {
-        termination_info[dev_id] = {};
-    }
-    return termination_info.at(dev_id);
+    // operator[] will default-construct entry if not present, avoiding multiple lookups
+    return termination_info[dev_id];
 }
 
 void reset_topology_state() {
