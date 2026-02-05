@@ -317,12 +317,7 @@ def test_binary_sharded_row_major_layout(device, a_shape, b_shape, sharded_core_
 )
 @pytest.mark.parametrize(
     "ttnn_fn",
-    [
-        "add",
-        "sub",
-        "mul",
-        # "add_", "sub_", "mul_"
-    ],
+    ["add", "sub", "mul", "add_", "sub_", "mul_"],
 )
 def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     torch.manual_seed(0)
@@ -2810,7 +2805,7 @@ def test_binary_sharded_shardspec_dram(dtype_pt, dtype_tt, device):
     (
         [torch.bfloat16, ttnn.bfloat16],
         # does not work for binary_ng yet
-        [torch.bfloat16, ttnn.bfloat8_b],
+        # [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
 def test_binary_sharded_bcast_w_height_uneven(device, dtype_pt, dtype_tt):

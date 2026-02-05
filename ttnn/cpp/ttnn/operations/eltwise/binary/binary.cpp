@@ -15,6 +15,15 @@
 namespace ttnn::operations::binary {
 namespace detail {
 
+inline bool is_block_format(DataType dtype) {
+    using enum DataType;
+    switch (dtype) {
+        case BFLOAT4_B:
+        case BFLOAT8_B: return true;
+        default: return false;
+    }
+}
+
 inline Tensor to_dtype(const Tensor& input, DataType dtype) {
     if (input.dtype() == dtype) {
         return input;
@@ -24,15 +33,6 @@ inline Tensor to_dtype(const Tensor& input, DataType dtype) {
 }
 
 inline float to_dtype(float input, [[maybe_unused]] DataType dtype) { return input; }
-
-inline bool is_block_format(DataType dtype) {
-    using enum DataType;
-    switch (dtype) {
-        case BFLOAT4_B:
-        case BFLOAT8_B: return true;
-        default: return false;
-    }
-}
 
 inline bool is_layout_or_scalar(const Tensor& input, Layout layout) { return input.layout() == layout; }
 
@@ -55,6 +55,7 @@ inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input) {
 
     using enum BinaryOpType;
 
+    // For ADD/SUB/MUL, binary_ng can handle block formats directly
     return op != ADD and op != SUB and op != MUL;
 }
 
@@ -73,10 +74,21 @@ inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, con
         return true;
     }
 
+    // Check if there's broadcasting in H or W dimensions
     const auto& input_shape = input.logical_shape();
     const auto& other_shape = other.logical_shape();
 
-    return (input_shape[-2] == 1 and other_shape[-2] > 1) or (input_shape[-1] == 1 and other_shape[-1] > 1);
+    // If there's broadcasting in H or W, binary_ng needs typecast for correct results
+    bool has_broadcast =
+        (input_shape[-2] == 1 and other_shape[-2] > 1) or (input_shape[-1] == 1 and other_shape[-1] > 1) or
+        (other_shape[-2] == 1 and input_shape[-2] > 1) or (other_shape[-1] == 1 and input_shape[-1] > 1);
+
+    // For sharded tensors with broadcast, don't typecast to avoid losing sharding
+    if (has_broadcast && (input.is_sharded() || other.is_sharded())) {
+        return false;
+    }
+
+    return has_broadcast;
 }
 
 inline bool needs_typecast_to_bfloat16(
