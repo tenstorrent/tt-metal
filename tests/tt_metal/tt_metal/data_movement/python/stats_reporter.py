@@ -207,7 +207,7 @@ class StatsReporter:
                                 [
                                     run_stats.get("num_cores", 1),
                                     run_stats.get("total_bytes", 0),
-                                    run_stats.get("max_duration", run_stats["duration_cycles"]),
+                                    run_stats.get("wall_clock_time", run_stats["duration_cycles"]),
                                     run_stats.get("combined_bandwidth", run_stats["bandwidth"]),
                                 ]
                             )
