@@ -45,14 +45,14 @@ This document catalogs potential improvements identified through a comprehensive
 - **Finding:** `cb_wait_front()` when data is already present returns immediately (just a counter check). The redundant calls add ~10-50ns overhead each, which is unmeasurable in ms-scale operations. Tested with NCHt up to 512 - baseline and "optimized" versions showed identical performance within noise.
 - **Recommendation:** Not worth a PR. The TODO comment is technically correct but the optimization is negligible on current hardware.
 
-### 4. Untilize Block Size Tuning
-- **Priority:** HIGH
+### ~~4. Untilize Block Size Tuning~~ (NO IMPROVEMENT)
+- **Priority:** ~~HIGH~~ → **SKIP**
+- **Status:** ⚠️ **TESTED - MADE THINGS WORSE** (2026-02-05)
 - **File:** `ttnn/cpp/ttnn/operations/data_movement/untilize/device/factories/untilize_multi_core_parallelize_column_program_factory.cpp` (line 55)
 - **Problem:** Each untilize block is a single tile, limiting performance
 - **TODO marker:** `// TODO increase block size to increase untilize performance, currently each untilize block is a single tile`
-- **Impact:** Direct untilize performance improvement
-- **Tradeoff:** Uses more L1 memory
-- **Complexity:** LOW-MEDIUM - parameter tuning with benchmarking
+- **Finding:** Enabled the commented-out L1-based block size calculation. Results: most shapes got 8-38% SLOWER, only tall tensors (few tiles per row) improved ~16%. Single-tile processing appears to have better pipelining/cache behavior.
+- **Recommendation:** Not worth a PR. The TODO is wrong - larger blocks hurt performance.
 
 ### 5. Double Map Lookup Elimination
 - **Priority:** HIGH
