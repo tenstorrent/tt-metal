@@ -56,7 +56,7 @@ from tracy.process_model_log import (
 )
 
 from .....utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from .....layers.normalization import DistributedLayerNorm
+from .....layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from .....parallel.manager import CCLManager
 from .....utils.test import line_params
 
@@ -391,6 +391,117 @@ def test_run_spatial_layernorm(
     logger.info(f"Completed {NUM_WARMUP_ITERS} warmup + {NUM_MEASUREMENT_ITERS} measurement iterations")
 
 
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        [MESH_SHAPE, line_params],
+    ],
+    ids=["bh_4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "config_name, seq_len",
+    [
+        ("1xGLX_14b_720p", SEQ_LEN_1XGLX),
+        ("4xGLX_14b_720p_emulated", SEQ_LEN_4XGLX_EMULATED),
+    ],
+    ids=["1xGLX", "4xGLX_emulated"],
+)
+def test_run_spatial_rmsnorm(
+    mesh_device: ttnn.MeshDevice,
+    config_name: str,
+    seq_len: int,
+    reset_seeds,
+) -> None:
+    """
+    Run spatial RMSNorm (norm_q/norm_k) in Wan attention.
+
+    This test is meant to be run with Tracy profiler via test_spatial_rmsnorm_perf.
+    It runs the DistributedRMSNorm with optional fused RoPE, as used for Q/K normalization
+    in the self-attention path.
+    """
+    tp_factor = MESH_SHAPE[TP_AXIS]
+    n_local_heads = WAN_NUM_HEADS // tp_factor
+
+    logger.info(f"Running spatial RMSNorm: {config_name}")
+    logger.info(f"  Sequence length: {seq_len}")
+    logger.info(f"  TP factor: {tp_factor}, local heads: {n_local_heads}")
+
+    # Create CCL manager
+    ccl_manager = CCLManager(
+        mesh_device=mesh_device,
+        num_links=NUM_LINKS,
+        topology=TOPOLOGY,
+    )
+
+    # Create DistributedRMSNorm (norm_q/norm_k in attention)
+    norm = DistributedRMSNorm(
+        embedding_dim=WAN_DIM,
+        norm_eps=WAN_EPS,
+        norm_elementwise_affine=True,
+        bias=False,
+        mesh_axis=TP_AXIS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+    )
+
+    # Load dummy weights via state dict
+    torch.manual_seed(0)
+    dummy_state_dict = {"weight": torch.randn(WAN_DIM)}
+    norm.load_state_dict(dummy_state_dict)
+
+    # Create input tensor (shape after Q/K projection, fractured on TP)
+    # Input is [1, B, N, D] fractured on TP for D dimension
+    batch_size = 1
+    local_dim = WAN_DIM // tp_factor
+    seq_len_local = seq_len // MESH_SHAPE[SP_AXIS]
+
+    input_torch = torch.randn((1, batch_size, seq_len_local, local_dim), dtype=torch.float32)
+    tt_input = bf16_tensor(input_torch, device=mesh_device)
+
+    # Create RoPE tensors for fused RoPE variant
+    # rope_cos/rope_sin shape: [1, B, N, A*H] where A=local_heads, H=head_dim
+    # Actually looking at the code, after create_heads it becomes [B, A, N, H]
+    # But the norm takes the pre-split input and rope
+    rope_dim = WAN_HEAD_DIM
+    rope_cos_torch = torch.randn((1, batch_size, seq_len_local, rope_dim), dtype=torch.float32)
+    rope_sin_torch = torch.randn((1, batch_size, seq_len_local, rope_dim), dtype=torch.float32)
+
+    tt_rope_cos = bf16_tensor(rope_cos_torch, device=mesh_device)
+    tt_rope_sin = bf16_tensor(rope_sin_torch, device=mesh_device)
+
+    # Create transformation matrix for RoPE (typically identity or rotation)
+    # trans_mat shape is [1, 1, head_dim, head_dim]
+    trans_mat_torch = torch.eye(32, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+    tt_trans_mat = bf16_tensor(trans_mat_torch, device=mesh_device)
+
+    logger.info(f"  TT input shape: {tt_input.shape}")
+
+    # Warmup iterations
+    for _ in range(NUM_WARMUP_ITERS):
+        _ = norm(
+            tt_input,
+            num_heads_per_device=n_local_heads,
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+            trans_mat=tt_trans_mat,
+        )
+    ttnn.synchronize_device(mesh_device)
+
+    # Measurement iterations
+    for _ in range(NUM_MEASUREMENT_ITERS):
+        _ = norm(
+            tt_input,
+            num_heads_per_device=n_local_heads,
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+            trans_mat=tt_trans_mat,
+        )
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info(f"Completed {NUM_WARMUP_ITERS} warmup + {NUM_MEASUREMENT_ITERS} measurement iterations")
+
+
 # =============================================================================
 # Op group definitions
 # =============================================================================
@@ -400,6 +511,13 @@ SPATIAL_LAYERNORM_OPS = [
     ("PreAllGatherDeviceOperation", "pre_allgather"),
     ("AllGatherAsyncDeviceOperation", "all_gather"),
     ("PostAllGatherDeviceOperation", "post_allgather"),
+]
+
+# Spatial RMSNorm: DistributedRMSNorm with fused RoPE (norm_q/norm_k in self-attention)
+SPATIAL_RMSNORM_OPS = [
+    ("FusedRMSNormPreAllGatherDeviceOperation", "pre_allgather"),
+    ("AllGatherAsyncDeviceOperation", "all_gather"),
+    ("FusedRMSNormPostAllGatherDeviceOperation", "post_allgather"),
 ]
 
 
@@ -436,3 +554,30 @@ def test_spatial_layernorm_perf(config_name: str, seq_len: int) -> None:
 
     results = analyze_op_group(PROFILER_OUTPUT_DIR, SPATIAL_LAYERNORM_OPS)
     print_perf_table("SPATIAL LAYERNORM", config_name, seq_len, SPATIAL_LAYERNORM_OPS, results)
+
+
+@pytest.mark.parametrize(
+    "config_name, seq_len",
+    [
+        ("1xGLX_14b_720p", SEQ_LEN_1XGLX),
+        ("4xGLX_14b_720p_emulated", SEQ_LEN_4XGLX_EMULATED),
+    ],
+    ids=["1xGLX", "4xGLX_emulated"],
+)
+def test_spatial_rmsnorm_perf(config_name: str, seq_len: int) -> None:
+    """
+    Measure device performance for spatial RMSNorm using Tracy profiler.
+
+    This benchmarks DistributedRMSNorm with fused RoPE, as used for Q/K
+    normalization in the self-attention path.
+    """
+    command = build_test_command("test_run_spatial_rmsnorm", config_name)
+
+    run_device_profiler_quiet(
+        command,
+        PROFILER_OUTPUT_DIR,
+        device_analysis_types=["device_kernel_duration"],
+    )
+
+    results = analyze_op_group(PROFILER_OUTPUT_DIR, SPATIAL_RMSNORM_OPS)
+    print_perf_table("SPATIAL RMSNORM", config_name, seq_len, SPATIAL_RMSNORM_OPS, results)
