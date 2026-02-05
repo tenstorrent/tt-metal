@@ -14,9 +14,9 @@ using namespace tt::tt_fabric::mesh::experimental;
 #error "API_TYPE_Linear or API_TYPE_Mesh must be defined"
 #endif
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "test_host_kernel_common.hpp"
+#include "tests/tt_metal/tt_fabric/common/test_host_kernel_common.hpp"
 using tt::tt_fabric::fabric_router_tests::FabricPacketType;
-using tt::tt_fabric::fabric_router_tests::TestNocPacketType;
+using tt::tt_fabric::fabric_router_tests::NocPacketType;
 
 template <uint8_t num_send_dir>
 union HopInfo {
@@ -77,7 +77,7 @@ HopInfo<num_send_dir> get_hop_info_from_args(size_t& rt_arg_idx) {
 }
 
 // Set-state helper: field selection via template; packet size is runtime argument when applicable
-template <uint8_t num_send_dir, FabricPacketType fabric_packet_type, TestNocPacketType noc_packet_type>
+template <uint8_t num_send_dir, FabricPacketType fabric_packet_type, NocPacketType noc_packet_type>
 void set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
@@ -88,7 +88,7 @@ void set_state(
         ASSERT(false);  // Stateful sparse multicast has not been tested yet
     } else if constexpr (fabric_packet_type == FabricPacketType::CHIP_MULTICAST) {
         switch (noc_packet_type) {
-            case TEST_NOC_UNICAST_WRITE: {
+            case NOC_UNICAST_WRITE: {
                 fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
                     connection_manager,
                     route_id,
@@ -97,13 +97,13 @@ void set_state(
                     nullptr,
                     packet_size);
             } break;
-            case TEST_NOC_UNICAST_INLINE_WRITE: {
+            case NOC_UNICAST_INLINE_WRITE: {
                 tt::tt_fabric::NocUnicastInlineWriteCommandHeader hdr;
                 hdr.value = 0xDEADBEEF;
                 fabric_multicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::Value>(
                     connection_manager, route_id, hop_info.mcast.start_distance, hop_info.mcast.range, hdr);
             } break;
-            case TEST_NOC_UNICAST_SCATTER_WRITE: {
+            case NOC_UNICAST_SCATTER_WRITE: {
                 const auto shdr =
                     tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_multicast_noc_scatter_write_set_state<
@@ -115,7 +115,7 @@ void set_state(
                     shdr,
                     packet_size);
             } break;
-            case TEST_NOC_UNICAST_ATOMIC_INC: {
+            case NOC_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader ah(
                     0,    // dummy noc_address
                     1,    // val
@@ -125,7 +125,7 @@ void set_state(
                     UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
                     connection_manager, route_id, hop_info.mcast.start_distance, hop_info.mcast.range, ah);
             } break;
-            case TEST_NOC_FUSED_UNICAST_ATOMIC_INC: {
+            case NOC_FUSED_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fh(
                     0,    // dummy noc_address
                     0,    // dummy semaphore_noc_address
@@ -143,24 +143,24 @@ void set_state(
         }
     } else {
         switch (noc_packet_type) {
-            case TEST_NOC_UNICAST_WRITE: {
+            case NOC_UNICAST_WRITE: {
                 fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
                     connection_manager, route_id, hop_info.ucast.num_hops, nullptr, packet_size);
             } break;
-            case TEST_NOC_UNICAST_INLINE_WRITE: {
+            case NOC_UNICAST_INLINE_WRITE: {
                 tt::tt_fabric::NocUnicastInlineWriteCommandHeader hdr;
                 hdr.value = 0xDEADBEEF;
                 fabric_unicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::Value>(
                     connection_manager, route_id, hop_info.ucast.num_hops, hdr);
             } break;
-            case TEST_NOC_UNICAST_SCATTER_WRITE: {
+            case NOC_UNICAST_SCATTER_WRITE: {
                 const auto shdr =
                     tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_unicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     connection_manager, route_id, hop_info.ucast.num_hops, shdr, packet_size);
             } break;
-            case TEST_NOC_UNICAST_ATOMIC_INC: {
+            case NOC_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader ah(
                     0,    // dummy noc_address
                     1,    // val
@@ -170,7 +170,7 @@ void set_state(
                     UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
                     connection_manager, route_id, hop_info.ucast.num_hops, ah);
             } break;
-            case TEST_NOC_FUSED_UNICAST_ATOMIC_INC: {
+            case NOC_FUSED_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fh(
                     0,    // dummy noc_address
                     0,    // dummy semaphore_noc_address
@@ -201,24 +201,24 @@ void set_state(
         }
 
         switch (noc_packet_type) {
-            case TEST_NOC_UNICAST_WRITE: {
+            case NOC_UNICAST_WRITE: {
                 fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
                     connection_manager, route_id, ranges, nullptr, packet_size);
             } break;
-            case TEST_NOC_UNICAST_INLINE_WRITE: {
+            case NOC_UNICAST_INLINE_WRITE: {
                 tt::tt_fabric::NocUnicastInlineWriteCommandHeader hdr;
                 hdr.value = 0xDEADBEEF;
                 fabric_multicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::Value>(
                     connection_manager, route_id, ranges, hdr);
             } break;
-            case TEST_NOC_UNICAST_SCATTER_WRITE: {
+            case NOC_UNICAST_SCATTER_WRITE: {
                 const auto shdr =
                     tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_multicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     connection_manager, route_id, ranges, shdr, packet_size);
             } break;
-            case TEST_NOC_UNICAST_ATOMIC_INC: {
+            case NOC_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader ah(
                     0,    // dummy noc_address
                     1,    // val
@@ -228,7 +228,7 @@ void set_state(
                     UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
                     connection_manager, route_id, ranges, ah);
             } break;
-            case TEST_NOC_FUSED_UNICAST_ATOMIC_INC: {
+            case NOC_FUSED_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fh(
                     0,    // dummy noc_address
                     0,    // dummy semaphore_noc_address
@@ -245,24 +245,24 @@ void set_state(
         }
     } else {
         switch (noc_packet_type) {
-            case TEST_NOC_UNICAST_WRITE: {
+            case NOC_UNICAST_WRITE: {
                 fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
                     connection_manager, route_id, nullptr, packet_size);
             } break;
-            case TEST_NOC_UNICAST_INLINE_WRITE: {
+            case NOC_UNICAST_INLINE_WRITE: {
                 tt::tt_fabric::NocUnicastInlineWriteCommandHeader hdr;
                 hdr.value = 0xDEADBEEF;
                 fabric_unicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::Value>(
                     connection_manager, route_id, hdr);
             } break;
-            case TEST_NOC_UNICAST_SCATTER_WRITE: {
+            case NOC_UNICAST_SCATTER_WRITE: {
                 const auto shdr =
                     tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_unicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     connection_manager, route_id, shdr, packet_size);
             } break;
-            case TEST_NOC_UNICAST_ATOMIC_INC: {
+            case NOC_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader ah(
                     0,    // dummy noc_address
                     1,    // val
@@ -272,7 +272,7 @@ void set_state(
                     UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
                     connection_manager, route_id, ah);
             } break;
-            case TEST_NOC_FUSED_UNICAST_ATOMIC_INC: {
+            case NOC_FUSED_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fh(
                     0,    // dummy noc_address
                     0,    // dummy semaphore_noc_address
