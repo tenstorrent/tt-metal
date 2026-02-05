@@ -44,6 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
+      model-config: ${{ steps.generate.outputs.model-config }}
     steps:
       - name: Generate test matrix
         id: generate
@@ -54,7 +55,7 @@ jobs:
               tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "mistral-7b", "phi-3-mini-128k"]'
               ;;
             n300)
-              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "phi-3-mini-128k", "qwen2.5-7b", "qwen2.5-coder-32b", "phi-3-mini-128k"]'
+              tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "phi-3-mini-128k"]'
               ;;
             p100)
               tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "phi-3-mini-128k"]'
@@ -66,169 +67,53 @@ jobs:
               tt_transformers_models='["llama3.1-8b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             WH-LB)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "phi-3-mini-128k", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen3-32b"]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             BH-LB)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "phi-3-mini-128k", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen3-32b"]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             BH-QB2)
-              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "phi-3-mini-128k", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b"]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b", "llama3.1-8b", "llama3.1-70b", "llama3.2-1b", "llama3.2-3b", "llama3.2-11b-vision", "llama3.2-90b-vision", "mistral-7b", "qwen2.5-7b", "qwen2.5-coder-32b", "qwen2.5-72b", "qwen3-32b", "phi-3-mini-128k"]'
               ;;
             WH-6U)
-              tt_transformers_models='[]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b"]'
               ;;
             BH-6U)
-              tt_transformers_models='[]'
+              tt_transformers_models='["deepseek-r1-distill-llama-70b"]'
               ;;
           esac
 
           # Define device-compatible standalone models
           case "${{ inputs.device-type }}" in
             n150)
-              standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo","test_args":"--input-path=models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json","timeout":30},
-                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/wormhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
-                {"name":"vit","test_path":"models/demos/vision/classification/vit/wormhole/tests/test_ttnn_optimized_sharded_vit_wh.py::test_vit","test_args":"","timeout":20},
-                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
-                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"unet-vanilla","test_path":"models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
-                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
-                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20},
-              ]')
+              standalone_models='["whisper", "stable-diffusion-wh", "resnet-50-wh", "vit-wh", "mobilenet-v2", "unet-vgg19-wh", "unet-vanilla", "segformer", "ufld-v2-wh", "bert-large", "sentence-bert-wh"]'
               ;;
             n300)
-              standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo","test_args":"--input-path=models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json","timeout":30},
-                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/wormhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
-                {"name":"vit","test_path":"models/demos/vision/classification/vit/wormhole/tests/test_ttnn_optimized_sharded_vit_wh.py::test_vit","test_args":"","timeout":20},
-                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
-                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"unet-vanilla","test_path":"models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
-                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
-                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20}
-              ]')
+              standalone_models='["whisper", "stable-diffusion-wh", "resnet-50-wh", "vit-wh", "mobilenet-v2", "unet-vgg19-wh", "unet-vanilla", "segformer", "ufld-v2-wh", "bert-large", "sentence-bert-wh"]'
               ;;
             p100)
-              standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/blackhole/tests/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512","test_args":"","timeout":30},
-                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
-                {"name":"vit","test_path":"models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20},
-                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
-                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20}
-                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
-                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20},
-              ]')
+              standalone_models='["whisper", "stable-diffusion-bh", "resnet-50-bh", "vit-bh", "mobilenet-v2", "unet-vgg19-bh", "segformer", "ufld-v2-bh", "bert-large", "sentence-bert-bh"]'
               ;;
             p150)
-              standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/blackhole/tests/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512","test_args":"","timeout":30},
-                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
-                {"name":"vit","test_path":"models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20},
-                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
-                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
-                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
-                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20}
-              ]')
+              standalone_models='["whisper", "stable-diffusion-bh", "resnet-50-bh", "vit-bh", "mobilenet-v2", "unet-vgg19-bh", "segformer", "ufld-v2-bh", "bert-large", "sentence-bert-bh"]'
               ;;
             p300)
-              standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/blackhole/tests/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512","test_args":"","timeout":30},
-                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
-                {"name":"vit","test_path":"models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20},
-                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
-                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
-                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
-                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20}
-              ]')
+              standalone_models='["whisper", "stable-diffusion-bh", "resnet-50-bh", "vit-bh", "mobilenet-v2", "unet-vgg19-bh", "segformer", "ufld-v2-bh", "bert-large", "sentence-bert-bh"]'
               ;;
             WH-LB)
-              standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo","test_args":"--input-path=models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json","timeout":30},
-                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py::test_demo_sample","test_args":"","timeout":20},
-                {"name":"vit","test_path":"models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference","test_args":"","timeout":20},
-                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
-                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"unet-vanilla","test_path":"models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
-                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
-                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20}
-              ]')
+              standalone_models='["whisper", "stable-diffusion-wh", "resnet-50-ttnn", "vit-t3000", "mobilenet-v2", "unet-vgg19-wh", "unet-vanilla", "segformer", "ufld-v2-wh", "bert-large", "sentence-bert-wh"]'
               ;;
             BH-LB)
-              standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/blackhole/tests/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512","test_args":"","timeout":30},
-                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
-                {"name":"vit","test_path":"models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20},
-                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
-                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
-                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
-                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20}
-              ]')
+              standalone_models='["whisper", "stable-diffusion-bh", "resnet-50-bh", "vit-bh", "mobilenet-v2", "unet-vgg19-bh", "segformer", "ufld-v2-bh", "bert-large", "sentence-bert-bh"]'
               ;;
             BH-QB2)
-              standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/blackhole/tests/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512","test_args":"","timeout":30},
-                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
-                {"name":"vit","test_path":"models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20}
-                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
-                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
-                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
-                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20},
-                {"name":"flux.1-dev","test_path":"models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py::test_flux1_pipeline","test_args":"-k \"2x2sp0tp1 and dev and encoder_device and not_traced and yes_use_cache\"","timeout":60},
-                {"name":"wan2.2-t2v-a14b","test_path":"models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py::test_pipeline_inference","test_args":"-k \"1x4sp0tp1 and resolution_480p\"","timeout":60}
-              ]')
+              standalone_models='["whisper", "stable-diffusion-bh", "resnet-50-bh", "vit-bh", "mobilenet-v2", "unet-vgg19-bh", "segformer", "ufld-v2-bh", "bert-large", "sentence-bert-bh"]'
               ;;
             WH-6U)
-              standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo","test_args":"--input-path=models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json","timeout":30},
-                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py::test_demo_sample","test_args":"","timeout":20},
-                {"name":"vit","test_path":"models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference","test_args":"","timeout":20},
-                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
-                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"unet-vanilla","test_path":"models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
-                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model","test_args":"","timeout":20},
-                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model","test_args":"","timeout":20}
-              ]')
+              standalone_models='["whisper", "stable-diffusion-wh", "resnet-50-ttnn", "vit-t3000", "mobilenet-v2", "unet-vgg19-wh", "unet-vanilla", "segformer", "ufld-v2-wh", "bert-large", "sentence-bert-wh"]'
               ;;
             BH-6U)
-              standalone_models=$(jq -nc '[
-                {"name":"whisper","test_path":"models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset","test_args":"","timeout":30},
-                {"name":"stable-diffusion","test_path":"models/demos/vision/generative/stable_diffusion/blackhole/tests/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512","test_args":"","timeout":30},
-                {"name":"resnet-50","test_path":"models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_sample","test_args":"","timeout":20},
-                {"name":"vit","test_path":"models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit","test_args":"","timeout":20},
-                {"name":"mobilenet-v2","test_path":"models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2","test_args":"","timeout":20},
-                {"name":"unet-vgg19","test_path":"models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"segformer","test_path":"models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py","test_args":"","timeout":20},
-                {"name":"ufld-v2","test_path":"models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo","test_args":"","timeout":20},
-                {"name":"bert-large","test_path":"models/demos/metal_BERT_large_11/demo/demo.py::test_demo","test_args":"","timeout":20},
-                {"name":"sentence-bert","test_path":"models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference","test_args":"","timeout":20}
-              ]')
+              standalone_models='["whisper", "stable-diffusion-bh", "resnet-50-bh", "vit-bh", "mobilenet-v2", "unet-vgg19-bh", "segformer", "ufld-v2-bh", "bert-large", "sentence-bert-bh"]'
               ;;
           esac
 
@@ -248,6 +133,118 @@ jobs:
           model_paths["qwen3-32b"]="Qwen/Qwen3-32B"
           model_paths["phi-3-mini-128k"]="microsoft/Phi-3-mini-128k-instruct"
           model_paths["deepseek-r1-distill-llama-70b"]="deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
+
+          # Define standalone model test configuration mapping
+          declare -A standalone_test_paths
+          declare -A standalone_test_args
+          declare -A standalone_test_timeouts
+          declare -A standalone_display_names
+
+          # Audio models
+          standalone_test_paths["whisper"]="models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset"
+          standalone_test_args["whisper"]=""
+          standalone_test_timeouts["whisper"]=30
+          standalone_display_names["whisper"]="whisper"
+
+          # Vision - Generative - Stable Diffusion variants
+          standalone_test_paths["stable-diffusion-wh"]="models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo"
+          standalone_test_args["stable-diffusion-wh"]="--input-path=models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json"
+          standalone_test_timeouts["stable-diffusion-wh"]=30
+          standalone_display_names["stable-diffusion-wh"]="stable-diffusion"
+
+          standalone_test_paths["stable-diffusion-bh"]="models/demos/vision/generative/stable_diffusion/blackhole/tests/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512"
+          standalone_test_args["stable-diffusion-bh"]=""
+          standalone_test_timeouts["stable-diffusion-bh"]=30
+          standalone_display_names["stable-diffusion-bh"]="stable-diffusion"
+
+          # Vision - Classification - ResNet-50 variants
+          standalone_test_paths["resnet-50-wh"]="models/demos/vision/classification/resnet50/wormhole/demo/demo.py::test_demo_sample"
+          standalone_test_args["resnet-50-wh"]=""
+          standalone_test_timeouts["resnet-50-wh"]=20
+          standalone_display_names["resnet-50-wh"]="resnet-50"
+
+          standalone_test_paths["resnet-50-bh"]="models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_sample"
+          standalone_test_args["resnet-50-bh"]=""
+          standalone_test_timeouts["resnet-50-bh"]=20
+          standalone_display_names["resnet-50-bh"]="resnet-50"
+
+          standalone_test_paths["resnet-50-ttnn"]="models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py::test_demo_sample"
+          standalone_test_args["resnet-50-ttnn"]=""
+          standalone_test_timeouts["resnet-50-ttnn"]=20
+          standalone_display_names["resnet-50-ttnn"]="resnet-50"
+
+          # Vision - Classification - ViT variants
+          standalone_test_paths["vit-wh"]="models/demos/vision/classification/vit/wormhole/tests/test_ttnn_optimized_sharded_vit_wh.py::test_vit"
+          standalone_test_args["vit-wh"]=""
+          standalone_test_timeouts["vit-wh"]=20
+          standalone_display_names["vit-wh"]="vit"
+
+          standalone_test_paths["vit-bh"]="models/demos/vision/classification/vit/blackhole/tests/test_ttnn_optimized_sharded_vit_bh.py::test_vit"
+          standalone_test_args["vit-bh"]=""
+          standalone_test_timeouts["vit-bh"]=20
+          standalone_display_names["vit-bh"]="vit"
+
+          standalone_test_paths["vit-t3000"]="models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference"
+          standalone_test_args["vit-t3000"]=""
+          standalone_test_timeouts["vit-t3000"]=20
+          standalone_display_names["vit-t3000"]="vit"
+
+          # Vision - Classification - MobileNet-V2
+          standalone_test_paths["mobilenet-v2"]="models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2"
+          standalone_test_args["mobilenet-v2"]=""
+          standalone_test_timeouts["mobilenet-v2"]=20
+          standalone_display_names["mobilenet-v2"]="mobilenet-v2"
+
+          # Vision - Segmentation - UNet VGG19 variants
+          standalone_test_paths["unet-vgg19-wh"]="models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_demo"
+          standalone_test_args["unet-vgg19-wh"]=""
+          standalone_test_timeouts["unet-vgg19-wh"]=20
+          standalone_display_names["unet-vgg19-wh"]="unet-vgg19"
+
+          standalone_test_paths["unet-vgg19-bh"]="models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo"
+          standalone_test_args["unet-vgg19-bh"]=""
+          standalone_test_timeouts["unet-vgg19-bh"]=20
+          standalone_display_names["unet-vgg19-bh"]="unet-vgg19"
+
+          # Vision - Segmentation - UNet Vanilla
+          standalone_test_paths["unet-vanilla"]="models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image"
+          standalone_test_args["unet-vanilla"]=""
+          standalone_test_timeouts["unet-vanilla"]=20
+          standalone_display_names["unet-vanilla"]="unet-vanilla"
+
+          # Vision - Segmentation - Segformer
+          standalone_test_paths["segformer"]="models/demos/vision/segmentation/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py"
+          standalone_test_args["segformer"]=""
+          standalone_test_timeouts["segformer"]=20
+          standalone_display_names["segformer"]="segformer"
+
+          # Vision - Segmentation - UFLD-V2 variants
+          standalone_test_paths["ufld-v2-wh"]="models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model"
+          standalone_test_args["ufld-v2-wh"]=""
+          standalone_test_timeouts["ufld-v2-wh"]=20
+          standalone_display_names["ufld-v2-wh"]="ufld-v2"
+
+          standalone_test_paths["ufld-v2-bh"]="models/demos/vision/segmentation/ufld_v2/blackhole/demo/demo.py::test_ufld_v2_demo"
+          standalone_test_args["ufld-v2-bh"]=""
+          standalone_test_timeouts["ufld-v2-bh"]=20
+          standalone_display_names["ufld-v2-bh"]="ufld-v2"
+
+          # NLP - BERT Large
+          standalone_test_paths["bert-large"]="models/demos/metal_BERT_large_11/demo/demo.py::test_demo"
+          standalone_test_args["bert-large"]=""
+          standalone_test_timeouts["bert-large"]=20
+          standalone_display_names["bert-large"]="bert-large"
+
+          # NLP - Sentence BERT variants
+          standalone_test_paths["sentence-bert-wh"]="models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model"
+          standalone_test_args["sentence-bert-wh"]=""
+          standalone_test_timeouts["sentence-bert-wh"]=20
+          standalone_display_names["sentence-bert-wh"]="sentence-bert"
+
+          standalone_test_paths["sentence-bert-bh"]="models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference"
+          standalone_test_args["sentence-bert-bh"]=""
+          standalone_test_timeouts["sentence-bert-bh"]=20
+          standalone_display_names["sentence-bert-bh"]="sentence-bert"
 
           # Define test configurations
           tests='[{"name":"Batch-1 CI","test_key":"performance and ci-1","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"},{"name":"Batch-32 CI","test_key":"performance and ci-32","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"},{"name":"Long Context 16K","test_key":"performance and ci-long-context-16k","extra_args":"","timeout":60,"owner_id":"U03PUAKE719"}]'
@@ -279,13 +276,12 @@ jobs:
           # Process standalone models if requested
           if [[ "${{ inputs.model-type }}" == "all" || "${{ inputs.model-type }}" == "standalone" ]]; then
             # Process standalone models with single demo test each
-            standalone_count=$(echo "$standalone_models" | jq 'length')
-            for ((i=0; i<standalone_count; i++)); do
-              standalone=$(echo "$standalone_models" | jq -c ".[$i]")
-              model_name=$(echo "$standalone" | jq -r '.name')
-              test_path=$(echo "$standalone" | jq -r '.test_path')
-              test_args=$(echo "$standalone" | jq -r '.test_args')
-              timeout=$(echo "$standalone" | jq -r '.timeout')
+            for model_key in $(echo "$standalone_models" | jq -r '.[]'); do
+              # Lookup test configuration from associative arrays
+              test_path="${standalone_test_paths[$model_key]}"
+              test_args="${standalone_test_args[$model_key]}"
+              timeout="${standalone_test_timeouts[$model_key]}"
+              display_name="${standalone_display_names[$model_key]}"
 
               # Determine cache path based on architecture
               if [[ "${{ inputs.arch }}" == "blackhole" ]]; then
@@ -296,7 +292,7 @@ jobs:
 
               # Add standalone model test to matrix using proper JSON construction
               matrix=$(echo "$matrix" | jq -c \
-                --arg model "$model_name" \
+                --arg model "$display_name" \
                 --arg test_path "$test_path" \
                 --arg test_args "$test_args" \
                 --arg cache "$CACHE_PATH" \
@@ -316,6 +312,43 @@ jobs:
           echo "Generated matrix for device-type: ${{ inputs.device-type }}"
           echo "Matrix length: $(echo "$matrix" | jq 'length')"
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
+
+          # Generate model configuration metadata for chart generation
+          # Only include models that match the model-type filter
+          if [[ "${{ inputs.model-type }}" == "tt-transformers" ]]; then
+            # Only TT-Transformers models
+            model_config=$(jq -nc \
+              --arg device "${{ inputs.device-type }}" \
+              --argjson tt_models "$tt_transformers_models" \
+              '{
+                device: $device,
+                tt_transformers: $tt_models,
+                standalone_keys: []
+              }')
+          elif [[ "${{ inputs.model-type }}" == "standalone" ]]; then
+            # Only standalone models
+            model_config=$(jq -nc \
+              --arg device "${{ inputs.device-type }}" \
+              --argjson standalone_keys "$standalone_models" \
+              '{
+                device: $device,
+                tt_transformers: [],
+                standalone_keys: $standalone_keys
+              }')
+          else
+            # All models
+            model_config=$(jq -nc \
+              --arg device "${{ inputs.device-type }}" \
+              --argjson tt_models "$tt_transformers_models" \
+              --argjson standalone_keys "$standalone_models" \
+              '{
+                device: $device,
+                tt_transformers: $tt_models,
+                standalone_keys: $standalone_keys
+              }')
+          fi
+
+          echo "model-config=$model_config" >> $GITHUB_OUTPUT
 
   run-tests:
     needs: generate-test-matrix
@@ -436,3 +469,51 @@ jobs:
         with:
           name: benchmark-data-${{ inputs.device-type }}-${{ matrix.test.model }}-${{ github.run_number }}-${{ strategy.job-index }}
           path: generated/benchmark_data
+
+  generate-device-config:
+    if: always()
+    needs: [generate-test-matrix, run-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Export model configuration
+        run: |
+          # Get model config from matrix generation
+          MODEL_CONFIG='${{ needs.generate-test-matrix.outputs.model-config }}'
+          echo "$MODEL_CONFIG" > device-model-config.json
+
+          # Extract standalone display names for chart generation
+          DEVICE="${{ inputs.device-type }}"
+          STANDALONE_KEYS=$(echo "$MODEL_CONFIG" | jq -r '.standalone_keys[]' 2>/dev/null || echo '[]')
+
+          # Map keys to display names
+          DISPLAY_NAMES='[]'
+          for key in $STANDALONE_KEYS; do
+            # Extract display name (everything before variant suffix)
+            case "$key" in
+              *-wh|*-bh|*-ttnn|*-t3000)
+                # Remove architecture suffix
+                display=$(echo "$key" | sed -E 's/-(wh|bh|ttnn|t3000)$//')
+                ;;
+              *)
+                # No suffix, use as-is
+                display="$key"
+                ;;
+            esac
+            DISPLAY_NAMES=$(echo "$DISPLAY_NAMES" | jq --arg name "$display" '. + [$name]')
+          done
+
+          # Create final config with display names
+          FINAL_CONFIG=$(echo "$MODEL_CONFIG" | jq \
+            --argjson standalone "$DISPLAY_NAMES" \
+            '.standalone = $standalone | del(.standalone_keys)')
+
+          echo "$FINAL_CONFIG" > device-model-config.json
+
+          cat device-model-config.json
+
+      - name: Upload device model configuration
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-config-${{ inputs.device-type }}
+          path: device-model-config.json
+          retention-days: 30

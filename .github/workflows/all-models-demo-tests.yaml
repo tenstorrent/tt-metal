@@ -242,6 +242,12 @@ jobs:
         with:
           path: test-artifacts/
 
+      - name: Download model configuration artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: model-config-*
+          path: model-configs/
+
       - name: Generate Model Status Chart
         env:
           MODEL_TYPE: ${{ inputs.model-type || 'all' }}
@@ -305,32 +311,29 @@ jobs:
               print("Generated empty status files due to missing test data.")
               exit(0)
 
-          # Define model configurations per device (only include available devices)
-          all_tt_transformers_models = {
-              'n150': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'mistral-7b', 'phi-3-mini-128k'],
-              'n300': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'mistral-7b', 'qwen2.5-7b', 'qwen2.5-coder-32b', 'phi-3-mini-128k'],
-              'p100': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'mistral-7b', 'phi-3-mini-128k'],
-              'p150': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'mistral-7b', 'phi-3-mini-128k'],
-              'p300': ['llama3.1-8b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'mistral-7b', 'qwen2.5-7b', 'qwen2.5-coder-32b', 'qwen3-32b', 'phi-3-mini-128k'],
-              'WH-LB': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
-              'BH-QB2': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
-              'BH-LB': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
-              'WH-6U': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k'],
-              'BH-6U': ['deepseek-r1-distill-llama-70b', 'llama3.1-8b', 'llama3.1-70b', 'llama3.2-1b', 'llama3.2-3b', 'llama3.2-11b-vision', 'llama3.2-90b-vision', 'mistral-7b', 'qwen2.5-coder-32b', 'qwen2.5-72b', 'qwen3-32b', 'phi-3-mini-128k']
-          }
+          # Load model configurations from device config artifacts
+          print("=== Loading model configurations ===")
+          all_tt_transformers_models = {}
+          all_standalone_models = {}
 
-          all_standalone_models = {
-              'n150': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'n300': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'p100': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'p150': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'p300': ['whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'WH-LB': ['resnet-50', 'vit', 'llama3.3-70b', 'whisper', 'stable-diffusion', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'BH-QB2': ['llama3.3-70b', 'flux.1-dev', 'wan2.2-t2v-a14b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'BH-LB': ['llama3.3-70b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'WH-6U': ['resnet-50', 'vit', 'llama3.3-70b', 'whisper', 'stable-diffusion', 'mobilenet-v2', 'unet-vgg19', 'unet-vanilla', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert'],
-              'BH-6U': ['llama3.3-70b', 'whisper', 'stable-diffusion', 'resnet-50', 'vit', 'mobilenet-v2', 'unet-vgg19', 'segformer', 'ufld-v2', 'bert-large', 'sentence-bert']
-          }
+          config_files = glob.glob('model-configs/**/device-model-config.json', recursive=True)
+          print(f"Found {len(config_files)} config files")
+
+          for config_file in config_files:
+              print(f"Loading config: {config_file}")
+              try:
+                  with open(config_file, 'r') as f:
+                      config = json.load(f)
+                      device = config['device']
+                      print(f"  Device: {device}")
+                      print(f"  TT-Transformers: {config.get('tt_transformers', [])}")
+                      print(f"  Standalone: {config.get('standalone', [])}")
+
+                      if device in devices:
+                          all_tt_transformers_models[device] = config.get('tt_transformers', [])
+                          all_standalone_models[device] = config.get('standalone', [])
+              except Exception as e:
+                  print(f"  Error loading config: {e}")
 
           # Filter to only available devices
           tt_transformers_models = {device: models for device, models in all_tt_transformers_models.items() if device in available_devices}
@@ -338,14 +341,14 @@ jobs:
 
           # Get all unique models for available devices
           all_tt_models = set()
-          all_standalone_models = set()
+          all_standalone_models_set = set()
           for device_models in tt_transformers_models.values():
               all_tt_models.update(device_models)
           for device_models in standalone_models.values():
-              all_standalone_models.update(device_models)
+              all_standalone_models_set.update(device_models)
 
           print(f"=== TT-Transformers models for available devices: {sorted(all_tt_models)} ===")
-          print(f"=== Standalone models for available devices: {sorted(all_standalone_models)} ===")
+          print(f"=== Standalone models for available devices: {sorted(all_standalone_models_set)} ===")
 
           # Parse test results
           test_results = defaultdict(lambda: defaultdict(list))  # test_results[device][model] = [test_results]
@@ -458,7 +461,7 @@ jobs:
           # Generate status for Standalone models (only if requested)
           standalone_status = {}
           if model_type_filter in ['all', 'standalone']:
-              for model in sorted(all_standalone_models):
+              for model in sorted(all_standalone_models_set):
                   standalone_status[model] = {}
                   for device in devices:
                       if model in standalone_models.get(device, []):
