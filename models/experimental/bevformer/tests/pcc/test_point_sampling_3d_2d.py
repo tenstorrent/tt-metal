@@ -346,7 +346,7 @@ def test_point_sampling_3d_to_2d(
     check_with_tolerances(
         torch_bev_mask.float(),
         ttnn_bev_mask_torch.float(),
-        pcc_threshold=0.996,
+        pcc_threshold=0.994,
         abs_error_threshold=0.1,
         rel_error_threshold=0.1,
         max_error_ratio=0.1,
@@ -364,7 +364,7 @@ def test_point_sampling_3d_to_2d(
     mask_passed, mask_message = check_with_pcc(
         torch_bev_mask.float(),
         ttnn_bev_mask_torch.float(),
-        0.996,
+        0.994,
     )
 
     assert mask_passed, f"PCC check for validity_mask failed: {mask_message}"

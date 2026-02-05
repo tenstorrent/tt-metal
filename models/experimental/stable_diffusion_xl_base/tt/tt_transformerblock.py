@@ -6,6 +6,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_attention import TtAttention
 from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 
 
 class TtBasicTransformerBlock(LightweightModule):
@@ -20,6 +21,9 @@ class TtBasicTransformerBlock(LightweightModule):
         out_dim,
     ):
         super().__init__()
+
+        self.module_path = module_path
+        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
 
         self.attn1 = TtAttention(
             device,
@@ -109,7 +113,14 @@ class TtBasicTransformerBlock(LightweightModule):
         )
 
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
-        hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
+
+        if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
+            # Use interleaved memory layout as LayerNorm will output a tensor with interleaved layout
+            hidden_states = ttnn.add(
+                hidden_states, attn_hidden_states, use_legacy=False, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+        else:
+            hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
 
         attn_hidden_states = ttnn.layer_norm(
             hidden_states,
@@ -120,6 +131,10 @@ class TtBasicTransformerBlock(LightweightModule):
             memory_config=hidden_states.memory_config() if hidden_states.is_sharded() else ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.ln_program_config if hidden_states.is_sharded() else self.legacy_program_config,
         )
+
+        if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
+            # Move add output to DRAM to make space in L1 for FeedForward Matmuls
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         attn_hidden_states = self.ff(attn_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
