@@ -504,9 +504,66 @@ def test_moe_routed_expert(device):
     )
     logger.info(f"Created down_proj tensors: weights={down_proj_weights.shape}, output={down_proj_output.shape}")
 
+    # ========== fused_add Tensor (for eltwise_add after down_proj) ==========
+    # fused_add is replicated on all gate_proj cores via HEIGHT_SHARDED
+    # Each core has the full [1, down_proj_N_padded] tensor
+    down_proj_N_padded = ((down_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
+    per_core_down_proj_N = down_proj_N_padded // num_banks
+
+    # Create fused_add torch tensor [1, 1, 1, down_proj_N_padded]
+    torch.manual_seed(1024)  # Different seed for fused_add
+    fused_add_torch = torch.randn([1, 1, 1, down_proj_N_padded]).bfloat16().float()
+
+    # Replicate for HEIGHT_SHARDING: [1, 1, num_gate_proj_cores, down_proj_N_padded]
+    fused_add_replicated = fused_add_torch.repeat(1, 1, num_gate_proj_cores, 1)
+
+    # HEIGHT_SHARDED memory config (replicated on all gate_proj cores)
+    fused_add_shard_spec = ttnn.ShardSpec(
+        gate_proj_core_ranges,
+        (1, down_proj_N_padded),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    fused_add_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fused_add_shard_spec
+    )
+    fused_add_tensor = ttnn.from_torch(
+        fused_add_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=fused_add_mem_config,
+        tile=tile_1x32,
+    )
+    logger.info(f"Created fused_add tensor: HEIGHT_SHARDED [1, {down_proj_N_padded}] on {num_gate_proj_cores} cores")
+
+    # ========== Final Output Tensor (down_proj + fused_add) ==========
+    # WIDTH_SHARDED with padded output per core (32x32 tile size = 1024 elements)
+    final_output_width_per_core = 32 * 32  # 1024 elements (padded for 32x32 tile)
+    final_output_total_width = final_output_width_per_core * num_gate_proj_cores
+
+    final_output_shard_spec = ttnn.ShardSpec(
+        gate_proj_core_ranges,
+        (1, final_output_width_per_core),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    final_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, final_output_shard_spec
+    )
+    final_output_tensor = ttnn.from_torch(
+        torch.zeros([1, 1, 1, final_output_total_width]).bfloat16().float(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=final_output_mem_config,
+        tile=tile_1x32,
+    )
+    logger.info(
+        f"Created final_output tensor: WIDTH_SHARDED [1, {final_output_width_per_core}] per core (padded) on {num_gate_proj_cores} cores"
+    )
+
     # Run fused operation
     logger.info("Running MoE routed expert fused operation...")
-    ttnn_result_scores, ttnn_result_indices, ttnn_result_down_proj = MoeRoutedExpert.op(
+    ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeRoutedExpert.op(
         ttnn_input,
         ttnn_mcast_output,
         ttnn_gate_mm_weights,
@@ -527,24 +584,36 @@ def test_moe_routed_expert(device):
         down_proj_mcast_output_tensor,
         down_proj_weights,
         down_proj_output,
+        fused_add_tensor,
+        final_output_tensor,
         use_hardcoded_expert_index=use_hardcoded_expert_index,
     )
 
     # Convert back to torch for comparison
     output_scores_torch = ttnn.to_torch(ttnn_result_scores)
     output_indices_torch = ttnn.to_torch(ttnn_result_indices).to(torch.int64)
-    output_down_proj_torch = ttnn.to_torch(ttnn_result_down_proj)
+    output_final_torch = ttnn.to_torch(ttnn_result_final)
+
+    # Extract valid data from padded final output
+    # Final output is [1, 1, 1, final_output_total_width] with 1024 per core (padded)
+    # We need first per_core_down_proj_N (896) elements from each 1024-element chunk
+    result_valid = []
+    for i in range(num_gate_proj_cores):
+        start_idx = i * final_output_width_per_core
+        end_idx = start_idx + per_core_down_proj_N
+        result_valid.append(output_final_torch[..., start_idx:end_idx])
+    output_final_valid = torch.cat(result_valid, dim=-1)  # [1, 1, 1, down_proj_N_padded]
 
     # Also read back intermediate matmul outputs for debugging
     output_gate_proj_torch = ttnn.to_torch(gate_proj_output)
     output_up_proj_mm_torch = ttnn.to_torch(up_proj_mm_out_tensor)
     output_fused_torch = ttnn.to_torch(fused_output_tensor)
 
-    # Compute golden reference (includes gate + expert matmuls + fused mul + down_proj)
+    # Compute golden reference (includes gate + expert matmuls + fused mul + down_proj + fused_add)
     (
         torch_expected_scores,
         torch_expected_indices,
-        torch_expected_down_proj,
+        torch_expected_final,
     ) = MoeRoutedExpert.golden(
         torch_input,
         torch_gate_mm_weights,
@@ -552,6 +621,7 @@ def test_moe_routed_expert(device):
         gate_proj_weights_dict=expert_weights_dict,
         up_proj_weights_dict=up_proj_weights_dict,
         down_proj_weights_dict=down_proj_weights_dict,
+        fused_add_tensor=fused_add_torch,
         eps=gate_eps,
         scaling_factor=gate_scaling_factor,
         use_hardcoded_expert_index=use_hardcoded_expert_index,
@@ -607,9 +677,18 @@ def test_moe_routed_expert(device):
     passing, pcc_output = comp_pcc(torch_expected_fused, output_fused_torch, 0.98)
     logger.info(f"fused output (silu(gate_proj) * up_proj * expert_scale): {pcc_output}")
 
-    # Verify down_proj output
+    # Compute expected down_proj for intermediate validation
+    down_proj_weights_torch = down_proj_weights_dict[selected_expert_idx]
+    torch_expected_down_proj = torch_expected_fused @ down_proj_weights_torch.float()
+
+    # Verify down_proj output (intermediate check)
+    output_down_proj_torch = ttnn.to_torch(down_proj_output)
     passing, pcc_output = comp_pcc(torch_expected_down_proj, output_down_proj_torch, 0.97)
     logger.info(f"down_proj output: {pcc_output}")
-    assert passing, f"down_proj output PCC check failed: {pcc_output}"
+
+    # Verify final output (down_proj + fused_add)
+    passing, pcc_output = comp_pcc(torch_expected_final, output_final_valid, 0.97)
+    logger.info(f"final output (down_proj + fused_add): {pcc_output}")
+    assert passing, f"final output PCC check failed: {pcc_output}"
 
     logger.info("MoE routed expert test passed!")
