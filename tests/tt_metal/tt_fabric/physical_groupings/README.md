@@ -4,7 +4,7 @@
 
 In replacement of the rankfile and rank_bindings file as needed for running tt-run on multi-host systems, we will be introducing a cluster physical groupings file deployed with each machine cluster specifying the valid physical groupings for each cluster of machines. This file is provided by the cluster administrator and is used by FM to understand which subsets of ASICs can be used as candidate physical meshes for a given logical mesh in the MGD.
 
-The Physical Groupings file defines the hierarchical structure of physical resources (meshes, pods, superpods, clusters) in the cluster. This file uses a **declarative approach** that defines groupings in terms of base units without requiring explicit ASIC IDs. The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD).
+The Physical Groupings file defines the hierarchical structure of physical resources (meshes, pods, superpods, clusters) in the cluster. This file uses a **declarative approach** that defines groupings in terms of ASIC locations and other groupings without requiring explicit ASIC IDs. The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD).
 
 The groupings file is complementary to the Physical System Descriptor (PSD):
 - **PSD**: Flat graph of all ASICs + links
@@ -15,10 +15,6 @@ Files use **protobuf text format** (`.textproto`) with schema validation. The sc
 ## Quick Example
 
 ```protobuf
-base_units {
-  # Base units are predefined constants - ASIC_LOCATION_1 through ASIC_LOCATION_8
-}
-
 groupings {
   name: "trays"
   items: [
@@ -71,7 +67,6 @@ The actual ASIC IDs are derived at runtime from the PSD, making this file comple
 The physical groupings file uses protobuf text format with schema validation. Key features:
 
 - **ASIC Locations as Constants**: ASIC locations 1-8 are predefined as enum constants (`ASIC_LOCATION_1` through `ASIC_LOCATION_8`)
-- **Base Units**: Base units are predefined in the schema, not defined as a grouping
 - **Type Safety**: Protobuf enforces that each grouping item is either an ASIC location or a grouping reference
 - **Required Groupings**: The "meshes" grouping must be defined (enforced by validation)
 - **Multiple Definitions**: The same grouping name can be defined multiple times (useful for custom groupings)
@@ -80,18 +75,9 @@ See `tt_metal/fabric/protobuf/physical_groupings.proto` for the complete schema 
 
 ## Groupings Explained
 
-### Base Units
+### Physical Groupings
 
 **ASIC Locations**: Predefined constants (`ASIC_LOCATION_1` through `ASIC_LOCATION_8`) representing individual ASIC positions within a tray. These are defined as enum values in the protobuf schema and are always available.
-
-```protobuf
-base_units {
-  # Base units are predefined constants - no fields needed
-  # ASIC_LOCATION_1 through ASIC_LOCATION_8 are available as enum values
-}
-```
-
-### Physical Groupings
 
 **Trays**: Contains all 8 ASIC locations. Defined using ASIC location enum values.
 
@@ -251,10 +237,6 @@ groupings {
 
 ```protobuf
 # Physical Groupings File for 3-Pod 16x8 Blackhole Galaxy Cluster
-
-base_units {
-  # Base units are predefined constants - ASIC_LOCATION_1 through ASIC_LOCATION_8
-}
 
 groupings {
   name: "trays"
@@ -572,7 +554,7 @@ groupings {
 ## Key Benefits
 
 - ✅ **Hardware-agnostic**: No ASIC IDs in the file - completely reusable across different clusters
-- ✅ **Declarative**: Define structure using counts and base units, not explicit IDs
+- ✅ **Declarative**: Define structure using counts and ASIC locations, not explicit IDs
 - ✅ **Flexible**: Can mix and match grouping types, reference multiple levels
 - ✅ **Maintainable**: Physical structure (trays, hosts) is more stable than ASIC IDs
 - ✅ **Schema-validated**: Protobuf schema enforces structure and type safety

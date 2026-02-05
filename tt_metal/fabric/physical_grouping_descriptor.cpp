@@ -180,8 +180,10 @@ PhysicalGroupingDescriptor::ValidationResult PhysicalGroupingDescriptor::validat
 void PhysicalGroupingDescriptor::validate_required_groupings(
     const proto::PhysicalGroupings& proto, ValidationResult& result) {
     // Rule 1: Check required "meshes" grouping
+    // The "meshes" grouping MUST be defined - this is a hard requirement
     if (!grouping_exists(proto, "meshes")) {
-        result.errors.push_back("Required grouping 'meshes' is missing");
+        result.errors.push_back(
+            "Required grouping 'meshes' is missing. At least one grouping with name 'meshes' must be defined.");
     }
 
     // Optional: Warn about recommended groupings

@@ -1,9 +1,6 @@
 # Example: Cluster Containing Pods Directly
 # This example shows a cluster skipping superpods and containing pods directly
 
-base_units {
-  # Base units are predefined constants - ASIC_LOCATION_1 through ASIC_LOCATION_8
-}
 
 groupings {
   name: "trays"

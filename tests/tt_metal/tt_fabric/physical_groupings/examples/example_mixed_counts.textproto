@@ -1,9 +1,6 @@
 # Example: Mixed Counts - Combining Different Grouping Types
 # This example shows mixing different types of lower-level groupings within a single grouping
 
-base_units {
-  # Base units are predefined constants - ASIC_LOCATION_1 through ASIC_LOCATION_8
-}
 
 groupings {
   name: "trays"
