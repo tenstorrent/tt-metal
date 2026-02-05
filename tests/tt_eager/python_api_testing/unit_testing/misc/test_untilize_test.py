@@ -13,9 +13,10 @@ from models.common.utility_functions import is_grayskull, skip_for_blackhole
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16,),
+    (ttnn.bfloat16, ttnn.float32),
     ids=[
         "bfloat16",
+        "float32",
     ],
 )
 @pytest.mark.parametrize(
@@ -60,12 +61,7 @@ def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
 
     untilized_inp = untilize(inp)
 
-    if dtype == ttnn.float32:
-        passing1, output = comp_pcc(untilized_inp, c1, 0.999999)
-        logger.info(output)
-    else:
-        passing1 = torch.equal(untilized_inp, c1)
-    assert passing1
+    assert torch.equal(untilized_inp, c1)
 
 
 @pytest.mark.parametrize(

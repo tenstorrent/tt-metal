@@ -115,6 +115,67 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
     assert isequal
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        # [1, 640, 16, 16],
+        # [2, 1280, 16, 16],
+        # [2, 640, 16, 16],
+        # [1, 256, 28, 28],
+        # [1, 512, 14, 14],
+        # [1, 64, 32, 32],
+        # [2, 32, 64, 64],
+        # [1, 128, 32, 32],
+        # [1, 64, 64, 64],
+        # [2, 64, 32, 32],
+        # [1, 32, 96, 96],
+        [1, 96, 32, 32],
+        # [1, 32, 80, 32],
+    ],
+)
+# @pytest.mark.parametrize("scale_h", [2, 3])
+# @pytest.mark.parametrize("scale_w", [2, 3])
+@pytest.mark.parametrize("scale_h", [2])
+@pytest.mark.parametrize("scale_w", [2])
+@pytest.mark.parametrize("memory_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("run_twice", [False])
+def test_upsample_nearest_interleaved_fp32(device, input_shapes, scale_h, scale_w, memory_layout, run_twice):
+    batch_size, num_channels, height, width = input_shapes
+    torch.manual_seed(0)
+
+    input = torch.rand(input_shapes, dtype=torch.float32)
+    tt_input = input.permute(0, 2, 3, 1)
+    input_tensor = ttnn.from_torch(tt_input, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    if input_tensor.padded_shape != input_tensor.shape and memory_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("Disabled until different logical and padded shapes are supported for TILE_LAYOUT")
+
+    scale_factor = (scale_h, scale_w)
+    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
+    torch_result = torch_upsample(input)
+
+    scale_factor = (scale_h, scale_w)
+
+    output_tensor = ttnn.upsample(input_tensor, scale_factor)
+
+    if run_twice:
+        ttnn.deallocate(output_tensor, True)
+        output_tensor = ttnn.upsample(input_tensor, scale_factor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    torch_result = torch_result.permute(0, 2, 3, 1)
+    pcc_passed, pcc_message = assert_with_pcc(torch_result, output_tensor)
+    logger.info(pcc_message)
+    allclose = torch.allclose(output_tensor, torch_result)
+    isclose = torch.all(torch.isclose(output_tensor, torch_result))
+    isequal = torch.equal(output_tensor, torch_result)
+    assert allclose
+    assert isclose
+    assert isequal
+
+
 def upsample_multicore_common(
     device,
     input_shape,

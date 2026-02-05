@@ -184,6 +184,11 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         !use_pack_untilize || a.dtype() == DataType::UINT16 ||
         (input_cb_data_format == tt::DataFormat::Float32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
+        std::cout << "Using slow untilize in untilize_with_unpadding_multi_core_sharded_program_factory.cpp"
+                  << std::endl;
+        std::cout << "input_cb_data_format: " << input_cb_data_format << std::endl;
+        std::cout << "ntiles_per_block: " << ntiles_per_block << std::endl;
+        std::cout << "a.dtype(): " << a.dtype() << std::endl;
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
         unpack_to_dest_mode[tt::CBIndex::c_0] =
             UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)

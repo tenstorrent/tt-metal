@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, check_with_pcc_without_tensor_printout
 from models.common.utility_functions import is_grayskull, is_blackhole, torch_random
 
 
@@ -249,6 +249,35 @@ def test_to_layout_for_2D(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a, output_tensor)
 
 
+@pytest.mark.parametrize("shape", [[1, 1000]])
+@pytest.mark.parametrize("dtype", [[torch.float32, ttnn.float32], [torch.bfloat16, ttnn.bfloat16]])
+def test_to_layout_for_2D_from_tile_to_row_major(shape, device, dtype):
+    torch.manual_seed(2005)
+    input_a = torch.randn(shape, dtype=dtype[0])
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype[1])
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.to_torch(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)
+    assert_equal(input_a, input_tensor)
+    assert_equal(input_a, output_tensor)
+
+
+@pytest.mark.xfail(reason="Currently precision loss in fused tilize operation (transpose and tilize) is unfixed")
+@pytest.mark.parametrize("shape", [[1, 1000]])
+@pytest.mark.parametrize("dtype", [[torch.float32, ttnn.float32], [torch.bfloat16, ttnn.bfloat16]])
+def test_to_layout_for_2D_from_row_major_to_tile(shape, device, dtype):
+    torch.manual_seed(2005)
+    input_a = torch.randn(shape, dtype=dtype[0])
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype[1])
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.to_torch(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)
+    assert_equal(input_a, input_tensor)
+    assert_equal(input_a, output_tensor)
+
+
 @pytest.mark.parametrize("shape", [1, 5, 14, 97, 0, ()])
 def test_to_from_01d(device, shape):
     torch.manual_seed(2005)
@@ -282,6 +311,33 @@ def test_to_layout_sharded(dtype, device):
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shape1_shard_spec
     )
     torch_input_tensor1 = torch.randn(shape1, dtype=torch.bfloat16)
+    ttnn_input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_tensor1 = ttnn.to_device(ttnn_input_tensor1, device, memory_config=shape1_memory_config)
+
+    output = ttnn.to_layout(ttnn_input_tensor1, ttnn.ROW_MAJOR_LAYOUT)
+
+    assert_with_pcc(torch_input_tensor1, ttnn.to_torch(output), 0.9999)
+    assert_equal(torch_input_tensor1, ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32])
+def test_to_layout_sharded_fp32(dtype, device):
+    core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(1, 5)),
+        }
+    )
+
+    shape1 = [1, 1, 2640, 288]
+
+    shape1_shard_shape = (64, 288)
+
+    shape1_shard_spec = ttnn.ShardSpec(core_grid, shape1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shape1_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shape1_shard_spec
+    )
+    torch_input_tensor1 = torch.randn(shape1, dtype=torch.float32)
     ttnn_input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     ttnn_input_tensor1 = ttnn.to_device(ttnn_input_tensor1, device, memory_config=shape1_memory_config)
 

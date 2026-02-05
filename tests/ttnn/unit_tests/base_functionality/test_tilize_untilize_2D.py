@@ -11,7 +11,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, check_with_pcc_without_tensor_printout
 from models.common.utility_functions import is_grayskull, is_blackhole, torch_random
 
 
@@ -92,6 +92,29 @@ def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, use_pack_un
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
     logger.info(pcc_msg)
     assert passing
+
+
+@pytest.mark.parametrize("in_dtype", [ttnn.float32])
+@pytest.mark.parametrize("use_multicore", [False, True])
+@pytest.mark.parametrize("use_pack_untilize", [False, True])
+@pytest.mark.parametrize("H", [32, 43, 999])
+@pytest.mark.parametrize("W", [64, 76, 999])
+def test_untilize_with_unpadding_2D_fp32(device, in_dtype, use_multicore, use_pack_untilize, H, W):
+    torch_input_shape = [H, W]
+
+    torch_input = random_torch_tensor(in_dtype, torch_input_shape)
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.TILE_LAYOUT)
+
+    output_tt = ttnn.untilize_with_unpadding(
+        ttnn_input, [H - 1, W - 1], use_multicore=use_multicore, use_pack_untilize=use_pack_untilize
+    )
+    output_torch = ttnn.to_torch(output_tt)
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
+    logger.info(pcc_msg)
+    assert passing
+    assert_equal(torch_input, output_torch)
 
 
 @pytest.mark.parametrize("in_dtype", dtypes)
