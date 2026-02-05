@@ -72,6 +72,17 @@ namespace tilize_config {
 constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
 
 /**
+ * @brief Controls register datatype reconfiguration mode for tilize operations
+ *
+ * Reconfigure - reconfigures register datatypes at the start of the helper function
+ * NoReconfigure - no register datatype reconfiguration (default)
+ */
+enum class ReconfigureRegisterDatatypeMode : uint8_t {
+    Reconfigure,   // Reconfigure register datatypes based on previous CBs
+    NoReconfigure  // No reconfiguration (default)
+};
+
+/**
  * @brief Controls init/uninit behavior for tilize operations
  *
  * Use InitAndUninit for standalone operations (default).
@@ -187,6 +198,25 @@ public:
     }
 };
 
+/**
+ * @brief Collection of previous circular buffers for datatype reconfiguration
+ *
+ * Used when ReconfigureRegisterDatatypeMode::Reconfigure is set to specify
+ * the previous circular buffers whose datatypes should be used for reconfiguration.
+ *
+ * Usage:
+ *   tilize<cb_in, cb_out, ReconfigureRegisterDatatypeMode::Reconfigure>(
+ *       width, blocks, config, PreviousCBs{cb_srcA_prev, cb_srcB_prev, cb_output_prev});
+ */
+struct PreviousCBs {
+    uint32_t prev_cb_srca;
+    uint32_t prev_cb_srcb;
+    uint32_t prev_cb_output;
+
+    constexpr PreviousCBs(uint32_t srca = INVALID_CB, uint32_t srcb = INVALID_CB, uint32_t output = INVALID_CB) :
+        prev_cb_srca(srca), prev_cb_srcb(srcb), prev_cb_output(output) {}
+};
+
 }  // namespace tilize_config
 
 /**
@@ -211,14 +241,15 @@ public:
  *
  * @tparam input_cb Input circular buffer ID (compile-time for type safety)
  * @tparam output_cb Output circular buffer ID (compile-time for type safety)
+ * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
  * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
  * @tparam wait_mode Controls input synchronization strategy (default: Wait)
  * @tparam speed_mode Explicit tilize speed mode selection (default: Standard)
- * @tparam reconfig_from_cb Previous CB for DT tracking (default: INVALID_CB = disabled)
  *
  * @param block_width_tiles Block width in tiles (FIRST runtime argument for consistency)
  * @param num_blocks Number of blocks to process
  * @param config Non-tile-aligned CB wait configuration (default: disabled)
+ * @param prev_cbs Previous circular buffers for reconfiguration (used when reconfig_mode = Reconfigure)
  *
  * @example
  *   // Simple standard tilize
@@ -236,19 +267,21 @@ public:
  *   // Data type reconfiguration
  *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<new_cb, cb_out,
+ *          ReconfigureRegisterDatatypeMode::Reconfigure,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
- *          TilizeSpeedMode::Standard,
- *          old_cb>(16, 5);
+ *          TilizeSpeedMode::Standard>(16, 5, NonTileAlignedCBWaitConfig::disabled(),
+ *                                     PreviousCBs{old_cb_srcA, old_cb_srcB, old_cb_out});
  *
  * @example
  *   // Fast + DT reconfiguration
  *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<new_cb, cb_out,
+ *          ReconfigureRegisterDatatypeMode::Reconfigure,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
- *          TilizeSpeedMode::Fast,
- *          old_cb>(64, 5);
+ *          TilizeSpeedMode::Fast>(64, 5, NonTileAlignedCBWaitConfig::disabled(),
+ *                                 PreviousCBs{old_cb_srcA, old_cb_srcB, old_cb_out});
  *
  * @example
  *   // Per-iteration pages (asymmetric input/output - convert_to_hwc pattern)
@@ -292,14 +325,16 @@ public:
 template <
     uint32_t input_cb,
     uint32_t output_cb,
+    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
+        tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
     tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
-    tilize_config::TilizeSpeedMode speed_mode = tilize_config::TilizeSpeedMode::Standard,
-    uint32_t reconfig_from_cb = tilize_config::INVALID_CB>
+    tilize_config::TilizeSpeedMode speed_mode = tilize_config::TilizeSpeedMode::Standard>
 ALWI void tilize(
     uint32_t block_width_tiles,
     uint32_t num_blocks,
-    tilize_config::NonTileAlignedCBWaitConfig config = tilize_config::NonTileAlignedCBWaitConfig::disabled());
+    tilize_config::NonTileAlignedCBWaitConfig config = tilize_config::NonTileAlignedCBWaitConfig::disabled(),
+    tilize_config::PreviousCBs prev_cbs = tilize_config::PreviousCBs());
 
 }  // namespace compute_kernel_lib
 

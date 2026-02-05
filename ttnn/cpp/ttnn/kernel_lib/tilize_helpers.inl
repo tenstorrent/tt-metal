@@ -16,14 +16,15 @@ namespace compute_kernel_lib {
 template <
     uint32_t input_cb,
     uint32_t output_cb,
+    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     tilize_config::InitUninitMode init_uninit_mode,
     tilize_config::WaitMode wait_mode,
-    tilize_config::TilizeSpeedMode speed_mode,
-    uint32_t reconfig_from_cb>
+    tilize_config::TilizeSpeedMode speed_mode>
 ALWI void tilize(
     uint32_t block_width_tiles,
     uint32_t num_blocks,
-    tilize_config::NonTileAlignedCBWaitConfig config) {
+    tilize_config::NonTileAlignedCBWaitConfig config,
+    tilize_config::PreviousCBs prev_cbs) {
 
     // Compile-time validation
     static_assert(input_cb != output_cb,
@@ -32,31 +33,55 @@ ALWI void tilize(
         "Invalid input_cb: must be less than 32");
     static_assert(output_cb < 32,
         "Invalid output_cb: must be less than 32");
-    static_assert(
-        (reconfig_from_cb == tilize_config::INVALID_CB) ||
-        init_uninit_mode != tilize_config::InitUninitMode::Neither,
-        "Data type reconfiguration requires either init or uninit: "
-        "cannot use InitUninitMode::Neither with reconfig_from_cb");
 
     // Determine if we're using fast tilize mode (explicit, NOT auto-detected)
     constexpr bool use_fast = (speed_mode == tilize_config::TilizeSpeedMode::Fast);
 
+    // Validate that no valid CB is provided when reconfiguration is NOT requested
+    // Note: This is a runtime validation since prev_cbs is a runtime parameter
+    if constexpr (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure) {
+        bool has_valid_cb = (prev_cbs.prev_cb_srca != tilize_config::INVALID_CB) ||
+                           (prev_cbs.prev_cb_srcb != tilize_config::INVALID_CB) ||
+                           (prev_cbs.prev_cb_output != tilize_config::INVALID_CB);
+        ASSERT(!has_valid_cb);
+    }
+
     // Determine if we're doing data type reconfiguration
-    constexpr bool use_dt = (reconfig_from_cb != tilize_config::INVALID_CB);
+    constexpr bool use_dt = (reconfig_mode == tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure);
+
+    // Reconfigure register datatypes if requested
+    if constexpr (use_dt) {
+        // Reconfigure srcA
+        if (prev_cbs.prev_cb_srca != tilize_config::INVALID_CB) {
+            reconfig_data_format_srca(prev_cbs.prev_cb_srca);
+        } else {
+            reconfig_data_format_srca(input_cb);
+        }
+
+        if constexpr (use_fast) {
+            // Reconfigure srcB only in fast mode
+            if (prev_cbs.prev_cb_srcb != tilize_config::INVALID_CB) {
+                reconfig_data_format_srcb(prev_cbs.prev_cb_srcb);
+            } else {
+                reconfig_data_format_srcb(input_cb);
+            }
+        }
+
+        // Reconfigure output
+        if (prev_cbs.prev_cb_output != tilize_config::INVALID_CB) {
+            pack_reconfig_data_format(prev_cbs.prev_cb_output);
+        } else {
+            pack_reconfig_data_format(output_cb);
+        }
+    }
 
     // Compile-time initialization based on InitUninitMode
     if constexpr (
         init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == tilize_config::InitUninitMode::InitOnly) {
 
-        if constexpr (use_dt && use_fast) {
-            // Fast data type reconfiguration mode
-            fast_tilize_init_with_dt(input_cb, block_width_tiles, output_cb);
-        } else if constexpr (use_dt) {
-            // Standard data type reconfiguration mode
-            tilize_init_short_with_dt(reconfig_from_cb, input_cb, block_width_tiles, output_cb);
-        } else if constexpr (use_fast) {
-            // Fast tilize mode (no DT reconfiguration)
+        if constexpr (use_fast) {
+            // Fast tilize mode
             fast_tilize_init(input_cb, block_width_tiles, output_cb);
         } else {
             // Standard tilize mode
@@ -152,11 +177,8 @@ ALWI void tilize(
         init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
 
         if constexpr (use_fast) {
-            // Fast tilize mode (works with both DT and non-DT)
+            // Fast tilize mode
             fast_tilize_uninit(input_cb, output_cb);
-        } else if constexpr (use_dt) {
-            // Standard data type reconfiguration mode
-            tilize_uninit_with_dt(input_cb, reconfig_from_cb, output_cb);
         } else {
             // Standard tilize mode
             tilize_uninit(input_cb, output_cb);

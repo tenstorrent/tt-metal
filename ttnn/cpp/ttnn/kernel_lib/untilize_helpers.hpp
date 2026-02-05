@@ -49,6 +49,20 @@ namespace compute_kernel_lib {
 // Nested namespace for untilize-specific types to avoid conflicts
 namespace untilize_config {
 
+// Sentinel value for invalid/unset circular buffer ID
+constexpr uint32_t INVALID_CB = NUM_CIRCULAR_BUFFERS;
+
+/**
+ * @brief Controls register datatype reconfiguration mode for untilize operations
+ *
+ * Reconfigure - reconfigures register datatypes at the start of the helper function
+ * NoReconfigure - no register datatype reconfiguration (default)
+ */
+enum class ReconfigureRegisterDatatypeMode : uint8_t {
+    Reconfigure,   // Reconfigure register datatypes based on previous CBs
+    NoReconfigure  // No reconfiguration (default)
+};
+
 /**
  * @brief Controls init/uninit behavior for untilize operations
  *
@@ -73,6 +87,25 @@ enum class WaitMode : uint8_t {
     WaitBlock,    // Default - wait per block/row
     WaitUpfront,  // Wait for all tiles upfront before processing
     NoWait        // Caller manages synchronization (reserved for future use)
+};
+
+/**
+ * @brief Collection of previous circular buffers for datatype reconfiguration
+ *
+ * Used when ReconfigureRegisterDatatypeMode::Reconfigure is set to specify
+ * the previous circular buffers whose datatypes should be used for reconfiguration.
+ * For untilize, only prev_cb_srca and prev_cb_output are used.
+ *
+ * Usage:
+ *   untilize<width, cb_in, cb_out, ReconfigureRegisterDatatypeMode::Reconfigure>(
+ *       num_blocks, PreviousCBs{cb_srcA_prev, cb_output_prev});
+ */
+struct PreviousCBs {
+    uint32_t prev_cb_srca;
+    uint32_t prev_cb_output;
+
+    constexpr PreviousCBs(uint32_t srca = INVALID_CB, uint32_t output = INVALID_CB) :
+        prev_cb_srca(srca), prev_cb_output(output) {}
 };
 
 }  // namespace untilize_config
@@ -134,10 +167,12 @@ ALWI void untilize_uninit();
  * @tparam block_width_tiles Width in tiles (number of tiles per row) - FIRST template param
  * @tparam input_cb Input circular buffer ID (tiled data) - must be compile-time constant
  * @tparam output_cb Output circular buffer ID (row-major data) - must be compile-time constant
+ * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
  * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
  * @tparam wait_mode Controls input synchronization strategy (default: Wait)
  *
  * @param num_blocks Number of rows/blocks to process
+ * @param prev_cbs Previous circular buffers for reconfiguration (used when reconfig_mode = Reconfigure)
  *
  * @example
  *   // Simple untilize (width 4, auto-dispatches to pack_untilize)
@@ -155,8 +190,16 @@ ALWI void untilize_uninit();
  *   // Wait-upfront pattern (GroupNorm) - forces standard untilize
  *   using namespace compute_kernel_lib::untilize_config;
  *   untilize<10, cb_in, cb_out,
+ *            ReconfigureRegisterDatatypeMode::NoReconfigure,
  *            InitUninitMode::InitAndUninit,
  *            WaitMode::WaitUpfront>(num_rows);
+ *
+ * @example
+ *   // Data type reconfiguration
+ *   using namespace compute_kernel_lib::untilize_config;
+ *   untilize<4, cb_in, cb_out,
+ *            ReconfigureRegisterDatatypeMode::Reconfigure>(10,
+ *                PreviousCBs{old_cb_srcA, old_cb_output});
  *
  * @example
  *   // Init only (first in sequence)
@@ -180,9 +223,11 @@ template <
     uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
+    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
+        untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
     untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock>
-ALWI void untilize(uint32_t num_blocks);
+ALWI void untilize(uint32_t num_blocks, untilize_config::PreviousCBs prev_cbs = untilize_config::PreviousCBs());
 
 }  // namespace compute_kernel_lib
 

@@ -117,9 +117,10 @@ template <
     uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
+    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     untilize_config::InitUninitMode init_uninit_mode,
     untilize_config::WaitMode wait_mode>
-ALWI void untilize(uint32_t num_blocks) {
+ALWI void untilize(uint32_t num_blocks, untilize_config::PreviousCBs prev_cbs) {
 
     // Compile-time validation
     static_assert(input_cb != output_cb,
@@ -131,8 +132,36 @@ ALWI void untilize(uint32_t num_blocks) {
     static_assert(output_cb < 32,
         "Invalid output_cb: must be less than 32");
 
+    // Validate that no valid CB is provided when reconfiguration is NOT requested
+    // Note: This is a runtime validation since prev_cbs is a runtime parameter
+    if constexpr (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure) {
+        bool has_valid_cb = (prev_cbs.prev_cb_srca != untilize_config::INVALID_CB) ||
+                           (prev_cbs.prev_cb_output != untilize_config::INVALID_CB);
+        ASSERT(!has_valid_cb);
+    }
+
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr bool is_integer = is_integer_format<input_cb>();
+
+    // Determine if we're doing data type reconfiguration
+    constexpr bool use_dt = (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::Reconfigure);
+
+    // Reconfigure register datatypes if requested
+    if constexpr (use_dt) {
+        // Reconfigure srcA
+        if (prev_cbs.prev_cb_srca != untilize_config::INVALID_CB) {
+            reconfig_data_format_srca(prev_cbs.prev_cb_srca);
+        } else {
+            reconfig_data_format_srca(input_cb);
+        }
+
+        // Reconfigure output
+        if (prev_cbs.prev_cb_output != untilize_config::INVALID_CB) {
+            pack_reconfig_data_format(prev_cbs.prev_cb_output);
+        } else {
+            pack_reconfig_data_format(output_cb);
+        }
+    }
 
     // Determine which dispatch path to use
     // WaitUpfront or non-integer wide widths always use standard path
