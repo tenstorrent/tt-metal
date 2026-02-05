@@ -74,7 +74,7 @@ void bind_reduction_cumsum_operation(nb::module_& mod) {
                const int32_t& dim,
                std::optional<DataType>& dtype,
                const bool& reverse_order,
-               std::optional<Tensor> preallocated_tensor,
+               const std::optional<Tensor>& preallocated_tensor,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(input_tensor, dim, dtype, reverse_order, preallocated_tensor, memory_config);
             },

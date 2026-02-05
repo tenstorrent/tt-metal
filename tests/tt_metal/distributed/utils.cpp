@@ -165,7 +165,6 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     uint32_t /*seed*/,
     const std::unordered_set<CoreCoord>& active_eth_cores) {
     uint32_t MAX_LOOP = 100;
-    uint32_t page_size = 1024;
     uint32_t max_eth_cores = 3;
 
     uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
@@ -182,6 +181,10 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
     std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
     std::map<std::string, std::string> erisc_defines = {{"ERISC", "1"}};
+    uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
+    // Smaller page size for architectures with more CBs to ensure all test CBs fit in L1
+    constexpr uint32_t l1_cb_test_budget = 1024 * 32;
+    uint32_t page_size = l1_cb_test_budget / max_cbs;
 
     for (uint32_t i = 0; i < num_programs; i++) {
         Program& program = *programs.emplace_back(std::make_shared<Program>());
@@ -192,14 +195,14 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
             BRISC_OUTER_LOOP = MAX_LOOP;
             BRISC_MIDDLE_LOOP = MAX_LOOP;
             BRISC_INNER_LOOP = MAX_LOOP;
-            NUM_CBS = NUM_CIRCULAR_BUFFERS;
+            NUM_CBS = max_cbs;
             NUM_SEMS = NUM_SEMAPHORES;
             USE_MAX_RT_ARGS = true;
         } else {
             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-            NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
+            NUM_CBS = rand() % (max_cbs) + 1;
             NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
             USE_MAX_RT_ARGS = false;
         }

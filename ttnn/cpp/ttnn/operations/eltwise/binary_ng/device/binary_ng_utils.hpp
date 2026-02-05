@@ -51,6 +51,8 @@ struct OpConfig {
         DIV,
         DIV_FLOOR,
         DIV_TRUNC,
+        REMAINDER,
+        FMOD,
         POWER,
         RSUB,
         GCD,
@@ -73,6 +75,7 @@ struct OpConfig {
         LE,
         HYPOT,
         WHERE,
+        EQ,
     };
 
     template <class EnumT>

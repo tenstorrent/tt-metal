@@ -542,6 +542,7 @@ target_sources(
             inc/experimental/lock.h
             inc/experimental/noc.h
             inc/experimental/circular_buffer.h
+            inc/experimental/dataflow_buffer.h
             inc/experimental/noc_semaphore.h
             inc/experimental/endpoints.h
             inc/experimental/core_local_mem.h
@@ -549,12 +550,15 @@ target_sources(
             # Interface Headers - Host-Device boundary
             inc/hostdev/dev_msgs.h
             inc/hostdev/fabric_telemetry_msgs.h
+            inc/hostdev/rta_constants.h
             inc/hostdev/socket.h
             # Interface Headers
             inc/internal/atomic_rwptr.h
             inc/internal/bit_utils.h
             inc/internal/circular_buffer_interface.h
             inc/internal/circular_buffer_init.h
+            inc/internal/dataflow_buffer_interface.h
+            inc/internal/dataflow_buffer_init.h
             inc/internal/firmware_common.h
             inc/internal/mod_div_lib.h
             inc/internal/risc_attribs.h

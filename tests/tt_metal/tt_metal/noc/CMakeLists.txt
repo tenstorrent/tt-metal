@@ -1,4 +1,5 @@
-set(UNIT_TESTS_NOC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_dynamic_noc.cpp)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 add_executable(unit_tests_noc ${UNIT_TESTS_NOC_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_noc)

@@ -8,8 +8,11 @@
 #include "internal/debug/watcher_common.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "internal/dataflow_buffer_init.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
+#include "internal/dataflow_buffer_interface.h"
+#include "hostdev/dev_msgs.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 uint8_t noc_index;
@@ -37,6 +40,11 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+thread_local uint32_t rta_count __attribute__((used));
+thread_local uint32_t crta_count __attribute__((used));
+#endif
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -87,6 +95,8 @@ void deassert_trisc() {
     // subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
 }
+// Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
+thread_local ::experimental::LocalDFBInterface g_dfb_interface[32] __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -234,8 +244,7 @@ extern "C" uint32_t _start1() {
                 //     { subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
                 // }
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
-                uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
-
+                uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
                 // Invalidate the i$ now the kernels have loaded and before running
                 // volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
                 // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
@@ -264,27 +273,20 @@ extern "C" uint32_t _start1() {
                 // }
                 // prev_noc_mode = noc_mode;
 
-                // uint32_t tt_l1_ptr* cb_l1_base =
-                //     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
+                uint32_t tt_l1_ptr* dfb_l1_base =
+                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
                 // Run the kernel
                 WAYPOINT("R");
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 if (enables & (1u << index)) {
-                    uint32_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
-                    // TODO: setup DataFlowBuffers
-                    // setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
-                    // cb_l1_base =
-                    //     (uint32_t tt_l1_ptr*)(kernel_config_base +
-                    //     launch_msg_address->kernel_config.remote_cb_offset);
-                    // uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                    // experimental::setup_remote_cb_interfaces<true>(
-                    //     cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                    // barrier_remote_cb_interface_setup(noc_index, end_cb_index);
+                    uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                    experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
                     uint32_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                     asm("FENCE.i");
+                    uint32_t* kernel_ptr = reinterpret_cast<uint32_t*>(kernel_lma);
                     auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                     record_stack_usage(stack_free);
                 } else {
@@ -377,15 +379,11 @@ extern "C" uint32_t _start1() {
 
         uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
 
-        uint32_t tt_l1_ptr* cb_l1_base =
+        uint32_t tt_l1_ptr* dfb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
-        // setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
+        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
-        // cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
-        // uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
-        // NOC argument is unused
-        // experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
+        experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 

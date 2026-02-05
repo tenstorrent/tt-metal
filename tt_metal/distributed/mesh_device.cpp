@@ -60,7 +60,6 @@
 #include "mesh_device_view_impl.hpp"
 
 namespace tt::tt_metal {
-class CommandQueue;
 class SystemMemoryManager;
 
 namespace program_cache::detail {
@@ -169,7 +168,18 @@ MeshDeviceImpl::ScopedDevices::~ScopedDevices() {
         for (auto& [id, device] : opened_local_devices_) {
             devices_to_close.push_back(device);
         }
-        tt_metal::MetalContext::instance().device_manager()->close_devices(devices_to_close, /*skip_synchronize=*/true);
+        // Catch any exceptions during device close - destructors must not throw.
+        // This can happen when a device is hung and times out during close.
+        try {
+            tt_metal::MetalContext::instance().device_manager()->close_devices(
+                devices_to_close, /*skip_synchronize=*/true);
+        } catch (const std::exception& e) {
+            log_warning(
+                LogMetal,
+                "Exception during device close in ScopedDevices destructor: {}. "
+                "The device may be in an unrecoverable state and require a reset.",
+                e.what());
+        }
     }
 }
 
@@ -375,6 +385,9 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
+    TT_FATAL(
+        !device_ids.empty(), "Cannot create unit meshes with empty device_ids. At least one device ID is required.");
+
     // Validate all devices are on compute meshes (not switches) before creating any resources
     const auto& mesh_graph = MetalContext::instance().get_control_plane().get_mesh_graph();
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
@@ -1016,11 +1029,6 @@ SystemMemoryManager& MeshDeviceImpl::sysmem_manager() {
     return reference_device()->sysmem_manager();
 }
 
-CommandQueue& MeshDeviceImpl::command_queue(std::optional<uint8_t> cq_id) {
-    TT_THROW("command_queue() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->command_queue(cq_id);
-}
-
 void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
 
@@ -1406,7 +1414,6 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
     return pimpl_->get_noc_multicast_encoding(noc_index, cores);
 }
 SystemMemoryManager& MeshDevice::sysmem_manager() { return pimpl_->sysmem_manager(); }
-CommandQueue& MeshDevice::command_queue(std::optional<uint8_t> cq_id) { return pimpl_->command_queue(cq_id); }
 MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) { return pimpl_->begin_mesh_trace(cq_id); }
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     pimpl_->begin_mesh_trace(cq_id, trace_id);

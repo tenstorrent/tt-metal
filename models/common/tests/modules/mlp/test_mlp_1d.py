@@ -188,7 +188,6 @@ def test_mlp_1d_config_defaults():
     # Check defaults
     assert config.max_batch_size == 32
     assert config.mlp_activation_type == ttnn.UnaryOpType.SILU
-    assert config.num_reduce_scatter_links == 1
 
     # Optional fields default to None
     assert config.mesh_device is None
@@ -766,6 +765,8 @@ def test_mlp_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
         state_dict=state_dict,
         weight_cache_path=topology_aware_cache_path(dtype),
         layer_num=0,
+        dtype=dtype,
+        model_config=model_config,
     )
 
     # Create input
