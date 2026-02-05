@@ -154,10 +154,13 @@ void kernel_main() {
         get_named_compile_time_arg_val("tilize_chunk_ready_semaphore_id");
     constexpr uint32_t matmul_chunk_ready_semaphore_id =
         get_named_compile_time_arg_val("matmul_chunk_ready_semaphore_id");
+    constexpr uint32_t previous_chunk_sent_semaphore_id =
+        get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
 
     uint32_t matmul_chunk_available_semaphore_addr = get_semaphore(matmul_chunk_available_semaphore_id);
     uint32_t tilize_chunk_ready_semaphore_addr = get_semaphore(tilize_chunk_ready_semaphore_id);
     uint32_t matmul_chunk_ready_semaphore_addr = get_semaphore(matmul_chunk_ready_semaphore_id);
+    uint32_t previous_chunk_sent_semaphore_addr = get_semaphore(previous_chunk_sent_semaphore_id);
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;
@@ -431,10 +434,7 @@ void kernel_main() {
         second_half_buffer_addr);
     uint32_t bytes_to_mcast = tiles_per_chunk * tilize_output_page_size;
 
-    // What value the drain-sync-core waits on (from the non-drain-sync cores) before signalling to the
-    // matmul cores that a chunk has arrived. Need to double buffer the semaphores so that a given tilize
-    // core can write into a free second buffer, while the tilize drain-sync core hasn't yet signalled that
-    // the first buffer is completely full (ex: one tilize core lags behind filling the first buffer).
+    // For synchronization between the drain-sync core and non-drain-sync cores
     uint32_t tilize_chunk_ready_wait_value = num_tilize_cores - 1;
     uint64_t tilize_chunk_ready_drain_semaphore_noc_addr =
         get_noc_addr(drain_core_noc_x, drain_core_noc_y, tilize_chunk_ready_semaphore_addr);
@@ -458,26 +458,15 @@ void kernel_main() {
 
             /*
              * Send chunks to MM cores;
-             * 0) Wait for previous chunk to be fully delivered to MM cores
-             *    - Only applicable to non-drain-sync cores, as drain-sync waits
-             *      before signalling to MM cores that all chunks have arrived
              * 1) Wait for buffer on matmul cores to be free
              *    - Can skip for the first two chunks
              * 2) Send the chunk
              * 3) Signal via semaphore to T drain-sync-core that you've sent your chunk
              * 4) T drain-sync-core waits until all T non-drain-sync cores have sent their chunk
              * 5) T drain-sync-core signals to MM cores that chunks have arrived
-             *
-             * NOTE: Steps 4 & 5 required as we don't have a noc_multicast_sem_inc available to use yet
+             * 6) T non-drain-sync cores wait until T drain-sync core signals that all chunks have been sent
+             * 7) All T writers signal to their reader that they can read in another set of tokens
              */
-
-            // == 0 ==
-            if (!is_drain_tilize_core && num_chunks_sent != 0) {
-                noc_semaphore_wait(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr),
-                    tilize_chunk_ready_wait_value);
-                tilize_chunk_ready_wait_value += (num_tilize_cores - 1);
-            }
 
             // == 1 ==
             // skip for the first two chunks (2 chunks are allocated, and both are initially empty)
@@ -553,12 +542,23 @@ void kernel_main() {
             } else {
                 // == 3 ==
                 noc_semaphore_inc(tilize_chunk_ready_drain_semaphore_noc_addr, 1);
+
+                // == 6 ==
+                noc_semaphore_wait(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tilize_chunk_ready_semaphore_addr),
+                    tilize_chunk_ready_wait_value);
+                tilize_chunk_ready_wait_value += (num_tilize_cores - 1);
             }
 
             // Pop the tiles from CB
             cb_pop_front(tilize_output_cb_id, tiles_per_chunk);
             num_chunks_sent++;
             use_second_half_buffer = !use_second_half_buffer;
+
+            // == 7 ==
+            // signal to reader that they can start reading in another set of tokens
+            noc_semaphore_set(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(previous_chunk_sent_semaphore_addr), num_chunks_sent);
         }
     }
 
