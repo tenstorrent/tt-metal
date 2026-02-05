@@ -633,11 +633,17 @@ jobs:
             echo "Check out the server log in a step below."
             exit 1
           fi
-      - name: 🧪 Run v1 sampling tests
+      - name: 🧪 Run compat sampling tests
         if: ${{ matrix.test-group.use-vllm-v1 }}
         timeout-minutes: 10
         run: |
-          pytest vllm/tests/tt/test_v1_sampling.py -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+          pytest vllm/tests/tt/test_host_only_params.py -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+
+      - name: 🧪 Run logprobs tests
+        if: ${{ matrix.test-group.use-vllm-v1 }}
+        timeout-minutes: 10
+        run: |
+          pytest vllm/tests/tt/test_logprobs.py -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
 
       - name: 🧪 Run sampling tests
         if: ${{ matrix.test-group.sampling-tests }}
