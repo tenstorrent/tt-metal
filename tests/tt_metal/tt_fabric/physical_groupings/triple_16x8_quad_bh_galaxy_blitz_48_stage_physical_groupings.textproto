@@ -3,9 +3,6 @@
 # Each mesh is 16x8 (128 ASICs = 4 hosts), arranged in 3 pods with 16 meshes each
 # The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD)
 
-base_units {
-  # Base units are predefined constants - ASIC_LOCATION_1 through ASIC_LOCATION_8
-}
 
 groupings {
   name: "trays"
