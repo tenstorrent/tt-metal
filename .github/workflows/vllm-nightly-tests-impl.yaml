@@ -82,6 +82,7 @@ jobs:
               "override-tt-config": "{\"data_parallel\": 8, \"sample_on_device_mode\": \"all\"}",
               "multimodal": false,
               "structured-output": true,
+              "sampling-tests": true,
               "additional-server-args": "--num_scheduler_steps 1",
               "owner_id": "U091SNDA4TS"
             },
@@ -111,6 +112,7 @@ jobs:
               "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
               "multimodal": false,
               "structured-output": true,
+              "sampling-tests": true,
               "additional-server-args": "--num_scheduler_steps 1",
               "owner_id": "U091SNDA4TS"
             },
@@ -188,6 +190,7 @@ jobs:
               "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\"}",
               "use-vllm-v1": true,
               "structured-output": true,
+              "sampling-tests": true,
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
@@ -236,6 +239,7 @@ jobs:
               "additional-server-args": "--data_parallel_size 2",
               "use-vllm-v1": true,
               "structured-output": true,
+              "sampling-tests": true,
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
             },
@@ -280,6 +284,7 @@ jobs:
               "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8",
               "use-vllm-v1": true,
+              "sampling-tests": true,
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
@@ -331,7 +336,6 @@ jobs:
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
               "use-vllm-v1": true,
               "multimodal": false,
-              "skip-sampling-tests": true,
               "co-owner-1-id": "U08CEGF78ET"
             },
             {
@@ -347,7 +351,6 @@ jobs:
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
               "use-vllm-v1": true,
               "multimodal": false,
-              "skip-sampling-tests": true,
               "owner_id": "U08CEGF78ET"
             }
           ]'
@@ -599,7 +602,7 @@ jobs:
               "max_tokens": 512,
               "temperature": 0.0,
               "top_p": 0.9,
-              "top_k": 10,
+              "top_k": 10,ś
               "repetition_penalty": 1.0,
               "stream": false,
               "ignore_eos": false
@@ -614,7 +617,7 @@ jobs:
             exit 1
           fi
       - name: 🧪 Run sampling tests
-        if: ${{ !matrix.test-group.skip-sampling-tests }}
+        if: ${{ matrix.test-group.sampling-tests }}
         timeout-minutes: 10
         run: |
           pytest vllm/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
