@@ -16,10 +16,7 @@ def main():
     with open(skip_list_file) as f:
         data = yaml.safe_load(f)
 
-    common = data.get("common") or []
-    arch_specific = data.get(arch) or []
-
-    skips = common + arch_specific
+    skips = data.get(arch) or []
     # Output simple --deselect args (no special chars in paths now)
     print(" ".join(f"--deselect={path}" for path in skips))
 
