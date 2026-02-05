@@ -23,7 +23,22 @@ namespace ckernel {
 // ============================================================================
 
 /**
- * Init for scalar broadcast multiply
+ * Full init for scalar broadcast multiply with FP32 accumulation
+ * Includes all hw_configure calls needed when DST_ACCUM_MODE is false
+ */
+ALWI void mul_tiles_bcast_scalar_init_fp32(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+    UNPACK((llk_unpack_hw_configure<true>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
+    MATH((llk_math_pack_sync_init<true>()));
+    MATH((llk_math_hw_configure<true>(icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init_with_operands<ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(icb0, icb1)));
+    PACK((llk_pack_hw_configure<true>(ocb)));
+    PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init<true, false>()));
+}
+
+/**
+ * Short init for scalar broadcast multiply (assumes hw already configured)
  */
 ALWI void mul_tiles_bcast_scalar_init_short_fp32(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);

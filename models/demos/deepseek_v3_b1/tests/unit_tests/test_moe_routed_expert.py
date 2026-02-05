@@ -146,7 +146,7 @@ def test_moe_routed_expert(device):
     gate_proj_N = 2048  # Expert output width
 
     # Testing mode: when True, hardcode expert index 0 and create only 1 expert
-    use_hardcoded_expert_index = True
+    use_hardcoded_expert_index = False
     num_experts = 1 if use_hardcoded_expert_index else 256
 
     # Tile definitions
