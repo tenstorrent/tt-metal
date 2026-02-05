@@ -29,7 +29,7 @@ from ....utils.test import line_params, ring_params
         "2x4sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
-        "bh_quad_4x32_sp1tp0",
+        "bh_4x32sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
