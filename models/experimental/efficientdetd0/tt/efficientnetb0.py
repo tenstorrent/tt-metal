@@ -104,10 +104,10 @@ class TtMBConvBlock:
 
         if not self.is_depthwise_first:
             x = self._expand_conv(x)
-            x = x * ttnn.sigmoid(x, fast_and_approximate_mode=True)
+            x = x * ttnn.sigmoid_accurate(x, True)
 
         x = self._depthwise_conv(x)
-        x = x * ttnn.sigmoid(x, fast_and_approximate_mode=True)
+        x = x * ttnn.sigmoid_accurate(x, True)
 
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
@@ -116,13 +116,13 @@ class TtMBConvBlock:
 
         x_squeezed = ttnn.global_avg_pool2d(x)
         x_squeezed = self._se_reduce(x_squeezed)
-        x_squeezed = x_squeezed * ttnn.sigmoid(x_squeezed, fast_and_approximate_mode=True)
+        x_squeezed = x_squeezed * ttnn.sigmoid_accurate(x_squeezed, True)
         x_squeezed = self._se_expand(x_squeezed)
 
         if x_squeezed.is_sharded():
             x_squeezed = ttnn.sharded_to_interleaved(x_squeezed, ttnn.L1_MEMORY_CONFIG)
 
-        x = ttnn.sigmoid(x_squeezed, fast_and_approximate_mode=True) * x
+        x = ttnn.sigmoid_accurate(x_squeezed, True) * x
         ttnn.deallocate(x_squeezed)
 
         x = self._project_conv(x)

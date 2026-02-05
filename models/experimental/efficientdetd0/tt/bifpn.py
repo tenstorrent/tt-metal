@@ -310,7 +310,7 @@ class TtBiFPN:
 
     def _swish(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Swish activation: x * sigmoid(x)"""
-        return x * ttnn.sigmoid(x, fast_and_approximate_mode=True)
+        return x * ttnn.sigmoid_accurate(x, True)
 
     def __call__(self, inputs: Tuple[ttnn.Tensor, ...]) -> Tuple[ttnn.Tensor, ...]:
         """
