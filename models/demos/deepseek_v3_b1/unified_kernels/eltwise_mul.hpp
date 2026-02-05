@@ -136,10 +136,7 @@ struct EltwiseMul {
             // ================================================================
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
 
-            binary_op_init_common(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
-
-            // Initialize eltwise binary for multiplication
-            mul_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
+            mul_tiles_bcast_scalar_init_fp32(CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
 
             // Wait for both inputs
             // cb_in0_wait allows waiting on a different CB (for CB aliasing)
@@ -173,6 +170,7 @@ struct EltwiseMul {
                 cb_push_back(CTArgs::cb_out, num_tiles);
             } else {
                 // Without scalar: cb_in0 * cb_in1 -> dest
+                mul_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
                 for (uint32_t i = 0; i < num_tiles; i++) {
                     mul_tiles(CTArgs::cb_in0, CTArgs::cb_in1, i, i, i);
                 }
