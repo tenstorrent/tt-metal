@@ -40,20 +40,6 @@ void check_validation_errors(
 
 TEST(PhysicalGroupingDescriptorTests, ParsesValidBasicConfiguration) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }
-            , { asic_location: ASIC_LOCATION_3 }
-            , { asic_location: ASIC_LOCATION_4 }
-            , { asic_location: ASIC_LOCATION_5 }
-            , { asic_location: ASIC_LOCATION_6 }
-            , { asic_location: ASIC_LOCATION_7 }
-            , { asic_location: ASIC_LOCATION_8 }]
-        }
 
         groupings {
           name: "hosts"
@@ -79,20 +65,6 @@ TEST(PhysicalGroupingDescriptorTests, ParsesValidBasicConfiguration) {
 
 TEST(PhysicalGroupingDescriptorTests, ParsesValidConfigurationWithPods) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }
-            , { asic_location: ASIC_LOCATION_3 }
-            , { asic_location: ASIC_LOCATION_4 }
-            , { asic_location: ASIC_LOCATION_5 }
-            , { asic_location: ASIC_LOCATION_6 }
-            , { asic_location: ASIC_LOCATION_7 }
-            , { asic_location: ASIC_LOCATION_8 }]
-        }
 
         groupings {
           name: "hosts"
@@ -123,16 +95,6 @@ TEST(PhysicalGroupingDescriptorTests, ParsesValidConfigurationWithPods) {
 
 TEST(PhysicalGroupingDescriptorTests, ParsesValidConfigurationWithMultipleDefinitions) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "halftray"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }
-            , { asic_location: ASIC_LOCATION_3 }
-            , { asic_location: ASIC_LOCATION_4 }]
-        }
 
         groupings {
           name: "halftray"
@@ -160,20 +122,6 @@ TEST(PhysicalGroupingDescriptorTests, ParsesValidConfigurationWithMultipleDefini
 
 TEST(PhysicalGroupingDescriptorTests, ParsesValidConfigurationWithMixedCounts) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }
-            , { asic_location: ASIC_LOCATION_3 }
-            , { asic_location: ASIC_LOCATION_4 }
-            , { asic_location: ASIC_LOCATION_5 }
-            , { asic_location: ASIC_LOCATION_6 }
-            , { asic_location: ASIC_LOCATION_7 }
-            , { asic_location: ASIC_LOCATION_8 }]
-        }
 
         groupings {
           name: "hosts"
@@ -222,8 +170,6 @@ TEST(PhysicalGroupingDescriptorTests, ParsesFromTextProtoFile) {
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenMeshesMissing) {
     const std::string text_proto = R"proto(
-        base_units {}
-
         groupings {
           name: "trays"
           items:
@@ -240,18 +186,13 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenMeshesMissing) {
 
     EXPECT_THAT(
         ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Required grouping 'meshes' is missing")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Required grouping 'meshes' is missing"),
+            ::testing::HasSubstr("At least one grouping with name 'meshes' must be defined"))));
 }
 
 TEST(PhysicalGroupingDescriptorTests, ValidationWarnsWhenRecommendedGroupingsMissing) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }]
-        }
     )proto";
 
     // This should parse but have warnings
@@ -279,13 +220,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationWarnsWhenRecommendedGroupingsMis
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenReferencingNonExistentGrouping) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "nonexistent" count: 1 } }]
-        }
     )proto";
 
     EXPECT_THAT(
@@ -295,13 +229,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenReferencingNonExistentG
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenGroupingRefHasEmptyName) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "" count: 1 } }]
-        }
     )proto";
 
     EXPECT_THAT(
@@ -315,14 +242,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenGroupingRefHasEmptyName
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenMeshesHasCountZero) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }]
-        }
 
         groupings {
           name: "meshes"
@@ -339,14 +258,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenMeshesHasCountZero) {
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenPodsHasCountOne) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }]
-        }
 
         groupings {
           name: "hosts"
@@ -376,14 +287,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenPodsHasCountOne) {
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenSuperpodsHasCountOne) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }]
-        }
 
         groupings {
           name: "hosts"
@@ -419,14 +322,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenSuperpodsHasCountOne) {
 
 TEST(PhysicalGroupingDescriptorTests, ValidationSucceedsWhenMeshesHasCountOne) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }]
-        }
 
         groupings {
           name: "meshes"
@@ -447,25 +342,9 @@ TEST(PhysicalGroupingDescriptorTests, ValidationSucceedsWhenMeshesHasCountOne) {
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenGroupingHasNoItems) {
     const std::string text_proto = R"proto(
-        base_units {}
 
-        groupings { name: "meshes" }
-    )proto";
-
-    EXPECT_THAT(
-        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must have at least one item")));
-}
-
-TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenItemHasNoAsicLocationOrGroupingRef) {
-    const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ {}]
-        }
+        TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenItemHasNoAsicLocationOrGroupingRef
+        ) { const std::string text_proto = R"proto(
     )proto";
 
     EXPECT_THAT(
@@ -476,13 +355,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenItemHasNoAsicLocationOr
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenAsicLocationIsUnspecified) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { asic_location: ASIC_LOCATION_UNSPECIFIED }]
-        }
     )proto";
 
     EXPECT_THAT(
@@ -492,13 +364,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenAsicLocationIsUnspecifi
 
 TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenAsicLocationIsInvalid) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { asic_location: ASIC_LOCATION_9 }]
-        }
     )proto";
 
     // This should fail at protobuf parsing level, but let's test what happens
@@ -508,20 +373,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenAsicLocationIsInvalid) 
 
 TEST(PhysicalGroupingDescriptorTests, ValidationSucceedsWithValidAsicLocations) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }
-            , { asic_location: ASIC_LOCATION_3 }
-            , { asic_location: ASIC_LOCATION_4 }
-            , { asic_location: ASIC_LOCATION_5 }
-            , { asic_location: ASIC_LOCATION_6 }
-            , { asic_location: ASIC_LOCATION_7 }
-            , { asic_location: ASIC_LOCATION_8 }]
-        }
     )proto";
 
     EXPECT_NO_THROW({
@@ -536,13 +387,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationSucceedsWithValidAsicLocations) 
 
 TEST(PhysicalGroupingDescriptorTests, HasGroupingReturnsTrueForExistingGrouping) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }]
-        }
 
         groupings {
           name: "pods"
@@ -559,14 +403,6 @@ TEST(PhysicalGroupingDescriptorTests, HasGroupingReturnsTrueForExistingGrouping)
 
 TEST(PhysicalGroupingDescriptorTests, GetGroupingsByNameReturnsAllDefinitions) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "halftray"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }]
-        }
 
         groupings {
           name: "halftray"
@@ -600,13 +436,6 @@ TEST(PhysicalGroupingDescriptorTests, GetGroupingsByNameReturnsAllDefinitions) {
 
 TEST(PhysicalGroupingDescriptorTests, GetAllGroupingNamesReturnsAllNames) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }]
-        }
 
         groupings {
           name: "meshes"
@@ -631,13 +460,6 @@ TEST(PhysicalGroupingDescriptorTests, GetAllGroupingNamesReturnsAllNames) {
 
 TEST(PhysicalGroupingDescriptorTests, GetGroupingCountReturnsCorrectCount) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }]
-        }
 
         groupings {
           name: "meshes"
@@ -658,13 +480,6 @@ TEST(PhysicalGroupingDescriptorTests, GetGroupingCountReturnsCorrectCount) {
 
 TEST(PhysicalGroupingDescriptorTests, GetAllGroupingsReturnsAllGroupings) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }]
-        }
 
         groupings {
           name: "pods"
@@ -699,13 +514,6 @@ TEST(PhysicalGroupingDescriptorTests, GetAllGroupingsReturnsAllGroupings) {
 
 TEST(PhysicalGroupingDescriptorTests, ValidationResultGetReportFormatsCorrectly) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { grouping_ref { grouping_name: "nonexistent" count: 1 } }]
-        }
     )proto";
 
     try {
@@ -725,13 +533,6 @@ TEST(PhysicalGroupingDescriptorTests, ValidationResultGetReportFormatsCorrectly)
 
 TEST(PhysicalGroupingDescriptorTests, ParsesMinimalValidConfiguration) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }]
-        }
     )proto";
 
     EXPECT_NO_THROW({
@@ -742,16 +543,6 @@ TEST(PhysicalGroupingDescriptorTests, ParsesMinimalValidConfiguration) {
 
 TEST(PhysicalGroupingDescriptorTests, ParsesConfigurationWithDirectAsicLocationsInMeshes) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "meshes"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }
-            , { asic_location: ASIC_LOCATION_3 }
-            , { asic_location: ASIC_LOCATION_4 }]
-        }
     )proto";
 
     EXPECT_NO_THROW({
@@ -762,14 +553,6 @@ TEST(PhysicalGroupingDescriptorTests, ParsesConfigurationWithDirectAsicLocations
 
 TEST(PhysicalGroupingDescriptorTests, ParsesConfigurationWithMixedAsicLocationsAndGroupingRefs) {
     const std::string text_proto = R"proto(
-        base_units {}
-
-        groupings {
-          name: "trays"
-          items:
-          [ { asic_location: ASIC_LOCATION_1 }
-            , { asic_location: ASIC_LOCATION_2 }]
-        }
 
         groupings {
           name: "meshes"

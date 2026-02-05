@@ -7,14 +7,15 @@ package tt.tt_fabric.proto;
 // in a declarative way without requiring explicit ASIC IDs.
 //
 // KEY DESIGN DECISIONS:
-// - Base units (ASIC locations 1-8) are predefined constants in the schema (not a grouping)
-// - Groupings can only reference ASIC locations OR other groupings (not define base units)
+// - ASIC locations (1-8) are predefined constants in the schema (enum values)
+// - Groupings can only reference ASIC locations OR other groupings
 // - ASIC locations are defined as an enum with values 1-8
 //
 // VALIDATION RULES - ALL ENCODED IN SCHEMA STRUCTURE:
 //
-// RULE 1: REQUIRED GROUPINGS (documented in comments, needs runtime check)
+// RULE 1: REQUIRED GROUPINGS (documented in comments, enforced by runtime validation)
 //   - A grouping with name="meshes" MUST exist in PhysicalGroupings.groupings
+//   - This is a hard requirement - validation will fail with an error if "meshes" is not defined
 //
 // RULE 2: MULTIPLE DEFINITIONS (enforced by schema structure)
 //   - The same grouping name CAN appear multiple times in groupings list
@@ -32,14 +33,9 @@ package tt.tt_fabric.proto;
 //   - Each Grouping contains a list of items
 //   - Each item can be either an ASIC location OR a grouping reference (enforced by oneof)
 //   - ENFORCED BY: repeated GroupingItem items, where GroupingItem has oneof { asic_location | grouping_ref }
-//   - Base units are NOT a grouping - they're predefined in base_units field
 //   - Can mix ASIC locations and grouping references in the same grouping
 //
 // Example textproto:
-//   base_units {
-//     # ASIC locations 1-8 are predefined - no need to specify them
-//     # They are automatically available as ASIC_LOCATION_1 through ASIC_LOCATION_8
-//   }
 //   groupings {
 //     name: "trays"
 //     items: [
@@ -83,7 +79,7 @@ package tt.tt_fabric.proto;
 //   }
 
 // ASIC Location - predefined constants for ASIC positions 1-8 within a tray
-// These are the base units and are always available
+// These enum values are always available for use in grouping definitions
 enum AsicLocation {
     // Reserved value - protobuf requires enum to start at 0
     ASIC_LOCATION_UNSPECIFIED = 0;
@@ -119,15 +115,6 @@ message GroupingReference {
     uint32 count = 2;
 }
 
-// Base units definition - ASIC locations 1-8 are predefined constants
-// This is NOT a grouping - it's a separate field that documents the base units
-// The actual ASIC locations are defined as enum constants (AsicLocation enum)
-message BaseUnits {
-    // Base units are predefined as ASIC_LOCATION_1 through ASIC_LOCATION_8
-    // No fields needed - the enum defines the constants
-    // This message exists for documentation and potential future extensibility
-}
-
 // A single item in a grouping definition - can be either an ASIC location or a grouping reference
 // This allows mixing ASIC locations and grouping references in the same grouping
 message GroupingItem {
@@ -157,7 +144,6 @@ message GroupingItem {
 //   2. items: List of grouping items (ASIC locations and/or grouping references)
 //      - Can mix ASIC locations and grouping references in the same grouping
 //      - Must be non-empty
-//      - Base units are NOT a grouping - they're predefined in base_units field
 //   3. grouping_ref: Each GroupingReference.count must satisfy Rule 4
 message Grouping {
     // Name of this grouping (e.g., "meshes", "pods", "halftray", "trays", "hosts")
@@ -166,7 +152,6 @@ message Grouping {
     //   - If name == "meshes": This grouping MUST exist (at least one Grouping with this name)
     //   - Multiple Grouping messages can have the same name (allowed for custom groupings)
     //   - Examples: "meshes", "pods", "superpods", "clusters", "halftray", "trays", "hosts"
-    //   - NOTE: "base_units" is NOT a grouping name - base units are predefined constants
     string name = 1;
 
     // List of grouping items - each item can be either an ASIC location or a grouping reference
@@ -180,18 +165,12 @@ message Grouping {
     repeated GroupingItem items = 2;
 }
 
-// Top-level message containing base units and all groupings
+// Top-level message containing all groupings
 // VALIDATION RULES:
-//   1. base_units: Optional field (base units are predefined as enum constants)
-//   2. groupings: Must contain at least one Grouping with name == "meshes"
-//   3. Multiple Grouping messages can have the same name (explicitly allowed)
-//   4. All GroupingReference.grouping_name values must reference a Grouping.name in this list
+//   1. groupings: Must contain at least one Grouping with name == "meshes"
+//   2. Multiple Grouping messages can have the same name (explicitly allowed)
+//   3. All GroupingReference.grouping_name values must reference a Grouping.name in this list
 message PhysicalGroupings {
-    // Base units definition (optional - ASIC locations are predefined as enum constants)
-    // This field exists for documentation and potential future extensibility
-    // The actual base units are ASIC_LOCATION_1 through ASIC_LOCATION_8 (defined in AsicLocation enum)
-    BaseUnits base_units = 1;
-
     // List of all groupings
     // VALIDATION:
     //   - Must contain at least one Grouping with name == "meshes" (REQUIRED)
@@ -199,6 +178,5 @@ message PhysicalGroupings {
     //   - Order does not matter (forward references are allowed)
     //   - Each Grouping must satisfy the validation rules in the Grouping message
     //   - All GroupingReference.grouping_name values must match at least one Grouping.name here
-    //   - Base units are NOT groupings - they're predefined constants
-    repeated Grouping groupings = 2;
+    repeated Grouping groupings = 1;
 }
