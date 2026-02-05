@@ -11,7 +11,7 @@ This test suite verifies:
 4. Sliding window attention works correctly (seq_len > window_size)
 
 Test coverage notes:
-- Paged attention: Tested via (paged_attention, chunked_prefill) parameter combinations.
+- Paged attention: Tested via (page_block_size, chunk_size) parameter combinations.
 - Chunked prefill: Tested via paged-chunked variant. Requires paged=True and mode="prefill".
 - Variants: non-paged, paged, paged-chunked (3 combinations per test case).
 """
@@ -29,11 +29,11 @@ from transformers.modeling_utils import no_init_weights
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
-from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig
+from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig, _resolve_attention1d_config
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
 from models.common.modules.tt_ccl import TT_CCL
-from models.common.tensor_utils import get_rot_transformation_mat
+from models.common.tensor_utils import get_rot_transformation_mat, zeros_like_kv_cache, zeros_like_paged_cache
 from models.common.tests.utils import stable_model_seed
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 
@@ -592,10 +592,6 @@ def test_attention_1d_config_creation():
 
 def test_attention_1d_config_defaults():
     """Test that Attention1DConfig has sensible defaults."""
-    from unittest.mock import MagicMock
-
-    from models.common.modules.attention.attention_1d import Attention1DConfig
-
     # Minimal creation - only required fields
     config = Attention1DConfig(wqkv=MagicMock(), wo=MagicMock())
 
@@ -646,6 +642,94 @@ def test_attention_1d_config_power_user_overrides():
     assert config.scale == pytest.approx(0.08838834764831843)
 
 
+def test_attention_1d_happy_path_signature():
+    """Test that Attention1D.__init__ accepts the happy path signature (weights + dimensions).
+
+    Note: This is a unit test that verifies the API signature without a device.
+    Full integration testing of Attention1D creation happens in device tests.
+    """
+    import inspect
+
+    # Verify the __init__ signature has the expected parameters
+    sig = inspect.signature(Attention1D.__init__)
+    params = list(sig.parameters.keys())
+
+    # Expected: self, wqkv, wo, n_heads, n_kv_heads, head_dim
+    assert "wqkv" in params, "wqkv should be a parameter"
+    assert "wo" in params, "wo should be a parameter"
+    assert "n_heads" in params, "n_heads should be a required parameter"
+    assert "n_kv_heads" in params, "n_kv_heads should be a required parameter"
+    assert "head_dim" in params, "head_dim should be a required parameter"
+
+    # Verify n_heads, n_kv_heads, head_dim have no defaults (are required)
+    for param_name in ["n_heads", "n_kv_heads", "head_dim"]:
+        param = sig.parameters[param_name]
+        assert param.default is inspect.Parameter.empty, f"{param_name} should be required (no default)"
+
+
+def test_attention_1d_resolve_requires_n_heads():
+    """Test that _resolve_attention1d_config raises ValueError when n_heads is missing."""
+    mock_source = MagicMock()
+    mock_source.shape = (4096, 1536)
+
+    mock_wqkv = MagicMock(spec=LazyWeight)
+    mock_wqkv.source = mock_source
+    mock_wqkv.device = None
+
+    config = Attention1DConfig(
+        wqkv=mock_wqkv,
+        wo=MagicMock(spec=LazyWeight),
+        n_heads=None,  # Missing!
+        n_kv_heads=8,
+        head_dim=128,
+    )
+
+    with pytest.raises(ValueError, match="n_heads must be provided"):
+        _resolve_attention1d_config(config)
+
+
+def test_attention_1d_resolve_requires_n_kv_heads():
+    """Test that _resolve_attention1d_config raises ValueError when n_kv_heads is missing."""
+    mock_source = MagicMock()
+    mock_source.shape = (4096, 1536)
+
+    mock_wqkv = MagicMock(spec=LazyWeight)
+    mock_wqkv.source = mock_source
+    mock_wqkv.device = None
+
+    config = Attention1DConfig(
+        wqkv=mock_wqkv,
+        wo=MagicMock(spec=LazyWeight),
+        n_heads=32,
+        n_kv_heads=None,  # Missing!
+        head_dim=128,
+    )
+
+    with pytest.raises(ValueError, match="n_kv_heads must be provided"):
+        _resolve_attention1d_config(config)
+
+
+def test_attention_1d_resolve_requires_head_dim():
+    """Test that _resolve_attention1d_config raises ValueError when head_dim is missing."""
+    mock_source = MagicMock()
+    mock_source.shape = (4096, 1536)
+
+    mock_wqkv = MagicMock(spec=LazyWeight)
+    mock_wqkv.source = mock_source
+    mock_wqkv.device = None
+
+    config = Attention1DConfig(
+        wqkv=mock_wqkv,
+        wo=MagicMock(spec=LazyWeight),
+        n_heads=32,
+        n_kv_heads=8,
+        head_dim=None,  # Missing!
+    )
+
+    with pytest.raises(ValueError, match="head_dim must be provided"):
+        _resolve_attention1d_config(config)
+
+
 # ============================================================================
 # Model name constants
 # ============================================================================
@@ -677,165 +761,235 @@ def _list_test_cases() -> list[pytest.param]:
     """
     Hardcoded test cases from attn_1d_performance.csv.
 
-    Parameters: mesh_shape, seq_len, mode, x_dtype, wqkv_dtype, hf_model_name, pcc
+    Parameters: mesh_shape, seq_len, batch_size, mode, x_dtype, wqkv_dtype, hf_model_name, pcc
+
+    batch_size semantics:
+    - Prefill: batch_size=1 (single user prefill), input shape (1, 1, seq_len, dim)
+    - Decode: batch_size=32 (continuous batching), input shape (1, 1, batch_size, dim)
     """
     # fmt: off
     return [
         # === Fast tests (minimal coverage set) ===
         # Single device (1x1)
-        pytest.param((1, 1), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-128-1B"),
-        pytest.param((1, 1), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-decode-32-1B"),
+        pytest.param((1, 1), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-128-1B"),
+        pytest.param((1, 1), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-decode-32-1B"),
+        pytest.param((1, 1), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-8192-1B"),
         # Dual device (1x2)
-        pytest.param((1, 2), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-128-8B"),
-        pytest.param((1, 2), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-decode-32-8B"),
+        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-128-8B"),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-decode-32-8B"),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x2-decode-32-11B"),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.95, id="1x2-decode-32-Qwen2.5-7B"),
         # Multi-device (1x8)
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-128-8B"),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-decode-32-8B"),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-128-8B"),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-decode-32-8B"),
 
         # === Slow tests (full coverage from models sweep) ===
         # --- Llama-3.2-1B on N150 (1x1) ---
-        pytest.param((1, 1), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-1024-1B", marks=_slow),
-        pytest.param((1, 1), 2048, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-2048-1B", marks=_slow),
-        pytest.param((1, 1), 4096, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-4096-1B", marks=_slow),
-        pytest.param((1, 1), 8192, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-8192-1B", marks=_slow),
-        pytest.param((1, 1), 16384, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-16384-1B", marks=_slow),
-        pytest.param((1, 1), 32768, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-32768-1B", marks=_slow),
+        pytest.param((1, 1), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-1024-1B", marks=_slow),
+        pytest.param((1, 1), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-2048-1B", marks=_slow),
+        pytest.param((1, 1), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-4096-1B", marks=_slow),
+        pytest.param((1, 1), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-16384-1B", marks=_slow),
+        pytest.param((1, 1), 32768, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x1-prefill-32768-1B", marks=_slow),
 
         # --- Llama-3.2-3B on N150 (1x1) ---
-        pytest.param((1, 1), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-prefill-128-3B", marks=_slow),
-        pytest.param((1, 1), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-prefill-1024-3B", marks=_slow),
-        pytest.param((1, 1), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-decode-32-3B", marks=_slow),
+        pytest.param((1, 1), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-prefill-128-3B", marks=_slow),
+        pytest.param((1, 1), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-prefill-1024-3B", marks=_slow),
+        pytest.param((1, 1), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-prefill-2048-3B", marks=_slow),
+        pytest.param((1, 1), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-prefill-4096-3B", marks=_slow),
+        pytest.param((1, 1), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-prefill-8192-3B", marks=_slow),
+        pytest.param((1, 1), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x1-decode-32-3B", marks=_slow),
 
         # --- Llama-3.1-8B on N150 (1x1) ---
-        pytest.param((1, 1), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-128-8B", marks=_slow),
-        pytest.param((1, 1), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-1024-8B", marks=_slow),
-        pytest.param((1, 1), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-decode-32-8B", marks=_slow),
+        pytest.param((1, 1), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-128-8B", marks=_slow),
+        pytest.param((1, 1), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-1024-8B", marks=_slow),
+        pytest.param((1, 1), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-2048-8B", marks=_slow),
+        pytest.param((1, 1), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-prefill-4096-8B", marks=_slow),
+        pytest.param((1, 1), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x1-decode-32-8B", marks=_slow),
 
         # --- Mistral-7B on N150 (1x1) ---
-        pytest.param((1, 1), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-prefill-128-Mistral-7B", marks=_slow),
-        pytest.param((1, 1), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-prefill-1024-Mistral-7B", marks=_slow),
-        pytest.param((1, 1), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-decode-32-Mistral-7B", marks=_slow),
+        pytest.param((1, 1), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-prefill-128-Mistral-7B", marks=_slow),
+        pytest.param((1, 1), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-prefill-1024-Mistral-7B", marks=_slow),
+        pytest.param((1, 1), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-prefill-2048-Mistral-7B", marks=_slow),
+        pytest.param((1, 1), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-prefill-4096-Mistral-7B", marks=_slow),
+        pytest.param((1, 1), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x1-decode-32-Mistral-7B", marks=_slow),
 
         # --- Llama-3.2-1B on N300 (1x2) ---
-        pytest.param((1, 2), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-128-1B", marks=_slow),
-        pytest.param((1, 2), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-1024-1B", marks=_slow),
-        pytest.param((1, 2), 2048, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-2048-1B", marks=_slow),
-        pytest.param((1, 2), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-decode-32-1B", marks=_slow),
+        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-128-1B", marks=_slow),
+        pytest.param((1, 2), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-1024-1B", marks=_slow),
+        pytest.param((1, 2), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-2048-1B", marks=_slow),
+        pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-4096-1B", marks=_slow),
+        pytest.param((1, 2), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-8192-1B", marks=_slow),
+        pytest.param((1, 2), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-16384-1B", marks=_slow),
+        pytest.param((1, 2), 32768, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-prefill-32768-1B", marks=_slow),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x2-decode-32-1B", marks=_slow),
 
         # --- Llama-3.2-3B on N300 (1x2) ---
-        pytest.param((1, 2), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-128-3B", marks=_slow),
-        pytest.param((1, 2), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-1024-3B", marks=_slow),
-        pytest.param((1, 2), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-decode-32-3B", marks=_slow),
+        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-128-3B", marks=_slow),
+        pytest.param((1, 2), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-1024-3B", marks=_slow),
+        pytest.param((1, 2), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-2048-3B", marks=_slow),
+        pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-4096-3B", marks=_slow),
+        pytest.param((1, 2), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-8192-3B", marks=_slow),
+        pytest.param((1, 2), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-16384-3B", marks=_slow),
+        pytest.param((1, 2), 32768, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-prefill-32768-3B", marks=_slow),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x2-decode-32-3B", marks=_slow),
 
         # --- Llama-3.1-8B on N300 (1x2) ---
-        pytest.param((1, 2), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-1024-8B", marks=_slow),
-        pytest.param((1, 2), 2048, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-2048-8B", marks=_slow),
+        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-128-8B", marks=_slow),
+        pytest.param((1, 2), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-1024-8B", marks=_slow),
+        pytest.param((1, 2), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-2048-8B", marks=_slow),
+        pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-4096-8B", marks=_slow),
+        pytest.param((1, 2), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-8192-8B", marks=_slow),
+        pytest.param((1, 2), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-16384-8B", marks=_slow),
+        pytest.param((1, 2), 32768, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-32768-8B", marks=_slow),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-decode-32-8B", marks=_slow),
 
         # --- Llama-3.2-11B on N300 (1x2) ---
-        pytest.param((1, 2), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x2-prefill-128-11B", marks=_slow),
-        # NOTE: 11B 1024 prefill has lower PCC (0.9845) due to vision model complexity
-        pytest.param((1, 2), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x2-prefill-1024-11B", marks=_slow),
-        pytest.param((1, 2), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x2-decode-32-11B", marks=_slow),
+        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x2-prefill-128-11B", marks=_slow),
+        # NOTE: 11B 1024+ prefill has lower PCC (0.9845) due to vision model complexity
+        pytest.param((1, 2), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x2-prefill-1024-11B", marks=_slow),
+        pytest.param((1, 2), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x2-prefill-2048-11B", marks=_slow),
+        pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x2-prefill-4096-11B", marks=_slow),
+        pytest.param((1, 2), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x2-prefill-8192-11B", marks=_slow),
+        pytest.param((1, 2), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x2-prefill-16384-11B", marks=_slow),
+        pytest.param((1, 2), 32768, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x2-prefill-32768-11B", marks=_slow),
 
         # --- Mistral-7B on N300 (1x2) ---
-        pytest.param((1, 2), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-128-Mistral-7B", marks=_slow),
-        pytest.param((1, 2), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-1024-Mistral-7B", marks=_slow),
-        pytest.param((1, 2), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-decode-32-Mistral-7B", marks=_slow),
+        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-128-Mistral-7B", marks=_slow),
+        pytest.param((1, 2), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-1024-Mistral-7B", marks=_slow),
+        pytest.param((1, 2), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-2048-Mistral-7B", marks=_slow),
+        pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-4096-Mistral-7B", marks=_slow),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-decode-32-Mistral-7B", marks=_slow),
 
         # --- Qwen2-7B on N300 (1x2) ---
         # NOTE: Qwen2-7B has Q/K biases causing numerical precision issues
-        pytest.param((1, 2), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN2_7B, 0.98, id="1x2-prefill-128-Qwen2-7B", marks=_slow),
-        pytest.param((1, 2), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN2_7B, 0.97, id="1x2-prefill-1024-Qwen2-7B", marks=_slow),
-        pytest.param((1, 2), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, QWEN2_7B, 0.99, id="1x2-decode-32-Qwen2-7B", marks=_slow),
+        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN2_7B, 0.98, id="1x2-prefill-128-Qwen2-7B", marks=_slow),
+        pytest.param((1, 2), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN2_7B, 0.97, id="1x2-prefill-1024-Qwen2-7B", marks=_slow),
+        pytest.param((1, 2), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN2_7B, 0.97, id="1x2-prefill-2048-Qwen2-7B", marks=_slow),
+        pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN2_7B, 0.97, id="1x2-prefill-4096-Qwen2-7B", marks=_slow),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, QWEN2_7B, 0.99, id="1x2-decode-32-Qwen2-7B", marks=_slow),
 
         # --- Qwen2.5-7B on N300 (1x2) ---
         # NOTE: Qwen2.5-7B has large Q/K biases causing numerical precision issues
-        pytest.param((1, 2), 128, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.98, id="1x2-prefill-128-Qwen2.5-7B", marks=_slow),
-        pytest.param((1, 2), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.97, id="1x2-prefill-1024-Qwen2.5-7B", marks=_slow),
+        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.98, id="1x2-prefill-128-Qwen2.5-7B", marks=_slow),
+        pytest.param((1, 2), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.97, id="1x2-prefill-1024-Qwen2.5-7B", marks=_slow),
+        pytest.param((1, 2), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.97, id="1x2-prefill-2048-Qwen2.5-7B", marks=_slow),
+        pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.97, id="1x2-prefill-4096-Qwen2.5-7B", marks=_slow),
+        pytest.param((1, 2), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.97, id="1x2-prefill-8192-Qwen2.5-7B", marks=_slow),
+        pytest.param((1, 2), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.97, id="1x2-prefill-16384-Qwen2.5-7B", marks=_slow),
+        pytest.param((1, 2), 32768, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.97, id="1x2-prefill-32768-Qwen2.5-7B", marks=_slow),
         # NOTE: Qwen2.5-7B has lower PCC for prefill+decode due to Q/K biases + RoPE interaction.
         # TTTv1's test_attention.py also shows ~0.984 min PCC. With 128-token prefill, accumulated
         # numerical error in SDPA over the larger KV cache causes further degradation.
         # See models/common/tests/modules/attention/low_pcc_notes.md for detailed analysis
-        pytest.param((1, 2), 32, "decode", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.95, id="1x2-decode-32-Qwen2.5-7B", marks=_slow),
 
         # --- DeepSeek-R1-14B on N300 (1x2) ---
-        pytest.param((1, 2), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, DEEPSEEK_R1_14B, 0.99, id="1x2-prefill-128-DeepSeek-R1-14B", marks=_slow),
-        pytest.param((1, 2), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, DEEPSEEK_R1_14B, 0.99, id="1x2-prefill-1024-DeepSeek-R1-14B", marks=_slow),
-        pytest.param((1, 2), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, DEEPSEEK_R1_14B, 0.99, id="1x2-decode-32-DeepSeek-R1-14B", marks=_slow),
+        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, DEEPSEEK_R1_14B, 0.99, id="1x2-prefill-128-DeepSeek-R1-14B", marks=_slow),
+        pytest.param((1, 2), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, DEEPSEEK_R1_14B, 0.99, id="1x2-prefill-1024-DeepSeek-R1-14B", marks=_slow),
+        pytest.param((1, 2), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, DEEPSEEK_R1_14B, 0.99, id="1x2-prefill-2048-DeepSeek-R1-14B", marks=_slow),
+        pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, DEEPSEEK_R1_14B, 0.99, id="1x2-prefill-4096-DeepSeek-R1-14B", marks=_slow),
+        pytest.param((1, 2), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, DEEPSEEK_R1_14B, 0.99, id="1x2-prefill-8192-DeepSeek-R1-14B", marks=_slow),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, DEEPSEEK_R1_14B, 0.99, id="1x2-decode-32-DeepSeek-R1-14B", marks=_slow),
 
         # --- Llama-3.2-1B on T3K (1x8) ---
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-128-1B", marks=_slow),
-        pytest.param((1, 8), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-1024-1B", marks=_slow),
-        pytest.param((1, 8), 8192, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-8192-1B", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-decode-32-1B", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-128-1B", marks=_slow),
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-1024-1B", marks=_slow),
+        pytest.param((1, 8), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-2048-1B", marks=_slow),
+        pytest.param((1, 8), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-4096-1B", marks=_slow),
+        pytest.param((1, 8), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-8192-1B", marks=_slow),
+        pytest.param((1, 8), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-16384-1B", marks=_slow),
+        pytest.param((1, 8), 32768, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-prefill-32768-1B", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_1B, 0.99, id="1x8-decode-32-1B", marks=_slow),
 
         # --- Llama-3.2-3B on T3K (1x8) ---
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-128-3B", marks=_slow),
-        pytest.param((1, 8), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-1024-3B", marks=_slow),
-        pytest.param((1, 8), 8192, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-8192-3B", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-decode-32-3B", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-128-3B", marks=_slow),
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-1024-3B", marks=_slow),
+        pytest.param((1, 8), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-2048-3B", marks=_slow),
+        pytest.param((1, 8), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-4096-3B", marks=_slow),
+        pytest.param((1, 8), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-8192-3B", marks=_slow),
+        pytest.param((1, 8), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-16384-3B", marks=_slow),
+        pytest.param((1, 8), 32768, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-prefill-32768-3B", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_3B, 0.99, id="1x8-decode-32-3B", marks=_slow),
 
         # --- Llama-3.1-8B on T3K (1x8) ---
-        pytest.param((1, 8), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-1024-8B", marks=_slow),
-        pytest.param((1, 8), 2048, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-2048-8B", marks=_slow),
-        pytest.param((1, 8), 8192, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-8192-8B", marks=_slow),
-        pytest.param((1, 8), 16384, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-16384-8B", marks=_slow),
-        pytest.param((1, 8), 32768, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-32768-8B", marks=_slow),
+        pytest.param((1, 8), 256, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-256-8B", marks=_slow),
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-1024-8B", marks=_slow),
+        pytest.param((1, 8), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-2048-8B", marks=_slow),
+        pytest.param((1, 8), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-4096-8B", marks=_slow),
+        pytest.param((1, 8), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-8192-8B", marks=_slow),
+        pytest.param((1, 8), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-16384-8B", marks=_slow),
+        pytest.param((1, 8), 32768, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-32768-8B", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-decode-32-8B", marks=_slow),
 
         # --- Llama-3.2-11B on T3K (1x8) ---
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x8-prefill-128-11B", marks=_slow),
-        # NOTE: 11B 1024 prefill has lower PCC (0.9844) due to vision model complexity
-        pytest.param((1, 8), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x8-prefill-1024-11B", marks=_slow),
-        pytest.param((1, 8), 8192, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x8-prefill-8192-11B", marks=_slow),
-        pytest.param((1, 8), 16384, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x8-prefill-16384-11B", marks=_slow),
-        pytest.param((1, 8), 32768, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x8-prefill-32768-11B", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x8-decode-32-11B", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x8-prefill-128-11B", marks=_slow),
+        # NOTE: 11B 1024+ prefill has lower PCC (0.9844) due to vision model complexity
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x8-prefill-1024-11B", marks=_slow),
+        pytest.param((1, 8), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x8-prefill-2048-11B", marks=_slow),
+        pytest.param((1, 8), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x8-prefill-4096-11B", marks=_slow),
+        pytest.param((1, 8), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x8-prefill-8192-11B", marks=_slow),
+        pytest.param((1, 8), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x8-prefill-16384-11B", marks=_slow),
+        pytest.param((1, 8), 32768, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.98, id="1x8-prefill-32768-11B", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x8-decode-32-11B", marks=_slow),
 
         # --- Llama-3.3-70B on T3K (1x8) ---
         # NOTE: 70B has slightly lower PCC (0.997) due to model size and multi-device communication
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_70B, 0.99, id="1x8-prefill-128-70B", marks=_slow),
-        pytest.param((1, 8), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_70B, 0.99, id="1x8-prefill-1024-70B", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_70B, 0.97, id="1x8-decode-32-70B", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_70B, 0.99, id="1x8-prefill-128-70B", marks=_slow),
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_70B, 0.99, id="1x8-prefill-1024-70B", marks=_slow),
+        pytest.param((1, 8), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_70B, 0.99, id="1x8-prefill-2048-70B", marks=_slow),
+        pytest.param((1, 8), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_70B, 0.99, id="1x8-prefill-4096-70B", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_70B, 0.97, id="1x8-decode-32-70B", marks=_slow),
 
         # --- Llama-3.2-90B on T3K (1x8) ---
         # NOTE: 90B has slightly lower PCC (0.995-0.996) due to model size
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_90B, 0.99, id="1x8-prefill-128-90B", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_90B, 0.99, id="1x8-decode-32-90B", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_90B, 0.99, id="1x8-prefill-128-90B", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_90B, 0.99, id="1x8-decode-32-90B", marks=_slow),
 
         # --- Mistral-7B on T3K (1x8) ---
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-prefill-128-Mistral-7B", marks=_slow),
-        pytest.param((1, 8), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-prefill-1024-Mistral-7B", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-decode-32-Mistral-7B", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-prefill-128-Mistral-7B", marks=_slow),
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-prefill-1024-Mistral-7B", marks=_slow),
+        pytest.param((1, 8), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-prefill-2048-Mistral-7B", marks=_slow),
+        pytest.param((1, 8), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-prefill-4096-Mistral-7B", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x8-decode-32-Mistral-7B", marks=_slow),
 
         # --- Mixtral-8x7B on T3K (1x8) ---
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MIXTRAL_8X7B, 0.99, id="1x8-prefill-128-Mixtral-8x7B", marks=_slow),
-        pytest.param((1, 8), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MIXTRAL_8X7B, 0.99, id="1x8-prefill-1024-Mixtral-8x7B", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MIXTRAL_8X7B, 0.99, id="1x8-decode-32-Mixtral-8x7B", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MIXTRAL_8X7B, 0.99, id="1x8-prefill-128-Mixtral-8x7B", marks=_slow),
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MIXTRAL_8X7B, 0.99, id="1x8-prefill-1024-Mixtral-8x7B", marks=_slow),
+        pytest.param((1, 8), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MIXTRAL_8X7B, 0.99, id="1x8-prefill-2048-Mixtral-8x7B", marks=_slow),
+        pytest.param((1, 8), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MIXTRAL_8X7B, 0.99, id="1x8-prefill-4096-Mixtral-8x7B", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MIXTRAL_8X7B, 0.99, id="1x8-decode-32-Mixtral-8x7B", marks=_slow),
 
         # --- Qwen2.5-72B on T3K (1x8) ---
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-prefill-128-Qwen2.5-72B", marks=_slow),
-        pytest.param((1, 8), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-prefill-1024-Qwen2.5-72B", marks=_slow),
-        pytest.param((1, 8), 8192, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-prefill-8192-Qwen2.5-72B", marks=_slow),
-        pytest.param((1, 8), 16384, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-prefill-16384-Qwen2.5-72B", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-decode-32-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-prefill-128-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-prefill-1024-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-prefill-2048-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-prefill-4096-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-prefill-8192-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-prefill-16384-Qwen2.5-72B", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_72B, 0.99, id="1x8-decode-32-Qwen2.5-72B", marks=_slow),
 
         # --- Qwen2.5-Coder-32B on T3K (1x8) ---
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-prefill-128-Qwen2.5-Coder-32B", marks=_slow),
-        pytest.param((1, 8), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-prefill-1024-Qwen2.5-Coder-32B", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-decode-32-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-prefill-128-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-prefill-1024-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-prefill-2048-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-prefill-4096-Qwen2.5-Coder-32B", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, QWEN25_CODER_32B, 0.99, id="1x8-decode-32-Qwen2.5-Coder-32B", marks=_slow),
         # BF16 weights
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_CODER_32B, 0.99, id="1x8-prefill-128-Qwen2.5-Coder-32B-bf16", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat16, QWEN25_CODER_32B, 0.99, id="1x8-decode-32-Qwen2.5-Coder-32B-bf16", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_CODER_32B, 0.99, id="1x8-prefill-128-Qwen2.5-Coder-32B-bf16", marks=_slow),
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN25_CODER_32B, 0.99, id="1x8-prefill-1024-Qwen2.5-Coder-32B-bf16", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat16, QWEN25_CODER_32B, 0.99, id="1x8-decode-32-Qwen2.5-Coder-32B-bf16", marks=_slow),
 
         # --- Qwen3-32B on T3K (1x8) ---
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-128-Qwen3-32B", marks=_slow),
-        pytest.param((1, 8), 1024, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-1024-Qwen3-32B", marks=_slow),
-        pytest.param((1, 8), 8192, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-8192-Qwen3-32B", marks=_slow),
-        pytest.param((1, 8), 16384, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-16384-Qwen3-32B", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-decode-32-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-128-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-1024-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-2048-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-4096-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 8192, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-8192-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 16384, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-prefill-16384-Qwen3-32B", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, QWEN3_32B, 0.99, id="1x8-decode-32-Qwen3-32B", marks=_slow),
         # BF16 weights
-        pytest.param((1, 8), 128, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN3_32B, 0.99, id="1x8-prefill-128-Qwen3-32B-bf16", marks=_slow),
-        pytest.param((1, 8), 32, "decode", ttnn.bfloat16, ttnn.bfloat16, QWEN3_32B, 0.99, id="1x8-decode-32-Qwen3-32B-bf16", marks=_slow),
+        pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN3_32B, 0.99, id="1x8-prefill-128-Qwen3-32B-bf16", marks=_slow),
+        pytest.param((1, 8), 1024, 1, "prefill", ttnn.bfloat16, ttnn.bfloat16, QWEN3_32B, 0.99, id="1x8-prefill-1024-Qwen3-32B-bf16", marks=_slow),
+        pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat16, QWEN3_32B, 0.99, id="1x8-decode-32-Qwen3-32B-bf16", marks=_slow),
     ]
     # fmt: on
 
@@ -853,29 +1007,32 @@ def _list_test_cases() -> list[pytest.param]:
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "mesh_shape,seq_len,mode,act_dtype,wqkv_dtype,hf_model_name,pcc",
+    "mesh_shape,seq_len,batch_size,mode,act_dtype,wqkv_dtype,hf_model_name,pcc",
     _list_test_cases(),
 )
 @pytest.mark.parametrize(
-    "paged_attention,chunk_size",
+    "page_block_size,chunk_size",
     [
-        (False, None),  # standard (non-paged, non-chunked)
-        (True, None),  # paged only (non-chunked)
-        (True, 4096),  # paged + chunked
+        (None, None),  # standard (non-paged, non-chunked)
+        (64, None),  # paged only (non-chunked)
+        (64, 4096),  # paged + chunked
     ],
     ids=["standard", "paged", "paged-chunked"],
 )
+@pytest.mark.parametrize("num_decode_iterations", [10])
 def test_attention_1d_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
     mesh_shape,
     seq_len,
+    batch_size,
     mode,
     act_dtype,
     wqkv_dtype,
     hf_model_name,
     pcc,
-    paged_attention,
+    page_block_size,
     chunk_size,
+    num_decode_iterations,
 ):
     """
     Test Attention1D constructed via from_config (direct API) executes successfully.
@@ -908,15 +1065,23 @@ def test_attention_1d_vs_reference(
     if chunked_prefill and seq_len <= chunk_size:
         pytest.skip(f"Chunked prefill requires seq_len > chunk_size ({chunk_size})")
 
-    # For decode mode, use batch_size=1 for simpler HF reference comparison
-    # For prefill mode, batch_size=1 and seq_len is the sequence length
-    # Note: seq_len parameter for decode tests is ignored (kept for parameterization compatibility)
-    # todo)) this is not right -- from test_cases.txt, in decode mode:
-    #         x: (seq_len, 1, batch, dim)
-    #         current_pos: (batch_size), current token position in the sequence for each user
-    batch_size = 1
-    # todo)) this does not seem correct -- why seq_len*2?
-    max_seq_len = max(2048, seq_len * 2) if mode == "prefill" else 2048
+    # batch_size is now a test parameter:
+    # - Prefill: typically batch_size=1, input shape (1, 1, seq_len, dim)
+    # - Decode: typically batch_size=32 (continuous batching), input shape (1, 1, batch, dim)
+    #   current_pos has shape (batch_size,) - one position per user
+    # Note: For decode tests, seq_len parameter is unused (kept for parameterization compatibility)
+
+    # max_seq_len: minimum allocation for KV cache
+    # - Prefill: exactly seq_len tokens written to cache
+    # - Decode: num_decode_iterations tokens (starts from position 0, no prefill)
+    # Round up to alignment (SDPA kernel requires multiples of 32, paged attention requires page_block_size)
+    if mode == "prefill":
+        max_seq_len = seq_len
+    else:
+        max_seq_len = num_decode_iterations
+    # Round up: use page_block_size if paged, otherwise 32 (SDPA tile alignment)
+    alignment = page_block_size if page_block_size is not None else 32
+    max_seq_len = ((max_seq_len + alignment - 1) // alignment) * alignment
     num_devices = ttnn_mesh_device.get_num_devices()
 
     # Seed for reproducibility
@@ -1041,14 +1206,14 @@ def test_attention_1d_vs_reference(
     page_table = None
     reverse_permutation = None
 
-    if paged_attention:
+    if page_block_size is not None:
         # Paged attention parameters (use local PagedAttentionConfig)
-        block_size = 64
-        # todo)) * 2 seems incorrect
-        max_num_blocks = max(128, (max_seq_len // block_size) * batch_size * 2)  # Ensure enough blocks
+        # Each user needs ceil(max_seq_len / block_size) blocks
+        blocks_per_user = (max_seq_len + page_block_size - 1) // page_block_size
+        max_num_blocks = max(128, blocks_per_user * batch_size)
 
         paged_attention_config = PagedAttentionConfig(
-            block_size=block_size,
+            block_size=page_block_size,
             max_num_blocks=max_num_blocks,
         )
 
@@ -1064,40 +1229,46 @@ def test_attention_1d_vs_reference(
             mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=mesh_shape),
         )
 
-    # Build Attention1DConfig with explicit parameters
-    # Note: kv_cache is auto-created by config resolution if not using paged attention
-    config = Attention1DConfig(
-        wqkv=lazy_wqkv,
-        wo=lazy_wo,
-        q_norm_config=q_norm_config,
-        k_norm_config=k_norm_config,
-        wqkv_bias=LazyWeight(source=wqkv_bias_torch) if wqkv_bias_torch is not None else None,
-        mesh_device=ttnn_mesh_device,
-        tt_ccl=tt_ccl,
-        topology=topology,
-        dim=dim,
-        n_heads=n_heads,
-        n_kv_heads=n_kv_heads,
-        head_dim=head_dim,
-        max_batch_size=batch_size,
-        max_seq_len=max_seq_len,
-        scale=head_dim**-0.5,
-        sliding_window=sliding_window,
-        use_qk_fused=False,
-        # Note: use_vllm_paged_kv_cache=False means kv_cache is managed internally (auto-created).
-        # paged_attention_config controls whether the cache uses paged layout.
-        use_vllm_paged_kv_cache=False,
-        paged_attention_config=paged_attention_config,
-        wqkv_dtype=wqkv_dtype,
-        wo_dtype=wqkv_dtype,
-        activation_dtype=act_dtype,
+    # Determine if we can use the simple happy path API
+    # Happy path works for basic models without special features (Q/K norms, bias, sliding window, paged attention)
+    has_special_features = (
+        q_norm_config is not None
+        or k_norm_config is not None
+        or wqkv_bias_torch is not None
+        or sliding_window is not None
+        or paged_attention_config is not None
     )
 
-    # Create Attention1D via from_config (TTTv2 pattern)
-    tt_model = Attention1D.from_config(config)
+    if has_special_features:
+        # Power user path: use from_config() for models with special features
+        # Only specify required fields + model-specific features; let defaults handle the rest
+        config = Attention1DConfig(
+            # Required: weights and dimensions
+            wqkv=lazy_wqkv,
+            wo=lazy_wo,
+            n_heads=n_heads,
+            n_kv_heads=n_kv_heads,
+            head_dim=head_dim,
+            # Model-specific features (only the non-default values)
+            q_norm_config=q_norm_config,
+            k_norm_config=k_norm_config,
+            wqkv_bias=LazyWeight(source=wqkv_bias_torch) if wqkv_bias_torch is not None else None,
+            sliding_window=sliding_window,
+            paged_attention_config=paged_attention_config,
+        )
+        tt_model = Attention1D.from_config(config)
+    else:
+        # Happy path: simple API for basic Llama-style models
+        tt_model = Attention1D(
+            wqkv=lazy_wqkv,
+            wo=lazy_wo,
+            n_heads=n_heads,
+            n_kv_heads=n_kv_heads,
+            head_dim=head_dim,
+        )
 
-    # Verify config is properly resolved
-    assert tt_model.config.is_resolved(), "Config should be resolved after from_config"
+    # Verify config is properly resolved (works for both happy path and from_config)
+    assert tt_model.config.is_resolved(), "Config should be resolved after Attention1D creation"
     assert tt_model.config.dim == dim
     assert tt_model.config.n_heads == n_heads
     assert tt_model.config.n_kv_heads == n_kv_heads
@@ -1116,7 +1287,7 @@ def test_attention_1d_vs_reference(
             n_kv_heads=n_kv_heads,
             head_dim=head_dim,
             act_dtype=act_dtype,
-            paged_attention=paged_attention,
+            page_block_size=page_block_size,
             chunked_prefill=chunked_prefill,
             chunk_size=chunk_size,
             paged_attention_config=paged_attention_config,
@@ -1130,14 +1301,16 @@ def test_attention_1d_vs_reference(
             reference_wrapper=reference_wrapper,
             ttnn_mesh_device=ttnn_mesh_device,
             mesh_shape=mesh_shape,
+            batch_size=batch_size,
             dim=dim,
             n_heads=n_heads,
             n_kv_heads=n_kv_heads,
             head_dim=head_dim,
             max_seq_len=max_seq_len,
             act_dtype=act_dtype,
-            paged_attention=paged_attention,
+            page_block_size=page_block_size,
             page_table_tt=page_table_tt,
+            num_decode_iterations=num_decode_iterations,
             pcc=pcc,
         )
 
@@ -1154,7 +1327,7 @@ def _run_prefill_test(
     n_kv_heads,
     head_dim,
     act_dtype,
-    paged_attention,
+    page_block_size,
     chunked_prefill,
     chunk_size,
     paged_attention_config,
@@ -1304,7 +1477,7 @@ def _run_prefill_test(
     # The output comparison above is the meaningful correctness check.
     logger.info("  KV cache validation: SKIPPED (HF/TT use different RoPE formats in cache)")
 
-    paged_str = "paged" if paged_attention else "non-paged"
+    paged_str = f"paged(block_size={page_block_size})" if page_block_size is not None else "non-paged"
     chunked_str = "chunked" if chunked_prefill else "non-chunked"
     logger.info(
         f"test_attention_1d_vs_reference (from_config): PASSED for mode=prefill, seq_len={seq_len}, {paged_str}, {chunked_str}"
@@ -1318,129 +1491,388 @@ def _run_decode_test(
     reference_wrapper,
     ttnn_mesh_device,
     mesh_shape,
+    batch_size,
     dim,
     n_heads,
     n_kv_heads,
     head_dim,
     max_seq_len,
     act_dtype,
-    paged_attention,
+    page_block_size,
     page_table_tt,
+    num_decode_iterations,
     pcc,
 ):
-    """Run decode test (prefill + decode) and compare against HuggingFace reference."""
-    # Decode mode - first prefill to populate KV cache, then decode
-    # Use batch_size=1 for simpler PCC comparison with HuggingFace reference
-    decode_batch_size = 1
+    """
+    Run decode-only test starting from position 0 (TTTv1 style).
 
-    # Step 1: Prefill pass to populate KV cache (use 128 tokens as initial context)
-    prefill_seq_len = 128
-    pt_prefill_input = torch.randn(1, prefill_seq_len, dim, dtype=torch.bfloat16)
+    This is a pure unit test for decode_forward:
+    - No prefill step - KV cache builds incrementally during decode
+    - Runs num_decode_iterations decode steps at positions 0, 1, 2, ...
+    - Compares each iteration against HuggingFace reference
 
-    tt_prefill_input = ttnn.from_torch(
-        pt_prefill_input.unsqueeze(0),  # [1, 1, prefill_seq_len, dim]
-        device=ttnn_mesh_device,
-        dtype=act_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=mesh_shape),
-    )
+    For batch_size > 1 (continuous batching):
+    - All users decode with identical inputs at the same position
+    - Verifies batching mechanism doesn't introduce numerical errors
 
-    # Use HF rotary_emb for rotation matrices
-    prefill_rot_mats = get_rot_mats_from_hf(
-        reference_wrapper.rotary_emb,
-        seq_len=prefill_seq_len,
-        head_dim=head_dim,
-        device=ttnn_mesh_device,
-    )
-
-    # Run TT prefill to populate KV cache
-    _ = tt_model.forward(
-        tt_prefill_input,
-        None,
-        prefill_rot_mats,
-        user_id=0,
-        mode="prefill",
-        page_table=page_table_tt,
-    )
-
-    # Run HuggingFace prefill to populate its KV cache (using wrapper)
-    with torch.no_grad():
-        _ = reference_wrapper(pt_prefill_input, start_pos=0, mask=None)
-
-    # Step 2: Decode pass - single token
-    pt_decode_input = torch.randn(decode_batch_size, 1, dim, dtype=torch.bfloat16)
-
-    tt_decode_input = ttnn.from_torch(
-        pt_decode_input.unsqueeze(0),  # [1, 1, 1, dim]
-        device=ttnn_mesh_device,
-        dtype=act_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=mesh_shape),
-    )
-
-    # Convert to decode input memory config
-    tt_decode_input = ttnn.to_memory_config(tt_decode_input, tt_model.config.decode_input_memcfg)
-
-    # Position for decode: right after prefill
-    position_idxs = torch.tensor([prefill_seq_len], dtype=torch.long)
-
-    # Create decode-specific RotarySetupHelper using HF rotary_emb
+    Note: prefill→decode transition is tested separately in test_attention_1d_prefill_decode_transition.
+    """
+    # Create decode-specific RotarySetupHelper using HF rotary_emb (reused across iterations)
     decode_rope_setup = RotarySetupHelper(
         ttnn_mesh_device,
-        decode_batch_size,
+        batch_size,
         head_dim,
         max_seq_len,
         reference_wrapper.rotary_emb,
         use_qk_fused=False,
     )
-    decode_rot_mats = decode_rope_setup.get_rot_mats(position_idxs)
 
-    current_pos = ttnn.from_torch(
-        position_idxs,
-        device=ttnn_mesh_device,
-        dtype=ttnn.int32,
-        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(ttnn_mesh_device),
-    )
+    # Decode iterations starting from position 0
+    # KV cache builds incrementally: position 0, 1, 2, ... (TTTv1 style)
+    all_iterations_passing = True
+    min_pcc_across_iterations = 1.0
 
-    # Run TT decode
-    tt_out = tt_model.forward(
-        tt_decode_input,
-        current_pos,
-        decode_rot_mats,
-        mode="decode",
-        page_table=page_table_tt,
-    )
+    for decode_iter in range(num_decode_iterations):
+        current_pos_value = decode_iter  # Start from 0, not after prefill
 
-    # Convert output to torch
-    tt_out = to_torch_auto_compose(tt_out)
+        # Create identical input for all users (for comparison against single HF reference)
+        # TTNN decode expects shape (1, 1, batch_size, dim) - seq_len=1, batch in 3rd dim
+        pt_decode_single = torch.randn(1, 1, dim, dtype=torch.bfloat16)
+        pt_decode_batched = pt_decode_single.unsqueeze(2).expand(1, 1, batch_size, dim).contiguous()
+
+        tt_decode_input = ttnn.from_torch(
+            pt_decode_batched,
+            device=ttnn_mesh_device,
+            dtype=act_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+        )
+
+        # Convert to decode input memory config
+        tt_decode_input = ttnn.to_memory_config(tt_decode_input, tt_model.config.decode_input_memcfg)
+
+        # Position for decode: all users at the same position
+        position_idxs = torch.full((batch_size,), current_pos_value, dtype=torch.long)
+        decode_rot_mats = decode_rope_setup.get_rot_mats(position_idxs)
+
+        current_pos = ttnn.from_torch(
+            position_idxs,
+            device=ttnn_mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(ttnn_mesh_device),
+        )
+
+        # Run TT decode (batched)
+        tt_out = tt_model.forward(
+            tt_decode_input,
+            current_pos,
+            decode_rot_mats,
+            mode="decode",
+            page_table=page_table_tt,
+        )
+
+        # Convert output to torch
+        tt_out = to_torch_auto_compose(tt_out)
+
+        # Extract TT output: shape (1, 1, batch_size, dim) -> (batch_size, 1, dim)
+        tt_output_torch = tt_out[:, 0:1, :batch_size, :dim].view(batch_size, 1, dim)
+
+        # Run HuggingFace decode using wrapper (single user reference)
+        with torch.no_grad():
+            reference_output = reference_wrapper(pt_decode_single, start_pos=current_pos_value, mask=None)
+
+        # Verify output content
+        assert tt_output_torch.numel() > 0, f"Output is empty at iteration {decode_iter}"
+        assert not torch.isnan(tt_output_torch).any(), f"Output contains NaN at iteration {decode_iter}"
+        assert not torch.isinf(tt_output_torch).any(), f"Output contains Inf at iteration {decode_iter}"
+
+        # Compare EACH user's TT output with the single HF reference
+        for user_idx in range(batch_size):
+            user_output = tt_output_torch[user_idx : user_idx + 1]
+            passing, pcc_value = comp_pcc(reference_output, user_output.to(reference_output.dtype), pcc)
+            if isinstance(pcc_value, (int, float)):
+                min_pcc_across_iterations = min(min_pcc_across_iterations, float(pcc_value))
+            if not passing:
+                logger.warning(f"  Iteration {decode_iter}, User {user_idx} PCC failed: {pcc_value}")
+                all_iterations_passing = False
+
     ttnn.SetDefaultDevice(None)
 
-    # Extract TT output
-    tt_output_torch = tt_out[:, 0:1, :decode_batch_size, :dim].view(decode_batch_size, 1, dim)
-
-    # Run HuggingFace decode using wrapper
-    with torch.no_grad():
-        reference_output = reference_wrapper(pt_decode_input, start_pos=prefill_seq_len, mask=None)
-
-    # Verify output content
-    assert tt_output_torch.numel() > 0, "Output is empty"
-    assert not torch.isnan(tt_output_torch).any(), "Output contains NaN values"
-    assert not torch.isinf(tt_output_torch).any(), "Output contains Inf values"
-
-    # Compare TT output with reference using PCC
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch.to(reference_output.dtype), pcc)
-    logger.info(f"  PCC comparison: {pcc_message}")
-    logger.info(comp_allclose(reference_output, tt_output_torch.to(reference_output.dtype)))
-    assert passing, f"Decode PCC failed: {pcc_message} (expected >= {pcc})"
-
-    paged_str = "paged" if paged_attention else "non-paged"
     logger.info(
-        f"test_attention_1d_vs_reference (from_config): PASSED for mode=decode, decode_batch_size={decode_batch_size}, {paged_str}"
+        f"  Decode iterations: {num_decode_iterations}, min_pcc={min_pcc_across_iterations:.6f} across all iterations"
+    )
+    assert all_iterations_passing, f"Decode PCC failed (min_pcc={min_pcc_across_iterations:.6f}, expected >= {pcc})"
+
+    paged_str = f"paged(block_size={page_block_size})" if page_block_size is not None else "non-paged"
+    logger.info(
+        f"test_attention_1d_vs_reference (from_config): PASSED for mode=decode, "
+        f"batch_size={batch_size}, {paged_str}, iterations={num_decode_iterations}"
     )
     logger.info(f"  Config: dim={dim}, n_heads={n_heads}, n_kv_heads={n_kv_heads}, head_dim={head_dim}")
-    logger.info(f"  Output shape: {tt_output_torch.shape}, dtype: {tt_output_torch.dtype}")
+
+
+# =============================================================================
+# Integration Test: Prefill → Decode Transition
+# =============================================================================
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [
+        (1, 1),  # single device
+        (1, 2),  # 1D mesh, 2 devices
+        (1, 8),  # 1D mesh, 8 devices
+    ],
+    ids=["1x1", "1x2", "1x8"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "page_block_size",
+    [None, 64],  # Test both non-paged and paged attention
+    ids=["non-paged", "paged"],
+)
+def test_attention_1d_prefill_decode_transition(ttnn_mesh_device: ttnn.MeshDevice, page_block_size):
+    """
+    Integration test for prefill→decode transition.
+
+    This test verifies that KV cache state is correctly maintained across the
+    prefill→decode boundary. Unlike the unit tests which test prefill and decode
+    in isolation, this test verifies the handoff between modes.
+
+    **Integration Point: KV Cache**
+    The KV cache is explicitly created and passed to the model config, making
+    the integration point crystal clear:
+    - Prefill writes keys/values to positions 0..prefill_seq_len-1
+    - Decode reads from those positions and writes to prefill_seq_len+
+
+    Test flow:
+    1. Create explicit KV cache tensors (the integration point)
+    2. Run prefill → populates KV cache positions 0..N-1
+    3. Run decode at positions N, N+1, ... → reads from cache, writes new positions
+    4. Compare outputs against HuggingFace reference
+    """
+    # Minimal test parameters - we're testing transition, not model variations
+    hf_model_name = "meta-llama/Llama-3.2-1B-Instruct"
+    prefill_seq_len = 128  # Must be divisible by 128
+    num_decode_after_prefill = 5
+    batch_size = 32  # Realistic continuous batching scenario
+    pcc = 0.98
+
+    seed = 42
+    torch.manual_seed(seed)
+
+    # Load HF config
+    hf_config = AutoConfig.from_pretrained(hf_model_name)
+    cfg = hf_config.text_config if hasattr(hf_config, "text_config") else hf_config
+    cfg.num_hidden_layers = 1
+
+    dim = cfg.hidden_size
+    n_heads = cfg.num_attention_heads
+    n_kv_heads = getattr(cfg, "num_key_value_heads", n_heads)
+    head_dim = getattr(cfg, "head_dim", None) or (dim // n_heads)
+
+    # Calculate max_seq_len with proper alignment
+    max_seq_len = prefill_seq_len + num_decode_after_prefill
+    alignment = page_block_size if page_block_size is not None else 32
+    max_seq_len = ((max_seq_len + alignment - 1) // alignment) * alignment
+
+    mesh_shape = ttnn_mesh_device.shape
+    num_devices = ttnn_mesh_device.get_num_devices()
+    n_local_kv_heads = n_kv_heads // num_devices
+
+    # Load HF model
+    with no_init_weights():
+        hf_model = AutoModelForCausalLM.from_config(hf_config, torch_dtype=torch.bfloat16)
+    first_layer = hf_model.model.layers[0]
+    rotary_emb = getattr(hf_model.model, "rotary_emb", None)
+
+    reference_attn = first_layer.self_attn
+    _get_or_init_attn_weights(hf_model_name, reference_attn)
+    reference_wrapper = HfAttentionWrapper(reference_attn, head_dim, rotary_emb)
+
+    # Extract weights
+    wqkv_torch, wo_torch, q_norm_torch, k_norm_torch, wqkv_bias_torch = get_attention_weights_from_ref_model(
+        reference_attn, num_devices
+    )
+
+    act_dtype = ttnn.bfloat16
+    wqkv_dtype = ttnn.bfloat8_b
+    lazy_wqkv = LazyWeight(source=wqkv_torch, dtype=wqkv_dtype, cache_dir_weight_name=None)
+    lazy_wo = LazyWeight(source=wo_torch, dtype=wqkv_dtype, cache_dir_weight_name=None)
+
+    # Setup paged attention if enabled
+    paged_attention_config = None
+    page_table_tt = None
+    if page_block_size is not None:
+        # Each user needs ceil(max_seq_len / block_size) blocks
+        blocks_per_user = (max_seq_len + page_block_size - 1) // page_block_size
+        max_num_blocks = max(128, blocks_per_user * batch_size)
+        paged_attention_config = PagedAttentionConfig(block_size=page_block_size, max_num_blocks=max_num_blocks)
+
+        permutation = torch.randperm(max_num_blocks)
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(batch_size, max_num_blocks // batch_size)
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=ttnn_mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+        )
+
+    # =========================================================================
+    # INTEGRATION POINT: Explicitly create KV cache tensors
+    # =========================================================================
+    # The KV cache is the shared state between prefill and decode.
+    # By creating it explicitly here, we make the integration point visible:
+    # - Prefill will WRITE to this cache (positions 0..prefill_seq_len-1)
+    # - Decode will READ from this cache and WRITE new positions
+    # =========================================================================
+    if paged_attention_config is not None:
+        cache_k = zeros_like_paged_cache(paged_attention_config, n_local_kv_heads, head_dim)
+        cache_v = zeros_like_paged_cache(paged_attention_config, n_local_kv_heads, head_dim)
+    else:
+        cache_k = zeros_like_kv_cache(batch_size, n_local_kv_heads, max_seq_len, head_dim)
+        cache_v = zeros_like_kv_cache(batch_size, n_local_kv_heads, max_seq_len, head_dim)
+
+    # Wrap as LazyWeight for config
+    kv_cache = (LazyWeight(source=cache_k), LazyWeight(source=cache_v))
+
+    # Build config with explicit KV cache
+    topology = ttnn.Topology.Ring if num_devices > 1 else None
+    tt_ccl = TT_CCL(ttnn_mesh_device) if num_devices > 1 else None
+
+    config = Attention1DConfig(
+        wqkv=lazy_wqkv,
+        wo=lazy_wo,
+        mesh_device=ttnn_mesh_device,
+        tt_ccl=tt_ccl,
+        topology=topology,
+        dim=dim,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        head_dim=head_dim,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        scale=head_dim**-0.5,
+        use_vllm_paged_kv_cache=False,
+        paged_attention_config=paged_attention_config,
+        kv_cache=kv_cache,  # <-- EXPLICIT KV CACHE: the integration point
+        wqkv_dtype=wqkv_dtype,
+        wo_dtype=wqkv_dtype,
+        activation_dtype=act_dtype,
+    )
+
+    tt_model = Attention1D.from_config(config)
+
+    # =========================================================================
+    # Step 1: PREFILL - populates KV cache positions 0..prefill_seq_len-1
+    # =========================================================================
+    # Run prefill per-user (continuous batching style) to avoid compute grid limits.
+    # Each user gets the same input for easy comparison.
+    # =========================================================================
+    pt_prefill_input_single = torch.randn(1, prefill_seq_len, dim, dtype=torch.bfloat16)
+    prefill_rot_mats = get_rot_mats_from_hf(rotary_emb, prefill_seq_len, head_dim, ttnn_mesh_device)
+
+    # Collect outputs for all users
+    tt_prefill_outputs = []
+    for user_id in range(batch_size):
+        tt_prefill_input = ttnn.from_torch(
+            pt_prefill_input_single.unsqueeze(0),  # (1, 1, prefill_seq_len, dim)
+            device=ttnn_mesh_device,
+            dtype=act_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+        )
+        tt_prefill_out = tt_model.forward(
+            tt_prefill_input, None, prefill_rot_mats, user_id=user_id, mode="prefill", page_table=page_table_tt
+        )
+        tt_prefill_out = to_torch_auto_compose(tt_prefill_out)
+        tt_prefill_outputs.append(tt_prefill_out[:, 0:1, :prefill_seq_len, :dim].view(1, prefill_seq_len, dim))
+
+    # Stack outputs: (batch_size, prefill_seq_len, dim)
+    tt_prefill_output = torch.cat(tt_prefill_outputs, dim=0)
+
+    # HF reference prefill (single user, same input)
+    with torch.no_grad():
+        ref_prefill_output = reference_wrapper(pt_prefill_input_single, start_pos=0, mask=None)
+
+    # Compare first user's output (all users have same input, should match)
+    passing, pcc_msg = comp_pcc(ref_prefill_output, tt_prefill_output[0:1].to(ref_prefill_output.dtype), pcc)
+    logger.info(f"  Prefill PCC: {pcc_msg}")
+    assert passing, f"Prefill failed: {pcc_msg}"
+
+    # =========================================================================
+    # Step 2: DECODE - uses prefill output as input (realistic autoregressive flow)
+    # =========================================================================
+    # In real autoregressive generation:
+    # - First decode input = last position of prefill output
+    # - Subsequent decode inputs = previous decode output
+    # This tests both KV cache integration AND data flow between modes.
+    # =========================================================================
+    decode_rope_setup = RotarySetupHelper(
+        ttnn_mesh_device, batch_size, head_dim, max_seq_len, rotary_emb, use_qk_fused=False
+    )
+
+    # First decode input: last position of prefill output (shape: batch, 1, dim)
+    pt_decode_input = tt_prefill_output[:, -1:, :].clone()  # (batch_size, 1, dim)
+    ref_decode_input = ref_prefill_output[:, -1:, :].clone()  # For HF reference
+
+    for decode_iter in range(num_decode_after_prefill):
+        current_pos_value = prefill_seq_len + decode_iter
+
+        # Prepare TT input: (batch, 1, dim) -> (1, 1, batch, dim) for TTNN decode format
+        pt_decode_batched = pt_decode_input.transpose(0, 1).unsqueeze(0)  # (1, 1, batch_size, dim)
+
+        tt_decode_input = ttnn.from_torch(
+            pt_decode_batched,
+            device=ttnn_mesh_device,
+            dtype=act_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+        )
+        tt_decode_input = ttnn.to_memory_config(tt_decode_input, tt_model.config.decode_input_memcfg)
+
+        position_idxs = torch.full((batch_size,), current_pos_value, dtype=torch.long)
+        decode_rot_mats = decode_rope_setup.get_rot_mats(position_idxs)
+
+        current_pos = ttnn.from_torch(
+            position_idxs,
+            device=ttnn_mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(ttnn_mesh_device),
+        )
+
+        tt_decode_out = tt_model.forward(
+            tt_decode_input, current_pos, decode_rot_mats, mode="decode", page_table=page_table_tt
+        )
+        tt_decode_out = to_torch_auto_compose(tt_decode_out)
+        tt_decode_output = tt_decode_out[:, 0:1, :batch_size, :dim].view(batch_size, 1, dim)
+
+        # HF reference decode (using same input flow)
+        with torch.no_grad():
+            ref_decode_output = reference_wrapper(ref_decode_input, start_pos=current_pos_value, mask=None)
+
+        # Compare first user's output (all users have identical input, should produce identical output)
+        passing, pcc_msg = comp_pcc(ref_decode_output, tt_decode_output[0:1].to(ref_decode_output.dtype), pcc)
+        logger.info(f"  Decode[pos={current_pos_value}] PCC: {pcc_msg}")
+        assert passing, f"Decode at position {current_pos_value} failed: {pcc_msg}"
+
+        # Next decode input = this decode output (autoregressive flow)
+        pt_decode_input = tt_decode_output.clone()
+        ref_decode_input = ref_decode_output.clone()
+
+    ttnn.SetDefaultDevice(None)
+
+    paged_str = f"paged(block_size={page_block_size})" if page_block_size is not None else "non-paged"
+    logger.info(
+        f"test_attention_1d_prefill_decode_transition: PASSED ({paged_str}, "
+        f"prefill={prefill_seq_len}, decode={num_decode_after_prefill})"
+    )
 
 
 @torch.no_grad()
@@ -1922,7 +2354,7 @@ def _create_attention_model_for_benchmark(
     ttnn_mesh_device: ttnn.MeshDevice,
     hf_model_name: str,
     use_qk_fused: bool,
-    paged_attention: bool = True,
+    page_block_size: int | None = 64,
     max_seq_len: int = 2048,
 ) -> tuple:
     """
@@ -2024,8 +2456,8 @@ def _create_attention_model_for_benchmark(
 
     # Paged attention config (local dataclass)
     paged_attention_config = None
-    if paged_attention:
-        paged_attention_config = PagedAttentionConfig(block_size=64, max_num_blocks=2048)
+    if page_block_size is not None:
+        paged_attention_config = PagedAttentionConfig(block_size=page_block_size, max_num_blocks=2048)
 
     # RotarySetupHelper using HF rotary_emb (no rope_scaling needed - HF handles it)
     rope_setup = RotarySetupHelper(
@@ -2176,7 +2608,7 @@ def test_attention_1d_fused_qk_profiling(ttnn_mesh_device: ttnn.MeshDevice):
                     ttnn_mesh_device=ttnn_mesh_device,
                     hf_model_name=hf_model_name,
                     use_qk_fused=use_qk_fused,
-                    paged_attention=False,
+                    page_block_size=None,
                 )
 
                 dim = params["dim"]

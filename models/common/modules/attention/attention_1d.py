@@ -233,11 +233,12 @@ class Attention1D(LightweightModule):
     """
     Attention for 1D mesh topologies (N150, N300, T3K).
 
-    Simple API (90% of users):
-        attn = Attention1D(wqkv, wo)
+    Simple API (90% of users) - requires weights and model dimensions:
+        attn = Attention1D(wqkv, wo, n_heads=32, n_kv_heads=8, head_dim=128)
 
-    Power API (10% of users) - any level of customization via config:
-        config = Attention1DConfig(wqkv, wo, n_heads=32, head_dim=128)
+    Power API (10% of users) - full customization via config:
+        config = Attention1DConfig(wqkv, wo, n_heads=32, n_kv_heads=8, head_dim=128,
+                                   sliding_window=4096, q_norm_config=..., ...)
         attn = Attention1D.from_config(config)
 
     Execution paths:
@@ -256,20 +257,40 @@ class Attention1D(LightweightModule):
         - from_config() with kv_cache as LazyWeight tuple: Cache backed by files
     """
 
-    def __init__(self, wqkv: LazyWeight, wo: LazyWeight):
+    def __init__(
+        self,
+        wqkv: LazyWeight,
+        wo: LazyWeight,
+        n_heads: int,
+        n_kv_heads: int,
+        head_dim: int,
+    ):
         """
-        Simple API for 90% of users - derives all config from weights.
+        Simple API for 90% of users - requires only weights and model dimensions.
 
         Args:
             wqkv: Combined QKV projection weight, sharded on dim=-1
             wo: Output projection weight, sharded on dim=-2
+            n_heads: Number of attention heads (from model config)
+            n_kv_heads: Number of key/value heads for GQA (from model config)
+            head_dim: Dimension per head (from model config)
 
-        Note: Use from_config() to set n_heads, n_kv_heads, head_dim explicitly
-        since they cannot be reliably inferred from weight shapes alone.
+        Other settings (mesh_device, topology, program configs, etc.) are derived
+        automatically. Use from_config() for full customization.
+
+        Example:
+            attn = Attention1D(wqkv, wo, n_heads=32, n_kv_heads=8, head_dim=128)
         """
-        # todo)) this may not be needed anymore; maybe provide a simple API that is a little bigger surface than just the weights?
         super().__init__()
-        self.config = _resolve_attention1d_config(Attention1DConfig(wqkv=wqkv, wo=wo))
+        self.config = _resolve_attention1d_config(
+            Attention1DConfig(
+                wqkv=wqkv,
+                wo=wo,
+                n_heads=n_heads,
+                n_kv_heads=n_kv_heads,
+                head_dim=head_dim,
+            )
+        )
         self._device_weights_loaded = False
 
     @classmethod
@@ -1212,7 +1233,31 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     """Materialize the config with sensible defaults."""
     to_set = {}
 
-    # --- Phase 1: Foundational fields ---
+    # --- Phase 1: Model dimensions (fail-fast validation, no device needed) ---
+    # n_heads, n_kv_heads, head_dim MUST be provided - they cannot be reliably inferred
+    # from weight shapes alone (different models have different configurations).
+
+    n_heads = config.n_heads
+    n_kv_heads = config.n_kv_heads
+    head_dim = config.head_dim
+
+    if n_heads is None:
+        raise ValueError(
+            "n_heads must be provided. It cannot be reliably inferred from weights. "
+            "Get this value from your model's config.json (num_attention_heads)."
+        )
+    if n_kv_heads is None:
+        raise ValueError(
+            "n_kv_heads must be provided. It cannot be reliably inferred from weights. "
+            "Get this value from your model's config.json (num_key_value_heads)."
+        )
+    if head_dim is None:
+        raise ValueError(
+            "head_dim must be provided. It cannot be reliably inferred from weights. "
+            "Typically: head_dim = hidden_size // num_attention_heads."
+        )
+
+    # --- Phase 2: Device and foundational fields ---
 
     # Derive mesh_device
     mesh_device = config.mesh_device
@@ -1237,37 +1282,18 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
 
     topology = to_set.get("topology", config.topology)
 
-    # --- Phase 2: Model dimensions ---
+    # --- Phase 3: Derived dimensions ---
 
-    # These must be provided or inferred
+    # dim CAN be reliably inferred from weight shapes
     dim = config.dim
-    n_heads = config.n_heads
-    n_kv_heads = config.n_kv_heads
-    head_dim = config.head_dim
-    qkv_size = config.qkv_size
-
-    # Try to infer from weight shapes
     if dim is None:
         # wqkv shape is (1, 1, dim, qkv_size_per_device * num_devices) or (dim, qkv_size)
         wqkv_shape = config.wqkv.source.shape
         dim = wqkv_shape[-2] if len(wqkv_shape) == 4 else wqkv_shape[0]
         to_set["dim"] = dim
 
-    if head_dim is None:
-        # Default head_dim for common models
-        head_dim = 128
-        to_set["head_dim"] = head_dim
-
-    if n_heads is None:
-        # Can't reliably infer n_heads, use common default
-        n_heads = dim // head_dim
-        to_set["n_heads"] = n_heads
-
-    if n_kv_heads is None:
-        # Assume GQA with same kv_heads as heads
-        n_kv_heads = n_heads
-        to_set["n_kv_heads"] = n_kv_heads
-
+    # qkv_size is derived from the required dimensions
+    qkv_size = config.qkv_size
     if qkv_size is None:
         qkv_size = head_dim * (2 * n_kv_heads + n_heads)
         to_set["qkv_size"] = qkv_size
@@ -1289,7 +1315,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
 
     # --- Phase 4: Compute kernel configs ---
 
-    compute_kernel_hifi2 = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_hifi2_fp16 = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
@@ -1303,17 +1329,17 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     )
 
     if config.li_qkv_decode_compute_kernel_cfg is None:
-        to_set["li_qkv_decode_compute_kernel_cfg"] = compute_kernel_hifi2
+        to_set["li_qkv_decode_compute_kernel_cfg"] = compute_kernel_hifi2_fp16
     if config.sdpa_decode_compute_kernel_cfg is None:
-        to_set["sdpa_decode_compute_kernel_cfg"] = compute_kernel_hifi2
+        to_set["sdpa_decode_compute_kernel_cfg"] = compute_kernel_hifi2_fp16
     if config.li_o_decode_compute_kernel_cfg is None:
-        to_set["li_o_decode_compute_kernel_cfg"] = compute_kernel_hifi2
+        to_set["li_o_decode_compute_kernel_cfg"] = compute_kernel_hifi2_fp16
     if config.li_qkv_prefill_compute_kernel_cfg is None:
-        to_set["li_qkv_prefill_compute_kernel_cfg"] = compute_kernel_hifi2
+        to_set["li_qkv_prefill_compute_kernel_cfg"] = compute_kernel_hifi2_fp16
     if config.sdpa_prefill_compute_kernel_cfg is None:
         to_set["sdpa_prefill_compute_kernel_cfg"] = compute_kernel_hifi4
     if config.li_o_prefill_compute_kernel_cfg is None:
-        to_set["li_o_prefill_compute_kernel_cfg"] = compute_kernel_hifi2
+        to_set["li_o_prefill_compute_kernel_cfg"] = compute_kernel_hifi2_fp16
 
     # --- Phase 5: Program configs ---
 
