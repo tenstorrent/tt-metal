@@ -18,6 +18,7 @@ namespace tt::tt_metal {
 
 namespace distributed {
 class MeshDevice;
+class MeshBuffer;
 }
 
 /**
@@ -58,6 +59,12 @@ public:
     // Transfers ownership of other's memory
     DeviceTensor(DeviceTensor&& other) = default;
     DeviceTensor& operator=(DeviceTensor&& other) = default;
+
+    /**
+     * Construct a DeviceTensor from pre-allocated device storage.
+     */
+    explicit DeviceTensor(DeviceStorage storage, TensorSpec spec, TensorTopology topology) :
+        impl(std::make_unique<TensorAttributes>(Storage(std::move(storage)), std::move(spec), std::move(topology))) {}
 
     // End speical member functions
 
@@ -141,16 +148,10 @@ public:
         return false;
     }
 
-    // We prob need to leak this for compatability:
-    //
-    // // TODO-ask Alex: can we retire this method in favor of mesh_buffer()
-    // Buffer* buffer() const;
-    //
-    // /**
-    //  * From original tensor:
-    //  *  Returns device `MeshBuffer`.
-    //  */
-    //  std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
+    /**
+     * Returns device MeshBuffer.
+     */
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const { return get_device_storage().mesh_buffer; }
 
 private:
     std::unique_ptr<TensorAttributes> impl;

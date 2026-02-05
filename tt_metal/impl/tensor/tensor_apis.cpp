@@ -5,6 +5,57 @@
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/tensor/details/tensor_impl.hpp>
+#include <tt-metalium/experimental/tensor/device_tensor.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+
+namespace {
+
+using namespace tt::tt_metal;
+
+DeviceStorage replicate_to_mesh_buffer(
+    distributed::MeshCommandQueue& cq,
+    const HostBuffer& buffer,
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
+    const TensorSpec& tensor_spec) {
+    auto* mesh_device = mesh_buffer->device();
+    auto data_to_write = buffer.view_bytes();
+    const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+    const auto input_size_bytes = data_to_write.size();
+    TT_FATAL(
+        input_size_bytes == expected_packed_buffer_size_bytes,
+        "Host data with total size {}B does not match expected size {}B of device buffer!",
+        input_size_bytes,
+        expected_packed_buffer_size_bytes);
+
+    cq.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
+
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(mesh_device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+        coords.push_back(coord);
+    }
+    return DeviceStorage(mesh_buffer, std::move(coords));
+}
+
+DeviceStorage write_to_mesh_buffer(
+    distributed::MeshCommandQueue& cq,
+    const DistributedHostBuffer& distributed_host_buffer,
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer) {
+    cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(distributed_host_buffer.shard_coords().size());
+    std::copy(
+        distributed_host_buffer.shard_coords().begin(),
+        distributed_host_buffer.shard_coords().end(),
+        std::back_inserter(coords));
+    return DeviceStorage(mesh_buffer, std::move(coords));
+}
+
+}  // namespace
 
 namespace tt::tt_metal {
 
@@ -143,5 +194,47 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
     return HostTensor(
         tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 }
+
+void TransferToDevice(
+    distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, DeviceTensor& device_tensor, bool blocking) {
+    TT_FATAL(device_tensor.is_allocated(), "DeviceTensor must be allocated");
+    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Shape mismatch");
+    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Dtype mismatch");
+
+    const auto& host_buffer = host_tensor.host_storage().buffer();
+    auto mesh_buffer = device_tensor.mesh_buffer();
+
+    cq.enqueue_write(mesh_buffer, host_buffer, blocking);
+}
+
+namespace tensor_impl {
+
+std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
+    distributed::MeshCommandQueue& cq,
+    const HostStorage& host_storage,
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
+    const TensorSpec& tensor_spec,
+    const TensorTopology& tensor_topology) {
+    const auto& host_storage_shape = host_storage.buffer().shape();
+    const auto& mesh_device_shape = mesh_buffer->device()->shape();
+
+    if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
+        host_storage_shape == distributed::MeshShape(1, 1)) {
+        // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
+        const auto device_buffer = host_storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
+        return {
+            replicate_to_mesh_buffer(cq, *device_buffer, mesh_buffer, tensor_spec),
+            TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape)};
+    }
+
+    TT_FATAL(
+        host_storage_shape == mesh_device_shape,
+        "Distributed host buffer has different shape {} than the mesh device {}",
+        host_storage_shape,
+        mesh_device_shape);
+    return {write_to_mesh_buffer(cq, host_storage.buffer(), mesh_buffer), tensor_topology};
+}
+
+}  // namespace tensor_impl
 
 }  // namespace tt::tt_metal

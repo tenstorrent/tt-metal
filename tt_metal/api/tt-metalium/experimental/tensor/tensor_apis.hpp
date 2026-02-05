@@ -10,6 +10,11 @@
 namespace tt::tt_metal {
 
 class HostTensor;
+class DeviceTensor;
+
+namespace distributed {
+class MeshCommandQueue;
+}
 
 // Returns true if the logical tensor data matches the physical tensor data:
 // 1. Row major layout is used.
@@ -19,5 +24,12 @@ bool logical_matches_physical(const TensorSpec& tensor_spec);
 
 // Converts data type of a HostTensor to the specified dtype.
 HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype);
+
+// High-level H2D transfer for HostTensor/DeviceTensor
+void TransferToDevice(
+    distributed::MeshCommandQueue& cq,
+    const HostTensor& host_tensor,
+    DeviceTensor& device_tensor,
+    bool blocking = true);
 
 }  // namespace tt::tt_metal

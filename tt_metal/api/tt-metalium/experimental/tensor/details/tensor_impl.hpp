@@ -11,6 +11,13 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/experimental/tensor/details/storage.hpp>
+#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+
+namespace tt::tt_metal::distributed {
+class MeshCommandQueue;
+class MeshBuffer;
+}  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::tensor_impl {
 
@@ -91,5 +98,16 @@ std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const Ten
 //   * Resulting data is safe to be converted to python tensors or general consumption with just a ND logical shape
 template <typename T>
 std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const TensorSpec& tensor_spec);
+
+// ======================================================================================
+//                                  H2D Transfer utilities
+// ======================================================================================
+
+std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
+    distributed::MeshCommandQueue& cq,
+    const HostStorage& host_storage,
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
+    const TensorSpec& tensor_spec,
+    const TensorTopology& tensor_topology);
 
 }  // namespace tt::tt_metal::tensor_impl
