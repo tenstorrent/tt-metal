@@ -80,7 +80,6 @@ constexpr uint32_t cb_grad_scores = tt::CBIndex::c_11;        // Gradient w.r.t.
 constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_12;       // u_scalar per row
 constexpr uint32_t cb_grad_query = tt::CBIndex::c_13;         // Output: grad_Q
 
-const uint32_t onetile = 1U;
 const uint32_t tiles_per_row = qWt;       // number of tiles per row (qWt == kWt == vWt)
 const uint32_t num_of_interm_tiles = 2U;  // number of tiles in intermediates buffer per head
 

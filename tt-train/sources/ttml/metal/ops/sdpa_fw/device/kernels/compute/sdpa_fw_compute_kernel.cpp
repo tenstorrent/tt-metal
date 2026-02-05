@@ -56,8 +56,6 @@ constexpr uint32_t cb_cur_mm_out = tt::CBIndex::c_14;    // used for holding cur
 
 constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-const uint32_t onetile = 1U;
-
 void kernel_main() {
     // Runtime args - needed for causal mask to know global position within sequence
     const uint32_t start_row = get_arg_val<uint32_t>(0);
