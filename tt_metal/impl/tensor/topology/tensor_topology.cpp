@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/distributed/tensor_topology.hpp"
+#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 
 namespace tt::tt_metal {
 

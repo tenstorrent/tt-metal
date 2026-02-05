@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/layout/alignment.hpp"
+#include <tt-metalium/experimental/tensor/spec/layout/alignment.hpp>
 
 #include <ostream>
 
