@@ -760,17 +760,17 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
 
 
 void fabric_mux_connection_ct_args(
-    const uint32_t num_workers_per_direction,
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    uint32_t num_workers_per_direction,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     std::vector<uint32_t>& worker_ct_args);
 
 void fabric_mux_connection_rt_args(
-    const bool mux_connection_valid,
-    const bool is_termination_master,
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    bool mux_connection_valid,
+    bool is_termination_master,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
     const CoreCoord& mux_virtual_core,
-    const uint32_t worker_id,
+    uint32_t worker_id,
     const CoreCoord& worker_logical_core,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     tt::tt_metal::Program& program,
