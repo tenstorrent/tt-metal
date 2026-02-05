@@ -21,7 +21,7 @@ constexpr uint32_t NUM_CORES = 12;
 constexpr uint32_t NUM_W_TILES_W = 28;
 constexpr uint32_t NUM_W_TILES_H = 512;
 
-constexpr uint32_t W_TXNS_PER_BLOCK = 3;
+constexpr uint32_t W_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W_TILES_PER_TXN = 7;
 
 constexpr uint32_t N_TILES_PER_ITER = 7;
