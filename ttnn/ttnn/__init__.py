@@ -228,7 +228,6 @@ from ttnn.types import (
     ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
-    GrayskullComputeKernelConfig,
     MeshShape,
     MeshCoordinate,
     MeshCoordinateRange,
