@@ -6,10 +6,6 @@
 # ASIC_LOCATION_1, ASIC_LOCATION_2, ..., ASIC_LOCATION_8
 # No need to define them - they're always available
 
-base_units {
-  # Base units are predefined constants - no fields needed
-  # ASIC_LOCATION_1 through ASIC_LOCATION_8 are available as enum values
-}
 
 groupings {
   name: "trays"
