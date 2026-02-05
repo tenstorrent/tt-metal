@@ -182,7 +182,7 @@ void kernel_main() {
         // Initialize pack untilize for row-major output: 4 tiles wide -> 32 rows x 128 datums
         pack_untilize_dest_init<4, 20>(cb_c2s_out_untilized);
         uint32_t out_index = (expert_id & 1) ? 26 : 0;
-
+        uint32_t untilize_iter = 0;
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
@@ -239,7 +239,8 @@ void kernel_main() {
 
             tile_regs_wait();
             // Pack 4 tiles as row-major: 32 rows x 128 datums (32*4 width)
-            pack_untilize_dest<4, 20>(cb_c2s_out_untilized, /*block_rt_dim=*/1, out_index + iter * 4);
+
+            pack_untilize_dest<4, 20>(cb_c2s_out_untilized, /*block_rt_dim=*/1, out_index + untilize_iter++);
             tile_regs_release();
         }
 
