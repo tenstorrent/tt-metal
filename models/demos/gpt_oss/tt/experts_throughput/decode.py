@@ -421,4 +421,17 @@ def decode_forward(
     ttnn.deallocate(output)
 
     # Final shape: [1, 1, tokens_per_device, H] (tokens on dim -2)
-    return output_all_reduced
+    if output_all_reduced.shape[2] > tokens_per_device:
+        output_all_reduced = ttnn.slice(
+            output_all_reduced,
+            [0, 0, 0, 0],
+            [1, 1, tokens_per_device, output_all_reduced.shape[3]],
+        )
+    elif output_all_reduced.shape[2] < tokens_per_device:
+        pad_tokens = tokens_per_device - output_all_reduced.shape[2]
+        output_all_reduced = ttnn.pad(
+            output_all_reduced,
+            [(0, 0), (0, 0), (0, pad_tokens), (0, 0)],
+            0,
+        )
+    return ttnn.reshape(output_all_reduced, input_shape)
