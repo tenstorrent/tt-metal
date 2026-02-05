@@ -44,19 +44,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "[]" > pulls_full.json
-
-          while read pr; do
-            gh api /repos/tenstorrent/tt-metal/pulls/$pr \
-            | jq '.' \
-            | jq -s '.[0]' >> temp.json
-
-            jq -s 'add' pulls_full.json temp.json > merged.json
-            mv merged.json pulls_full.json
-            rm -f temp.json
-
-          done < pr_numbers.txt
-
+          gh api --paginate \
+            /repos/tenstorrent/tt-metal/pulls \
+            > pulls_full.json
       # ------------------------------------------------------------
       # Build merge queue snapshot with REAL state mapping
       # ------------------------------------------------------------
