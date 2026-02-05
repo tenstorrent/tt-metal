@@ -1165,9 +1165,14 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id, uint8_t 
     // Kernel expects NUM_L1_BANKS entries (compile-time constant: 64 for wormhole, 140 for blackhole)
     // Pad arrays to NUM_L1_BANKS to match kernel expectations, wrapping entries beyond actual bank count
     const auto arch = cluster_->arch();
-    const size_t num_l1_banks_kernel = (arch == ARCH::WORMHOLE_B0) ? 64
-                                       : (arch == ARCH::BLACKHOLE) ? 140
-                                                                   : num_l1_banks;
+    size_t num_l1_banks_kernel;
+    if (arch == ARCH::WORMHOLE_B0) {
+        num_l1_banks_kernel = 64;
+    } else if (arch == ARCH::BLACKHOLE) {
+        num_l1_banks_kernel = 140;
+    } else {
+        num_l1_banks_kernel = num_l1_banks;
+    }
 
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks_kernel);
     l1_bank_offset_map_[device_id].clear();
@@ -1220,16 +1225,14 @@ void MetalContext::regenerate_device_l1_bank_to_noc_table(ChipId device_id, cons
     // Regenerate L1 bank-to-NOC table from the device's allocator so kernel table matches host.
     const size_t num_l1_banks = allocator.get_num_banks(BufferType::L1);
     const auto arch = cluster_->arch();
-    const size_t num_l1_banks_kernel = (arch == ARCH::WORMHOLE_B0) ? 64
-                                       : (arch == ARCH::BLACKHOLE) ? 140
-                                                                   : num_l1_banks;
-
-    log_info(
-        tt::LogDevice,
-        "Regenerating L1 bank table: device={} num_l1_banks={} num_l1_banks_kernel={}",
-        device_id,
-        num_l1_banks,
-        num_l1_banks_kernel);
+    size_t num_l1_banks_kernel;
+    if (arch == ARCH::WORMHOLE_B0) {
+        num_l1_banks_kernel = 64;
+    } else if (arch == ARCH::BLACKHOLE) {
+        num_l1_banks_kernel = 140;
+    } else {
+        num_l1_banks_kernel = num_l1_banks;
+    }
 
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks_kernel);
     l1_bank_offset_map_[device_id].clear();
