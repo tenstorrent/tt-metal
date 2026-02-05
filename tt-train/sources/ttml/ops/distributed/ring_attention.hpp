@@ -32,6 +32,11 @@ namespace ttml::ops::distributed {
  *             where S_full = S_local * cp_size. Each device's mask contains
  *             attention values for its Q chunk attending to ALL K positions.
  *             Rolled per-device using ParallelismContext::get_cp_rank_tensor().
+ * @param use_causal_mask If true, use causal masking with optimized ring attention.
+ *             Each device only computes attention for valid chunks:
+ *             - Step 0: causal mask (local K/V)
+ *             - Steps where source device < current device: full attention
+ *             - Steps where source device > current device: skip (no computation)
  * @return Attention output tensor (B, H, S_local, D)
  *
  * Note: KV is passed in the ring (rather than Q) because in GQA, num_groups <= num_heads,
@@ -41,6 +46,7 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
-    const std::optional<autograd::TensorPtr>& mask = std::nullopt);
+    const std::optional<autograd::TensorPtr>& mask = std::nullopt,
+    bool use_causal_mask = false);
 
 }  // namespace ttml::ops::distributed

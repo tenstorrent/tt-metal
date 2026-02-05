@@ -285,6 +285,16 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
+    # Ring SDPA Workload (for ring attention / context parallelism)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_workload/ring_sdpa_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_workload/ring_sdpa_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_workload/ring_sdpa_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_workload/ring_sdpa_workload.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_workload/ring_sdpa_workload.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_workload/ring_sdpa_bw_workload.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_workload/ring_sdpa_bw_workload.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_workload/ring_sdpa_bw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_workload/ring_sdpa_bw_device_operation.cpp
     # SDPA Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.hpp

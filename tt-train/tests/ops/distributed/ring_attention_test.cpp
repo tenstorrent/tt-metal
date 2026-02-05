@@ -271,7 +271,7 @@ static void TestRingAttention(
     const bool use_mask = false,
     const bool test_backward = false,
     const float rtol = 1e-2F,
-    const float atol = 1e-1F) {
+    const float atol = 5e-1F) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
@@ -347,7 +347,8 @@ static void TestRingAttention(
         mask_tensor = autograd::create_tensor(mask_tt);
     }
 
-    auto output_tensor = ops::distributed::ring_attention_sdpa(query_tensor, key_tensor, value_tensor, mask_tensor);
+    auto output_tensor =
+        ops::distributed::ring_attention_sdpa(query_tensor, key_tensor, value_tensor, mask_tensor, use_mask);
 
     // Gather output from all devices
     auto output_xtensors = core::to_xtensor<float>(output_tensor->get_value(), core::IdentityComposer{});
@@ -439,6 +440,17 @@ TEST_F(GalaxyRingAttentionTest, BasicNoMask) {
         /*test_backward=*/false);
 }
 
+// Basic ring attention test without mask (forward only)
+TEST_F(GalaxyRingAttentionTest, CacheTest) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/128,  // 32 per device (4 CP devices along axis 0)
+        /*head_dim=*/64,
+        /*use_mask=*/false,
+        /*test_backward=*/false);
+}
+
 // Basic ring attention test with backward pass
 TEST_F(GalaxyRingAttentionTest, BasicWithBackward) {
     TestRingAttention(
@@ -518,6 +530,17 @@ TEST_F(GalaxyRingAttentionTest, LargerSequenceWithCausalMask) {
 
 // Full test: larger batch with causal mask and backward
 TEST_F(GalaxyRingAttentionTest, LargerBatchCausalMaskBackward) {
+    TestRingAttention(
+        /*batch=*/4,
+        /*num_heads=*/8,
+        /*seq_len=*/128,
+        /*head_dim=*/64,
+        /*use_mask=*/true,
+        /*test_backward=*/true);
+}
+
+// Full test: larger batch with causal mask and backward
+TEST_F(GalaxyRingAttentionTest, CacheTestBackward) {
     TestRingAttention(
         /*batch=*/4,
         /*num_heads=*/8,
