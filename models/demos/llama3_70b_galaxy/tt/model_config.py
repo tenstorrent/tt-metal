@@ -1175,7 +1175,7 @@ class TtModelArgs:
             )
 
             # Default PAGED_SDPA_DECODE_PROGCFG (will be updated dynamically based on actual ISL)
-            # Use 48 cores for ISLs >= 16k, 32 cores for ISLs < 16k
+            # Use 48 cores for ISLs >= 8k, 32 cores for ISLs < 8k
             # Call update_paged_sdpa_config_for_isl() to update based on actual input sequence length
             self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
@@ -2231,7 +2231,7 @@ class TtModelArgs:
     def update_paged_sdpa_config_for_isl(self, isl):
         """
         Update PAGED_SDPA_DECODE_PROGCFG based on the actual Input Sequence Length (ISL).
-        Use 48 cores for ISLs >= 16k, 32 cores for ISLs < 16k.
+        Use 48 cores for ISLs >= 8k, 32 cores for ISLs < 8k.
 
         Args:
             isl (int): The actual input sequence length
@@ -2240,7 +2240,7 @@ class TtModelArgs:
             # Only applies to TG (32 devices)
             return
 
-        if isl >= 16384:
+        if isl >= 8192:
             num_cores = 48
             grid_size = (8, 6)
         else:
