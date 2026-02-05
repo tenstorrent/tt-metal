@@ -28,7 +28,9 @@ tt::tt_metal::Program create_socket_forward_program(
     const tt::tt_metal::distributed::MeshSocket& recv_socket,
     std::size_t num_bytes,
     const tt::tt_metal::distributed::MeshCoordinate& mesh_coordinate,
-    distributed::MeshDevice* mesh_device) {
+    distributed::MeshDevice* mesh_device,
+    uint32_t latency_measurement_address,
+    uint32_t num_iterations) {
     tt::tt_metal::Program program{};
 
     const auto& send_socket_conn = send_socket.get_config().socket_connection_config[0];
@@ -89,7 +91,6 @@ tt::tt_metal::Program create_socket_forward_program(
 
     CreateCircularBuffer(program, my_core_coord, cb_packet_header_config);
 
-    constexpr uint32_t barrier_address = 639680;
     std::vector<uint32_t> compile_args = {
         packet_header_cb_index,
         socket_block_size,
@@ -97,7 +98,8 @@ tt::tt_metal::Program create_socket_forward_program(
         fabric_max_payload_size,
         num_whole_packets_link_0,
         num_whole_packets_link_1,
-        barrier_address,
+        latency_measurement_address,
+        num_iterations,
     };
 
     auto kernel_id = tt::tt_metal::CreateKernel(
@@ -132,7 +134,9 @@ void socket_forward(
     distributed::MeshDevice* mesh_device,
     const distributed::MeshSocket& recv_socket,
     const distributed::MeshSocket& send_socket,
-    std::size_t num_bytes) {
+    std::size_t num_bytes,
+    uint32_t latency_measurement_address,
+    uint32_t num_iterations) {
     const auto& send_socket_connections = send_socket.get_config().socket_connection_config;
     const auto& recv_socket_connections = recv_socket.get_config().socket_connection_config;
 
@@ -147,7 +151,8 @@ void socket_forward(
 
     distributed::MeshWorkload workload;
 
-    auto program = create_socket_forward_program(send_socket, recv_socket, num_bytes, device_coord, mesh_device);
+    auto program = create_socket_forward_program(
+        send_socket, recv_socket, num_bytes, device_coord, mesh_device, latency_measurement_address, num_iterations);
 
     workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program));
 

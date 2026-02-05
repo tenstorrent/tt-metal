@@ -24,7 +24,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 8 }
+    channels { count: 16 }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
@@ -34,7 +34,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-    channels { count: 8 }
+    channels { count: 16 }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

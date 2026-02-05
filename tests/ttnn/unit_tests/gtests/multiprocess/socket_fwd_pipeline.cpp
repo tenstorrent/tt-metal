@@ -25,6 +25,11 @@ namespace tt::tt_metal {
 
 using MeshDeviceClosetBoxSendRecvFixture = tt::tt_fabric::fabric_router_tests::MeshDeviceClosetBoxFabricFixture;
 
+// Fixture for single-galaxy pipeline tests (4 ranks, one per tray).
+// Uses MeshDeviceExaboxFixture which auto-detects the system topology.
+// Set TT_FABRIC_MESH_GRAPH_DESC_PATH to bh_galaxy_4x2_mesh_graph_descriptor.textproto when running.
+class MeshDeviceSingleGalaxyPipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {};
+
 // Pipeline config structs.
 
 // User builds a pipeline in physical space (Host Ranks, Tray IDs, ASIC Locations)
@@ -96,6 +101,30 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
         }
     }
     return asic_id_to_mesh_coord_map;
+}
+
+// Pipeline type enum to toggle between different pipeline configurations.
+enum class PipelineType {
+    CLOSET_BOX,    // Existing multi-host pipeline (48 stages across dual galaxy closet box)
+    SINGLE_GALAXY  // Single-galaxy pipeline (4 stages, 9 hops across 4 trays)
+};
+
+// Get physical pipeline stage configs for the specified pipeline type.
+std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config(PipelineType type) {
+    switch (type) {
+        case PipelineType::SINGLE_GALAXY:
+            return {
+                {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
+                {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
+                {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
+                {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+            };
+        case PipelineType::CLOSET_BOX:
+        default:
+            // The CLOSET_BOX config is the 48-stage pipeline defined inline in build_pipeline().
+            // To use a different config for the multi-host test, update build_pipeline() to call this function.
+            return {};
+    }
 }
 
 // For testing/benchmaring purposes only - build a pipeline on a Dual BH Galaxy.
@@ -179,6 +208,31 @@ std::vector<LogicalPipelineStageConfig> build_pipeline(
     return logical_pipeline_stage_configs;
 }
 
+// Overloaded build_pipeline that accepts an external physical pipeline config.
+std::vector<LogicalPipelineStageConfig> build_pipeline(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord,
+    const std::vector<PhysicalPipelineStageConfig>& physical_pipeline_stage_configs) {
+    const auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
+    std::vector<LogicalPipelineStageConfig> logical_pipeline_stage_configs;
+    for (std::size_t stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
+        auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index % num_procs);
+        auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
+            stage_hostname,
+            tt::tt_metal::TrayID(physical_pipeline_stage_configs[stage_index].tray_id),
+            tt::tt_metal::ASICLocation(physical_pipeline_stage_configs[stage_index].entry_node_asic_location));
+        auto exit_node_asic_id = physical_system_descriptor.get_asic_id(
+            stage_hostname,
+            tt::tt_metal::TrayID(physical_pipeline_stage_configs[stage_index].tray_id),
+            tt::tt_metal::ASICLocation(physical_pipeline_stage_configs[stage_index].exit_node_asic_location));
+        logical_pipeline_stage_configs.emplace_back(LogicalPipelineStageConfig{
+            .stage_index = stage_index,
+            .entry_node_coord = asic_id_to_mesh_coord.at(entry_node_asic_id),
+            .exit_node_coord = asic_id_to_mesh_coord.at(exit_node_asic_id)});
+    }
+    return logical_pipeline_stage_configs;
+}
+
 // Helper to get the device coords connecting the given pipeline stage and neighbor stage.
 std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecting_coords(
     const std::vector<LogicalPipelineStageConfig>& pipeline_stages,
@@ -221,7 +275,7 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
 // - During steady state, this represents the average pipeline stage throughput.
 TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     constexpr uint32_t XFER_SIZE = 14 * 1024;
-    // constexpr uint32_t NUM_ITERS = 1000000;
+    constexpr uint32_t NUM_ITERATIONS = 100;
 
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const distributed::multihost::Rank pipeline_start_rank{0};
@@ -263,22 +317,29 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
 
     const bool is_pipeline_start = (*distributed_context->rank() == *pipeline_start_rank);
 
-    // Create Barrier Buffer
-    auto barrier_buffer_size = sizeof(uint64_t) * 100;
-    CoreRangeSet barrier_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    auto shard_params = ShardSpecBuffer(barrier_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    distributed::DeviceLocalBufferConfig barrier_buffer_specs = {
-        .page_size = barrier_buffer_size,
+    // Create Latency Measurement Buffer
+    // Size: 8 bytes per iteration (uint64_t latency) + 32 bytes padding
+    // First address is reused for credit/barrier synchronization
+    constexpr auto latency_measurement_buffer_size = 8 * NUM_ITERATIONS + 32;
+    CoreRangeSet latency_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    auto shard_params = ShardSpecBuffer(latency_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    distributed::DeviceLocalBufferConfig latency_measurement_buffer_specs = {
+        .page_size = latency_measurement_buffer_size,
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = std::nullopt,
         .sub_device_id = std::nullopt,
     };
-    auto barrier_buffer = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = barrier_buffer_size}, barrier_buffer_specs, mesh_device_.get());
-    // Write 0 to barrier buffer
-    std::vector<uint32_t> barrier_data(barrier_buffer_size / sizeof(uint32_t), 0);
-    distributed::EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), barrier_buffer, barrier_data, true);
+    auto latency_measurement_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = latency_measurement_buffer_size},
+        latency_measurement_buffer_specs,
+        mesh_device_.get());
+    // Write 0 to latency measurement buffer (initializes credit/barrier to 0)
+    std::vector<uint32_t> latency_init_data(latency_measurement_buffer_size / sizeof(uint32_t), 0);
+    distributed::EnqueueWriteMeshBuffer(
+        mesh_device_->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
+
+    const uint32_t latency_measurement_address = latency_measurement_buffer->address();
 
     distributed::MeshCoordinate start_coord = distributed::MeshCoordinate(0, 0);
 
@@ -336,14 +397,19 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         // Extract buffer pointer for metal-level operations
         Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
 
-        // Warmup iteration
-        // Forward data to sender over intermed_send. Recv data over intermed_recv_2
+        // Launch kernels
         tt::tt_metal::send_async(
-            mesh_device_.get(), input_buffer, tt::DataFormat::UInt32, intermed_send, intermed_recv_2);
-        // Forward data to downstream over send_socket.
-        tt::tt_metal::socket_forward(mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE);
-        // Recv data over recv_socket. Forward data to start over intermed_send_2.
-        tt::tt_metal::socket_forward(mesh_device_.get(), recv_socket, intermed_send_2, XFER_SIZE);
+            mesh_device_.get(),
+            input_buffer,
+            tt::DataFormat::UInt32,
+            intermed_send,
+            intermed_recv_2,
+            latency_measurement_address,
+            NUM_ITERATIONS);
+        tt::tt_metal::socket_forward(
+            mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+        tt::tt_metal::socket_forward(
+            mesh_device_.get(), recv_socket, intermed_send_2, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
     } else {
         auto [my_recv, upstream_send] = get_connecting_coords(pipeline_stages, my_mesh_id, upstream_mesh_id);
 
@@ -370,7 +436,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             {fwd_connection},
             socket_mem_config,
             distributed_context->rank(),
-            distributed::multihost::Rank(downstream_socket_rank));  // Hardcoded to 1st rank for now
+            distributed::multihost::Rank(downstream_socket_rank));
         send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
 
         std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, my_sender);
@@ -388,19 +454,254 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         auto output_mesh_buffer = distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device_.get());
 
-        // Warmup iteration
-        tt::tt_metal::socket_forward(mesh_device_.get(), recv_socket, intermed_send, XFER_SIZE);
-        tt::tt_metal::socket_forward(mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE);
+        // Launch kernels
+        tt::tt_metal::socket_forward(
+            mesh_device_.get(), recv_socket, intermed_send, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+        tt::tt_metal::socket_forward(
+            mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
     }
     barrier();
     if (is_pipeline_start) {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         auto start_device_id = mesh_device_->get_device(start_coord)->id();
         auto start_core_coord = mesh_device_->worker_core_from_logical_core(logical_coord);
-        std::vector<uint64_t> latencies = std::vector<uint64_t>(100, 0);
-        uint32_t base_addr = 1572032;
+        std::vector<uint64_t> latencies = std::vector<uint64_t>(NUM_ITERATIONS, 0);
+        uint32_t base_addr = latency_measurement_address;
         cluster.read_core(
-            latencies.data(), sizeof(uint64_t) * 100, tt_cxy_pair(start_device_id, start_core_coord), base_addr);
+            latencies.data(),
+            sizeof(uint64_t) * NUM_ITERATIONS,
+            tt_cxy_pair(start_device_id, start_core_coord),
+            base_addr);
+        for (auto latency : latencies) {
+            std::cout << latency << std::endl;
+        }
+    }
+}
+
+// Single-galaxy pipeline test (multi-process, 4 ranks, one per tray).
+// Uses the SINGLE_GALAXY pipeline config and follows the same setup logic
+// as the ClosetBox SendRecvPipeline test, but with 4 stages across 4 trays
+// and a separate sender device (T1D2).
+//
+// Pipeline path (9 hops):
+//   T1D2(send) -> T1D6(fwd) -> T3D6(fwd) -> T3D4(fwd) -> T4D4(fwd) ->
+//   T4D7(fwd) -> T2D7(fwd) -> T2D4(fwd) -> T1D4(fwd) -> T1D2(recv)
+TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
+    constexpr uint32_t XFER_SIZE = 14 * 1024;
+    constexpr uint32_t NUM_ITERATIONS = 100;
+
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto my_rank = *distributed_context->rank();
+
+    const auto logical_coord = CoreCoord(0, 0);
+    const uint32_t socket_fifo_size = XFER_SIZE * 16;
+
+    auto physical_system_descriptor = create_physical_system_descriptor();
+    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device_);
+
+    // Build pipeline from the SINGLE_GALAXY config (4 stages, one per tray)
+    auto physical_config = get_physical_pipeline_config(PipelineType::SINGLE_GALAXY);
+    auto pipeline_stages = build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord, physical_config);
+
+    const uint32_t num_stages = pipeline_stages.size();
+    const uint32_t upstream_rank = (my_rank + num_stages - 1) % num_stages;
+    const uint32_t downstream_rank = (my_rank + 1) % num_stages;
+
+    const distributed::SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
+
+    // Metal-level buffer configuration - no ttnn dependencies
+    const uint32_t num_elems = XFER_SIZE / sizeof(uint32_t);
+    const DeviceAddr buffer_size = XFER_SIZE;
+    const DeviceAddr page_size = XFER_SIZE;  // Single page buffer
+
+    // Helper to create an intermediate socket pair for local forwarding
+    auto create_intermed_socket_pair = [&](const distributed::MeshCoordinate& sender_coord,
+                                           const distributed::MeshCoordinate& recv_coord) {
+        auto connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(sender_coord, logical_coord),
+            distributed::MeshCoreCoord(recv_coord, logical_coord));
+        auto config = distributed::SocketConfig({connection}, socket_mem_config);
+        return distributed::MeshSocket::create_socket_pair(mesh_device_, mesh_device_, config);
+    };
+
+    // Helper to run warmup iteration with barrier synchronization
+    auto barrier = [&]() {
+        Synchronize(mesh_device_.get(), std::nullopt);
+        distributed_context->barrier();
+    };
+
+    const bool is_pipeline_start = (my_rank == 0);
+
+    // My stage coordinates
+    auto my_entry = pipeline_stages[my_rank].entry_node_coord;
+    auto my_exit = pipeline_stages[my_rank].exit_node_coord;
+
+    // Neighbor stage coordinates for cross-mesh sockets (with wrap-around)
+    auto upstream_exit = pipeline_stages[upstream_rank].exit_node_coord;
+    auto downstream_entry = pipeline_stages[downstream_rank].entry_node_coord;
+
+    // Create Latency Measurement Buffer
+    // Size: 8 bytes per iteration (uint64_t latency) + 32 bytes padding
+    // First address is reused for credit/barrier synchronization
+    constexpr auto latency_measurement_buffer_size = 8 * NUM_ITERATIONS + 32;
+    CoreRangeSet latency_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    auto shard_params = ShardSpecBuffer(latency_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    distributed::DeviceLocalBufferConfig latency_measurement_buffer_specs = {
+        .page_size = latency_measurement_buffer_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = std::nullopt,
+        .sub_device_id = std::nullopt,
+    };
+    auto latency_measurement_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = latency_measurement_buffer_size},
+        latency_measurement_buffer_specs,
+        mesh_device_.get());
+    // Write 0 to latency measurement buffer (initializes credit/barrier to 0)
+    std::vector<uint32_t> latency_init_data(latency_measurement_buffer_size / sizeof(uint32_t), 0);
+    distributed::EnqueueWriteMeshBuffer(
+        mesh_device_->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
+
+    const uint32_t latency_measurement_address = latency_measurement_buffer->address();
+
+    distributed::MeshCoordinate start_coord = distributed::MeshCoordinate(0, 0);
+
+    if (is_pipeline_start) {
+        // Resolve sender device T1D2 using physical system descriptor.
+        // The sender device is separate from the pipeline stage entry/exit nodes.
+        auto sender_hostname = physical_system_descriptor.get_hostname_for_rank(0);
+        auto sender_asic_id = physical_system_descriptor.get_asic_id(
+            sender_hostname, tt::tt_metal::TrayID(1), tt::tt_metal::ASICLocation(2));
+        start_coord = asic_id_to_mesh_coord.at(sender_asic_id);
+
+        // Outbound: start_coord (T1D2) -> my_exit (T1D6)
+        auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_exit);
+
+        // Cross-mesh send: my_exit (T1D6) -> downstream_entry (T3D6)
+        auto fwd_connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(my_exit, logical_coord),
+            distributed::MeshCoreCoord(downstream_entry, logical_coord));
+        auto send_socket_config = distributed::SocketConfig(
+            {fwd_connection},
+            socket_mem_config,
+            distributed_context->rank(),
+            distributed::multihost::Rank(downstream_rank));
+        auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
+
+        // Cross-mesh recv: upstream_exit (T2D4) -> my_entry (T1D4)
+        auto bwd_connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(upstream_exit, logical_coord),
+            distributed::MeshCoreCoord(my_entry, logical_coord));
+        auto recv_socket_config = distributed::SocketConfig(
+            {bwd_connection},
+            socket_mem_config,
+            distributed::multihost::Rank(upstream_rank),
+            distributed_context->rank());
+        auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
+
+        // Inbound: my_entry (T1D4) -> start_coord (T1D2)
+        auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_entry, start_coord);
+
+        // Create device buffer using metal-level API (no ttnn dependencies)
+        distributed::DeviceLocalBufferConfig buffer_config = {
+            .page_size = page_size,
+            .buffer_type = BufferType::DRAM,
+            .sharding_args = BufferShardingArgs(std::nullopt, TensorMemoryLayout::INTERLEAVED),
+            .bottom_up = std::nullopt,
+            .sub_device_id = std::nullopt,
+        };
+        auto input_mesh_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device_.get());
+
+        // Initialize buffer with data (arange equivalent: 0, 1, 2, ..., num_elems-1)
+        std::vector<uint32_t> host_data(num_elems);
+        for (uint32_t i = 0; i < num_elems; i++) {
+            host_data[i] = i;
+        }
+
+        // Write data to device buffer
+        distributed::EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_mesh_buffer, host_data, true);
+
+        // Extract buffer pointer for metal-level operations
+        Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
+
+        // Launch kernels:
+        // - send_async on T1D2: sends data via intermed to T1D6, receives ack back via intermed_2 from T1D4
+        // - socket_forward on T1D6: forwards from intermed to cross-mesh send socket (to T3D6)
+        // - socket_forward on T1D4: forwards from cross-mesh recv socket (from T2D4) to intermed_2 (to T1D2)
+        tt::tt_metal::send_async(
+            mesh_device_.get(),
+            input_buffer,
+            tt::DataFormat::UInt32,
+            intermed_send,
+            intermed_recv_2,
+            latency_measurement_address,
+            NUM_ITERATIONS);
+        tt::tt_metal::socket_forward(
+            mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+        tt::tt_metal::socket_forward(
+            mesh_device_.get(), recv_socket, intermed_send_2, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+    } else {
+        // Non-start ranks: receive from upstream, forward locally, send to downstream
+
+        // Cross-mesh recv from upstream: upstream_exit -> my_entry
+        auto bwd_connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(upstream_exit, logical_coord),
+            distributed::MeshCoreCoord(my_entry, logical_coord));
+        auto recv_socket_config = distributed::SocketConfig(
+            {bwd_connection},
+            socket_mem_config,
+            distributed::multihost::Rank(upstream_rank),
+            distributed_context->rank());
+        auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
+
+        distributed::MeshSocket send_socket;
+        distributed::MeshSocket intermed_send;
+        distributed::MeshSocket intermed_recv;
+
+        // Cross-mesh send to downstream: my_exit -> downstream_entry
+        auto fwd_connection = distributed::SocketConnection(
+            distributed::MeshCoreCoord(my_exit, logical_coord),
+            distributed::MeshCoreCoord(downstream_entry, logical_coord));
+        auto send_socket_config = distributed::SocketConfig(
+            {fwd_connection},
+            socket_mem_config,
+            distributed_context->rank(),
+            distributed::multihost::Rank(downstream_rank));
+        send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
+
+        // Local intermed: my_entry -> my_exit
+        std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_entry, my_exit);
+
+        // Create device buffer using metal-level API (no ttnn dependencies)
+        distributed::DeviceLocalBufferConfig buffer_config = {
+            .page_size = page_size,
+            .buffer_type = BufferType::DRAM,
+            .sharding_args = BufferShardingArgs(std::nullopt, TensorMemoryLayout::INTERLEAVED),
+            .bottom_up = std::nullopt,
+            .sub_device_id = std::nullopt,
+        };
+        auto output_mesh_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device_.get());
+
+        // Launch kernels: forward from upstream to downstream through local intermed
+        tt::tt_metal::socket_forward(
+            mesh_device_.get(), recv_socket, intermed_send, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+        tt::tt_metal::socket_forward(
+            mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+    }
+    barrier();
+    if (is_pipeline_start) {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto start_device_id = mesh_device_->get_device(start_coord)->id();
+        auto start_core_coord = mesh_device_->worker_core_from_logical_core(logical_coord);
+        std::vector<uint64_t> latencies = std::vector<uint64_t>(NUM_ITERATIONS, 0);
+        uint32_t base_addr = latency_measurement_address;
+        cluster.read_core(
+            latencies.data(),
+            sizeof(uint64_t) * NUM_ITERATIONS,
+            tt_cxy_pair(start_device_id, start_core_coord),
+            base_addr);
         for (auto latency : latencies) {
             std::cout << latency << std::endl;
         }

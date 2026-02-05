@@ -19,6 +19,7 @@ constexpr uint32_t whole_packet_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_whole_packets_link_0 = get_compile_time_arg_val(4);
 constexpr uint32_t num_whole_packets_link_1 = get_compile_time_arg_val(5);
 constexpr uint32_t credit_address = get_compile_time_arg_val(6);
+constexpr uint32_t num_iterations = get_compile_time_arg_val(7);
 
 FORCE_INLINE void write_data_to_remote_core_with_ack(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
@@ -101,7 +102,7 @@ void kernel_main() {
         (uint32_t)downstream_data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
     // Done handshake
 
-    for (uint32_t i = 0; i < 100; ++i) {
+    for (uint32_t i = 0; i < num_iterations; ++i) {
         socket_reserve_pages(send_socket, 1);
         socket_wait_for_pages(recv_socket, 1);
         auto l1_read_addr = recv_socket.read_ptr;

@@ -21,8 +21,9 @@ constexpr uint32_t num_whole_packets_link_0 = get_compile_time_arg_val(5);
 constexpr uint32_t num_whole_packets_link_1 = get_compile_time_arg_val(6);
 constexpr uint32_t input_page_size = get_compile_time_arg_val(7);
 constexpr uint32_t credit_address = get_compile_time_arg_val(8);
+constexpr uint32_t num_iterations = get_compile_time_arg_val(9);
 
-constexpr uint32_t input_args_cta_idx = 9;
+constexpr uint32_t input_args_cta_idx = 10;
 constexpr uint32_t input_args_crta_idx = 0;
 
 FORCE_INLINE void write_data_to_remote_core_with_ack(
@@ -50,7 +51,6 @@ void kernel_main() {
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t recv_socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t measurement_address = get_arg_val<uint32_t>(rt_args_idx++);  // Runtime barrier/measurement address
 
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
     auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_tensor_addr, input_page_size);
@@ -124,10 +124,11 @@ void kernel_main() {
         invalidate_l1_cache();
     }
     // Measure roundtrip latency: Time it takes for the data to be picked up from L1 + pipeline latency
-    // Use runtime-provided measurement address (barrier buffer) if available, otherwise use credit_address
-    uint32_t measurement_addr = measurement_address;
-    auto l1_read_addr = get_read_ptr(data_cb_id);
-    for (uint32_t i = 0; i < 100; ++i) {
+    // Latency measurements are written to the same buffer used for credit synchronization
+    uint32_t measurement_addr = credit_address;
+    auto l1_read_addr_base = get_read_ptr(data_cb_id);
+    for (uint32_t i = 0; i < num_iterations; ++i) {
+        auto l1_read_addr = l1_read_addr_base;
         uint64_t start_timestamp = get_timestamp();
         socket_reserve_pages(sender_socket, 1);
         uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
@@ -166,14 +167,14 @@ void kernel_main() {
         socket_push_pages(sender_socket, 1);
 
         socket_wait_for_pages(receiver_socket, 1);
-        // uint32_t socket_read_addr = receiver_socket.read_ptr;
-        // uint32_t val = 0;
-        // for (uint32_t j = 0; j < input_page_size / 4; j += 4) {
-        //     if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket_read_addr + j) != val) {
-        //         while (true);
-        //     }
-        //     val++;
-        // }
+        uint32_t socket_read_addr = receiver_socket.read_ptr;
+        uint32_t val = 0;
+        for (uint32_t j = 0; j < input_page_size / 4; j += 4) {
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket_read_addr + j) != val) {
+                while (true);
+            }
+            val++;
+        }
         socket_pop_pages(receiver_socket, 1);
         if ((i & 7) == 0) {
             fabric_socket_notify_sender_stateful(

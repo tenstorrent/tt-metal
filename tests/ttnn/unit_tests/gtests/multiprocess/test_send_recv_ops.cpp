@@ -317,22 +317,28 @@ TEST_F(FabricSendRecv2x4MigratedFixture, SRTestMigrated) {
     auto [send_socket_3, recv_socket_end] = MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_34);
 
     // Create Barrier Buffer
-    auto barrier_buffer_size = 832;
-    CoreRangeSet barrier_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    auto shard_params = ShardSpecBuffer(barrier_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    DeviceLocalBufferConfig barrier_buffer_specs = {
-        .page_size = barrier_buffer_size,
+    constexpr uint32_t NUM_ITERATIONS = 100;
+    // Size: 8 bytes per iteration (uint64_t latency) + 32 bytes padding
+    // First address is reused for credit/barrier synchronization
+    constexpr auto latency_measurement_buffer_size = 8 * NUM_ITERATIONS + 32;
+    CoreRangeSet latency_core_range = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    auto shard_params = ShardSpecBuffer(latency_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    DeviceLocalBufferConfig latency_measurement_buffer_specs = {
+        .page_size = latency_measurement_buffer_size,
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = std::nullopt,
         .sub_device_id = std::nullopt,
     };
-    auto barrier_buffer = MeshBuffer::create(
-        ReplicatedBufferConfig{.size = barrier_buffer_size}, barrier_buffer_specs, mesh_device.get());
-    // Write 0 to barrier buffer
-    std::vector<uint32_t> barrier_data(barrier_buffer_size / sizeof(uint32_t), 0);
-    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), barrier_buffer, barrier_data, true);
-    std::cout << "Barrier buffer address: " << barrier_buffer->address() << std::endl;
+    auto latency_measurement_buffer = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = latency_measurement_buffer_size},
+        latency_measurement_buffer_specs,
+        mesh_device.get());
+    // Write 0 to latency measurement buffer (initializes credit/barrier to 0)
+    std::vector<uint32_t> latency_init_data(latency_measurement_buffer_size / sizeof(uint32_t), 0);
+    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
+    const uint32_t latency_measurement_address = latency_measurement_buffer->address();
+    std::cout << "Latency measurement buffer address: " << latency_measurement_address << std::endl;
     // return;
     const uint32_t i = 0;
     // Create input buffer using metal-level API (no ttnn dependencies)
@@ -361,23 +367,47 @@ TEST_F(FabricSendRecv2x4MigratedFixture, SRTestMigrated) {
     Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
 
     // Sender forwards downstream and waits for ack from last receiver
-    // Using migrated code from multiprocess utils - pass barrier buffer for latency measurements
-    Buffer* barrier_buffer_ptr = barrier_buffer->get_reference_buffer();
     tt::tt_metal::send_async(
-        mesh_device.get(), input_buffer, tt::DataFormat::UInt32, send_socket_0, recv_socket_end, barrier_buffer_ptr);
-    tt::tt_metal::socket_forward(mesh_device.get(), recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t));
-    tt::tt_metal::socket_forward(mesh_device.get(), recv_socket_2, send_socket_2, num_elems * sizeof(uint32_t));
-    tt::tt_metal::socket_forward(mesh_device.get(), recv_socket_3, send_socket_3, num_elems * sizeof(uint32_t));
+        mesh_device.get(),
+        input_buffer,
+        tt::DataFormat::UInt32,
+        send_socket_0,
+        recv_socket_end,
+        latency_measurement_address,
+        NUM_ITERATIONS);
+    tt::tt_metal::socket_forward(
+        mesh_device.get(),
+        recv_socket_1,
+        send_socket_1,
+        num_elems * sizeof(uint32_t),
+        latency_measurement_address,
+        NUM_ITERATIONS);
+    tt::tt_metal::socket_forward(
+        mesh_device.get(),
+        recv_socket_2,
+        send_socket_2,
+        num_elems * sizeof(uint32_t),
+        latency_measurement_address,
+        NUM_ITERATIONS);
+    tt::tt_metal::socket_forward(
+        mesh_device.get(),
+        recv_socket_3,
+        send_socket_3,
+        num_elems * sizeof(uint32_t),
+        latency_measurement_address,
+        NUM_ITERATIONS);
     Synchronize(mesh_device.get(), std::nullopt);
 
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto start_device_id = mesh_device->get_device(start_device_coord)->id();
     auto start_core_coord = mesh_device->worker_core_from_logical_core(sender_logical_coord);
-    std::vector<uint64_t> latencies = std::vector<uint64_t>(100, 0);
-    uint32_t base_addr = barrier_buffer->address();
+    std::vector<uint64_t> latencies = std::vector<uint64_t>(NUM_ITERATIONS, 0);
     cluster.read_core(
-        latencies.data(), sizeof(uint64_t) * 100, tt_cxy_pair(start_device_id, start_core_coord), base_addr);
-    for (uint32_t i = 0; i < 100; i++) {
+        latencies.data(),
+        sizeof(uint64_t) * NUM_ITERATIONS,
+        tt_cxy_pair(start_device_id, start_core_coord),
+        latency_measurement_address);
+    for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
         std::cout << "Iteration " << i << " latency: " << latencies[i] << std::endl;
     }
 }
