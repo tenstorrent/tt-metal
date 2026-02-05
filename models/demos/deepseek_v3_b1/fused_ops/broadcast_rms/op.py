@@ -368,7 +368,7 @@ class BroadcastRMSNorm:
 
                 # Program descriptor
                 program = ttnn.ProgramDescriptor(
-                    kernels=unified_kernel.get_kernel_descriptors().kernels,
+                    kernels=unified_kernel.get_kernel_descriptors().kernels.kernels,
                     cbs=[
                         in_cb_descriptor,
                         pkt_cb_descriptor,

@@ -151,7 +151,7 @@ class MatmulSingleCore:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors().kernels,
+            kernels=unified_kernel.get_kernel_descriptors().kernels.kernels,
             cbs=[in0_cb_descriptor, in1_cb_descriptor, out_cb_descriptor],
         )
 

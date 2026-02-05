@@ -641,7 +641,7 @@ def run_mcast_matmul_with_phantom_cores_test(
 
     # Create program descriptor
     program_descriptor = ttnn.ProgramDescriptor(
-        kernels=unified_kernel.get_kernel_descriptors(),
+        kernels=unified_kernel.get_kernel_descriptors().kernels,
         cbs=[src_cb_descriptor, src_cb_placeholder_descriptor, dst_cb_descriptor, in1_cb_descriptor, out_cb_descriptor],
         semaphores=[sender_semaphore_descriptor, receiver_semaphore_descriptor],
     )

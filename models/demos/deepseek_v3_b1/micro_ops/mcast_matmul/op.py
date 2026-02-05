@@ -283,6 +283,7 @@ class McastMatmulMultiCore:
             ("mcast_src_num_pages", k_num_tiles),
             ("mcast_dst_cb", dst_cb),
             ("mcast_is_part_of_receiver_grid", is_sender_in_mcast_grid),
+            ("mcast_loopback", 0),
         ]
 
         # TRISC compile-time args (matmul compute)
@@ -345,7 +346,7 @@ class McastMatmulMultiCore:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 src_cb_descriptor,
                 src_cb_placeholder_descriptor,
@@ -623,6 +624,7 @@ class McastMatmulSiLUMultiCore:
             ("mcast_src_num_pages", k_num_tiles),
             ("mcast_dst_cb", dst_cb),
             ("mcast_is_part_of_receiver_grid", is_sender_in_mcast_grid),
+            ("mcast_loopback", 0),
         ]
 
         # TRISC compile-time args (fused matmul+SiLU compute)
@@ -671,7 +673,7 @@ class McastMatmulSiLUMultiCore:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 src_cb_descriptor,
                 src_cb_placeholder_descriptor,
@@ -1007,6 +1009,7 @@ class McastSwiGLUMultiCore:
             ("mcast_src_num_pages", k_num_tiles),
             ("mcast_dst_cb", dst_cb),
             ("mcast_is_part_of_receiver_grid", is_sender_in_mcast_grid),
+            ("mcast_loopback", 0),
         ]
 
         # TRISC compile-time args (fused SwiGLU compute)
@@ -1058,7 +1061,7 @@ class McastSwiGLUMultiCore:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 src_cb_descriptor,
                 dst_cb_descriptor,
@@ -1451,6 +1454,7 @@ class McastDisjointSwiGLUMultiCore:
             ("mcast_src_num_pages", k_num_tiles),
             ("mcast_dst_cb", dst_cb),
             ("mcast_is_part_of_receiver_grid", is_sender_in_mcast_grid),
+            ("mcast_loopback", 0),
             # Gate output params (for gate cores)
             ("gate_output_cb", gate_output_cb),
             ("gate_output_num_pages", out_w_per_gate_core),
@@ -1524,7 +1528,7 @@ class McastDisjointSwiGLUMultiCore:
         # Create program descriptor
         # Include placeholder descriptors to ensure consistent CB layout across all cores
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 src_cb_descriptor,
                 dst_cb_descriptor,

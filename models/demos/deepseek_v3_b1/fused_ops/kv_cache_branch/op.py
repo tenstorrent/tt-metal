@@ -488,7 +488,7 @@ class KVCacheBranch:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors().kernels,
+            kernels=unified_kernel.get_kernel_descriptors().kernels.kernels,
             cbs=[
                 dkv_matmul_input_cb_descriptor,
                 dkv_matmul_output_cb_descriptor,

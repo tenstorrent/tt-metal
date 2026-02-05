@@ -292,7 +292,7 @@ def test_mcast_130_cores_sender_inside(device):
     )
 
     program_descriptor = ttnn.ProgramDescriptor(
-        kernels=unified_kernel.get_kernel_descriptors(),
+        kernels=unified_kernel.get_kernel_descriptors().kernels,
         cbs=[
             src_cb_descriptor,
             src_cb_placeholder_descriptor,
@@ -571,7 +571,7 @@ def test_mcast_130_cores_128_matmul(device):
     )
 
     program_descriptor = ttnn.ProgramDescriptor(
-        kernels=unified_kernel.get_kernel_descriptors(),
+        kernels=unified_kernel.get_kernel_descriptors().kernels,
         cbs=[
             src_cb_descriptor,
             src_cb_placeholder_descriptor,
