@@ -13,7 +13,7 @@ from transformers import AutoProcessor
 from models.common.llama_models import create_vision_mask, extract_images_from_messages, sample_top_p
 from models.tt_transformers.tt.generator import create_submeshes
 
-IMG_PATH = (Path(__file__).parent / "sample_prompts/llama_images").resolve()
+IMG_PATH = (Path(__file__).parent / "sample_prompts/llama_models").resolve()
 
 import os
 import time
