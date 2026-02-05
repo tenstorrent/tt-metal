@@ -11,11 +11,10 @@ set_target_properties(
             ${CMAKE_BINARY_DIR}/test/ttnn/lab_examples
 )
 
-target_sources(
-    test_lab_eltwise_binary
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/ttnn/examples/lab_eltwise_binary/lab_eltwise_binary.cpp
-)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
+
+target_sources(test_lab_eltwise_binary PRIVATE ${TEST_LAB_ELTWISE_BINARY_SOURCES})
 
 target_link_libraries(
     test_lab_eltwise_binary

@@ -158,13 +158,12 @@ def test_validation_rmsnorm_host_and_device(ttnn_mesh_device: ttnn.MeshDevice):
     x2_tt = ttnn.from_torch(x2.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     _ = rms_host(x2_tt)
 
-    assert len(registry.results) >= 2
-    # Expect the last two validations to fail max_abs_error and mean_abs_error checks (known issue??)
-    assert not registry.results[0].metrics[Metric.MAX_ABS_ERROR].passed
-    assert not registry.results[1].metrics[Metric.MAX_ABS_ERROR].passed
-    assert not registry.results[2].metrics[Metric.MAX_ABS_ERROR].passed
-    assert not registry.results[2].metrics[Metric.MEAN_ABS_ERROR].passed
-    # Expect the last two validations to pass pcc check
+    assert len(registry.results) >= 3
+    # Expect all validations to pass
+    assert registry.results[0].metrics[Metric.MAX_ABS_ERROR].passed
+    assert registry.results[1].metrics[Metric.MAX_ABS_ERROR].passed
+    assert registry.results[2].metrics[Metric.MAX_ABS_ERROR].passed
+    assert registry.results[2].metrics[Metric.MEAN_ABS_ERROR].passed
     assert registry.results[0].metrics[Metric.PCC].passed
     assert registry.results[1].metrics[Metric.PCC].passed
     assert registry.results[2].metrics[Metric.PCC].passed
