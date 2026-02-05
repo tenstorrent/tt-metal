@@ -43,23 +43,6 @@ jobs:
           export PATH=~/.local/bin:$PATH
           tt-metalium-models -c "python3 ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py"
 
-      - name: Download Falcon7b weights via tt-metalium-models
-        shell: bash
-        timeout-minutes: 30
-        env:
-          HF_CACHE_DIR: ${{ runner.temp }}/hf_cache
-        run: |
-          set -euo pipefail
-          export PATH=~/.local/bin:$PATH
-          mkdir -p "$HF_CACHE_DIR"
-          echo "Downloading Falcon7b weights to $HF_CACHE_DIR (auto-cleaned after workflow)..."
-          # Mount host dir into container, download saves to mounted path -> persists on host
-          tt-metalium-models \
-            -v "$HF_CACHE_DIR:$HF_CACHE_DIR" \
-            -c "export HF_HOME=$HF_CACHE_DIR && python3 -c \"from transformers import FalconForCausalLM; FalconForCausalLM.from_pretrained('tiiuae/falcon-7b-instruct')\""
-          echo "Download complete. Host cache contents:"
-          ls -la "$HF_CACHE_DIR/hub/" || true
-
       - name: Run Falcon7b Demo via tt-metalium-models
         shell: bash
         timeout-minutes: 30
@@ -68,10 +51,8 @@ jobs:
         run: |
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
-          # Mount same host HF cache into container - weights already there from previous step
           tt-metalium-models \
-            -v "$HF_CACHE_DIR:$HF_CACHE_DIR" \
-            -c "export HF_HOME=$HF_CACHE_DIR && pytest --disable-warnings -q -s \
+            -c "pytest --disable-warnings -q -s \
               --input-method=json \
               --input-path='models/demos/ttnn_falcon7b/demo/input_data.json' \
               models/demos/ttnn_falcon7b/demo/demo.py::test_demo"
