@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
 
-#include "ttnn/tensor/layout/layout.hpp"
+#include <tt-metalium/experimental/tensor/spec/layout/layout.hpp>
 
 namespace tt::tt_metal {
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout) {
