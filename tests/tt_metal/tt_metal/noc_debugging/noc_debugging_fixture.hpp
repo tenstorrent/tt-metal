@@ -5,10 +5,12 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include "profiler_state_manager.hpp"
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <impl/context/metal_context.hpp>
 #include <impl/debug/noc_debugging.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 
 namespace tt::tt_metal {
 
@@ -59,6 +61,10 @@ public:
     void RunTestOnDevice(
         const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
         const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        // Reset NOC debug state before each device iteration
+        if (auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state()) {
+            noc_debug_state->reset_state();
+        }
         auto run_function_no_args = [this, run_function, mesh_device]() {
             run_function(static_cast<T*>(this), mesh_device);
         };

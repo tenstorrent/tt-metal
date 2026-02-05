@@ -166,6 +166,8 @@ void ProfilerStateManager::signal_debug_dump_read() {
 void ProfilerStateManager::start_debug_dump_thread(
     std::vector<IDevice*> active_devices, std::unordered_map<ChipId, std::vector<CoreCoord>> virtual_cores_map) {
     TT_ASSERT(!this->debug_dump_thread.joinable());
+    // Reset stop flag in case it was set by a previous cleanup_device_profilers() call
+    this->stop_debug_dump_thread = false;
     // Faster polling to unblock cores quickly at the expensive of more NoC PCIe traffic
     constexpr auto interval = std::chrono::milliseconds(500);
 
