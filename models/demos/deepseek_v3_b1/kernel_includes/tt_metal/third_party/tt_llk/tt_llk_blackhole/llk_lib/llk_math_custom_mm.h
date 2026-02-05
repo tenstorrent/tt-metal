@@ -52,30 +52,30 @@ inline void custom_mm_configure_addrmod() {
         .set(ADDR_MOD_3);
 
     addr_mod_t{
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 0, .clr = 0, .cr = 0},
-        .dest = {.incr = 0, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_4);
-
-    addr_mod_t{
         .srca = {.incr = 0, .clr = 1, .cr = 0},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
         .dest = {.incr = 0, .clr = 0, .cr = 1},
     }
-        .set(ADDR_MOD_5);
+        .set(ADDR_MOD_4);
 
     addr_mod_t{
         .srca = {.incr = 0, .clr = 0, .cr = 0},
         .srcb = {.incr = 32, .clr = 0, .cr = 0},
         .dest = {.incr = 0, .clr = 0, .cr = 0},
     }
-        .set(ADDR_MOD_6);
+        .set(ADDR_MOD_5);
 
     addr_mod_t{
         .srca = {.incr = 16, .clr = 0, .cr = 0},
         .srcb = {.incr = 16, .clr = 0, .cr = 0},
         .dest = {.incr = 16, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_6);
+
+    addr_mod_t{
+        .srca = {.incr = 0, .clr = 0, .cr = 0},
+        .srcb = {.incr = 0, .clr = 0, .cr = 0},
+        .dest = {.incr = 0, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_7);
 }
@@ -90,20 +90,20 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0  (8  if split_acc)
 
         // Finalization phase
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0);  // 16 (24 if split_acc)
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);  // 16 (24 if split_acc)
 
-        TTI_MOVD2B(0, 32, ADDR_MOD_6, p_movd2a::MOV_4_ROWS, 0 + 8);
-        TTI_MOVD2B(0, 16, ADDR_MOD_4, p_movd2a::MOV_4_ROWS, 16 + 8);
+        TTI_MOVD2B(0, 32, ADDR_MOD_5, p_movd2a::MOV_4_ROWS, 0 + 8);
+        TTI_MOVD2B(0, 16, ADDR_MOD_7, p_movd2a::MOV_4_ROWS, 16 + 8);
 
         // Move lower 4 rows if they exist
         if (operandB_face_r_dim == 8) {
-            TTI_MOVD2B(0, 0 + 4, ADDR_MOD_4, p_movd2a::MOV_4_ROWS, 0 + 8 + 4);
-            TTI_MOVD2B(0, 16 + 4, ADDR_MOD_4, p_movd2a::MOV_4_ROWS, 16 + 8 + 4);
+            TTI_MOVD2B(0, 0 + 4, ADDR_MOD_7, p_movd2a::MOV_4_ROWS, 0 + 8 + 4);
+            TTI_MOVD2B(0, 16 + 4, ADDR_MOD_7, p_movd2a::MOV_4_ROWS, 16 + 8 + 4);
         }
 
         TTI_ZEROSRC(0, 1, 0, 1);
 
-        TTI_ELWADD(0, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_7, 0);
+        TTI_ELWADD(0, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_6, 0);
         TTI_ELWADD(1, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
     });
 

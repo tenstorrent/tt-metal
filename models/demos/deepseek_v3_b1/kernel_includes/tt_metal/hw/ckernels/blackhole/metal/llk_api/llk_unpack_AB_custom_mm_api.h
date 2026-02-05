@@ -31,5 +31,5 @@ inline void llk_unpack_AB_custom_mm(
     std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
 
     _llk_unpack_AB_custom_mm_<read_transposed>(
-        base_address_a, base_address_b, tile_index_a, tile_index_b, tile_size_a, tile_size_b, kt_dim, ct_dim);
+        base_address_a, base_address_b, tile_index_b, tile_index_a, tile_size_a, tile_size_b, kt_dim, ct_dim);
 }

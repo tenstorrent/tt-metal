@@ -175,6 +175,8 @@ inline void _llk_unpack_AB_custom_mm_(
 
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
 
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
     // We can issue mop only once for up to 256 kt_dim
     TT_MOP(0, (kt_dim / 2) - 1, 0);
 
