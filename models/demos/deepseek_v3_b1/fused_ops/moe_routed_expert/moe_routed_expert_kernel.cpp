@@ -33,6 +33,7 @@
 #include "../../unified_kernels/deepseek_moe_gate.hpp"
 #include "../../unified_kernels/dram_streaming_matmul.hpp"
 #include "../../unified_kernels/eltwise_mul.hpp"
+#include "../../unified_kernels/eltwise_add.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {
@@ -157,6 +158,11 @@ void kernel_main() {
     using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs;
 
     // ------------------------------------------------------------------------
+    // Eltwise Add (reader - no-op, CB setup done above)
+    // ------------------------------------------------------------------------
+    using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
+
+    // ------------------------------------------------------------------------
     // Setup sharded persistent buffers
     // ------------------------------------------------------------------------
     if constexpr (Core::is_sender_core) {
@@ -185,6 +191,16 @@ void kernel_main() {
         constexpr uint32_t mul_cb_in1 = get_named_compile_time_arg_val("mul_cb_in1");
         constexpr uint32_t mul_num_tiles = get_named_compile_time_arg_val("mul_num_tiles");
         unified_kernels::setup_sharded_buffer(mul_cb_in1, mul_num_tiles);
+
+        // Setup eltwise_add sharded buffers
+        // cb_in0: aliased to down_proj output with 32x32 tile format
+        constexpr uint32_t add_cb_in0 = get_named_compile_time_arg_val("add_cb_in0");
+        constexpr uint32_t add_cb_in0_wait_tiles = get_named_compile_time_arg_val("add_cb_in0_wait_tiles");
+        unified_kernels::setup_sharded_buffer(add_cb_in0, add_cb_in0_wait_tiles);
+        // cb_in1: fused_add (replicated)
+        constexpr uint32_t add_cb_in1 = get_named_compile_time_arg_val("add_cb_in1");
+        constexpr uint32_t add_cb_in1_wait_tiles = get_named_compile_time_arg_val("add_cb_in1_wait_tiles");
+        unified_kernels::setup_sharded_buffer(add_cb_in1, add_cb_in1_wait_tiles);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -380,6 +396,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("down_proj_index_offset"),
         get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
 
+    // ------------------------------------------------------------------------
+    // Eltwise Add (writer - no-op)
+    // ------------------------------------------------------------------------
+    using AddCTArgs = deepseek_b1_ops::EltwiseAdd::WriterCTArgs;
+
 #elif defined(COMPILE_FOR_TRISC)
     // ------------------------------------------------------------------------
     // Mcast (no-op for TRISC)
@@ -496,6 +517,22 @@ void kernel_main() {
         get_named_compile_time_arg_val("down_proj_tile_r_dim"),
         get_named_compile_time_arg_val("down_proj_fuse_silu"),
         get_named_compile_time_arg_val("down_proj_fp32_dest_acc_en")>;
+
+    // ------------------------------------------------------------------------
+    // Eltwise Add (down_proj + fused_add)
+    // use_short_init = true with proper reconfig_data_format for new CBs
+    // ------------------------------------------------------------------------
+    using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<
+        get_named_compile_time_arg_val("add_cb_in0"),
+        get_named_compile_time_arg_val("add_cb_in1"),
+        get_named_compile_time_arg_val("add_cb_out"),
+        get_named_compile_time_arg_val("add_num_tiles"),
+        get_named_compile_time_arg_val("add_cb_in0"),  // cb_in0_wait = cb_in0 (same CB)
+        get_named_compile_time_arg_val("add_cb_in0_wait_tiles"),
+        get_named_compile_time_arg_val("add_cb_in1_wait_tiles"),
+        get_named_compile_time_arg_val("add_sender_index"),
+        get_named_compile_time_arg_val("add_slice_size_bytes"),
+        true>;  // use_short_init with reconfig_data_format
 #endif
 
     // ============================================================================
@@ -641,6 +678,16 @@ void kernel_main() {
         DeviceZoneScopedN("DOWN_PROJ");
         deepseek_b1_ops::DRAMStreamingMatmul::Op<DownProjCTArgs, Core::is_gate_proj_core, true> down_proj;
         down_proj();
+    }
+
+    // ========================================================================
+    // 12. Eltwise Add: down_proj + fused_add
+    //     Each core uses sender_index to offset into replicated fused_add
+    // ========================================================================
+    {
+        DeviceZoneScopedN("ELTWISE_ADD");
+        deepseek_b1_ops::EltwiseAdd::Op<AddCTArgs, Core::is_gate_proj_core> add_op;
+        add_op();
     }
 
     // Only need one teardown since all mcasts reuse the same semaphores
