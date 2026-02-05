@@ -35,6 +35,7 @@ common:
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_uint16.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_uint32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py
@@ -129,14 +130,38 @@ blackhole:
   - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
   - tests/ttnn/unit_tests/operations/conv/test_conv1d.py
 
-  # Pool tests
+  # Pool tests (same as wormhole + BH-specific)
+  - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py
+  - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
+  - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
+  - tests/ttnn/unit_tests/operations/pool/test_rotate.py
   - tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_grid_sample.py
   - tests/ttnn/unit_tests/operations/pool/test_upsample.py
 
-  # Transformers tests
+  # Matmul tests (same simulator limitations as wormhole)
+  - tests/ttnn/unit_tests/operations/matmul/test_addmm.py
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
+  - tests/ttnn/unit_tests/operations/matmul/test_linear.py
+  - tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py
+
+  # Fused tests (same simulator limitations as wormhole)
+  - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py
+  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
+  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
+  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
+
+  # Transformers tests (same as wormhole + BH-specific)
+  - tests/ttnn/unit_tests/operations/transformers/test_transformer.py
   - tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py
   - tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
 
-  # Reduce tests
+  # Reduce tests (same as wormhole + BH-specific)
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
+  - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
+  - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
+  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
