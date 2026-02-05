@@ -75,6 +75,7 @@ ttnn:
     bh_galaxy: 40
   integration:
     wh_llmbox: 30
+    wh_galaxy: 350
 
 fabric:
   unit:
