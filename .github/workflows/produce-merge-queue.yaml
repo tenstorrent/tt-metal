@@ -1,18 +1,15 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
 on:
-  # test on your branch
   push:
     branches:
       - ashah/merge-queue
 
-  # test in PR
   pull_request:
     types: [opened, synchronize, reopened]
 
   workflow_dispatch:
 
-  # runs after merge to main
   schedule:
     - cron: "*/5 * * * *"
 
@@ -50,6 +47,8 @@ jobs:
               mergeQueue {
                 entries(first: 100) {
                   nodes {
+                    enqueuedAt
+                    position
                     pullRequest {
                       number
                       title
@@ -81,16 +80,15 @@ jobs:
             repository: $repo,
             collected_at: $ts,
             merge_queue: [
-              .data.repository.mergeQueue.entries.nodes[].pullRequest | {
+              .data.repository.mergeQueue.entries.nodes[] | {
                 merge_queue_id: null,
-                pr_number: .number,
-                pr_title: .title,
-                pr_author_login: .author.login,
-                head_sha: .headRefOid,
+                pr_number: .pullRequest.number,
+                pr_title: .pullRequest.title,
+                pr_author_login: .pullRequest.author.login,
+                head_sha: .pullRequest.headRefOid,
                 state: "IN_QUEUE",
-                queue_position: null,
-                enqueued_at: null,
-                estimated_time_to_merge_sec: null,
+                queue_position: .position,
+                enqueued_at: .enqueuedAt,
                 collected_at: $ts
               }
             ]
