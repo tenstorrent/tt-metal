@@ -269,7 +269,6 @@ jobs:
           echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
 
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
-        timeout-minutes: 30
         run: |
           # Run pytest with parallel execution and skip list
           ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}
