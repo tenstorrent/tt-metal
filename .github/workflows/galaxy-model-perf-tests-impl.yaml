@@ -43,7 +43,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": false,
               "timeout": 50,
-              "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
+              "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest --timeout 600 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
             }, # Pavle Josipovic
             {
               "name": "Galaxy Llama 70B model perf tests",
@@ -59,7 +59,7 @@ jobs:
               "name": "Llama Galaxy Perf Unit Tests",
               "model-name": "llama_unit_tests",
               "arch": "wormhole_b0",
-              "cmd": "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/tests/tg_perf_unit_tests",
+              "cmd": "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/tg_perf_unit_tests",
               "timeout": 100,
               "tracy": true,
               "save-perf-data": true,
@@ -81,7 +81,7 @@ jobs:
               "model-type": "sentence_bert",
               "model-name": "sentence_bert",
               "save-perf-data": false,
-              "cmd": "pytest models/demos/tg/sentence_bert/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py",
+              "cmd": "pytest --timeout 600 models/demos/tg/sentence_bert/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py",
               "timeout": 30,
               "owner_id": "U088413NP0Q"
             } # Ashai Reddy
