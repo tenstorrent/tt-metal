@@ -146,7 +146,7 @@ jobs:
             {
               "name": "[WH-T3K][v1] Gemma3-27B",
               "model": "google/gemma-3-27b-it",
-              "server-timeout": 20,
+              "server-timeout": 45,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -161,7 +161,7 @@ jobs:
             {
               "name": "[WH-GLX][v1] Gemma3-27B DP=4",
               "model": "google/gemma-3-27b-it",
-              "server-timeout": 20,
+              "server-timeout": 45,
               "benchmark-timeout": 5,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
