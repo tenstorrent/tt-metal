@@ -99,35 +99,6 @@ def test_reshape_block_shard(device, shape):
     assert torch.allclose(expected_output, actual_output)
 
 
-# @pytest.mark.parametrize("shape", [[1, 1, 1024, 1], [1, 1024, 1]])
-# def test_reshape_block_shard(device, shape):
-#     input_torch = torch.randn(shape, dtype=torch.bfloat16)
-#     shard_shape = shape.copy()
-#     shard_shape[-1] = 32
-
-#     block_sharded_config = ttnn.create_sharded_memory_config(
-#         shape=shard_shape,
-#         core_grid=ttnn.CoreGrid(x=1, y=8),
-#         strategy=ttnn.ShardStrategy.BLOCK,
-#         use_height_and_width_as_shard_shape=False,
-#     )
-#     output_block_sharded_config = ttnn.create_sharded_memory_config(
-#         shape=[32,128]
-#     )
-#     input_ttnn = ttnn.from_torch(
-#         input_torch,
-#         dtype=ttnn.bfloat16,
-#         layout=ttnn.TILE_LAYOUT,
-#         device=device,
-#         memory_config=block_sharded_config,
-#     )
-#     output_tensor = ttnn.reshape(input_ttnn, [1, 1024])
-
-#     expected_output = input_torch.reshape([1, 1024])
-#     actual_output = ttnn.to_torch(output_tensor)
-#     assert torch.allclose(expected_output, actual_output)
-
-
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_reshape_height_shard(device, layout):
     input_shape = [1, 1, 256, 32]
