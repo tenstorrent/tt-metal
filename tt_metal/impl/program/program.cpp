@@ -85,12 +85,9 @@
 namespace tt {
 class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
-namespace tt_metal {
-class EnqueueProgramCommand;
-namespace experimental {
+namespace tt_metal::experimental {
 class GlobalCircularBuffer;
-}  // namespace experimental
-}  // namespace tt_metal
+}  // namespace tt_metal::experimental
 }  // namespace tt
 
 namespace {
@@ -1693,30 +1690,24 @@ void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
     }
 }
 
-using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
-using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
-using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
-using DataflowBuffersGetter =
-    std::function<const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>&()>;
-
 void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     if (is_finalized()) {
         return;
     }
 
     // Create proper function objects that capture 'this'
-    KernelsGetter kernels_getter =
+    detail::KernelsGetter kernels_getter =
         [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
         return this->get_kernels(index);
     };
 
-    KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
+    detail::KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
         return this->get_kernel_groups(index);
     };
 
-    SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
 
-    DataflowBuffersGetter dataflow_buffers_getter =
+    detail::DataflowBuffersGetter dataflow_buffers_getter =
         [this]() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
         return this->dataflow_buffers_;
     };
