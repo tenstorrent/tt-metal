@@ -110,6 +110,27 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
         l1_addrs.push_back(l1_addr);
     }
 
+    // ===== Barrier synchronization setup =====
+    // Create a semaphore on all cores for the barrier
+    // All cores will increment the coordinator's semaphore and poll it until it equals num_cores
+    uint32_t num_cores = test_config.cores.num_cores();
+    CoreCoord coordinator_core = core_list[0];
+
+    // Create semaphore for barrier - one per kernel type that uses the barrier
+    // The semaphore ID is the same on all cores, but each core has its own L1 copy
+    uint32_t reader_barrier_sem_id = 0;
+    uint32_t writer_barrier_sem_id = 0;
+
+    if (test_config.read_kernel) {
+        reader_barrier_sem_id = CreateSemaphore(program, test_config.cores, 0);  // Initialize to 0
+    }
+    if (test_config.write_kernel) {
+        writer_barrier_sem_id = CreateSemaphore(program, test_config.cores, 0);  // Initialize to 0
+    }
+
+    // Get the physical coordinates of the coordinator core for NOC addressing
+    CoreCoord coordinator_phys = device->worker_core_from_logical_core(coordinator_core);
+
     // Kernels
     if (test_config.read_kernel) {
         TensorAccessorArgs(*input_buffer).append_to(reader_compile_args);
@@ -122,8 +143,18 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
                 .noc = NOC::RISCV_0_default,  // NOC0 should be used when reading from DRAM into Tensix core L1
                 .compile_args = reader_compile_args});
 
-        for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
-            std::vector<uint32_t> reader_run_time_args = {input_buffer_address, l1_addrs[i]};
+        for (size_t i = 0; i < num_cores; ++i) {
+            // Use the end of L1 data buffer as scratch space for polling
+            uint32_t local_barrier_addr = l1_addrs[i] + total_size_bytes;
+
+            std::vector<uint32_t> reader_run_time_args = {
+                input_buffer_address,
+                l1_addrs[i],
+                reader_barrier_sem_id,  // Semaphore ID, kernel will call get_semaphore() to get address
+                coordinator_phys.x,
+                coordinator_phys.y,
+                num_cores,
+                local_barrier_addr};
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core_list[i], reader_run_time_args);
         }
     }
@@ -139,8 +170,18 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
                 .noc = NOC::RISCV_1_default,  // NOC1 should be used when writing from Tensix core L1 into DRAM
                 .compile_args = writer_compile_args});
 
-        for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
-            std::vector<uint32_t> writer_run_time_args = {output_buffer_address, l1_addrs[i]};
+        for (size_t i = 0; i < num_cores; ++i) {
+            // Use the end of L1 data buffer as scratch space for polling
+            uint32_t local_barrier_addr = l1_addrs[i] + total_size_bytes + sizeof(uint32_t);
+
+            std::vector<uint32_t> writer_run_time_args = {
+                output_buffer_address,
+                l1_addrs[i],
+                writer_barrier_sem_id,  // Semaphore ID, kernel will call get_semaphore() to get address
+                coordinator_phys.x,
+                coordinator_phys.y,
+                num_cores,
+                local_barrier_addr};
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core_list[i], writer_run_time_args);
         }
     }
