@@ -32,7 +32,10 @@ class LMHead(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
 
-        if not self.padded_vocab_size or self.padded_vocab_size % 32 != 0:
+        if not self.padded_vocab_size:
+            self.padded_vocab_size = self.vocab_size
+
+        if self.padded_vocab_size % 32 != 0:
             # Pad vocab_size to be divisible by 32
             self.padded_vocab_size = math.ceil(self.padded_vocab_size / 32) * 32
 
