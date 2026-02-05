@@ -316,6 +316,7 @@ def test_moe_routed_expert(device):
     logger.info(f"Created gate indices tensor with shard shape (16, 16) on sender core")
 
     # Gate output scores tensor: sharded on sender core [1, 16]
+    tile_1x16 = ttnn.Tile((1, 16))
     gate_output_shard_spec = ttnn.ShardSpec(
         input_core_grid,
         (1, 16),
@@ -325,51 +326,60 @@ def test_moe_routed_expert(device):
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gate_output_shard_spec
     )
 
-    torch_gate_output_scores_zeros = torch.zeros((1, 16), dtype=torch.bfloat16)
-    ttnn_gate_output_scores = ttnn.from_torch(
-        torch_gate_output_scores_zeros,
+    # Gate output scores tensor [1, 16] on sender core
+    gate_output_scores_tensor = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=gate_output_mem_config,
         tile=tile_1x16,
     )
-    logger.info(f"Created gate output scores tensor with shard shape (1, 16) on sender core")
+    logger.info(f"Created gate output scores tensor [1, 16] on sender core")
 
-    # Gate output indices tensor: sharded on sender core [1, 16]
-    torch_gate_output_indices_zeros = torch.zeros((1, 16), dtype=torch.uint16)
-    ttnn_gate_output_indices = ttnn.from_torch(
-        torch_gate_output_indices_zeros,
+    # Gate output indices tensor [1, 16] on sender core
+    gate_output_indices_tensor = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.uint16),
         dtype=ttnn.uint16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=gate_output_mem_config,
         tile=tile_1x16,
     )
-    logger.info(f"Created gate output indices tensor with shard shape (1, 16) on sender core")
+    logger.info(f"Created gate output indices tensor [1, 16] on sender core")
 
     # ========== DRAM Streaming Matmul + SiLU Tensors ==========
     # The gate output indices determine which expert to use (we'll validate after op runs)
 
-    # DRAM matmul index tensor: sharded on mcast grid for consistent CB addresses
-    # This receives the mcasted expert indices from the gate
-    gate_proj_index_shard_spec = ttnn.ShardSpec(
-        mcast_output_core_grid,  # Same grid as mcast for consistent addresses
+    # Expert index tensor [1, 16] on mcast grid (receives mcasted indices)
+    expert_index_shard_spec = ttnn.ShardSpec(
+        mcast_output_core_grid,
         (1, 16),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    gate_proj_index_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gate_proj_index_shard_spec
+    expert_index_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, expert_index_shard_spec
     )
-    ttnn_gate_proj_index = ttnn.from_torch(
+    expert_index_tensor = ttnn.from_torch(
         torch.zeros((1, 16), dtype=torch.uint16),
         dtype=ttnn.uint16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=gate_proj_index_mem_config,
+        memory_config=expert_index_mem_config,
         tile=tile_1x16,
     )
-    logger.info(f"Created DRAM matmul + SiLU index tensor with shard shape (1, 16) on mcast grid")
+    logger.info(f"Created expert index tensor [1, 16] on mcast grid")
+
+    # Expert scale tensor [1, 16] on mcast grid (receives mcasted scale)
+    expert_scale_tensor = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=expert_index_mem_config,
+        tile=tile_1x16,
+    )
+    logger.info(f"Created expert scale tensor [1, 16] on mcast grid")
 
     (
         gate_proj_weights,
@@ -504,9 +514,10 @@ def test_moe_routed_expert(device):
         ttnn_gate_input,
         ttnn_gate_bias,
         ttnn_gate_indices,
-        ttnn_gate_output_scores,
-        ttnn_gate_output_indices,
-        ttnn_gate_proj_index,
+        gate_output_scores_tensor,
+        gate_output_indices_tensor,
+        expert_index_tensor,
+        expert_scale_tensor,
         gate_proj_weights,
         gate_proj_output,
         up_proj_weights,
@@ -521,7 +532,7 @@ def test_moe_routed_expert(device):
 
     # Convert back to torch for comparison
     output_scores_torch = ttnn.to_torch(ttnn_result_scores)
-    output_indices_torch = ttnn.to_torch(ttnn_result_indices)
+    output_indices_torch = ttnn.to_torch(ttnn_result_indices).to(torch.int64)
     output_down_proj_torch = ttnn.to_torch(ttnn_result_down_proj)
 
     # Also read back intermediate matmul outputs for debugging
@@ -577,8 +588,12 @@ def test_moe_routed_expert(device):
     up_proj_weights_torch = up_proj_weights_dict[selected_expert_idx]
     torch_expected_up_proj = input_for_expert @ up_proj_weights_torch.float()
 
-    # fused expected: silu(gate_proj) * up_proj
-    torch_expected_fused = torch_expected_gate_proj * torch_expected_up_proj
+    # Get expert scale (first score for the selected expert)
+    expert_scale = torch_expected_scores[0, 0].float()
+    logger.info(f"Expert scale: {expert_scale.item()}")
+
+    # fused expected: silu(gate_proj) * up_proj * expert_scale
+    torch_expected_fused = torch_expected_gate_proj * torch_expected_up_proj * expert_scale
 
     # Verify gate_proj matmul + SiLU
     passing, pcc_output = comp_pcc(torch_expected_gate_proj, output_gate_proj_torch, 0.98)
@@ -588,9 +603,9 @@ def test_moe_routed_expert(device):
     passing, pcc_output = comp_pcc(torch_expected_up_proj, output_up_proj_mm_torch, 0.98)
     logger.info(f"up_proj (matmul only): {pcc_output}")
 
-    # Verify fused output: silu(gate_proj) * up_proj
+    # Verify fused output: silu(gate_proj) * up_proj * expert_scale
     passing, pcc_output = comp_pcc(torch_expected_fused, output_fused_torch, 0.98)
-    logger.info(f"fused output (silu(gate_proj) * up_proj): {pcc_output}")
+    logger.info(f"fused output (silu(gate_proj) * up_proj * expert_scale): {pcc_output}")
 
     # Verify down_proj output
     passing, pcc_output = comp_pcc(torch_expected_down_proj, output_down_proj_torch, 0.97)

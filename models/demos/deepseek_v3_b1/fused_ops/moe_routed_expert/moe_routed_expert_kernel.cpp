@@ -90,12 +90,21 @@ void kernel_main() {
     using GateCTArgs = deepseek_b1_ops::DeepseekMoeGate::ReaderCTArgs;
 
     // ------------------------------------------------------------------------
-    // Index Mcast (receiver) - reuses same mcast Op, just different args
+    // Index Mcast (receiver) - receives expert indices
     // ------------------------------------------------------------------------
     deepseek_b1_ops::Mcast::ReceiverArgs index_mcast_args{
         get_named_compile_time_arg_val("index_mcast_receiver_semaphore"),
         get_named_compile_time_arg_val("gate_proj_cb_index"),
         get_named_compile_time_arg_val("index_mcast_num_pages"),
+    };
+
+    // ------------------------------------------------------------------------
+    // Expert Scale Mcast (receiver) - receives expert scale for scalar multiply
+    // ------------------------------------------------------------------------
+    deepseek_b1_ops::Mcast::ReceiverArgs expert_scale_mcast_args{
+        get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore"),
+        get_named_compile_time_arg_val("mul_cb_scalar_src"),
+        get_named_compile_time_arg_val("expert_scale_mcast_num_pages"),
     };
 
     // ------------------------------------------------------------------------
@@ -229,7 +238,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gate_output_indices_cb")>;
 
     // ------------------------------------------------------------------------
-    // Index Mcast (sender) - reuses same mcast Op, just different args
+    // Index Mcast (sender) - broadcasts expert indices to compute cores
     // ------------------------------------------------------------------------
     constexpr uint32_t index_mcast_src_cb = get_named_compile_time_arg_val("gate_output_indices_cb");
     constexpr uint32_t index_mcast_dst_cb = get_named_compile_time_arg_val("gate_proj_cb_index");
@@ -245,6 +254,25 @@ void kernel_main() {
         get_named_compile_time_arg_val("index_mcast_num_pages"),
         get_read_ptr(index_mcast_src_cb),
         get_write_ptr(index_mcast_dst_cb),
+    };
+
+    // ------------------------------------------------------------------------
+    // Expert Scale Mcast (sender) - broadcasts expert scale for scalar multiply
+    // ------------------------------------------------------------------------
+    constexpr uint32_t expert_scale_mcast_src_cb = get_named_compile_time_arg_val("gate_output_cb");
+    constexpr uint32_t expert_scale_mcast_dst_cb = get_named_compile_time_arg_val("mul_cb_scalar_src");
+    deepseek_b1_ops::Mcast::SenderArgs expert_scale_mcast_args{
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("expert_scale_mcast_sender_semaphore"),
+        get_named_compile_time_arg_val("expert_scale_mcast_receiver_semaphore"),
+        get_named_compile_time_arg_val("expert_scale_mcast_data_size_bytes"),
+        expert_scale_mcast_src_cb,
+        get_named_compile_time_arg_val("expert_scale_mcast_num_pages"),
+        get_read_ptr(expert_scale_mcast_src_cb),
+        get_write_ptr(expert_scale_mcast_dst_cb),
     };
 
     // ------------------------------------------------------------------------
@@ -290,10 +318,15 @@ void kernel_main() {
         get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
 
     // ------------------------------------------------------------------------
-    // Mul (writer) - waits for final output after mul
+    // Mul (writer) - waits for final output after mul, copies scalar for multiply
     // ------------------------------------------------------------------------
-    using MulCTArgs = deepseek_b1_ops::EltwiseMul::
-        WriterCTArgs<get_named_compile_time_arg_val("mul_cb_out"), get_named_compile_time_arg_val("mul_num_tiles")>;
+    using MulCTArgs = deepseek_b1_ops::EltwiseMul::WriterCTArgs<
+        get_named_compile_time_arg_val("mul_cb_out"),
+        get_named_compile_time_arg_val("mul_num_tiles"),
+        1,  // enable_scalar_mul = true
+        get_named_compile_time_arg_val("mul_cb_scalar"),
+        get_named_compile_time_arg_val("mul_cb_scalar_src"),
+        get_named_compile_time_arg_val("mul_scalar_index_offset")>;
 
     // ------------------------------------------------------------------------
     // down_proj_gather (receiver - sender core receives fused output from gate_proj cores)
@@ -386,9 +419,14 @@ void kernel_main() {
         get_named_compile_time_arg_val("gate_enable_sigmoid")>;
 
     // ------------------------------------------------------------------------
-    // Index Mcast (no-op for TRISC) - reuses same mcast Op
+    // Index Mcast (no-op for TRISC)
     // ------------------------------------------------------------------------
     deepseek_b1_ops::Mcast::ComputeArgs index_mcast_args{};
+
+    // ------------------------------------------------------------------------
+    // Expert Scale Mcast (no-op for TRISC)
+    // ------------------------------------------------------------------------
+    deepseek_b1_ops::Mcast::ComputeArgs expert_scale_mcast_args{};
 
     // ------------------------------------------------------------------------
     // DRAM Streaming Matmul (compute)
@@ -421,16 +459,18 @@ void kernel_main() {
         get_named_compile_time_arg_val("up_proj_fp32_dest_acc_en")>;
 
     // ------------------------------------------------------------------------
-    // Mul (compute): up_proj_mm_out (as 16x16) * gate_proj_out (as 16x16) -> final output
+    // Mul (compute): up_proj_mm_out (as 16x16) * gate_proj_out (as 16x16) * expert_scale -> final output
     // cb_in0_wait: wait on up_proj_mm_out (1x32 tiles) before reading aliased 16x16 CB
     // ------------------------------------------------------------------------
     using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
-        get_named_compile_time_arg_val("mul_cb_in0"),           // up_proj output aliased as 16x16
-        get_named_compile_time_arg_val("mul_cb_in1"),           // gate_proj output aliased as 16x16
-        get_named_compile_time_arg_val("mul_cb_out"),           // final output (16x16)
-        get_named_compile_time_arg_val("mul_num_tiles"),        // number of 16x16 tiles
-        get_named_compile_time_arg_val("up_proj_cb_mm_out"),    // wait on this CB before reading mul_cb_in0
-        get_named_compile_time_arg_val("up_proj_per_core_n")>;  // number of tiles in mm_out format
+        get_named_compile_time_arg_val("mul_cb_in0"),          // up_proj output aliased as 16x16
+        get_named_compile_time_arg_val("mul_cb_in1"),          // gate_proj output aliased as 16x16
+        get_named_compile_time_arg_val("mul_cb_out"),          // final output (16x16)
+        get_named_compile_time_arg_val("mul_num_tiles"),       // number of 16x16 tiles
+        get_named_compile_time_arg_val("up_proj_cb_mm_out"),   // wait on this CB before reading mul_cb_in0
+        get_named_compile_time_arg_val("up_proj_per_core_n"),  // number of tiles in mm_out format
+        1,                                                     // enable_scalar_mul = true
+        get_named_compile_time_arg_val("mul_cb_scalar")>;      // scalar CB for expert scale
 
     // ------------------------------------------------------------------------
     // down_proj_gather (no-op for TRISC)
@@ -505,12 +545,30 @@ void kernel_main() {
     }
 
     // ========================================================================
-    // 5. Mcast Index: Broadcast expert indices from sender core to matmul cores
-    //    Reuse the same mcast Op (same grid, same semaphores)
+    // 5. Mcast Index: Broadcast expert indices from sender core to compute cores
     // ========================================================================
     {
         DeviceZoneScopedN("MCAST_INDEX");
         mcast(index_mcast_args);
+    }
+
+    // ========================================================================
+    // 5b. Mcast Expert Scale: Broadcast expert scale from sender core to compute cores
+    //     Uses UpdateSemaphoreAddr=true to update semaphore address on the fly
+    //     (avoids race condition with back-to-back mcasts without needing reinit)
+    // ========================================================================
+    {
+        DeviceZoneScopedN("MCAST_EXPERT_SCALE");
+        // Use separate Op with UpdateSemaphoreAddr=true to update semaphore address
+        deepseek_b1_ops::Mcast::Op<
+            McastCTArgs,
+            Core::is_sender_core,
+            Core::is_mcast_grid_core,
+            Core::is_gate_proj_core,  // Only gate_proj cores receive expert scale
+            true,                     // pop_src
+            true>                     // UpdateSemaphoreAddr = true
+            expert_scale_mcast;
+        expert_scale_mcast(expert_scale_mcast_args);
     }
 
     // ========================================================================
@@ -559,10 +617,20 @@ void kernel_main() {
     // ========================================================================
     // 10. down_proj_mcast: Broadcast gathered fused output to compute cores
     //     Same mcast grid as input mcast
+    //     Uses UpdateSemaphoreAddr=true to restore semaphore addresses back to 0, 1
+    //     (after expert_scale_mcast changed them to 4, 5)
     // ========================================================================
     {
         DeviceZoneScopedN("DOWN_PROJ_MCAST");
-        mcast(down_proj_mcast_args);
+        deepseek_b1_ops::Mcast::Op<
+            McastCTArgs,
+            Core::is_sender_core,
+            Core::is_mcast_grid_core,
+            Core::is_gate_proj_core,  // Same receivers as input mcast for down_proj
+            true,                     // pop_src
+            true>                     // UpdateSemaphoreAddr = true
+            down_proj_mcast;
+        down_proj_mcast(down_proj_mcast_args);
     }
 
     // ========================================================================
