@@ -140,6 +140,107 @@ void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
 
 namespace ckernel {
 
+// =============================================================================
+// SDPA Tail Helpers - Composable building blocks for streaming/chunked processing
+// =============================================================================
+
+/**
+ * Helper 1: MS Reduction Phase
+ *
+ * Processes MS tiles to compute P1 and P2 scaling factors, sets up SRCB for
+ * subsequent L tile broadcast multiply operations.
+ *
+ * After this call:
+ *   - SRCB contains P1 (col 0) and P2 (col 1) ready for broadcast multiply
+ *   - If normalize=false: MS output is packed to cb_cur_ms, tile_regs released
+ *   - If normalize=true: tile_regs still held (caller can process first L block immediately)
+ *
+ * @param cb_worker_ms Neighbor MS tile (max in col 0, sum in col 1)
+ * @param cb_prev_ms Local MS tile (max in col 0, sum in col 1)
+ * @param cb_cur_ms Output MS tile (only used when normalize=false)
+ * @param cb_l_for_init CB used for sdpa_mul_bcast_col_reuse_tiles_init
+ */
+template <
+    bool SDPA_EXP_APPROX_MODE,
+    bool normalize,
+    uint32_t block_size,
+    uint32_t scale_fp32,
+    int vector_mode = (int)VectorMode::C>
+ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32_t cb_cur_ms, uint32_t cb_l_for_init) {
+    copy_tile_to_dst_init_short(cb_worker_ms);
+
+    cb_wait_front(cb_worker_ms, 1);
+    cb_wait_front(cb_prev_ms, 1);
+
+    constexpr uint32_t dst_reg_0 = 0;  // prev_ms
+    constexpr uint32_t dst_reg_1 = 1;  // worker_ms
+    constexpr uint32_t dst_reg_2 = 2;  // cur_ms output
+
+    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+
+    tile_regs_acquire();
+    copy_tile(cb_prev_ms, 0, dst_reg_0);
+    copy_tile(cb_worker_ms, 0, dst_reg_1);
+    MATH((fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, vector_mode, normalize>(0, scale_bf16)));
+    sdpa_bcast_col_reuse_preamble<normalize>();
+
+    // Not final reduction: pack out stats and release regs
+    if constexpr (!normalize) {
+        tile_regs_commit();
+        cb_reserve_back(cb_cur_ms, 1);
+        tile_regs_wait();
+        pack_tile(dst_reg_2, cb_cur_ms);
+        cb_push_back(cb_cur_ms, 1);
+        tile_regs_release();
+    }
+
+    // Initialize SRCB reuse for L tile broadcast multiply
+    sdpa_mul_bcast_col_reuse_tiles_init<block_size>(cb_l_for_init);
+}
+
+/**
+ * Helper 2: Process single L block
+ *
+ * Processes one block of L tiles using P1/P2 already in SRCB from sdpa_tail_ms_reduce.
+ * Caller is responsible for cb_wait_front/cb_reserve_back before and cb_push_back/cb_pop_front after.
+ *
+ * @param cb_l1 First L input CB (neighbor)
+ * @param cb_l2 Second L input CB (local)
+ * @param cb_l_out Output L CB
+ * @param tile_index Starting tile index within the CB (for current block)
+ * @param acquire_regs Whether to acquire tile_regs (false if regs already held from MS phase)
+ */
+template <uint32_t block_size>
+ALWI void sdpa_tail_l_block(uint32_t cb_l1, uint32_t cb_l2, uint32_t cb_l_out, uint32_t tile_index, bool acquire_regs) {
+    if (acquire_regs) {
+        tile_regs_acquire();
+    }
+    sdpa_mul_bcast_col_reuse_tiles<block_size>(cb_l2, cb_l1, tile_index, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile_block(0, cb_l_out, block_size);
+    tile_regs_release();
+}
+
+/**
+ * Helper 3: Finalize SDPA tail
+ *
+ * Cleanup: calls postamble and pops MS input tiles.
+ * Call this after all L blocks have been processed.
+ *
+ * @param cb_worker_ms Neighbor MS tile CB (to pop)
+ * @param cb_prev_ms Local MS tile CB (to pop)
+ */
+ALWI void sdpa_tail_finalize(uint32_t cb_worker_ms, uint32_t cb_prev_ms) {
+    sdpa_bcast_col_reuse_postamble();
+    cb_pop_front(cb_prev_ms, 1);
+    cb_pop_front(cb_worker_ms, 1);
+}
+
+// =============================================================================
+// SDPA Tail - Main function (uses helpers internally)
+// =============================================================================
+
 /**
  * SDPA tail reduction combining fused SFPI kernel with srcB reuse broadcast multiply.
  *
@@ -173,68 +274,32 @@ ALWI void sdpa_tail(
     uint32_t cb_l1,
     uint32_t cb_l2,
     uint32_t cb_l_out) {
-    copy_tile_to_dst_init_short(cb_worker_max_sum);
+    // Phase 1: MS reduction - computes P1/P2, sets up SRCB
+    sdpa_tail_ms_reduce<SDPA_EXP_APPROX_MODE, normalize, block_size, scale_fp32, vector_mode>(
+        cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1);
 
-    cb_wait_front(cb_worker_max_sum, 1);
-    cb_wait_front(cb_prev_max_sum, 1);
+    // Phase 2: Wait for all L tiles and reserve output space
+    constexpr uint32_t total_tiles = num_blocks * block_size;
+    cb_wait_front(cb_l2, total_tiles);
+    cb_wait_front(cb_l1, total_tiles);
+    cb_reserve_back(cb_l_out, total_tiles);
 
-    constexpr uint32_t dst_reg_0 = 0;  // dst_reg_0 is used for prev_max_sum
-    constexpr uint32_t dst_reg_1 = 1;  // dst_reg_1 is used for worker_max_sum
-    constexpr uint32_t dst_reg_2 = 2;  // dst_reg_2 is used for cur_max_sum
-
-    // Convert scale from fp32 to bf16
-    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
-
-    tile_regs_acquire();
-    copy_tile(cb_prev_max_sum, 0, dst_reg_0);
-    copy_tile(cb_worker_max_sum, 0, dst_reg_1);
-    MATH((fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE, vector_mode, normalize>(0, scale_bf16)));
-    sdpa_bcast_col_reuse_preamble<normalize>();
-
-    // Not final reduction, pack out stats
-    if constexpr (!normalize) {
-        tile_regs_commit();
-        cb_reserve_back(cb_cur_max_sum, 1);
-        tile_regs_wait();
-        pack_tile(dst_reg_2, cb_cur_max_sum);
-        cb_push_back(cb_cur_max_sum, 1);
-        tile_regs_release();
-    }
-    sdpa_mul_bcast_col_reuse_tiles_init<block_size>(cb_l1);
-
-    cb_wait_front(cb_l2, num_blocks * block_size);
-    cb_wait_front(cb_l1, num_blocks * block_size);
-    cb_reserve_back(cb_l_out, num_blocks * block_size);
-
-    // Now compute l = l1 * P1 + l2 * P2
-    // Following sdpa_flash_decode.cpp pattern:
-    //   l2 *= P2 (cb_exp_diff_1)
-    //   l1 *= P1 (cb_exp_diff_2)
-    //   l = l2 + l1
-    // Final reduction, we compute the first iteration without spilling
+    // Phase 3: Process all L blocks
+    // When normalize=true, first block uses regs still held from MS phase
     if constexpr (normalize) {
-        sdpa_mul_bcast_col_reuse_tiles<block_size>(cb_l2, cb_l1, 0, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile_block(0, cb_l_out, block_size);
-        tile_regs_release();
+        sdpa_tail_l_block<block_size>(cb_l1, cb_l2, cb_l_out, 0, false);
     }
-
     for (uint32_t i = (normalize ? 1 : 0); i < num_blocks; i++) {
-        tile_regs_acquire();
-        sdpa_mul_bcast_col_reuse_tiles<block_size>(cb_l2, cb_l1, i * block_size, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile_block(0, cb_l_out, block_size);
-        tile_regs_release();
+        sdpa_tail_l_block<block_size>(cb_l1, cb_l2, cb_l_out, i * block_size, true);
     }
 
-    sdpa_bcast_col_reuse_postamble();
-    cb_push_back(cb_l_out, num_blocks * block_size);
-    cb_pop_front(cb_prev_max_sum, 1);
-    cb_pop_front(cb_worker_max_sum, 1);
-    cb_pop_front(cb_l2, num_blocks * block_size);
-    cb_pop_front(cb_l1, num_blocks * block_size);
+    // Phase 4: Push output and pop L inputs
+    cb_push_back(cb_l_out, total_tiles);
+    cb_pop_front(cb_l2, total_tiles);
+    cb_pop_front(cb_l1, total_tiles);
+
+    // Phase 5: Finalize (postamble + pop MS)
+    sdpa_tail_finalize(cb_worker_max_sum, cb_prev_max_sum);
 }
 
 }  // namespace ckernel

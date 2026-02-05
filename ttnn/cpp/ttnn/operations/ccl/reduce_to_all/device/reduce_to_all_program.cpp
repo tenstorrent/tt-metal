@@ -87,9 +87,81 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     const uint32_t Sq_chunk_t = PNHt;
     const uint32_t out_tiles = Sq_chunk_t * vDHt;
 
-    const uint32_t payload_size_bytes = out_tiles * input_page_size_bytes;
+    // const uint32_t payload_size_bytes = out_tiles * input_page_size_bytes;
     const uint32_t ms_tile_size_bytes = aligned_page_size;                       // Single combined MS tile
-    const uint32_t total_packet_size = payload_size_bytes + ms_tile_size_bytes;  // L + MS
+    // const uint32_t total_packet_size = payload_size_bytes + ms_tile_size_bytes;  // L + MS
+
+    // =========================================================================
+    // Chunking configuration
+    // =========================================================================
+    // Chunking hides fabric transfer latency by overlapping data transfer with compute.
+    // - MS packet sent first (slot 0)
+    // - L chunks sent after (slots 1..num_l_chunks)
+    // Buffer layout on receiver: [L_chunk0][L_chunk1]...[L_chunkN-1][MS]
+    //
+    // Block size derivation:
+    // - block_size = tiles_per_l_chunk (each chunk = one SDPA block)
+    // - Hardware constraint: block_size <= 8 (DST register limit)
+    // - This means: num_l_chunks >= ceil(out_tiles / 8)
+    //
+    // For out_tiles=16: num_l_chunks >= 2 (block_size=8)
+    constexpr uint32_t max_block_size = 8;  // DST register limit
+    const uint32_t min_num_l_chunks = (out_tiles + max_block_size - 1) / max_block_size;
+
+    // Configure num_l_chunks (must satisfy hardware constraint)
+    // const uint32_t num_l_chunks = min_num_l_chunks;  // Use minimum for now (largest valid block_size)
+    const uint32_t num_l_chunks = 4;
+
+    TT_FATAL(num_l_chunks >= 1, "num_l_chunks must be at least 1");
+    TT_FATAL(
+        out_tiles % num_l_chunks == 0,
+        "out_tiles ({}) must be divisible by num_l_chunks ({})",
+        out_tiles,
+        num_l_chunks);
+
+    const uint32_t tiles_per_l_chunk = out_tiles / num_l_chunks;
+    const uint32_t l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes;
+
+    // Derive block_size from chunking (each chunk = one SDPA block)
+    const uint32_t block_size = tiles_per_l_chunk;
+    const uint32_t num_blocks = num_l_chunks;  // blocks_per_chunk = 1, so num_blocks = num_l_chunks
+
+    TT_FATAL(
+        block_size <= max_block_size,
+        "block_size ({}) exceeds maximum ({}). Increase num_l_chunks to at least {}.",
+        block_size,
+        max_block_size,
+        min_num_l_chunks);
+
+    // Slot sizing: largest packet is L chunk (MS is smaller)
+    // All slots sized for L chunk to simplify buffer management
+    const size_t max_fabric_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t max_chunk_payload_size = l_chunk_size_bytes;
+    TT_FATAL(
+        max_chunk_payload_size <= max_fabric_payload_size,
+        "L chunk payload ({} bytes) exceeds fabric max ({})",
+        max_chunk_payload_size,
+        max_fabric_payload_size);
+
+    log_info(
+        tt::LogTest,
+        "Tile width={}, height={}, ms_tile_size_bytes={}, out_tiles={}, input_page_size_bytes={}, aligned_page_size={}",
+        tile_width,
+        tile_height,
+        ms_tile_size_bytes,
+        out_tiles,
+        input_page_size_bytes,
+        aligned_page_size);
+    log_info(
+        tt::LogTest,
+        "Chunking: num_l_chunks={}, tiles_per_l_chunk={}, block_size={}, num_blocks={}, l_chunk_size_bytes={}, "
+        "max_chunk_payload_size={}",
+        num_l_chunks,
+        tiles_per_l_chunk,
+        block_size,
+        num_blocks,
+        l_chunk_size_bytes,
+        max_chunk_payload_size);
 
     // Scale encoding
     union {
@@ -130,12 +202,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
     // Packet slot CB for writer (unified header + payload)
     constexpr auto cb_packet_slot = tt::CBIndex::c_10;
-
-    // Sync CBs for coordination between Compute and Writer
-    // cb_compute_to_writer_sync: Compute -> Writer (R1 results ready)
-    // cb_writer_to_compute_sync: Writer -> Compute (Writer finished reading R1 results)
-    constexpr auto cb_compute_to_writer_sync = tt::CBIndex::c_11;
-    constexpr auto cb_writer_to_compute_sync = tt::CBIndex::c_12;
 
     // =========================================================================
     // Create Circular Buffers
@@ -216,38 +282,30 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
     // Packet slot CB for writer (unified header + payload in single buffer)
     // This enables single NOC transfer instead of separate header + payload writes
+    // Slot size based on largest chunk (L chunk, since MS is smaller)
     const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    const uint32_t slot_size_unaligned = packet_header_size_bytes + total_packet_size;
+    const uint32_t slot_size_unaligned = packet_header_size_bytes + max_chunk_payload_size;
     const uint32_t slot_size = tt::round_up(slot_size_unaligned, l1_alignment);
+    log_info(
+        tt::LogTest,
+        "ReduceToAll packet slot size: header={} + max_payload={} = total={} (aligned to {})",
+        packet_header_size_bytes,
+        max_chunk_payload_size,
+        slot_size_unaligned,
+        slot_size);
     TT_FATAL(
         slot_size == slot_size_unaligned,
-        "Slot size ({}) must be L1 aligned ({}). Header={}, payload={}",
+        "Slot size ({}) must be L1 aligned ({}). Header={}, max_payload={}",
         slot_size_unaligned,
         l1_alignment,
         packet_header_size_bytes,
-        total_packet_size);
+        max_chunk_payload_size);
 
     tt::tt_metal::CircularBufferConfig cb_packet_slot_config =
         tt::tt_metal::CircularBufferConfig(2 * slot_size, {{cb_packet_slot, tt::DataFormat::RawUInt32}})
             .set_page_size(cb_packet_slot, slot_size)
             .set_tile_dims(cb_packet_slot, stats_tile);
     CreateCircularBuffer(program, shard_grid, cb_packet_slot_config);
-
-    // Sync CBs (tiny, 1 tile size each)
-    // cb_compute_to_writer_sync: Compute signals Writer that R1 results are ready
-    tt::tt_metal::CircularBufferConfig cb_compute_to_writer_sync_config =
-        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_compute_to_writer_sync, tt::DataFormat::RawUInt32}})
-            .set_page_size(cb_compute_to_writer_sync, aligned_page_size)
-            .set_tile_dims(cb_compute_to_writer_sync, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_compute_to_writer_sync_config);
-
-    // cb_writer_to_compute_sync: Writer signals Compute that it finished reading R1 results
-    // This prevents race where Compute pops R1 results while Writer still reading
-    tt::tt_metal::CircularBufferConfig cb_writer_to_compute_sync_config =
-        tt::tt_metal::CircularBufferConfig(aligned_page_size, {{cb_writer_to_compute_sync, tt::DataFormat::RawUInt32}})
-            .set_page_size(cb_writer_to_compute_sync, aligned_page_size)
-            .set_tile_dims(cb_writer_to_compute_sync, stats_tile);
-    CreateCircularBuffer(program, shard_grid, cb_writer_to_compute_sync_config);
 
     // =========================================================================
     // Setup forwarder cores and config
@@ -261,8 +319,22 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
     // Workers are split into Type A and Type B based on (core_index % 2).
     // Half the workers per link are Type A, half are Type B.
-    // packets_per_round = workers of same type per link = num_workers_per_link / 2
-    const uint32_t packets_per_round = num_workers_per_link / 2;
+    // workers_per_type = num_workers_per_link / 2
+    const uint32_t workers_per_type = num_workers_per_link / 2;
+
+    // Two-semaphore design: each forwarder instance has R1 and R2 semaphores
+    // Slots per worker: 1 MS + num_l_chunks L chunks = (1 + num_l_chunks)
+    // Slots per semaphore (R1 or R2): workers_per_type * (1 + num_l_chunks)
+    const uint32_t slots_per_worker = 1 + num_l_chunks;
+    const uint32_t slots_per_round = workers_per_type * slots_per_worker;
+
+    // Validate semaphore bit capacity
+    TT_FATAL(
+        slots_per_round <= 32,
+        "ReduceToAll: slots_per_round ({} = {} workers * {} slots/worker) exceeds 32-bit semaphore capacity",
+        slots_per_round,
+        workers_per_type,
+        slots_per_worker);
 
     // Use first 2 cores from input_forwarder_cores (renamed to forwarder cores) or default
     std::vector<CoreCoord> forwarder_cores = {CoreCoord(2, 0), CoreCoord(2, 1)};
@@ -274,13 +346,17 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     }
     CoreRangeSet forwarder_core_range_set = CoreRangeSet(forwarder_cores);
 
-    // forwarder buffer layout per core (68KB total, shared by BRISC and NCRISC):
-    // - BRISC region (offset 0): [FWD R1 slots][FWD R2 slots] - 4 slots total
-    // - NCRISC region (offset 4*slot_size): [BWD R1 slots][BWD R2 slots] - 4 slots total
-    // Each slot = packet header + L + S + M (slot_size already computed and L1-aligned above)
-    const uint32_t slots_per_direction = 2 * packets_per_round;  // R1 + R2 slots
-    const uint32_t brisc_buffer_size = slots_per_direction * slot_size;
+    // forwarder buffer layout per core (shared by BRISC and NCRISC):
+    // - BRISC region (offset 0): slots for FWD direction
+    //   - R1 slots: 0 to slots_per_round-1
+    //   - R2 slots: slots_per_round to 2*slots_per_round-1 (separate region for streaming overlap)
+    // - NCRISC region: same layout, offset after BRISC
+    // Each slot = packet header + chunk payload (slot_size already computed and L1-aligned above)
+    // R1 and R2 use SEPARATE buffer regions to support streaming (R2 can start while R1 forwarding)
+    const uint32_t r2_buffer_offset = slots_per_round * slot_size;       // R2 slots start after R1 slots
+    const uint32_t brisc_buffer_size = 2 * slots_per_round * slot_size;  // R1 + R2 slots
     const uint32_t ncrisc_buffer_offset = brisc_buffer_size;  // NCRISC starts after BRISC region
+    const uint32_t total_forwarder_buffer_size = 2 * brisc_buffer_size;  // BRISC + NCRISC regions
 
     // Allocate forwarder buffer in L1 on forwarder cores
     // Use scratch tensor if provided (preferred - decouples from semaphore allocations)
@@ -288,6 +364,15 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     uint32_t forwarder_buffer_base = 0;
     if (tensor_args.optional_forwarder_scratch_tensor.has_value()) {
         const auto& scratch_tensor = tensor_args.optional_forwarder_scratch_tensor.value();
+        const uint32_t scratch_size = scratch_tensor.buffer()->size();
+        TT_FATAL(
+            scratch_size >= total_forwarder_buffer_size,
+            "ReduceToAll: forwarder scratch tensor size ({} bytes) is insufficient. "
+            "Need {} bytes = {} slots * {} slot_size * 2 rounds (R1+R2) * 2 directions",
+            scratch_size,
+            total_forwarder_buffer_size,
+            slots_per_round,
+            slot_size);
         forwarder_buffer_base = scratch_tensor.buffer()->address();
     } else {
         const uint32_t l1_unreserved_base_address =
@@ -295,23 +380,28 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         forwarder_buffer_base = l1_unreserved_base_address;
     }
 
-    // Create semaphores for forwarder synchronization (2 per forwarder core)
+    // Create semaphores for forwarder synchronization (4 per forwarder core)
+    // Two-semaphore design: each forwarder instance has R1 and R2 semaphores
     // Non-blocking design: Each semaphore is bit-packed (1 << slot_idx) per worker.
-    // forwarder polls mask, forwards ready slots immediately without blocking per-round.
-    // Layout: [link0_fwd, link0_bwd, link1_fwd, link1_bwd]
-    // Maximum 32 slots per direction (limited by 32-bit semaphore width).
+    // forwarder polls both semaphores, forwards ready slots immediately.
+    // Layout: [link0_fwd_r1, link0_fwd_r2, link0_bwd_r1, link0_bwd_r2, link1_fwd_r1, ...]
+    // Maximum 32 slots per semaphore (limited by 32-bit width).
     std::vector<uint32_t> forwarder_sem_addrs;
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
         CoreCoord agg_core = forwarder_cores[link_idx];
-        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd
-        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd
+        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd_r1
+        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd_r2
+        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd_r1
+        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd_r2
     }
 
-    // forwarder compile-time args (non-blocking design)
-    // forwarder polls bit-packed semaphore and forwards any ready slots immediately.
+    // forwarder compile-time args (two-semaphore design)
+    // forwarder polls both R1 and R2 semaphores, forwards any ready slots immediately.
+    // R1 and R2 use separate buffer regions to support streaming overlap.
     std::vector<uint32_t> forwarder_ct_args = {
-        slots_per_direction,  // 0: Total slots per direction (R1 + R2 combined)
-        slot_size,            // 1: Total packet size (header + L + MS)
+        slots_per_round,   // 0: Slots per semaphore (R1 or R2)
+        slot_size,         // 1: Max packet size (header + payload)
+        r2_buffer_offset,  // 2: Offset from buffer base for R2 slots
     };
 
     // =========================================================================
@@ -319,6 +409,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // =========================================================================
 
     // Reader compile-time args
+    // Buffer layout: [L_chunk0][L_chunk1]...[MS] (L at offset 0, MS at end)
     std::vector<uint32_t> reader_ct_args = {
         cb_local_l,          // 0
         cb_local_ms,         // 1
@@ -328,43 +419,46 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         cb_r2_neighbor_ms,   // 5
         Sq_chunk_t,          // 6
         vDHt,                // 7
-        payload_size_bytes,  // 8 - offset to MS data in receive buffer
-        ms_tile_size_bytes,  // 9 - size of MS data to copy
+        ms_tile_size_bytes,  // 8 - MS tile size
+        l_chunk_size_bytes,  // 9 - L chunk size
+        num_l_chunks,        // 10 - number of L chunks
+        tiles_per_l_chunk,   // 11 - tiles per L chunk
     };
 
     // Writer compile-time args
+    // Buffer layout: [L_chunk0][L_chunk1]...[MS] (L at offset 0, MS at end)
     std::vector<uint32_t> writer_ct_args = {
-        cb_local_l,                 // 0
-        cb_local_ms,                // 1
-        cb_r1_result_l,             // 2
-        cb_r1_result_ms,            // 3
-        cb_packet_slot,             // 4: Unified packet slot CB (header + payload)
-        cb_compute_to_writer_sync,  // 5: Compute -> Writer (R1 ready)
-        cb_writer_to_compute_sync,  // 6: Writer -> Compute (done reading R1 results)
-        Sq_chunk_t,                 // 7
-        vDHt,                       // 8
-        l1_alignment,               // 9
-        input_page_size_bytes,      // 10
-        slot_size,                  // 11: forwarder slot size (L1-aligned)
+        cb_local_l,             // 0
+        cb_local_ms,            // 1
+        cb_r1_result_l,         // 2
+        cb_r1_result_ms,        // 3
+        cb_packet_slot,         // 4: Unified packet slot CB (header + payload)
+        l1_alignment,           // 5
+        input_page_size_bytes,  // 6
+        slot_size,              // 7: forwarder slot size (L1-aligned)
+        ms_tile_size_bytes,     // 8: MS tile size
+        l_chunk_size_bytes,     // 9: L chunk size
+        num_l_chunks,           // 10: number of L chunks
+        tiles_per_l_chunk,      // 11: tiles per L chunk
     };
 
     // Compute compile-time args
     std::vector<uint32_t> compute_ct_args = {
-        cb_local_l,                 // 0
-        cb_local_ms,                // 1
-        cb_r1_neighbor_l,           // 2
-        cb_r1_neighbor_ms,          // 3
-        cb_r1_result_l,             // 4
-        cb_r1_result_ms,            // 5
-        cb_r2_neighbor_l,           // 6
-        cb_r2_neighbor_ms,          // 7
-        cb_l_out,                   // 8 - ALIASED to output_l
-        cb_ms_out,                  // 9 - intermediate MS
-        cb_compute_to_writer_sync,  // 10 - Compute -> Writer (R1 ready)
-        cb_writer_to_compute_sync,  // 11 - Writer -> Compute (done reading R1 results)
-        scale_val,                  // 12
-        vDHt,                       // 13 - block_size (tiles per row)
-        Sq_chunk_t,                 // 14 - num_blocks (number of rows)
+        cb_local_l,         // 0
+        cb_local_ms,        // 1
+        cb_r1_neighbor_l,   // 2
+        cb_r1_neighbor_ms,  // 3
+        cb_r1_result_l,     // 4
+        cb_r1_result_ms,    // 5
+        cb_r2_neighbor_l,   // 6
+        cb_r2_neighbor_ms,  // 7
+        cb_l_out,           // 8 - ALIASED to output_l
+        cb_ms_out,          // 9 - intermediate MS
+        scale_val,          // 10
+        block_size,         // 11 - block_size (= tiles_per_l_chunk, max 8)
+        num_blocks,         // 12 - num_blocks (= num_l_chunks)
+        num_l_chunks,       // 13 - number of L chunks
+        tiles_per_l_chunk,  // 14 - tiles per L chunk
     };
 
     // =========================================================================
@@ -430,21 +524,24 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     std::vector<CoreCoord> cores_link_2(shard_cores.begin() + cores_per_link, shard_cores.end());
 
     // Set forwarder runtime args (BRISC for FWD, NCRISC for BWD)
-    // Non-blocking design: single semaphore per direction (bit-packed by workers)
+    // Two-semaphore design: each forwarder instance has R1 and R2 semaphores
     const auto src_node_id = mesh_device->get_fabric_node_id(device_coordinate);
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
         CoreCoord agg_core = forwarder_cores[link_idx];
 
-        // Semaphore addresses for this forwarder core (2 per core: fwd, bwd)
-        uint32_t fwd_sem = forwarder_sem_addrs[link_idx * 2 + 0];
-        uint32_t bwd_sem = forwarder_sem_addrs[link_idx * 2 + 1];
+        // Semaphore addresses for this forwarder core (4 per core: fwd_r1, fwd_r2, bwd_r1, bwd_r2)
+        uint32_t fwd_r1_sem = forwarder_sem_addrs[link_idx * 4 + 0];
+        uint32_t fwd_r2_sem = forwarder_sem_addrs[link_idx * 4 + 1];
+        uint32_t bwd_r1_sem = forwarder_sem_addrs[link_idx * 4 + 2];
+        uint32_t bwd_r2_sem = forwarder_sem_addrs[link_idx * 4 + 3];
 
         // BRISC runtime args (FWD direction)
         // buffer_offset = 0 (BRISC uses first region)
         std::vector<uint32_t> brisc_rt_args = {
             forwarder_buffer_base,  // 0: buffer_base
             0,                      // 1: buffer_offset (BRISC uses offset 0)
-            fwd_sem,                // 2: semaphore (bit-packed by workers)
+            fwd_r1_sem,             // 2: R1 semaphore
+            fwd_r2_sem,             // 3: R2 semaphore
         };
         tt::tt_fabric::append_fabric_connection_rt_args(
             src_node_id, forward_node_id, link_idx, program, agg_core, brisc_rt_args);
@@ -455,7 +552,8 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         std::vector<uint32_t> ncrisc_rt_args = {
             forwarder_buffer_base,  // 0: buffer_base
             ncrisc_buffer_offset,   // 1: buffer_offset (NCRISC uses offset after BRISC region)
-            bwd_sem,                // 2: semaphore (bit-packed by workers)
+            bwd_r1_sem,             // 2: R1 semaphore
+            bwd_r2_sem,             // 3: R2 semaphore
         };
         tt::tt_fabric::append_fabric_connection_rt_args(
             src_node_id, backward_node_id, link_idx, program, agg_core, ncrisc_rt_args);
@@ -469,17 +567,19 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         CoreCoord agg_core = forwarder_cores[link_idx];
         CoreCoord agg_core_noc = mesh_device->worker_core_from_logical_core(agg_core);
 
-        // Semaphore addresses for this forwarder core (2 per core: fwd, bwd)
-        uint32_t fwd_sem = forwarder_sem_addrs[link_idx * 2 + 0];
-        uint32_t bwd_sem = forwarder_sem_addrs[link_idx * 2 + 1];
+        // Semaphore addresses for this forwarder core (4 per core: fwd_r1, fwd_r2, bwd_r1, bwd_r2)
+        uint32_t fwd_r1_sem = forwarder_sem_addrs[link_idx * 4 + 0];
+        uint32_t fwd_r2_sem = forwarder_sem_addrs[link_idx * 4 + 1];
+        uint32_t bwd_r1_sem = forwarder_sem_addrs[link_idx * 4 + 2];
+        uint32_t bwd_r2_sem = forwarder_sem_addrs[link_idx * 4 + 3];
 
-        // Track slot indices for R1 and R2 within each direction
-        // Each direction has slots_per_direction slots: [R1 slots: 0..ppr-1][R2 slots: ppr..2*ppr-1]
-        // where ppr = packets_per_round
-        uint32_t fwd_r1_slot_idx = 0;  // FWD direction R1 slots
-        uint32_t fwd_r2_slot_idx = 0;  // FWD direction R2 slots
-        uint32_t bwd_r1_slot_idx = 0;  // BWD direction R1 slots
-        uint32_t bwd_r2_slot_idx = 0;  // BWD direction R2 slots
+        // Track slot indices for R1 and R2 within each semaphore
+        // Each worker gets slots_per_worker consecutive slots (1 MS + num_l_chunks L)
+        // Separate indices for FWD vs BWD direction
+        uint32_t fwd_r1_worker_idx = 0;  // FWD direction R1 worker count
+        uint32_t fwd_r2_worker_idx = 0;  // FWD direction R2 worker count
+        uint32_t bwd_r1_worker_idx = 0;  // BWD direction R1 worker count
+        uint32_t bwd_r2_worker_idx = 0;  // BWD direction R2 worker count
 
         for (uint32_t worker_idx = 0; worker_idx < cores_for_link.size(); worker_idx++) {
             CoreCoord core = cores_for_link[worker_idx];
@@ -489,10 +589,11 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             // Type A: R1=FWD, R2=BWD; Type B: R1=BWD, R2=FWD
             const bool is_type_a = ((device_index + worker_idx) % 2) == 0;
 
-            // Assign slot indices within each direction's slot space
-            // R1 slots: 0..packets_per_round-1, R2 slots: packets_per_round..2*packets_per_round-1
-            uint32_t r1_slot_idx;
-            uint32_t r2_slot_idx;
+            // Assign BASE slot indices within each semaphore's slot space
+            // Each worker gets slots_per_worker consecutive slots (1 MS + num_l_chunks L)
+            // R1 and R2 use separate semaphores but share buffer space
+            uint32_t r1_slot_idx;  // Base slot for R1 (MS=slot 0, L=slots 1..num_l_chunks)
+            uint32_t r2_slot_idx;  // Base slot for R2
             uint32_t r1_agg_sem;
             uint32_t r2_agg_sem;
             auto r1_dst_node_id = forward_node_id;   // Default to forward
@@ -500,31 +601,36 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
             if (is_type_a) {
                 // Type A: R1=FWD, R2=BWD
-                r1_slot_idx = fwd_r1_slot_idx++;
-                r2_slot_idx = packets_per_round + bwd_r2_slot_idx++;
-                r1_agg_sem = fwd_sem;
-                r2_agg_sem = bwd_sem;
+                r1_slot_idx = fwd_r1_worker_idx * slots_per_worker;
+                fwd_r1_worker_idx++;
+                r2_slot_idx = bwd_r2_worker_idx * slots_per_worker;
+                bwd_r2_worker_idx++;
+                r1_agg_sem = fwd_r1_sem;
+                r2_agg_sem = bwd_r2_sem;
                 r1_dst_node_id = forward_node_id;
                 r2_dst_node_id = backward_node_id;
             } else {
                 // Type B: R1=BWD, R2=FWD
-                r1_slot_idx = bwd_r1_slot_idx++;
-                r2_slot_idx = packets_per_round + fwd_r2_slot_idx++;
-                r1_agg_sem = bwd_sem;
-                r2_agg_sem = fwd_sem;
+                r1_slot_idx = bwd_r1_worker_idx * slots_per_worker;
+                bwd_r1_worker_idx++;
+                r2_slot_idx = fwd_r2_worker_idx * slots_per_worker;
+                fwd_r2_worker_idx++;
+                r1_agg_sem = bwd_r1_sem;
+                r2_agg_sem = fwd_r2_sem;
                 r1_dst_node_id = backward_node_id;
                 r2_dst_node_id = forward_node_id;
             }
 
             // Calculate forwarder slot addresses based on direction
+            // R1 and R2 use SEPARATE buffer regions to support streaming overlap
+            // R1 slots: buffer_base + slot_idx * slot_size
+            // R2 slots: buffer_base + r2_buffer_offset + slot_idx * slot_size
             uint32_t r1_slot_base = is_type_a ? forwarder_buffer_base : (forwarder_buffer_base + ncrisc_buffer_offset);
             uint32_t r2_slot_base = is_type_a ? (forwarder_buffer_base + ncrisc_buffer_offset) : forwarder_buffer_base;
 
-            // Calculate actual slot addresses (R1 slots first, then R2 slots in each region)
-            // Type A R1: FWD region slot r1_slot_idx
-            // Type A R2: BWD region slot (r2_slot_idx - packets_per_round) + packets_per_round offset
+            // Calculate actual slot addresses (R2 includes r2_buffer_offset for separate region)
             uint32_t r1_slot_addr = r1_slot_base + (r1_slot_idx * slot_size);
-            uint32_t r2_slot_addr = r2_slot_base + (r2_slot_idx * slot_size);
+            uint32_t r2_slot_addr = r2_slot_base + r2_buffer_offset + (r2_slot_idx * slot_size);
 
             // Reader runtime args
             std::vector<uint32_t> reader_rt_args = {
@@ -552,10 +658,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
                 agg_core_noc.y,  // 11: forwarder_core_y
                 r1_slot_addr,    // 12: R1 forwarder slot address
                 r1_agg_sem,      // 13: R1 forwarder semaphore
-                r1_slot_idx,     // 14: R1 slot index (for bit-packed signaling: 1 << r1_slot_idx)
+                r1_slot_idx,     // 14: R1 BASE slot index (chunk i signals: 1 << (base + i))
                 r2_slot_addr,    // 15: R2 forwarder slot address
                 r2_agg_sem,      // 16: R2 forwarder semaphore
-                r2_slot_idx,     // 17: R2 slot index (for bit-packed signaling: 1 << r2_slot_idx)
+                r2_slot_idx,     // 17: R2 BASE slot index (chunk i signals: 1 << (base + i))
             };
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
@@ -605,6 +711,7 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
             // reader runtime args:
             // 0: R1 neighbor semaphore, 1: R2 neighbor semaphore
             // 2: R1 receive buffer, 3: R2 receive buffer
+
             auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel);
             auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
             reader_runtime_args[0] = shared_variables.semaphores[0].address();     // R1 recv sem

@@ -114,7 +114,7 @@ def create_fabric_router_config(max_payload_size):
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "trace_region_size": 548880,
-                "fabric_router_config": create_fabric_router_config(12288),
+                # "fabric_router_config": create_fabric_router_config(9600),
             }
         ),
     ],
@@ -278,15 +278,21 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     # - Header padding: 256B * 8 slots / 2 bytes = 1024 elements = 128 columns (at 8 rows)
     # Total shard width: 640 + 128 = 768 columns
     header_size_bytes = 256
-    packet_slot_size_bytes = l_width + ms_width + header_size_bytes  # L + MS + header padding
+    # use conservative number of slots
+    num_pkt_slots_per_round = 16
+    num_rounds = 2
+    # although we will chunk later, we allocate full size here for simplicity
+    max_payload_size_per_slot = l_width
+    packet_slot_size_bytes = header_size_bytes + max_payload_size_per_slot
+    total_packet_slots = num_pkt_slots_per_round * num_rounds
     forwarder_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(forwarder_cores[0], forwarder_cores[1])})
     forwarder_shard_spec = ttnn.ShardSpec(
-        forwarder_shard_grid, [8, packet_slot_size_bytes * 4], ttnn.ShardOrientation.ROW_MAJOR
+        forwarder_shard_grid, [8, packet_slot_size_bytes * total_packet_slots], ttnn.ShardOrientation.ROW_MAJOR
     )
     forwarder_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, forwarder_shard_spec
     )
-    forwarder_scratch_shape = [8, (packet_slot_size_bytes * 4) * 2]  # shard_width * 2 cores
+    forwarder_scratch_shape = [8, (packet_slot_size_bytes * total_packet_slots) * 2]  # shard_width * 2 cores
     forwarder_scratch_tensor = ttnn.from_torch(
         torch.zeros(forwarder_scratch_shape, dtype=torch.bfloat16),
         device=submesh_device,
@@ -358,6 +364,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     ttnn.synchronize_device(submesh_device)
     profiler.end("reduce-to-root-warmup")
 
+    logger.info("Warmup trace execution completed.")
+
     # Execute main trace with signposting for tracy
     signpost("start")
     profiler.start("reduce-to-root-trace")
@@ -368,6 +376,8 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
 
     profiler.end("reduce-to-root-trace")
     signpost("stop")
+
+    logger.info("Main trace execution completed.")
 
     # Verify the output from the last trace execution
     print("\nVerifying trace output...")

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// forwarder APPROACH:
+// FORWARDER APPROACH:
 // Instead of using mux with connect/disconnect cycles, workers write
 // complete packets to forwarder slots via NoC and increment forwarder semaphore.
 // The forwarder kernel (running on forwarder cores) collects packets and forwards
@@ -13,9 +13,18 @@
 //   - Type A: R1 sends via FWD forwarder, R2 sends via BWD forwarder
 //   - Type B: R1 sends via BWD forwarder, R2 sends via FWD forwarder
 // This balances FWD/BWD traffic in each round.
+//
+// PACKET ORDER AND BUFFER LAYOUT:
+// To enable streaming and avoid race conditions:
+// - MS packet sent FIRST (slot 0) → written to buffer END (offset total_l_bytes)
+// - L chunks sent after (slots 1..num_l_chunks) → written contiguously from offset 0
+// Buffer layout on receiver: [L_chunk0][L_chunk1]...[L_chunkN-1][MS]
+// This allows:
+// - L CB to be aliased at buffer base (offset 0)
+// - MS at fixed location (end) that won't be overwritten by L chunks
+// - Receiver can start compute after MS arrives, stream L chunks during compute
 
 #include "api/dataflow/dataflow_api.h"
-#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -23,67 +32,288 @@
 #include "api/debug/dprint.h"
 #include <cstdint>
 
-using tt::data_movement::common::tt_memmove;
-
 // =============================================================================
-// Helper functions for packet construction and forwarding
+// Compile-time arguments
 // =============================================================================
-
-/**
- * Prepare fabric packet header with routing and fused write+atomic_inc command.
- * No data dependency - can be called before payload data is ready.
- */
-template <uint32_t l1_alignment, uint32_t total_payload_size>
-FORCE_INLINE void prepare_header(
-    uint32_t header_addr, uint32_t dst_mesh_id, uint32_t dst_chip_id, uint64_t dst_noc, uint64_t sem_noc) {
-    auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_addr);
-    constexpr uint32_t ATOMIC_INC_VAL = 1;
-    constexpr bool FLUSH_WRITES = false;
-
-    (void)fabric_set_unicast_route(header, dst_chip_id, dst_mesh_id);
-    header->to_noc_fused_unicast_write_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc, sem_noc, ATOMIC_INC_VAL, FLUSH_WRITES},
-        align(total_payload_size, l1_alignment));
-}
-
-/**
- * Pack L and MS data into contiguous packet buffer after header.
- * Layout: [HEADER][L tiles][MS tile aligned]
- */
-template <uint32_t l_tensor_size_bytes, uint32_t ms_tile_size_bytes>
-FORCE_INLINE void pack_payload(uint32_t slot_addr, uint32_t src_l, uint32_t src_ms) {
-    constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-    uint32_t payload_start = slot_addr + packet_header_size_bytes;
-
-    tt_memmove<true, false, false, 0>(payload_start, src_l, l_tensor_size_bytes);
-    tt_memmove<true, false, false, 0>(payload_start + l_tensor_size_bytes, src_ms, ms_tile_size_bytes);
-}
-
-/**
- * Forward complete packet (header + payload) to forwarder slot in single NOC transfer.
- * Uses bit-packed semaphore signaling: increments by (1 << slot_idx) so forwarder
- * can identify exactly which slot is ready.
- */
-template <uint32_t slot_size>
-FORCE_INLINE void forward_packet(uint32_t slot_addr, uint64_t agg_slot_noc, uint64_t agg_sem_noc, uint32_t slot_idx) {
-    noc_async_write(slot_addr, agg_slot_noc, slot_size);
-    noc_async_writes_flushed();
-    noc_semaphore_inc(agg_sem_noc, 1u << slot_idx);
-}
-
-// CB IDs
 static constexpr uint32_t cb_local_l = get_compile_time_arg_val(0);
 static constexpr uint32_t cb_local_ms = get_compile_time_arg_val(1);
 static constexpr uint32_t cb_r1_result_l = get_compile_time_arg_val(2);
 static constexpr uint32_t cb_r1_result_ms = get_compile_time_arg_val(3);
 static constexpr uint32_t cb_packet_slot = get_compile_time_arg_val(4);
-static constexpr uint32_t cb_compute_to_writer_sync = get_compile_time_arg_val(5);
-static constexpr uint32_t cb_writer_to_compute_sync = get_compile_time_arg_val(6);
-static constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(7);
-static constexpr uint32_t vDHt = get_compile_time_arg_val(8);
-static constexpr uint32_t l1_alignment = get_compile_time_arg_val(9);
-static constexpr uint32_t page_size_bytes = get_compile_time_arg_val(10);
-static constexpr uint32_t slot_size = get_compile_time_arg_val(11);
+static constexpr uint32_t l1_alignment = get_compile_time_arg_val(5);
+static constexpr uint32_t page_size_bytes = get_compile_time_arg_val(6);
+static constexpr uint32_t slot_size = get_compile_time_arg_val(7);
+static constexpr uint32_t ms_tile_size_bytes = get_compile_time_arg_val(8);
+static constexpr uint32_t l_chunk_size_bytes = get_compile_time_arg_val(9);
+static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(10);
+static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(11);
+
+static constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+
+// Slot indices: MS = slot 0, L_chunk_i = slot (1 + i)
+static constexpr uint32_t MS_SLOT_OFFSET = 0;
+static constexpr uint32_t L_SLOT_OFFSET = 1;
+
+// =============================================================================
+// Address helper structs
+// =============================================================================
+
+/** Fabric destination addresses (where data lands on remote device) */
+struct FabricDest {
+    uint64_t dst_noc;  // Destination L1 address (varies per packet)
+    uint64_t sem_noc;  // Semaphore address (constant per round)
+};
+
+/** Forwarder destination addresses (local forwarder slot) */
+struct ForwarderDest {
+    uint64_t slot_noc;  // Forwarder slot NOC address
+    uint64_t sem_noc;   // Forwarder semaphore NOC address (constant per round)
+    uint32_t slot_idx;  // Slot index for bit-packed signaling
+};
+
+// =============================================================================
+// Configuration structs
+// =============================================================================
+
+/**
+ * Per-round configuration for sending packets.
+ * Groups destination info and forwarder slot info.
+ */
+struct RoundConfig {
+    uint32_t cb_l;
+    uint32_t cb_ms;
+    uint32_t dst_mesh_id;
+    uint32_t dst_chip_id;
+    uint32_t dst_base_addr;
+    uint32_t sem_addr;
+    uint32_t agg_base_slot_addr;
+    uint32_t agg_sem_addr;
+    uint32_t base_slot_idx;
+};
+
+// =============================================================================
+// ChunkSender - templated packet sender with precomputed addresses
+// =============================================================================
+
+/**
+ * Packet sender with cached core coordinates and round configuration.
+ * Template parameters encode size constants for zero-overhead abstraction.
+ *
+ * Optimizations:
+ * - Header address cached once per round (no repeated get_write_ptr calls)
+ * - Unicast route set once per round (no repeated fabric_set_unicast_route calls)
+ * - Zero-copy payload transfer (payload sent directly from source CB)
+ *
+ * Usage:
+ *   ChunkSender sender{core_x, core_y, agg_x, agg_y};
+ *   sender.setup_round(r1_cfg);
+ *   sender.send_all();
+ *   sender.finish_round();
+ *   sender.setup_round(r2_cfg);
+ *   sender.send_streaming();
+ *   sender.finish_round();
+ */
+template <
+    uint32_t _slot_size,
+    uint32_t _ms_tile_size_bytes,
+    uint32_t _l_chunk_size_bytes,
+    uint32_t _num_l_chunks,
+    uint32_t _tiles_per_l_chunk>
+struct ChunkSender {
+    // Core coordinates (constant across rounds)
+    uint32_t current_core_x;
+    uint32_t current_core_y;
+    uint32_t agg_core_x;
+    uint32_t agg_core_y;
+
+    // Round configuration (set by setup_round)
+    RoundConfig cfg;
+
+    // Precomputed NOC addresses (computed once per round in setup_round)
+    uint64_t sem_noc;      // Fabric destination semaphore
+    uint64_t agg_sem_noc;  // Forwarder semaphore
+
+    // Cached header address (set once per round, reused for all packets)
+    uint32_t header_addr;
+
+    // Derived constants
+    static constexpr uint32_t total_l_bytes = _num_l_chunks * _l_chunk_size_bytes;
+
+    // =========================================================================
+    // Round setup and teardown
+    // =========================================================================
+
+    /**
+     * Configure sender for a new round.
+     * - Copies config and precomputes constant NOC addresses
+     * - Reserves header slot once for entire round
+     * - Sets unicast route once (constant for all packets in round)
+     */
+    FORCE_INLINE void setup_round(const RoundConfig& new_cfg) {
+        cfg = new_cfg;
+        sem_noc = get_noc_addr(current_core_x, current_core_y, cfg.sem_addr);
+        agg_sem_noc = get_noc_addr(agg_core_x, agg_core_y, cfg.agg_sem_addr);
+
+        // Reserve header slot once for entire round (reused for all packets)
+        cb_reserve_back(cb_packet_slot, 1);
+        header_addr = get_write_ptr(cb_packet_slot);
+
+        // Set unicast route once (constant for all packets in this round)
+        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_addr);
+        (void)fabric_set_unicast_route(header, cfg.dst_chip_id, cfg.dst_mesh_id);
+    }
+
+    /**
+     * Release header slot at end of round.
+     * Must be called after all packets are sent for the round.
+     *
+     * NOTE: We push then immediately pop to restore CB state. This is necessary
+     * because there's no real consumer - we just use the CB as a scratch buffer.
+     * Without the pop, the CB fills up and blocks on trace replay.
+     */
+    FORCE_INLINE void finish_round() {
+        cb_push_back(cb_packet_slot, 1);
+        cb_pop_front(cb_packet_slot, 1);  // Free slot for reuse (no real consumer)
+    }
+
+    // =========================================================================
+    // Address helpers
+    // =========================================================================
+
+    /**
+     * Compute fabric destination addresses for a packet.
+     * sem_noc is precomputed and constant per round.
+     */
+    FORCE_INLINE FabricDest get_fabric_dest(uint32_t dst_addr) const {
+        return {
+            get_noc_addr(current_core_x, current_core_y, dst_addr),
+            sem_noc  // precomputed
+        };
+    }
+
+    /**
+     * Compute forwarder destination addresses for a packet.
+     * agg_sem_noc is precomputed and constant per round.
+     *
+     * @tparam is_ms True for MS packet (slot 0), false for L chunk (slot 1+i)
+     * @param l_chunk_idx L chunk index (ignored when is_ms=true)
+     */
+    template <bool is_ms>
+    FORCE_INLINE ForwarderDest get_forwarder_dest(uint32_t l_chunk_idx = 0) const {
+        uint32_t slot_offset = is_ms ? MS_SLOT_OFFSET : (L_SLOT_OFFSET + l_chunk_idx);
+        uint32_t slot_idx = cfg.base_slot_idx + slot_offset;
+        uint32_t agg_slot_addr = cfg.agg_base_slot_addr + slot_offset * _slot_size;
+        return {
+            get_noc_addr(agg_core_x, agg_core_y, agg_slot_addr),
+            agg_sem_noc,  // precomputed
+            slot_idx};
+    }
+
+    // =========================================================================
+    // Generic packet send
+    // =========================================================================
+
+    /**
+     * Generic packet send: update header command, then zero-copy transfer to forwarder.
+     *
+     * Optimizations:
+     * - Header address cached (no get_write_ptr per packet)
+     * - Unicast route already set (no fabric_set_unicast_route per packet)
+     * - Zero-copy payload transfer (payload sent directly from source CB)
+     *
+     * @param fabric_dest Fabric destination addresses
+     * @param fwd_dest Forwarder destination addresses
+     * @param src_addr Source data address in L1
+     * @param payload_size Payload size in bytes
+     */
+    FORCE_INLINE void send_packet(
+        const FabricDest& fabric_dest, const ForwarderDest& fwd_dest, uint32_t src_addr, uint32_t payload_size) const {
+        // Update header command (route already set in setup_round)
+        auto* header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_addr);
+        constexpr uint32_t ATOMIC_INC_VAL = 1;
+        constexpr bool FLUSH_WRITES = false;
+        header->to_noc_fused_unicast_write_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                fabric_dest.dst_noc, fabric_dest.sem_noc, ATOMIC_INC_VAL, FLUSH_WRITES},
+            align(payload_size, l1_alignment));
+
+        // Write header to forwarder slot
+        noc_async_write(header_addr, fwd_dest.slot_noc, packet_header_size_bytes);
+
+        // Write payload directly from source to forwarder slot (zero-copy)
+        uint64_t fwd_payload_noc = fwd_dest.slot_noc + packet_header_size_bytes;
+        noc_async_write(src_addr, fwd_payload_noc, payload_size);
+
+        // Wait for both writes to flush, then signal forwarder
+        // NOTE: This ensures header_addr is safe to reuse for next packet
+        noc_async_writes_flushed();
+        noc_semaphore_inc(fwd_dest.sem_noc, 1u << fwd_dest.slot_idx);
+    }
+
+    // =========================================================================
+    // High-level send methods
+    // =========================================================================
+
+    /**
+     * Send MS packet (slot 0).
+     * MS is written to the END of the receive buffer (offset = total_l_bytes).
+     */
+    FORCE_INLINE void send_ms() const {
+        uint32_t dst_addr = cfg.dst_base_addr + total_l_bytes;
+        auto fabric_dest = get_fabric_dest(dst_addr);
+        auto fwd_dest = get_forwarder_dest<true>();
+        send_packet(fabric_dest, fwd_dest, get_read_ptr(cfg.cb_ms), _ms_tile_size_bytes);
+    }
+
+    /**
+     * Send L chunk packet (slots 1..num_l_chunks).
+     * L chunks are written contiguously from buffer offset 0.
+     *
+     * @param l_chunk_idx L chunk index (0 to num_l_chunks-1)
+     */
+    FORCE_INLINE void send_l_chunk(uint32_t l_chunk_idx) const {
+        uint32_t dst_addr = cfg.dst_base_addr + l_chunk_idx * _l_chunk_size_bytes;
+        uint32_t src_addr = get_read_ptr(cfg.cb_l) + l_chunk_idx * _l_chunk_size_bytes;
+        auto fabric_dest = get_fabric_dest(dst_addr);
+        auto fwd_dest = get_forwarder_dest<false>(l_chunk_idx);
+        send_packet(fabric_dest, fwd_dest, src_addr, _l_chunk_size_bytes);
+    }
+
+    /**
+     * Send all packets for a round (MS first, then all L chunks).
+     * Used when all data is ready (R1 with local input).
+     */
+    FORCE_INLINE void send_all() const {
+        send_ms();
+        for (uint32_t i = 0; i < _num_l_chunks; i++) {
+            send_l_chunk(i);
+        }
+    }
+
+    /**
+     * Send packets with streaming waits (R2 with compute results).
+     * Overlaps fabric transfer with R1 compute by waiting for each chunk.
+     */
+    FORCE_INLINE void send_streaming() const {
+        // Wait for MS (produced early in R1 compute, after MS reduction phase)
+        cb_wait_front(cfg.cb_ms, 1);
+        send_ms();
+
+        // Stream L chunks: wait for each chunk as compute produces it
+        for (uint32_t i = 0; i < _num_l_chunks; i++) {
+            // Cumulative wait: cb_wait_front waits for total tiles in CB
+            cb_wait_front(cfg.cb_l, (i + 1) * _tiles_per_l_chunk);
+            send_l_chunk(i);
+        }
+    }
+};
+
+// Type alias for convenience
+using Sender = ChunkSender<slot_size, ms_tile_size_bytes, l_chunk_size_bytes, num_l_chunks, tiles_per_l_chunk>;
+
+// =============================================================================
+// Main kernel
+// =============================================================================
 
 void kernel_main() {
     size_t arg_idx = 0;
@@ -100,81 +330,61 @@ void kernel_main() {
     const uint32_t r2_neighbor_dst_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r2_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
 
-    // Local core coordinates (for NOC address calculation in fused packets)
+    // Core coordinates
     const uint32_t current_core_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t current_core_y = get_arg_val<uint32_t>(arg_idx++);
-
-    // forwarder core and slot info
     const uint32_t agg_core_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t agg_core_y = get_arg_val<uint32_t>(arg_idx++);
+
+    // R1 forwarder slot info
     const uint32_t r1_agg_slot_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r1_agg_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t r1_slot_idx = get_arg_val<uint32_t>(arg_idx++);  // For bit-packed signaling
+    const uint32_t r1_base_slot_idx = get_arg_val<uint32_t>(arg_idx++);
+
+    // R2 forwarder slot info
     const uint32_t r2_agg_slot_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t r2_agg_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t r2_slot_idx = get_arg_val<uint32_t>(arg_idx++);  // For bit-packed signaling
+    const uint32_t r2_base_slot_idx = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
-    constexpr uint32_t l_tensor_size_bytes = out_tiles * page_size_bytes;  // L payload
-    constexpr uint32_t aligned_page_size = ((page_size_bytes + l1_alignment - 1) / l1_alignment) * l1_alignment;
-    constexpr uint32_t ms_tile_size_bytes = aligned_page_size;  // Single combined MS tile
-    constexpr uint32_t total_payload_size = l_tensor_size_bytes + ms_tile_size_bytes;
+    // Initialize sender with core coordinates
+    Sender sender{current_core_x, current_core_y, agg_core_x, agg_core_y};
 
     // ==========================================================================
     // ROUND 1: Send local input to R1 neighbor via forwarder
+    // All local data is ready, send all packets immediately
     // ==========================================================================
-    const uint64_t r1_dst_noc = get_noc_addr(current_core_x, current_core_y, r1_neighbor_dst_addr);
-    const uint64_t r1_sem_noc = get_noc_addr(current_core_x, current_core_y, r1_neighbor_sem_addr);
-    const uint64_t r1_agg_slot_noc = get_noc_addr(agg_core_x, agg_core_y, r1_agg_slot_addr);
-    const uint64_t r1_agg_sem_noc = get_noc_addr(agg_core_x, agg_core_y, r1_agg_sem_addr);
+    sender.setup_round(
+        {cb_local_l,
+         cb_local_ms,
+         r1_dst_mesh_id,
+         r1_dst_chip_id,
+         r1_neighbor_dst_addr,
+         r1_neighbor_sem_addr,
+         r1_agg_slot_addr,
+         r1_agg_sem_addr,
+         r1_base_slot_idx});
+    sender.send_all();
+    sender.finish_round();
 
-    cb_reserve_back(cb_packet_slot, 1);
-    uint32_t r1_slot_addr = get_write_ptr(cb_packet_slot);
-
-    prepare_header<l1_alignment, total_payload_size>(
-        r1_slot_addr, r1_dst_mesh_id, r1_dst_chip_id, r1_dst_noc, r1_sem_noc);
-    pack_payload<l_tensor_size_bytes, ms_tile_size_bytes>(
-        r1_slot_addr, get_read_ptr(cb_local_l), get_read_ptr(cb_local_ms));
-    forward_packet<slot_size>(r1_slot_addr, r1_agg_slot_noc, r1_agg_sem_noc, r1_slot_idx);
-
-    cb_push_back(cb_packet_slot, 1);
-
-    // ==========================================================================
-    // R2 Header Preparation (overlapped with compute - no data dependency)
-    // ==========================================================================
-    const uint64_t r2_dst_noc = get_noc_addr(current_core_x, current_core_y, r2_neighbor_dst_addr);
-    const uint64_t r2_sem_noc = get_noc_addr(current_core_x, current_core_y, r2_neighbor_sem_addr);
-    const uint64_t r2_agg_slot_noc = get_noc_addr(agg_core_x, agg_core_y, r2_agg_slot_addr);
-    const uint64_t r2_agg_sem_noc = get_noc_addr(agg_core_x, agg_core_y, r2_agg_sem_addr);
-
-    cb_reserve_back(cb_packet_slot, 1);
-    uint32_t r2_slot_addr = get_write_ptr(cb_packet_slot);
-    prepare_header<l1_alignment, total_payload_size>(
-        r2_slot_addr, r2_dst_mesh_id, r2_dst_chip_id, r2_dst_noc, r2_sem_noc);
+    DPRINT << "Completed ROUND 1 send" << ENDL();
 
     // ==========================================================================
-    // Wait for R1 compute result
+    // ROUND 2: Send R1 result to R2 neighbor via forwarder (STREAMING)
+    // Overlap R2 fabric transfer with R1 compute by sending as data is produced
     // ==========================================================================
-    cb_wait_front(cb_compute_to_writer_sync, 1);
-    cb_pop_front(cb_compute_to_writer_sync, 1);
-
-    cb_wait_front(cb_r1_result_l, out_tiles);
-    cb_wait_front(cb_r1_result_ms, 1);
-
-    // ==========================================================================
-    // ROUND 2: Send R1 result to R2 neighbor via forwarder
-    // ==========================================================================
-    // Pack R1 results into packet buffer
-    pack_payload<l_tensor_size_bytes, ms_tile_size_bytes>(
-        r2_slot_addr, get_read_ptr(cb_r1_result_l), get_read_ptr(cb_r1_result_ms));
-
-    // Signal compute that we're done reading R1 results - it can now pop them
-    cb_reserve_back(cb_writer_to_compute_sync, 1);
-    cb_push_back(cb_writer_to_compute_sync, 1);
-
-    forward_packet<slot_size>(r2_slot_addr, r2_agg_slot_noc, r2_agg_sem_noc, r2_slot_idx);
-
-    cb_push_back(cb_packet_slot, 1);
+    sender.setup_round(
+        {cb_r1_result_l,
+         cb_r1_result_ms,
+         r2_dst_mesh_id,
+         r2_dst_chip_id,
+         r2_neighbor_dst_addr,
+         r2_neighbor_sem_addr,
+         r2_agg_slot_addr,
+         r2_agg_sem_addr,
+         r2_base_slot_idx});
+    sender.send_streaming();
+    sender.finish_round();
 
     noc_async_full_barrier();
+    DPRINT << "writer done" << ENDL();
 }

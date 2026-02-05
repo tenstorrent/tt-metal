@@ -10,19 +10,28 @@
 // - BRISC and NCRISC run on same core but access different L1 regions (via buffer_offset)
 // - Non-blocking: forwards packets as soon as they arrive (no batching)
 //
-// Memory layout per forwarder core:
-// - BRISC region (offset 0): [slot0][slot1][slot2][slot3] (R1 + R2 slots interleaved)
-// - NCRISC region (offset N*slot_size): same layout for opposite direction
+// TWO-SEMAPHORE DESIGN:
+// Each forwarder instance has two semaphores: R1 and R2
+// - R1 semaphore: tracks R1 packets from half the workers (Type A for FWD, Type B for BWD)
+// - R2 semaphore: tracks R2 packets from other half (Type B for FWD, Type A for BWD)
+// - R1 and R2 use SEPARATE buffer regions to support streaming overlap
+// - Interleaved processing: check both semaphores in each poll iteration
 //
-// Semaphore protocol (bit-packed):
-// - Single semaphore per direction, each client signals with (1 << slot_idx)
-// - forwarder polls semaphore and forwards any ready slots immediately
-// - Maximum 32 clients per direction (limited by 32-bit semaphore width)
+// Memory layout per forwarder kernel instance:
+// - R1 buffer region: [slot0][slot1]...[slotN-1] at buffer_base
+// - R2 buffer region: [slot0][slot1]...[slotN-1] at buffer_base + r2_buffer_offset
+// - Separate regions allow R2 to start while R1 forwarding is still in progress
+//
+// Semaphore protocol (bit-packed, 32-bit each):
+// - Each semaphore tracks slots_per_round slots
+// - Workers signal with (1 << slot_idx)
+// - Forwarder polls both semaphores and forwards any ready slots
+// - Maximum 32 slots per semaphore (limited by 32-bit width)
 //
 // Workflow:
-// 1. Poll semaphore for ready slots
-// 2. For each ready bit not yet sent, forward packet via fabric
-// 3. Repeat until all slots sent
+// 1. Poll both r1_sem and r2_sem
+// 2. For each ready bit not yet sent, forward the packet
+// 3. Repeat until both semaphores fully processed
 
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "api/dataflow/dataflow_api.h"
@@ -33,20 +42,66 @@
 
 #include <cstdint>
 
-static constexpr uint32_t total_slots = get_compile_time_arg_val(0);  // Total slots (R1 + R2 combined)
-static constexpr uint32_t slot_size = get_compile_time_arg_val(1);    // Bytes per slot (header + L + S + M)
+// Compile-time arguments
+static constexpr uint32_t slots_per_round = get_compile_time_arg_val(0);   // Slots per semaphore (R1 or R2)
+static constexpr uint32_t slot_size = get_compile_time_arg_val(1);         // Max bytes per slot
+static constexpr uint32_t r2_buffer_offset = get_compile_time_arg_val(2);  // Offset for R2 buffer region
 
-static constexpr uint32_t all_sent_mask = (1u << total_slots) - 1;
+static constexpr uint32_t all_sent_mask = (1u << slots_per_round) - 1;
 
-// Maximum clients is 32 (one bit per client in 32-bit semaphore)
-static_assert(total_slots <= 32, "forwarder supports at most 32 slots (limited by 32-bit semaphore)");
+// Maximum slots is 32 (one bit per slot in 32-bit semaphore)
+static_assert(slots_per_round <= 32, "forwarder supports at most 32 slots per round (limited by 32-bit semaphore)");
+
+static uint32_t packet_sent_count = 0;
+static uint32_t prev_packet_sent_count = 0;
+
+static uint32_t packet_sent_count_round_2 = 0;
+static uint32_t prev_packet_sent_count_round_2 = 0;
+
+/**
+ * Process ready slots from a semaphore and forward packets.
+ * Returns updated sent_mask.
+ */
+template <typename FabricConnection>
+FORCE_INLINE uint32_t process_ready_slots(
+    volatile tt_l1_ptr uint32_t* sem_ptr,
+    uint32_t sent_mask,
+    uint32_t buffer_base,
+    FabricConnection& fabric_connection,
+    bool round_1 = true) {
+    uint32_t sem_value = *sem_ptr;
+    uint32_t pending = sem_value & ~sent_mask;
+
+    while (pending != 0) {
+        uint32_t slot = __builtin_ctz(pending);
+        uint32_t slot_addr = buffer_base + (slot * slot_size);
+
+        // Read actual payload size from packet header (supports variable chunk sizes)
+        auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(slot_addr);
+        uint32_t actual_packet_size = packet_header->get_payload_size_including_header();
+
+        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, actual_packet_size);
+        if (round_1) {
+            packet_sent_count++;
+        } else {
+            packet_sent_count_round_2++;
+        }
+
+        sent_mask |= (1u << slot);
+        pending &= ~(1u << slot);
+    }
+
+    return sent_mask;
+}
 
 void kernel_main() {
     size_t arg_idx = 0;
 
     const uint32_t buffer_base = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t buffer_offset = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     const uint32_t my_buffer_base = buffer_base + buffer_offset;
 
@@ -55,34 +110,50 @@ void kernel_main() {
     fabric_connection.open();
 
     // =========================================================================
-    // Non-blocking forwarding loop
+    // Interleaved R1/R2 forwarding loop
     // =========================================================================
-    // Poll semaphore and forward packets as soon as they're ready.
-    // Each worker signals by doing: noc_semaphore_inc(sem, 1 << slot_idx)
-    // We track which slots have been sent via sent_mask.
+    // Poll both semaphores and forward packets as they're ready.
+    // R1 and R2 use separate buffer regions to support streaming overlap.
 
-    volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
-    uint32_t sent_mask = 0;
+    volatile tt_l1_ptr uint32_t* r1_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r1_sem_addr);
+    volatile tt_l1_ptr uint32_t* r2_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(r2_sem_addr);
+
+    DPRINT << "intial values: r1_sem=" << *r1_sem_ptr << ", r2_sem=" << *r2_sem_ptr << ENDL();
+    DPRINT << "all_sent_mask=" << all_sent_mask << ENDL();
+
+    // R1 and R2 buffer bases are offset to prevent overlap during streaming
+    const uint32_t r1_buffer_base = my_buffer_base;
+    const uint32_t r2_buffer_base = my_buffer_base + r2_buffer_offset;
+
+    uint32_t r1_sent_mask = 0;
+    uint32_t r2_sent_mask = 0;
 
     do {
         invalidate_l1_cache();
 
-        uint32_t sem_value = *sem_ptr;
-        uint32_t pending = sem_value & ~sent_mask;
-
-        // Drain all ready slots before polling again
-        while (pending != 0) {
-            uint32_t slot = __builtin_ctz(pending);
-            uint32_t slot_addr = my_buffer_base + (slot * slot_size);
-
-            fabric_connection.wait_for_empty_write_slot();
-            fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, slot_size);
-
-            sent_mask |= (1u << slot);
-            pending &= ~(1u << slot);
+        // Process R1 slots (at r1_buffer_base)
+        r1_sent_mask = process_ready_slots(r1_sem_ptr, r1_sent_mask, r1_buffer_base, fabric_connection);
+        if (prev_packet_sent_count != packet_sent_count) {
+            DPRINT << "forwarder: sent R1 packets=" << packet_sent_count << ENDL();
+            DPRINT << "r1_sem=" << *r1_sem_ptr << ", r1_sent_mask=" << r1_sent_mask << ENDL();
+            prev_packet_sent_count = packet_sent_count;
         }
-    } while (sent_mask != all_sent_mask);
 
+        // Process R2 slots (at r2_buffer_base, separate region)
+        r2_sent_mask = process_ready_slots(r2_sem_ptr, r2_sent_mask, r2_buffer_base, fabric_connection, false);
+        if (prev_packet_sent_count_round_2 != packet_sent_count_round_2) {
+            DPRINT << "forwarder: sent R2 packets=" << packet_sent_count_round_2 << ENDL();
+            DPRINT << "r2_sem=" << *r2_sem_ptr << ", r2_sent_mask=" << r2_sent_mask << ENDL();
+            prev_packet_sent_count_round_2 = packet_sent_count_round_2;
+        }
+
+    } while (r1_sent_mask != all_sent_mask || r2_sent_mask != all_sent_mask);
+
+    DPRINT << "forwarder: all packets sent" << ENDL();
     fabric_connection.close();
+
+    // noc_semaphore_set(r1_sem_ptr, 0);
+    // noc_semaphore_set(r2_sem_ptr, 0);
     noc_async_full_barrier();
+    DPRINT << "forwarder done" << ENDL();
 }
