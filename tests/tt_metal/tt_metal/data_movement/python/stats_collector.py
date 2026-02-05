@@ -171,6 +171,16 @@ class StatsCollector:
                 else:
                     raise ValueError(f"Unknown method: {method}")
 
+                # Calculate combined bandwidth metrics for multi-core tests
+                # Combined bandwidth = total_bytes / wall_clock_time
+                # With barrier sync, max(duration) ≈ wall_clock_time (end_of_last - start_of_first)
+                num_cores = len(durations)
+                max_duration = float(np.max(durations))
+                transaction_size = attributes.get("Transaction size in bytes", 0)
+                num_transactions = attributes.get("Number of transactions", 1)
+                total_bytes = num_cores * transaction_size * num_transactions
+                combined_bandwidth = total_bytes / max_duration if max_duration > 0 else 0
+
                 agg_data = {
                     "duration_cycles": agg_duration,
                     "bandwidth": agg_bandwidth,
@@ -178,8 +188,13 @@ class StatsCollector:
                     "all_durations": durations,
                     "all_bandwidths": bandwidths,
                     "all_cores": cores,
-                    "transaction_size": attributes.get("Transaction size in bytes"),
-                    "num_transactions": attributes.get("Number of transactions"),
+                    "transaction_size": transaction_size,
+                    "num_transactions": num_transactions,
+                    # Combined bandwidth metrics
+                    "num_cores": num_cores,
+                    "max_duration": max_duration,
+                    "total_bytes": total_bytes,
+                    "combined_bandwidth": combined_bandwidth,
                 }
 
                 # Dynamically add attributes based on test type
