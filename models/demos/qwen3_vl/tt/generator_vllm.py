@@ -7,11 +7,11 @@ from types import SimpleNamespace
 from typing import Mapping, Optional
 
 import torch
+import vllm.envs as envs
 from loguru import logger
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
     Qwen3VLForConditionalGeneration as Ref_Qwen3VLForConditionalGeneration,
 )
-from vllm.env import envs
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.qwen3_vl import Qwen3VLProcessingInfo
 from vllm.multimodal import MULTIMODAL_REGISTRY
