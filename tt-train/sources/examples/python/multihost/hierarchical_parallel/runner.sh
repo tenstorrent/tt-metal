@@ -67,5 +67,14 @@ ${TT_METAL_HOME}/tt-train/sources/examples/nano_gpt/3tier/all_machines_copy.sh -
 mpirun-ulfm --hostfile ${HOST_FILE} --tag-output uv pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/requirements.txt
 
 CMD="python ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/training.py -c ${CONFIG_FILE}"
+
+# Build tt-run arguments: use --tcp-interface if set, otherwise --multihost for multi-host TCP settings
+TTRUN_NETWORK_ARGS=""
+if [[ -n "${TCP_INTERFACE:-}" ]]; then
+    TTRUN_NETWORK_ARGS="--tcp-interface ${TCP_INTERFACE}"
+else
+    TTRUN_NETWORK_ARGS="--multihost"
+fi
+
 # use tt-run to run the training script across all machines
-${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py --tcp-interface ${TCP_INTERFACE} --rank-binding ${RANK_BINDINGS_FILE} --mpi-args "--hostfile ${HOST_FILE} ${MPI_EXTRA_ARGS}" ${CMD}
+${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py ${TTRUN_NETWORK_ARGS} --rank-binding ${RANK_BINDINGS_FILE} --mpi-args "--hostfile ${HOST_FILE} ${MPI_EXTRA_ARGS}" ${CMD}
