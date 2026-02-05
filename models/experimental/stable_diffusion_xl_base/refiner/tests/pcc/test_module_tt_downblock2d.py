@@ -26,6 +26,10 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 def test_downblock2d(
     device, image_resolution, temb_shape, input_shape, block_id, pcc, debug_mode, is_ci_env, reset_seeds
 ):
+    # Skip unsupported image resolutions
+    if image_resolution != (1024, 1024):
+        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
+
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,

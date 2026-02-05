@@ -2,9 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs.model_configs_512x512 import (
-    RefinerModelOptimisations512x512,
-)
 from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs.model_configs_1024x1024 import (
     RefinerModelOptimisations1024x1024,
 )
@@ -22,21 +19,20 @@ def load_refiner_model_optimisations(
 
     Args:
         image_resolution (tuple): A tuple of (height, width) representing the image resolution.
-            Supported resolutions are (512, 512) and (1024, 1024).
+            Supported resolution is (1024, 1024).
         conv_act_dtype: Optional dtype for convolution activations. Defaults to ttnn.bfloat16.
         conv_w_dtype: Optional dtype for convolution weights. Defaults to ttnn.bfloat16.
         attention_weights_dtype: Optional dtype for attention weights. Defaults to ttnn.bfloat8_b.
         ff_weights_dtype: Optional dtype for feedforward weights. Defaults to ttnn.bfloat8_b.
 
     Returns:
-        RefinerModelOptimisations512x512 or RefinerModelOptimisations1024x1024: The appropriate
-            RefinerModelOptimisation object based on the image resolution.
+        RefinerModelOptimisations1024x1024: The appropriate RefinerModelOptimisation object based
+            on the image resolution.
 
     Raises:
         ValueError: If the image_resolution is not supported.
 
     Example:
-        >>> model_opt = load_refiner_model_optimisations((512, 512))
         >>> model_opt = load_refiner_model_optimisations((1024, 1024))
     """
     if not isinstance(image_resolution, (tuple, list)) or len(image_resolution) != 2:
@@ -55,11 +51,7 @@ def load_refiner_model_optimisations(
     if ff_weights_dtype is not None:
         init_kwargs["ff_weights_dtype"] = ff_weights_dtype
 
-    if (height, width) == (512, 512):
-        return RefinerModelOptimisations512x512(**init_kwargs)
-    elif (height, width) == (1024, 1024):
+    if (height, width) == (1024, 1024):
         return RefinerModelOptimisations1024x1024(**init_kwargs)
     else:
-        raise ValueError(
-            f"Unsupported image_resolution: {image_resolution}. " "Only (512, 512) and (1024, 1024) are supported."
-        )
+        raise ValueError(f"Unsupported image_resolution: {image_resolution}. " "Only (1024, 1024) is supported.")

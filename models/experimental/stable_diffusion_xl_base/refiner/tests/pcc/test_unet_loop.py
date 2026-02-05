@@ -372,4 +372,8 @@ def test_unet_loop(
     loop_iter_num,
     debug_mode,
 ):
+    # Skip unsupported image resolutions
+    if image_resolution != (1024, 1024):
+        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
+
     return run_unet_inference(device, is_ci_env, image_resolution, prompt, loop_iter_num, debug_mode)

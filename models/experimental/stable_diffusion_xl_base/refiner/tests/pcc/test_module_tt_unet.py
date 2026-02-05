@@ -212,6 +212,10 @@ def test_unet(
     model_location_generator,
     reset_seeds,
 ):
+    # Skip unsupported image resolutions
+    if image_resolution != (1024, 1024):
+        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
+
     run_refiner_unet_model(
         device,
         image_resolution,
