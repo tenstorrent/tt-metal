@@ -89,7 +89,8 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    if (!is_native_L1_sharding(a, b, c.memory_config())) {
+    // in addition to input, also check output is uneven
+    if (!is_native_L1_sharding(a, b, c.memory_config()) || is_uneven(c)) {
         // treat as interleaved
         return std::nullopt;
     }
