@@ -241,6 +241,7 @@ class TtLlamaMLP(LightweightModule):
                 matmul_config=minimal_pc_1_3,
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
             )
+            breakpoint()
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096 or batch_size > 1:
