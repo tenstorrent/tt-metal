@@ -1,19 +1,9 @@
 name: "[internal] Produce GitHub Merge Queue data"
 
 on:
-  # REQUIRED for testing on your branch
-  push:
-    branches:
-      - ashah/merge-queue
-
-  # REQUIRED for testing on PRs
-  pull_request:
-    types: [opened, synchronize, reopened]
-
-  # Manual trigger (useful for debugging)
   workflow_dispatch:
 
-  # Scheduled execution (only meaningful after merge to main)
+  # Runs automatically every 5 minutes after merge to main
   schedule:
     - cron: "*/5 * * * *"
 
@@ -29,30 +19,42 @@ jobs:
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # Sanity check: confirm GH_TOKEN works
+      # Fetch ALL open PR numbers (pagination prevents truncation)
       # ------------------------------------------------------------
-      - name: Check GitHub API rate limit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "[Info] Checking GitHub API rate limit"
-          gh api rate_limit
-
-      # ------------------------------------------------------------
-      # Fetch open PRs using simplest possible endpoint
-      # ------------------------------------------------------------
-      - name: Fetch open PRs (hardcoded endpoint)
+      - name: Fetch open PR numbers
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "[Info] Fetching open pull requests"
-          gh api /repos/tenstorrent/tt-metal/pulls > pulls.json
-          echo "[Info] PR count:"
-          jq 'length' pulls.json
+
+          gh api --paginate \
+            /repos/tenstorrent/tt-metal/pulls \
+            | jq '.[].number' > pr_numbers.txt
 
       # ------------------------------------------------------------
-      # Build merge queue snapshot JSON
+      # Fetch FULL PR objects (mergeable_state is computed here)
+      # ------------------------------------------------------------
+      - name: Fetch PR details
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          echo "[]" > pulls_full.json
+
+          while read pr; do
+            gh api /repos/tenstorrent/tt-metal/pulls/$pr \
+            | jq '.' \
+            | jq -s '.[0]' >> temp.json
+
+            jq -s 'add' pulls_full.json temp.json > merged.json
+            mv merged.json pulls_full.json
+            rm -f temp.json
+
+          done < pr_numbers.txt
+
+      # ------------------------------------------------------------
+      # Build merge queue snapshot with REAL state mapping
       # ------------------------------------------------------------
       - name: Build merge queue snapshot
         run: |
@@ -62,6 +64,14 @@ jobs:
           COLLECTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           jq --arg repo "tenstorrent/tt-metal" --arg ts "$COLLECTED_AT" '
+          def map_state(ms):
+            if ms == "clean" then "PASSED_GATE"
+            elif ms == "blocked" then "IN_QUEUE"
+            elif ms == "unstable" then "FAILED_GATE"
+            elif ms == "dirty" then "FAILED_GATE"
+            else "NOT_QUEUED"
+            end;
+
           {
             repository: $repo,
             collected_at: $ts,
@@ -72,7 +82,7 @@ jobs:
                 pr_title: .title,
                 pr_author_login: .user.login,
                 head_sha: .head.sha,
-                state: "AWAITING_CHECKS",
+                state: map_state(.mergeable_state),
                 queue_position: null,
                 enqueued_at: null,
                 estimated_time_to_merge_sec: null,
@@ -80,29 +90,25 @@ jobs:
               }
             ]
           }
-          ' pulls.json > generated/merge_queue/merge_queue_snapshot.json
-
-          echo "[Info] Snapshot preview:"
-          jq '.merge_queue | length' generated/merge_queue/merge_queue_snapshot.json
-          jq '.merge_queue[0]' generated/merge_queue/merge_queue_snapshot.json || true
+          ' pulls_full.json > generated/merge_queue/merge_queue_snapshot.json
 
       # ------------------------------------------------------------
-      # Timestamp filename
+      # Timestamp filename (prevents overwrite + enables lineage)
       # ------------------------------------------------------------
-      - name: Add timestamp to filename
+      - name: Timestamp snapshot
         run: |
           TS=$(date -u +"%Y%m%dT%H%M%SZ")
+
           mv generated/merge_queue/merge_queue_snapshot.json \
              generated/merge_queue/${TS}_merge_queue_snapshot.json
-          ls -lh generated/merge_queue
 
       # ------------------------------------------------------------
-      # Upload via SFTP (NO mkdir — aligns with CI/CD permissions)
+      # Upload to SFTP (Airflow watches this)
       # ------------------------------------------------------------
       - name: Upload merge queue data via SFTP
         uses: ./.github/actions/upload-data-via-sftp
         with:
-          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
-          username: ${{ secrets.SFTP_CICD_WRITER_USERNAME }}
-          hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
+          ssh-private-key: ${{ secrets.SFTP_MERGE_QUEUE_WRITER_KEY }}
+          username: ${{ secrets.SFTP_MERGE_QUEUE_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_MERGE_QUEUE_WRITER_HOSTNAME }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/merge_queue_data_batchfile.txt
