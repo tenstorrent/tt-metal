@@ -195,7 +195,7 @@ import torch
 import ttnn
 
 # NOTE: Use the built-in `device` fixture from conftest.py - do NOT define your own.
-# Before running: 'tt-smi -ls' to verify device, 'tt-smi -r 0' to reset (see CLAUDE.md)
+# Before running: 'tt-smi -r' to reset device (see CLAUDE.md)
 
 def test_device_op_called(device):
     """Operation should reach program factory, not fail at validation"""
@@ -328,7 +328,7 @@ import torch
 import ttnn
 
 # NOTE: Use the built-in `device` fixture from conftest.py - do NOT define your own.
-# Before running: 'tt-smi -ls' to verify device, 'tt-smi -r 0' to reset (see CLAUDE.md)
+# Before running: 'tt-smi -r' to reset device (see CLAUDE.md)
 
 def test_program_factory_creates_cbs(device):
     """Program factory should create CBs before failing at kernel creation"""

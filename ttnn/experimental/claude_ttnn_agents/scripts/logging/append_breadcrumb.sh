@@ -2,8 +2,11 @@
 # Append a breadcrumb entry to the agent's breadcrumb file
 # Usage: append_breadcrumb.sh <operation_path> <agent_name> <event_json>
 #
-# Example:
-#   append_breadcrumb.sh ttnn/cpp/ttnn/operations/reduction/my_op ttnn-operation-scaffolder '{"event":"start"}'
+# Example (standard C++ workflow):
+#   append_breadcrumb.sh ttnn/cpp/ttnn/operations/reduction/my_op ttnn-operation-scaffolder '{"event":"action","type":"build"}'
+#
+# Example (generic_op workflow - see ttnn-generic-op-workflow.md for canonical path):
+#   append_breadcrumb.sh ttnn/experimental/my_op ttnn-generic-op-builder '{"event":"action","type":"test"}'
 #
 # The script automatically adds timestamp and ensures the log directory exists.
 

@@ -217,25 +217,13 @@ Before proposing:
 
 ## Workflow Details
 
-### CRITICAL: Device Reset Command
-
-**ALWAYS follow these commands to reset the device:**
-```bash
-# First, list available device IDs
-tt-smi -ls
-
-# Then reset using the first available device ID
-tt-smi -r <device_id>  # Use the first PCI Dev ID from the list (e.g., tt-smi -r 0)
-```
-
 ### Mandatory Steps
 
-**CRITICAL**: Before running any tests, follow the device management protocol in `CLAUDE.md` under "Device Management and Test Execution":
+**CRITICAL**: Before running any tests, follow the device management protocol:
 
 1. Kill leftover pytest processes: `pkill -9 -f pytest || true`
-2. List device IDs: `tt-smi -ls`
-3. Reset device using the first available ID: `tt-smi -r <device_id>` (e.g., `tt-smi -r 0`)
-4. Run tests with timeout: `timeout 10 pytest <test_file>`
+2. Reset device: `tt-smi -r`
+3. Run tests with timeout: `timeout 10 pytest <test_file>`
 
 These steps prevent false debugging conclusions from stale device state or hung processes.
 
