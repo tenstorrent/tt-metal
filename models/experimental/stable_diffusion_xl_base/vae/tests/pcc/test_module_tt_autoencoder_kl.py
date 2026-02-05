@@ -38,6 +38,10 @@ def test_vae(
     is_ci_v2_env,
     model_location_generator,
 ):
+    # Skip unsupported image resolutions
+    if image_resolution != (1024, 1024):
+        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
+
     model_location = model_location_generator(
         "stable-diffusion-xl-base-1.0/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )

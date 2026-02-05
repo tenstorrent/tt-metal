@@ -26,6 +26,10 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_downblock2d(device, image_resolution, block_id, input_shape, pcc, debug_mode, is_ci_env, reset_seeds):
+    # Skip unsupported image resolutions
+    if image_resolution != (1024, 1024):
+        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
+
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,

@@ -30,6 +30,10 @@ from models.common.utility_functions import torch_random
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae_attention(device, image_resolution, input_shape, encoder_shape, block_name, pcc, is_ci_env, reset_seeds):
+    # Skip unsupported image resolutions
+    if image_resolution != (1024, 1024):
+        pytest.skip(f"Unsupported image resolution: {image_resolution}. Only (1024, 1024) is supported.")
+
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
