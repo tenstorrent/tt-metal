@@ -14,6 +14,7 @@ For dual-axis broadcast on a 2D mesh:
 
 
 import ttnn
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 
 
 class DeepseekMinimalBroadcast:
@@ -246,13 +247,6 @@ class DeepseekMinimalBroadcast:
                     num_connections,  # num_connections (computed from len(dst_nodes))
                 ]
 
-                # Per-core runtime args are empty - fabric args will be appended later
-                reader_rt_args = ttnn.RuntimeArgs()
-                reader_rt_args[worker_core.x][worker_core.y] = []
-
-                writer_rt_args = ttnn.RuntimeArgs()
-                writer_rt_args[worker_core.x][worker_core.y] = []
-
                 # Create CB config
                 cb_config = ttnn.CBFormatDescriptor(
                     buffer_index=src0_cb_index,
@@ -265,36 +259,32 @@ class DeepseekMinimalBroadcast:
                     format_descriptors=[cb_config],
                 )
 
-                # Create reader kernel using unified kernel file
-                reader_kernel = ttnn.KernelDescriptor(
+                # Create unified kernel descriptor for CCL broadcast
+                unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=ccl_kernel_path,
-                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=worker_core_set,
-                    named_compile_time_args=union_named_compile_time_args,
-                    runtime_args=reader_rt_args,
-                    common_runtime_args=reader_common_rt_args,
-                    config=ttnn.ReaderConfigDescriptor(),
+                    ncrisc_named_compile_time_args=union_named_compile_time_args,
+                    brisc_named_compile_time_args=union_named_compile_time_args,
+                    ncrisc_common_runtime_args=reader_common_rt_args,
+                    brisc_common_runtime_args=writer_common_rt_args,
+                    # Per-core runtime args: empty for NCRISC/BRISC (fabric args appended later)
+                    per_core_runtime_args_descriptors=[
+                        PerCoreRuntimeArgsDescriptor(
+                            risc="brisc",
+                            core_args=[(worker_core, [])],  # Fabric args appended after program creation
+                        ),
+                    ],
                 )
 
-                # Create writer kernel using unified kernel file
-                writer_kernel = ttnn.KernelDescriptor(
-                    kernel_source=ccl_kernel_path,
-                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                    core_ranges=worker_core_set,
-                    named_compile_time_args=union_named_compile_time_args,
-                    runtime_args=writer_rt_args,
-                    common_runtime_args=writer_common_rt_args,
-                    config=ttnn.WriterConfigDescriptor(),
-                )
-
-                # Create program descriptor
+                # Create program descriptor (only reader and writer, no compute)
                 program = ttnn.ProgramDescriptor(
-                    kernels=[reader_kernel, writer_kernel],
+                    kernels=unified_kernel.get_kernel_descriptors().kernels[:2],
                     semaphores=[],
                     cbs=[cb_desc],
                 )
 
-                # Append fabric connection args to writer kernel if there are connections
+                # Append fabric connection args to BRISC kernel if needed
+                # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
                 if num_connections > 0:
                     writer_rt_args_ref = program.kernels[1].runtime_args[worker_core.x][worker_core.y]
                     fabric_args = ttnn.setup_routing_plane_connection(

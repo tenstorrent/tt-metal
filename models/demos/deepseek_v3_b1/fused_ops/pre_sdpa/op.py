@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreRuntimeArgsDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
@@ -1663,15 +1664,15 @@ class PreSDPA:
                             other_value=0,
                         ),
                     ],
+                    # Per-core runtime args for fabric (BRISC only, on worker_core)
+                    # Initialize empty args that will be populated by setup_routing_plane_connection
+                    per_core_runtime_args_descriptors=[
+                        PerCoreRuntimeArgsDescriptor(
+                            risc="brisc",
+                            core_args=[(worker_core, [])],  # Fabric args appended after program creation
+                        ),
+                    ],
                 )
-                # ================================================================
-                # CCL Broadcast runtime args and fabric setup
-                # ================================================================
-                reader_rt_args = ttnn.RuntimeArgs()
-                writer_rt_args = ttnn.RuntimeArgs()
-
-                reader_rt_args[worker_core.x][worker_core.y] = []
-                writer_rt_args[worker_core.x][worker_core.y] = []
 
                 # ================================================================
                 # Create program descriptor
@@ -1722,31 +1723,20 @@ class PreSDPA:
                     ],
                 )
 
-                # Set runtime args for reader/writer kernels on worker core
-                # With unified_compile_time_core_descriptors, there are multiple kernel groups
-                # We need to find the NCRISC (reader) and BRISC (writer) kernels whose core_ranges include worker_core
-                worker_writer_kernel_idx = None
-                for idx, kernel in enumerate(program.kernels):
-                    # Check if this kernel's core_ranges contains the worker_core
-                    if kernel.core_ranges.contains(worker_core):
-                        # Determine kernel type from config
-                        if isinstance(kernel.config, ttnn.ReaderConfigDescriptor):
-                            # NCRISC reader kernel
-                            kernel.runtime_args = reader_rt_args
-                        elif isinstance(kernel.config, ttnn.WriterConfigDescriptor):
-                            # BRISC writer kernel
-                            kernel.runtime_args = writer_rt_args
-                            worker_writer_kernel_idx = idx
-
-                # Append fabric connection args if needed
-                if not skip_ccl and num_connections > 0 and worker_writer_kernel_idx is not None:
-                    writer_rt_args_ref = program.kernels[worker_writer_kernel_idx].runtime_args[worker_core.x][
-                        worker_core.y
-                    ]
-                    fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id, dst_nodes, [0], program, worker_writer_kernel_idx, worker_core
-                    )
-                    writer_rt_args_ref.extend(fabric_args)
+                # Append fabric connection args to BRISC kernel if needed (CCL mode only)
+                # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
+                if not skip_ccl and num_connections > 0:
+                    # Find the BRISC (writer) kernel whose core_ranges includes worker_core
+                    for idx, kernel in enumerate(program.kernels):
+                        if kernel.core_ranges.contains(worker_core) and isinstance(
+                            kernel.config, ttnn.WriterConfigDescriptor
+                        ):
+                            writer_rt_args_ref = kernel.runtime_args[worker_core.x][worker_core.y]
+                            fabric_args = ttnn.setup_routing_plane_connection(
+                                fabric_node_id, dst_nodes, [0], program, idx, worker_core
+                            )
+                            writer_rt_args_ref.extend(fabric_args)
+                            break
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 

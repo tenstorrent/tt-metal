@@ -6,7 +6,7 @@ import math
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
@@ -282,10 +282,6 @@ class BroadcastRMSNorm:
                     input_num_pages,  # tile_id_end
                 ]
 
-                # Per-core reader runtime args are empty - broadcast args moved to common
-                reader_rt_args = ttnn.RuntimeArgs()
-                reader_rt_args[worker_core.x][worker_core.y] = []
-
                 # Common runtime args for writer (broadcast args shared across cores)
                 writer_common_rt_args = []
                 if not skip_ccl:
@@ -311,11 +307,6 @@ class BroadcastRMSNorm:
                         int(secondary_sync_sem_addr),  # secondary_sync_sem
                         int(num_connections),  # num_connections
                     ]
-
-                # Per-core writer runtime args are empty - broadcast args moved to common
-                # Fabric args will be appended later
-                writer_rt_args = ttnn.RuntimeArgs()
-                writer_rt_args[worker_core.x][worker_core.y] = []
 
                 # Create tile descriptor for proper tile dimensions
                 tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
@@ -359,6 +350,9 @@ class BroadcastRMSNorm:
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     brisc_named_compile_time_args=brisc_named_compile_time_args,
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
+                    ncrisc_common_runtime_args=reader_common_rt_args,
+                    brisc_common_runtime_args=writer_common_rt_args,
+                    trisc_common_runtime_args=[epsilon_packed, scalar_packed],
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                         math_approx_mode=False,
@@ -366,6 +360,13 @@ class BroadcastRMSNorm:
                         dst_full_sync_en=fp32_dest_acc_en,
                     ),
                     defines=kernel_defines,
+                    # Per-core runtime args: empty for NCRISC/BRISC (fabric args appended later)
+                    per_core_runtime_args_descriptors=[
+                        PerCoreRuntimeArgsDescriptor(
+                            risc="brisc",
+                            core_args=[(worker_core, [])],  # Fabric args appended after program creation
+                        ),
+                    ],
                 )
 
                 # Program descriptor
@@ -380,21 +381,8 @@ class BroadcastRMSNorm:
                     semaphores=[],
                 )
 
-                # Ensure per-kernel runtime args are set for reader/writer kernels before any append operations
-                # kernels ordering: [ncrisc_reader, brisc_writer, trisc_compute]
-                if len(program.kernels) >= 1:
-                    program.kernels[0].runtime_args = reader_rt_args
-                    program.kernels[0].common_runtime_args = reader_common_rt_args
-                if len(program.kernels) >= 2:
-                    program.kernels[1].runtime_args = writer_rt_args
-                    program.kernels[1].common_runtime_args = writer_common_rt_args
-
-                if len(program.kernels) >= 3:
-                    compute_rt_args = ttnn.RuntimeArgs()
-                    compute_rt_args[worker_core.x][worker_core.y] = [epsilon_packed, scalar_packed]
-                    program.kernels[2].runtime_args = compute_rt_args
-
-                # Append fabric connection args to writer kernel if there are connections (CCL mode only)
+                # Append fabric connection args to BRISC kernel if needed (CCL mode only)
+                # Runtime args are already initialized by UnifiedKernelDescriptor via per_core_runtime_args_descriptors
                 if not skip_ccl and num_connections > 0:
                     # writer kernel is index 1 in the unified kernel descriptor list
                     writer_rt_args_ref = program.kernels[1].runtime_args[worker_core.x][worker_core.y]

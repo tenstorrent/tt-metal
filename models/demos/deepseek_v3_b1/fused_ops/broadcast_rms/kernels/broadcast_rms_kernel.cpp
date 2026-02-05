@@ -112,8 +112,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
         get_named_compile_time_arg_val("rmsnorm_output_cb"),
-        get_arg_val<uint32_t>(0),  // epsilon (runtime arg 0)
-        get_arg_val<float>(1),     // scalar (1/N)
+        get_common_arg_val<uint32_t>(0),  // epsilon (common runtime arg 0)
+        get_common_arg_val<float>(1),     // scalar (1/N)
     };
 
 #if !defined(SKIP_CCL)
