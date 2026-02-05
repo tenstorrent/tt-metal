@@ -19,4 +19,13 @@ enum class AttentionMaskType {
     Arbitrary  // Use provided mask tensor from DRAM
 };
 
+/**
+ * Specifies whether stochastic rounding is applied during optimizer updates.
+ *
+ * Stochastic rounding can help maintain training accuracy when using
+ * reduced precision (e.g. BFLOAT16) by randomly rounding values up or down
+ * based on their proximity to representable values.
+ */
+enum class StochasticRounding : bool { Disabled = false, Enabled = true };
+
 }  // namespace ttml::metal
