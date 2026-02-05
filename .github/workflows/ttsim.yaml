@@ -256,11 +256,14 @@ jobs:
       - name: Install pytest-xdist for parallel execution
         run: uv pip install pytest-xdist
 
+      - name: Install yq for YAML parsing
+        run: uv pip install yq
+
       - name: Build skip list arguments
         id: skip-list
         run: |
           ARCH="${{ matrix.arch.name }}"
-          SKIP_ARGS=$(python3 .github/scripts/parse_skip_list.py "$ARCH")
+          SKIP_ARGS=$(yq -r ".${ARCH}[]" .github/ttsim-skip-list.yaml | sed 's/^/--deselect=/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
           echo "[info] Loaded skip list for arch: $ARCH"
           echo "[info] Skip args count: $(echo $SKIP_ARGS | wc -w)"
           echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
