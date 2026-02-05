@@ -65,7 +65,8 @@ ttnn::Tensor ring_sdpa_bw_q(
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    ttml::metal::AttentionMaskType mask_type);
+    ttml::metal::AttentionMaskType mask_type,
+    ttml::metal::ops::ring_sdpa::RingDirection ring_direction);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw_kv(
     const ttnn::Tensor& grad_output,
@@ -79,6 +80,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw_kv(
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    ttml::metal::AttentionMaskType mask_type);
+    ttml::metal::AttentionMaskType mask_type,
+    ttml::metal::ops::ring_sdpa::RingDirection ring_direction);
 
 }  // namespace ttml::metal::prim

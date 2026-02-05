@@ -44,9 +44,8 @@ public:
         ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
 
         // Configure parallelism context for CP (CP axis will be 0)
-        auto* device = &ttml::autograd::ctx().get_device();
-        ttml::autograd::ctx().get_parallelism_context().configure(
-            device, /*enable_dp=*/false, /*enable_tp=*/false, /*enable_cp=*/true);
+        ttml::autograd::ctx().initialize_parallelism_context(
+            {.enable_ddp = false, .enable_tp = true, .enable_cp = true});
     }
 
     static void TearDownTestSuite() {

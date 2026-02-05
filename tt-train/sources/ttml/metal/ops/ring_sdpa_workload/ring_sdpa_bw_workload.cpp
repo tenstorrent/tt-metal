@@ -20,21 +20,35 @@ using ttml::metal::AttentionMaskType;
 
 namespace {
 
+using RingDirection = ttnn_fixed::distributed::RingShiftDirection;
+
 // Determine if device should execute at this step and which mask type to use
 // Returns: (should_execute, mask_type_to_use)
 std::pair<bool, AttentionMaskType> get_device_execution_info(
-    uint32_t device_ring_id, uint32_t step, uint32_t ring_size, AttentionMaskType mask_type) {
+    uint32_t device_ring_id,
+    uint32_t step,
+    uint32_t ring_size,
+    AttentionMaskType mask_type,
+    RingDirection ring_direction) {
     if (mask_type != AttentionMaskType::Causal) {
         // Non-causal: all devices execute with no mask (full attention)
         return {true, AttentionMaskType::None};
     }
 
     // Causal masking logic for ring attention:
-    // At step s, device d processes K/V from device (d + s) % ring_size
-    // - If src == device_id (step 0): diagonal chunk, use causal mask
+    // At step s, device d processes K/V from source device based on ring direction
+    // - Backward direction: src = (d + s) % ring_size
+    // - Forward direction: src = (d - s + ring_size) % ring_size
+    // Then apply causal logic:
+    // - If src == device_id: diagonal chunk, use causal mask
     // - If src < device_id: earlier chunk, use full attention (no mask)
     // - If src > device_id: later chunk, skip (all positions masked)
-    uint32_t src_device = (device_ring_id + step) % ring_size;
+    uint32_t src_device;
+    if (ring_direction == RingDirection::Backward) {
+        src_device = (device_ring_id + step) % ring_size;
+    } else {
+        src_device = (device_ring_id - step + ring_size) % ring_size;
+    }
 
     if (src_device == device_ring_id) {
         return {true, AttentionMaskType::Causal};  // Diagonal: use causal mask
@@ -72,6 +86,7 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t step = operation_attributes.step;
     const auto mask_type = operation_attributes.mask_type;
+    const auto ring_direction = operation_attributes.ring_direction;
 
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, shared_variables_t> shared_vars;
@@ -89,7 +104,7 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
         uint32_t device_ring_id = mesh_coord[ring_axis];
 
         auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type);
+            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
 
         if (!should_execute) {
             continue;
@@ -187,6 +202,7 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t step = operation_attributes.step;
     const auto mask_type = operation_attributes.mask_type;
+    const auto ring_direction = operation_attributes.ring_direction;
 
     // Get mesh buffers
     auto grad_output_mesh_buffer = grad_output.mesh_buffer();
@@ -204,7 +220,7 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
         // Determine effective mask type for this device
         uint32_t device_ring_id = start_coord[ring_axis];
         auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type);
+            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
         (void)should_execute;  // Already filtered in create_mesh_workload
 
         // Create DeviceStorage objects for this coordinate
@@ -334,6 +350,7 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t step = operation_attributes.step;
     const auto mask_type = operation_attributes.mask_type;
+    const auto ring_direction = operation_attributes.ring_direction;
 
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, shared_variables_t> shared_vars;
@@ -352,7 +369,7 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
         uint32_t device_ring_id = mesh_coord[ring_axis];
 
         auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type);
+            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
 
         if (!should_execute) {
             continue;
@@ -455,6 +472,7 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t step = operation_attributes.step;
     const auto mask_type = operation_attributes.mask_type;
+    const auto ring_direction = operation_attributes.ring_direction;
 
     // Get mesh buffers
     auto grad_output_mesh_buffer = grad_output.mesh_buffer();
@@ -473,7 +491,7 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
         // Determine effective mask type for this device
         uint32_t device_ring_id = start_coord[ring_axis];
         auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type);
+            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
 
         // Create DeviceStorage objects for this coordinate
         std::vector<tt::tt_metal::distributed::MeshCoordinate> single_coord_vec{start_coord};

@@ -41,10 +41,12 @@ RingSDPABwQDeviceOperation::tensor_return_value_t RingSDPABwQDeviceOperation::cr
 tt::stl::hash::hash_t RingSDPABwQDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     return tt::stl::hash::hash_objects(
+        0,  // Q marker (different from KV)
         attrs.ring_size,
         attrs.ring_axis,
         attrs.step,
-        attrs.mask_type,
+        static_cast<int>(attrs.mask_type),
+        static_cast<int>(attrs.ring_direction),
         tensor_args.query.logical_shape(),
         tensor_args.query.dtype(),
         tensor_args.key.logical_shape());
@@ -82,11 +84,12 @@ tt::stl::hash::hash_t RingSDPABwKVDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // Hash based on operation configuration - buffer addresses are updated via override_runtime_arguments
     return tt::stl::hash::hash_objects(
-        1,  // KV marker
+        1,  // KV marker (different from Q)
         attrs.ring_size,
         attrs.ring_axis,
         attrs.step,
         static_cast<int>(attrs.mask_type),
+        static_cast<int>(attrs.ring_direction),
         tensor_args.query.tensor_spec().logical_shape(),
         tensor_args.query.dtype(),
         tensor_args.key.tensor_spec().logical_shape());
@@ -107,11 +110,16 @@ ttnn::Tensor ring_sdpa_bw_q(
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    ttml::metal::AttentionMaskType mask_type) {
+    ttml::metal::AttentionMaskType mask_type,
+    ttml::metal::ops::ring_sdpa::RingDirection ring_direction) {
     using OperationType = ttml::metal::ops::ring_sdpa::RingSDPABwQDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .ring_size = ring_size, .ring_axis = ring_axis, .step = step, .mask_type = mask_type};
+        .ring_size = ring_size,
+        .ring_axis = ring_axis,
+        .step = step,
+        .mask_type = mask_type,
+        .ring_direction = ring_direction};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,
@@ -137,11 +145,16 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw_kv(
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    ttml::metal::AttentionMaskType mask_type) {
+    ttml::metal::AttentionMaskType mask_type,
+    ttml::metal::ops::ring_sdpa::RingDirection ring_direction) {
     using OperationType = ttml::metal::ops::ring_sdpa::RingSDPABwKVDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .ring_size = ring_size, .ring_axis = ring_axis, .step = step, .mask_type = mask_type};
+        .ring_size = ring_size,
+        .ring_axis = ring_axis,
+        .step = step,
+        .mask_type = mask_type,
+        .ring_direction = ring_direction};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,

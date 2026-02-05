@@ -48,6 +48,7 @@ tt::stl::hash::hash_t RingSDPADeviceOperation::compute_program_hash(
         attrs.ring_axis,
         attrs.step,
         attrs.mask_type,
+        static_cast<int>(attrs.ring_direction),
         tensor_args.query.logical_shape(),
         tensor_args.query.dtype(),
         tensor_args.key.logical_shape(),
@@ -67,11 +68,16 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa(
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    ttml::metal::AttentionMaskType mask_type) {
+    ttml::metal::AttentionMaskType mask_type,
+    ttml::metal::ops::ring_sdpa::RingDirection ring_direction) {
     using OperationType = ttml::metal::ops::ring_sdpa::RingSDPADeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .ring_size = ring_size, .ring_axis = ring_axis, .step = step, .mask_type = mask_type};
+        .ring_size = ring_size,
+        .ring_axis = ring_axis,
+        .step = step,
+        .mask_type = mask_type,
+        .ring_direction = ring_direction};
 
     auto tensor_args = OperationType::tensor_args_t{
         .query = query,

@@ -7,8 +7,11 @@
 #include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::metal::ops::ring_sdpa {
+
+using RingDirection = ttnn_fixed::distributed::RingShiftDirection;
 
 // ============== Forward Pass Types ==============
 
@@ -17,6 +20,7 @@ struct RingSDPAParams {
     uint32_t ring_axis;
     uint32_t step;
     ttml::metal::AttentionMaskType mask_type;
+    RingDirection ring_direction;  // Direction K/V is shifting in the ring
 };
 
 struct RingSDPAInputs {
@@ -64,6 +68,7 @@ struct RingSDPABwQParams {
     uint32_t ring_axis;
     uint32_t step;
     ttml::metal::AttentionMaskType mask_type;
+    RingDirection ring_direction;  // Direction K/V is shifting in the ring
 };
 
 struct RingSDPABwQInputs {
@@ -113,6 +118,7 @@ struct RingSDPABwKVParams {
     uint32_t ring_axis;
     uint32_t step;
     ttml::metal::AttentionMaskType mask_type;
+    RingDirection ring_direction;  // Direction K/V is shifting in the ring
 };
 
 struct RingSDPABwKVInputs {

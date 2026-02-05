@@ -78,13 +78,6 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Layout::TILE,
         std::ref(*mesh_device));
 
-    // Helper tensors for computation
-    ttnn::Tensor ones = ttnn::ones(
-        ttnn::Shape{batch_num, heads, seq_len_local, 1U},
-        ttnn::DataType::BFLOAT16,
-        ttnn::Layout::TILE,
-        std::ref(*mesh_device));
-
     // Allocate output and intermediate tensors (mesh tensors)
     // These will be reused each step
     ttnn::Tensor output_tensor = ttnn::empty_like(query_tensor);
@@ -95,14 +88,8 @@ autograd::TensorPtr ring_attention_sdpa(
         mesh_device,
         ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
 
-    // Store intermediates, outputs, and weights for each step (needed for backward pass)
-    // NOTE: We do NOT store K/V - they are re-obtained via ring shifting in backward
-    std::vector<ttnn::Tensor> step_intermediates;
-    std::vector<ttnn::Tensor> step_outputs;
-    std::vector<ttnn::Tensor> step_weights;  // Weight applied to each chunk's output
-    step_intermediates.reserve(ring_size);
-    step_outputs.reserve(ring_size);
-    step_weights.reserve(ring_size);
+    // NOTE: We do NOT store K/V or step outputs - they are recomputed via ring shifting in backward
+    // We only store final global statistics needed for weight computation
 
     // Helper lambda to print tensor stats for debugging
     // Create "no contribution" intermediate values for skipped devices
@@ -141,6 +128,7 @@ autograd::TensorPtr ring_attention_sdpa(
 
         // Call the cached device operation
         // No mask tensors needed - SDPA kernel generates causal mask internally
+        // Forward pass uses Backward ring direction (device i receives from device (i+1) % ring_size)
         auto [out_tensor, inter_tensor] = ttml::metal::prim::ring_sdpa(
             query_tensor,
             k_current,
@@ -150,7 +138,8 @@ autograd::TensorPtr ring_attention_sdpa(
             ring_size,
             cp_axis_value,
             step,
-            mask_type);
+            mask_type,
+            ttml::metal::ops::ring_sdpa::RingDirection::Backward);
 
         // Extract intermediates for online softmax combination
         // Intermediate shape: (B, H, S, 64)
@@ -211,14 +200,7 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Tensor scaled_new = ttnn::multiply(output_tensor, new_weight);
         output_accum = ttnn::add(scaled_old, scaled_new);
 
-        // Store intermediates, outputs, and K/V for backward pass
-        // We need to copy these tensors since they will be overwritten in the next step
-        step_intermediates.push_back(ttnn::empty_like(intermediate_tensor));
-        ttnn::copy(intermediate_tensor, step_intermediates.back());
-        step_outputs.push_back(ttnn::empty_like(output_tensor));
-        ttnn::copy(output_tensor, step_outputs.back());
-        // NOTE: K/V not stored - will be re-obtained via ring shifting in backward
-        // NOTE: Weights are computed AFTER the forward loop using final global statistics
+        // NOTE: We don't store outputs or intermediates - they are recomputed in backward
 
         // Step 7: Update global state
         global_max = new_global_max;
@@ -234,48 +216,26 @@ autograd::TensorPtr ring_attention_sdpa(
         }
     }
 
-    // Recompute effective weights using FINAL global statistics
-    // The weights stored during the loop were intermediate values, not final effective weights!
-    // eff_weight_j = sum_exp_j * exp(max_j - global_max_final) / global_sum_exp_final
-    ttnn::Tensor recip_final_sum = ttnn::reciprocal(global_sum_exp);
-    step_weights.clear();
-    for (uint32_t step = 0; step < ring_size; ++step) {
-        // Extract max and sum_exp from stored intermediates
-        const ttnn::SmallVector<uint32_t> slice_step_eff = {1, 1, 1, 1};
-        const ttnn::SmallVector<uint32_t> max_start_eff = {0, 0, 0, 0};
-        const ttnn::SmallVector<uint32_t> max_end_eff = {batch_num, heads, seq_len_local, 1};
-        const ttnn::SmallVector<uint32_t> recip_start_eff = {0, 0, 0, 32};
-        const ttnn::SmallVector<uint32_t> recip_end_eff = {batch_num, heads, seq_len_local, 33};
-
-        ttnn::Tensor max_j = ttnn::slice(step_intermediates[step], max_start_eff, max_end_eff, slice_step_eff);
-        ttnn::Tensor recip_sum_exp_j =
-            ttnn::slice(step_intermediates[step], recip_start_eff, recip_end_eff, slice_step_eff);
-        ttnn::Tensor sum_exp_j = ttnn::reciprocal(recip_sum_exp_j);
-
-        // Compute effective weight: sum_exp_j * exp(max_j - global_max) / global_sum_exp
-        ttnn::Tensor max_diff = ttnn::subtract(max_j, global_max);
-        ttnn::Tensor exp_diff = ttnn::exp(max_diff);
-        ttnn::Tensor numerator = ttnn::multiply(sum_exp_j, exp_diff);
-        ttnn::Tensor eff_weight = ttnn::multiply(numerator, recip_final_sum);
-
-        step_weights.push_back(eff_weight);
-    }
-
     // Create output tensor for autograd graph
     auto out = autograd::create_tensor(output_accum);
+
+    // Store final global statistics (needed for weight computation in backward)
+    // These are the ONLY tensors we store - outputs/intermediates are recomputed
+    ttnn::Tensor final_global_max = global_max;
+    ttnn::Tensor final_global_sum_exp = global_sum_exp;
 
     // After forward pass completes, K/V has been shifted backward (ring_size-1) times
     // So k_current is at position k1, v_current is at position v1
     // We capture this position and shift forward during backward to replay
 
     // Register backward function
+    // NOTE: We only capture final global stats - outputs/intermediates are recomputed
     autograd::GradFunction grad_fn = [query,
                                       key,
                                       value,
                                       out,
-                                      step_intermediates,
-                                      step_outputs,
-                                      step_weights,
+                                      final_global_max,
+                                      final_global_sum_exp,
                                       k_current,  // K at end of forward (position k1)
                                       v_current,  // V at end of forward (position v1)
                                       ring_size,
@@ -283,21 +243,40 @@ autograd::TensorPtr ring_attention_sdpa(
                                       use_causal_mask]() mutable {
         // Get gradient w.r.t. output
         const auto& grad_output = out->get_grad();
+        const auto& query_tensor = query->get_value();
+        auto* mesh_device = query_tensor.device();
+        auto [batch_num, heads, seq_len_local, dim] = query_tensor.logical_shape().to_array_4D();
 
         // Determine mask type for backward pass
         ttml::metal::AttentionMaskType bw_mask_type =
             use_causal_mask ? ttml::metal::AttentionMaskType::Causal : ttml::metal::AttentionMaskType::None;
 
         // Initialize gradient accumulators using raw ttnn::Tensor
-        ttnn::Tensor grad_Q_accum = ttnn::zeros_like(query->get_value());
+        ttnn::Tensor grad_Q_accum = ttnn::zeros_like(query_tensor);
         ttnn::Tensor grad_K_accum = ttnn::zeros_like(key->get_value());
         ttnn::Tensor grad_V_accum = ttnn::zeros_like(value->get_value());
 
-        // Allocate temporary gradient tensors for each step
-        // Use zeros_like to ensure clean state when workloads are skipped (causal masking)
-        ttnn::Tensor grad_Q_step = ttnn::zeros_like(query->get_value());
+        // Allocate temporary tensors for recomputation and gradients
+        ttnn::Tensor recomputed_output = ttnn::empty_like(query_tensor);
+        ttnn::Tensor recomputed_intermediate = ttnn::empty(
+            ttnn::Shape{batch_num, heads, seq_len_local, 64U},
+            ttnn::DataType::BFLOAT16,
+            ttnn::Layout::TILE,
+            mesh_device,
+            ttnn::MemoryConfig(ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
+        ttnn::Tensor grad_Q_step = ttnn::zeros_like(query_tensor);
         ttnn::Tensor grad_K_step = ttnn::zeros_like(key->get_value());
         ttnn::Tensor grad_V_step = ttnn::zeros_like(value->get_value());
+
+        // Precompute reciprocal of final sum for weight calculation
+        ttnn::Tensor recip_final_sum = ttnn::reciprocal(final_global_sum_exp);
+
+        // Slice parameters for extracting max and sum_exp from intermediate
+        const ttnn::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
+        const ttnn::SmallVector<uint32_t> max_start = {0, 0, 0, 0};
+        const ttnn::SmallVector<uint32_t> max_end = {batch_num, heads, seq_len_local, 1};
+        const ttnn::SmallVector<uint32_t> recip_start = {0, 0, 0, 32};
+        const ttnn::SmallVector<uint32_t> recip_end = {batch_num, heads, seq_len_local, 33};
 
         // Loop over ring steps in reverse order (from last to first)
         for (int step = ring_size - 1; step >= 0; --step) {
@@ -315,49 +294,72 @@ autograd::TensorPtr ring_attention_sdpa(
                 ttnn::copy(zero_V, grad_V_step);
             }
 
-            // Get the stored intermediates, outputs, and weight for this step
-            const auto& step_intermediate = step_intermediates[step_idx];
-            const auto& step_output = step_outputs[step_idx];
-            const auto& step_weight = step_weights[step_idx];
-            // K/V are obtained via ring shifting (not stored)
+            // RECOMPUTE: Run forward SDPA to get output and intermediate for this step
+            // K/V are already at the correct ring position (same as forward used at this step)
+            // Use Backward direction (same as forward) since src = (device + step) % ring_size
+            auto [step_output, step_intermediate] = ttml::metal::prim::ring_sdpa(
+                query_tensor,
+                k_current,
+                v_current,
+                recomputed_output,
+                recomputed_intermediate,
+                ring_size,
+                cp_axis_value,
+                step_idx,
+                bw_mask_type,
+                ttml::metal::ops::ring_sdpa::RingDirection::Backward);
+
+            // RECOMPUTE: Calculate effective weight from recomputed intermediate and final global stats
+            // eff_weight = sum_exp_j * exp(max_j - global_max_final) / global_sum_exp_final
+            ttnn::Tensor max_j = ttnn::slice(step_intermediate, max_start, max_end, slice_step);
+            ttnn::Tensor recip_sum_exp_j = ttnn::slice(step_intermediate, recip_start, recip_end, slice_step);
+            ttnn::Tensor sum_exp_j = ttnn::reciprocal(recip_sum_exp_j);
+            ttnn::Tensor max_diff = ttnn::subtract(max_j, final_global_max);
+            ttnn::Tensor exp_diff = ttnn::exp(max_diff);
+            ttnn::Tensor numerator = ttnn::multiply(sum_exp_j, exp_diff);
+            ttnn::Tensor step_weight = ttnn::multiply(numerator, recip_final_sum);
 
             // Scale grad_output by the weight applied to this chunk in forward
             // d(chunk_output_j) = weight_j * d(final_output)
             ttnn::Tensor scaled_grad_output = ttnn::multiply(grad_output, step_weight);
 
             // Call backward Q device operation (cached)
-            // No mask tensors needed - SDPA kernel generates causal mask internally
+            // Uses recomputed step_output and step_intermediate
+            // Use Backward direction (same as forward) since K/V is at same position
             auto grad_Q_result = ttml::metal::prim::ring_sdpa_bw_q(
                 scaled_grad_output,
-                step_output,
-                query->get_value(),
-                k_current,  // K at current ring position
-                v_current,  // V at current ring position
-                step_intermediate,
+                step_output,  // Recomputed
+                query_tensor,
+                k_current,          // K at current ring position
+                v_current,          // V at current ring position
+                step_intermediate,  // Recomputed
                 grad_Q_step,
                 ring_size,
                 cp_axis_value,
                 step_idx,
-                bw_mask_type);
+                bw_mask_type,
+                ttml::metal::ops::ring_sdpa::RingDirection::Backward);
 
             // Accumulate grad_Q locally (Q doesn't move in the ring)
             grad_Q_accum = ttnn::add(grad_Q_accum, grad_Q_step);
 
             // Call backward KV device operation (cached)
-            // No mask tensors needed - SDPA kernel generates causal mask internally
+            // Uses recomputed step_output and step_intermediate
+            // Use Backward direction (same as forward) since K/V is at same position
             auto [grad_K_result, grad_V_result] = ttml::metal::prim::ring_sdpa_bw_kv(
                 scaled_grad_output,
-                step_output,
-                query->get_value(),
-                k_current,  // K at current ring position
-                v_current,  // V at current ring position
-                step_intermediate,
+                step_output,  // Recomputed
+                query_tensor,
+                k_current,          // K at current ring position
+                v_current,          // V at current ring position
+                step_intermediate,  // Recomputed
                 grad_K_step,
                 grad_V_step,
                 ring_size,
                 cp_axis_value,
                 step_idx,
-                bw_mask_type);
+                bw_mask_type,
+                ttml::metal::ops::ring_sdpa::RingDirection::Backward);
 
             // Accumulate into grad_K/V buffers
             grad_K_accum = ttnn::add(grad_K_accum, grad_K_step);
