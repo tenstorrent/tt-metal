@@ -443,10 +443,6 @@ def generate_sdxl_test_inputs():
     inputs.append((1, 960, 32, 32))
     inputs.append((1, 960, 64, 64))
     inputs.append((1, 640, 64, 64))
-
-    # VAE inputs
-    # TODO(fbajraktari): ...
-
     ###### END: 512x512 resolution ######
 
     return inputs

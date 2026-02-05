@@ -321,7 +321,7 @@ def test_demo_base_and_refiner(
     sigmas,
 ):
     if image_resolution == (512, 512) and use_refiner and not vae_on_device:
-        pytest.skip("512x512 image resolution is not yet supported for " "refiner and works only with VAE on the host.")
+        pytest.skip("512x512 image resolution is not yet supported for refiner and works only with VAE on the host.")
 
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(

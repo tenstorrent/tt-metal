@@ -31,10 +31,10 @@ from models.common.utility_functions import profiler
 
 @dataclass
 class TtSDXLPipelineConfig:
-    image_resolution: tuple
     num_inference_steps: int
     guidance_scale: float
     is_galaxy: bool
+    image_resolution: tuple = (1024, 1024)
     capture_trace: bool = True
     vae_on_device: bool = True
     encoders_on_device: bool = True
