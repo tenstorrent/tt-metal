@@ -203,7 +203,11 @@ class Generator:
         )
         ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Prefill Trace")
-        return trace_id, tt_out_trace, *device_inputs
+        # Allocate fresh device tensors for trace execution (trace capture tensors are part of trace graph)
+        device_inputs_for_execution = copy_host_to_device(
+            host_inputs, mesh_device=self.model_args[model_id].mesh_device
+        )
+        return trace_id, tt_out_trace, *device_inputs_for_execution
 
     def _easy_trace_prefill(
         self,
@@ -228,6 +232,9 @@ class Generator:
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out_trace
+            # On first call (trace capture), return the output from compilation run
+            # Don't try to execute the trace yet as device tensors are still in capture state
+            return tt_out_trace
 
         tt_out_trace = self._prefill_forward_trace(
             self.trace_id_prefill[trace_key],

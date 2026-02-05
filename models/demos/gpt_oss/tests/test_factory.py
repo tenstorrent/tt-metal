@@ -120,7 +120,7 @@ def parametrize_mesh_with_fabric():
         raise ValueError(f"Invalid number of devices: {num_devices}")
     fabric_params = [
         pytest.param(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 30000000}, id="fabric_1d_ring"
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 39051264}, id="fabric_1d_ring"
         ),
     ]
 

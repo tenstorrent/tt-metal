@@ -358,6 +358,24 @@ class Model:
 
         return logits
 
+    def process_logits_after_prefill_trace(self, logits, last_token_idx):
+        """Process logits after prefill trace to extract last token.
+
+        For traced prefill, the full sequence logits are returned. This method:
+        1. Slices to get the last token (aligned to 32)
+        2. Converts to ROW_MAJOR layout
+
+        Note: norm and lm_head are already applied in ttnn_prefill_forward
+        """
+        get_last_token = (last_token_idx // 32) * 32
+        logits = ttnn.slice(
+            logits,
+            (0, 0, get_last_token, 0),
+            (1, 1, get_last_token + 32, logits.shape[-1]),
+        )
+        logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return logits
+
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
         Prepare inputs for decode mode - matches tt_transformers interface (4 values).
@@ -441,7 +459,7 @@ class Model:
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def prepare_inputs_prefill_trace(
+    def prepare_prefill_inputs_trace(
         self, tokens, start_pos=0, page_table=None, chunk_page_table=None, last_token_idx=None
     ):
         """Prepare inputs on host so we later send them to device"""
