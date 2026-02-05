@@ -43,6 +43,7 @@ tt::tt_fabric::FabricTelemetryStaticInfo unpack_static_info_from_hal(const Stati
     dst.device_id = src.device_id();
     dst.direction = src.direction();
     dst.fabric_config = src.fabric_config();
+    dst.version = src.version();
     dst.supported_stats = static_cast<tt::tt_fabric::FabricTelemetryStatisticMask>(src.supported_stats());
     return dst;
 }
