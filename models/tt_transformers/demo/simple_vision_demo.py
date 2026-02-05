@@ -8,13 +8,12 @@ from typing import Optional
 
 from loguru import logger
 from PIL import Image as PIL_Image
-from pkg_resources import resource_filename
 from transformers import AutoProcessor
 
 from models.common.llama_models import create_vision_mask, extract_images_from_messages, sample_top_p
 from models.tt_transformers.tt.generator import create_submeshes
 
-IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
+IMG_PATH = (Path(__file__).parent / "sample_prompts/llama_images").resolve()
 
 import os
 import time
