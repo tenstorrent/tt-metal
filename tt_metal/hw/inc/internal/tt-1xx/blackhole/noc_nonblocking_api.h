@@ -257,13 +257,21 @@ inline __attribute__((always_inline)) uint32_t noc_get_nonposted_writes_issued(u
 inline __attribute__((always_inline)) uint32_t noc_get_nonposted_writes_acked(uint32_t noc) {
     return noc_nonposted_writes_acked[noc];
 }
+// Returns number of nonposted atomic acks received on this noc.
+inline __attribute__((always_inline)) uint32_t noc_get_nonposted_atomics_acked(uint32_t noc) {
+    return noc_nonposted_atomics_acked[noc];
+}
+// Returns number of posted write transactions issued on this noc.
+inline __attribute__((always_inline)) uint32_t noc_get_posted_writes_issued(uint32_t noc) {
+    return noc_posted_writes_num_issued[noc];
+}
 
-// Adds delta to nonposted-writes-acked (e.g. for multicast write accounting).
-inline __attribute__((always_inline)) void noc_adjust_nonposted_writes_acked(uint32_t noc, uint32_t delta) {
+// Increments nonposted-writes-acked by delta (e.g. for multicast write accounting).
+inline __attribute__((always_inline)) void noc_increment_nonposted_writes_acked(uint32_t noc, uint32_t delta) {
     noc_nonposted_writes_acked[noc] += delta;
 }
-// Adds delta to nonposted-writes-issued (e.g. for multicast write accounting).
-inline __attribute__((always_inline)) void noc_adjust_nonposted_writes_issued(uint32_t noc, uint32_t delta) {
+// Increments nonposted-writes-issued by delta (e.g. for multicast write accounting).
+inline __attribute__((always_inline)) void noc_increment_nonposted_writes_issued(uint32_t noc, uint32_t delta) {
     noc_nonposted_writes_num_issued[noc] += delta;
 }
 
@@ -273,13 +281,26 @@ inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_at_count(ui
     return (int32_t)(sent - expected_count) >= 0;
 }
 
-// Writes NOC_TARG_ADDR_COORDINATE for cmd_buf (target (x,y) for transactions).
+// Writes NOC_TARG_ADDR_COORDINATE for cmd_buf. Takes NOC coordinates from NOC_XY_COORD(x, y).
 inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr_coordinate(
     uint32_t noc, uint32_t cmd_buf, uint32_t coord) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, coord);
 }
 
-// Writes NOC_RET_ADDR_LO and NOC_RET_ADDR_COORDINATE from 64-bit ret_addr (e.g. atomic return).
+// Writes NOC_TARG_ADDR_LO and NOC_TARG_ADDR_COORDINATE from full NOC address from NOC_XY_ADDR(x, y, addr).
+inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr(
+    uint32_t noc, uint32_t cmd_buf, uint64_t targ_addr) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(targ_addr & 0xFFFFFFFF));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(targ_addr >> NOC_ADDR_COORD_SHIFT));
+}
+
+// Writes NOC_RET_ADDR_COORDINATE for cmd_buf. Takes NOC coordinates from NOC_XY_COORD(x, y).
+inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr_coordinate(
+    uint32_t noc, uint32_t cmd_buf, uint32_t coord) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, coord);
+}
+
+// Writes NOC_RET_ADDR_LO and NOC_RET_ADDR_COORDINATE from full NOC address from NOC_XY_ADDR(x, y, addr).
 inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr(uint32_t noc, uint32_t cmd_buf, uint64_t ret_addr) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(ret_addr & 0xFFFFFFFF));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(ret_addr >> NOC_ADDR_COORD_SHIFT));

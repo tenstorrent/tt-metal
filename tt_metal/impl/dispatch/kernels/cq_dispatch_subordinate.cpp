@@ -239,12 +239,12 @@ void process_go_signal_mcast_cmd() {
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
             (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
 
-        // Multicast write accounting: adjust counters for num_dests acks and one issued transaction.
-        noc_adjust_nonposted_writes_acked(noc_index, num_dests);
+        // Multicast write accounting: increment counters for num_dests acks and one issued transaction.
+        noc_increment_nonposted_writes_acked(noc_index, num_dests);
 
         wait_for_workers(wait_count, wait_stream);
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
-        noc_adjust_nonposted_writes_issued(noc_index, 1);
+        noc_increment_nonposted_writes_issued(noc_index, 1);
     } else {
         wait_for_workers(wait_count, wait_stream);
     }
