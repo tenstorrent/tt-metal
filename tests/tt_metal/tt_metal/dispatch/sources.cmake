@@ -16,6 +16,7 @@ set(UNIT_TESTS_DISPATCH_BASIC_SOURCES
     dispatch_buffer/test_sub_device.cpp
     dispatch_buffer/test_BufferCorePageMapping_Iterator.cpp
     dispatch_program/test_dispatch.cpp
+    dispatch_program/test_dataflow_cb.cpp
     dispatch_program/test_global_circular_buffers.cpp
     dispatch_trace/test_sub_device.cpp
     dispatch_util/test_ringbuffer_cache.cpp
