@@ -153,7 +153,7 @@ jobs:
     if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: ubuntu-latest
     env:
-      TTNN_TESTS_YAML: .github/ttnn-tests.yaml
+      TTNN_TESTS_YAML: tests/pipeline_reorg/ttnn-tests.yaml
     outputs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
     steps:
@@ -187,7 +187,7 @@ jobs:
     if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: ubuntu-latest
     env:
-      TTSIM_SKIP_LIST_YAML: .github/ttsim-skip-list.yaml
+      TTSIM_SKIP_LIST_YAML: tests/pipeline_reorg/ttsim-skip-list.yaml
     timeout-minutes: ${{ matrix.test-group.timeout || inputs.job-timeout }}
     name: "TTNN ${{ matrix.test-group.name }} - ${{ matrix.arch.name }}"
     strategy:

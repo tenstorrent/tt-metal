@@ -72,7 +72,7 @@ jobs:
   define-ttnn-tests:
     runs-on: ubuntu-latest
     env:
-      TTNN_TESTS_YAML: .github/ttnn-tests.yaml
+      TTNN_TESTS_YAML: tests/pipeline_reorg/ttnn-tests.yaml
     outputs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
     steps:
