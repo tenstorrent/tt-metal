@@ -21,6 +21,7 @@ FORCE_INLINE void fill_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
 template <bool half_tile>
 FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t scaler) {
     ASSERT(cb_id < NUM_CIRCULAR_BUFFERS);
+    ASSERT(get_cb_interface(cb_id).fifo_num_pages == 1);
     // Verify scaler is properly packed: high 16 bits must equal low 16 bits
     ASSERT((scaler >> 16) == (scaler & 0xFFFF));
 
