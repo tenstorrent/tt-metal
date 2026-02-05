@@ -34,6 +34,8 @@ void kernel_main() {
     constexpr uint32_t enable_mul = get_named_compile_time_arg_val("dram_mm_enable_mul");
     constexpr uint32_t cb_mul_in1 = get_named_compile_time_arg_val("dram_mm_cb_mul_in1");
     constexpr uint32_t mul_num_tiles = get_named_compile_time_arg_val("dram_mm_mul_num_tiles");
+    constexpr uint32_t enable_scalar_mul = get_named_compile_time_arg_val("dram_mm_enable_scalar_mul");
+    constexpr uint32_t cb_scalar_src = get_named_compile_time_arg_val("dram_mm_cb_scalar_src");
 
     // Setup sharded persistent buffers
     if constexpr (Core::is_active_core) {
@@ -45,6 +47,11 @@ void kernel_main() {
             // CB 6 (mul_in1): mul_tensor viewed as 16x16
             unified_kernels::setup_sharded_buffer(cb_mul_in1, mul_num_tiles);
         }
+        if constexpr (enable_scalar_mul == 1) {
+            // CB 10 (scalar_src): scalar tensor 1x16, BRISC will read from this
+            unified_kernels::setup_sharded_buffer(cb_scalar_src, 1);
+        }
+        // Note: CB 9 (scalar) is NOT backed by tensor - BRISC will fill it
     }
 
     // MulCTArgs for NCRISC - no-op
@@ -73,9 +80,13 @@ void kernel_main() {
 
     // MulCTArgs: waits for final output (cb_out after mul writes to it)
     // Uses mul_num_tiles (1 tile of 16x16)
+    // Also handles scalar copy if enabled
     using MulCTArgs = deepseek_b1_ops::EltwiseMul::WriterCTArgs<
         get_named_compile_time_arg_val("dram_mm_cb_final_out"),
-        get_named_compile_time_arg_val("dram_mm_mul_num_tiles")>;
+        get_named_compile_time_arg_val("dram_mm_mul_num_tiles"),
+        get_named_compile_time_arg_val("dram_mm_enable_scalar_mul"),
+        get_named_compile_time_arg_val("dram_mm_cb_scalar"),
+        get_named_compile_time_arg_val("dram_mm_cb_scalar_src")>;
 
 #elif defined(COMPILE_FOR_TRISC)
     // Matmul writes to dram_mm_cb_out (CB 4 when mul disabled, CB 8 when mul enabled)
@@ -94,13 +105,16 @@ void kernel_main() {
 
     // MulCTArgs: CB 7 * CB 6 -> CB 4 (all 16x16 tiles)
     // cb_in0_wait = dram_mm_cb_out (wait on matmul output before reading aliased CB 7)
+    // Optional scalar multiply: result * cb_scalar -> result
     using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
         get_named_compile_time_arg_val("dram_mm_cb_mul_in0"),
         get_named_compile_time_arg_val("dram_mm_cb_mul_in1"),
         get_named_compile_time_arg_val("dram_mm_cb_mul_out"),
         get_named_compile_time_arg_val("dram_mm_mul_num_tiles"),
         get_named_compile_time_arg_val("dram_mm_cb_out"),
-        get_named_compile_time_arg_val("dram_mm_per_core_n")>;
+        get_named_compile_time_arg_val("dram_mm_per_core_n"),
+        get_named_compile_time_arg_val("dram_mm_enable_scalar_mul"),
+        get_named_compile_time_arg_val("dram_mm_cb_scalar")>;
 #endif
 
     // ========================================================================
@@ -116,6 +130,7 @@ void kernel_main() {
     //   - mul_tensor is in cb_mul_in1 (CB 6, 1 tile of 16x16)
     //   - cb_mul_in0 (CB 7) views same memory as CB 8 but with 16x16 format
     //   - Mul waits on CB 8, then reads cb_mul_in0 * cb_mul_in1 -> cb_mul_out
+    //   - If scalar_mul enabled, also multiplies by scalar from CB 9
     // ========================================================================
     if constexpr (enable_mul == 1) {
         deepseek_b1_ops::EltwiseMul::Op<MulCTArgs, Core::is_active_core> mul_op;

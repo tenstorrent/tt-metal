@@ -91,11 +91,14 @@ class DRAMStreamingMatmul:
         input_b: torch.Tensor,
         fused_activation: str = None,
         mul_tensor: torch.Tensor = None,
+        scalar_tensor: torch.Tensor = None,
     ) -> torch.Tensor:
-        """PyTorch reference implementation with optional fused activation and mul.
+        """PyTorch reference implementation with optional fused activation, mul, and scalar.
 
         If mul_tensor is provided, computes:
             activation(input_a @ input_b) * mul_tensor
+        If scalar_tensor is also provided (1x16 tensor, uses index 0 as scalar):
+            activation(input_a @ input_b) * mul_tensor * scalar_tensor[0]
         Otherwise:
             input_a @ input_b with optional fused_activation
         """
@@ -109,6 +112,10 @@ class DRAMStreamingMatmul:
             result = activation_fn(result)
         if mul_tensor is not None:
             result = result * mul_tensor
+        if scalar_tensor is not None:
+            # Use index 0 as the scalar value (scalar_tensor is [1, 16])
+            scalar_value = scalar_tensor.flatten()[0]
+            result = result * scalar_value
         return result
 
     @staticmethod
@@ -124,6 +131,7 @@ class DRAMStreamingMatmul:
         index_tensor: ttnn.Tensor = None,  # Expert index tensor for indexed access
         mul_tensor: ttnn.Tensor = None,  # Optional tensor to multiply with matmul output (16x16 tiles)
         mm_out_tensor: ttnn.Tensor = None,  # Optional intermediate tensor for matmul output (1x32 tiles)
+        scalar_tensor: ttnn.Tensor = None,  # Optional scalar tensor (16x16 tile) to multiply after mul
     ) -> ttnn.Tensor:
         """
         Execute simplified DRAM streaming matmul.
@@ -348,6 +356,38 @@ class DRAMStreamingMatmul:
             cb_mm_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_id_mm_out, output_tensor)
             cb_descriptors.append(cb_mm_out_descriptor)
 
+        # Optional scalar tensor CB (for scalar multiply after mul)
+        enable_scalar_mul = scalar_tensor is not None
+        cb_id_scalar = 9  # 16x16 CB for mul operation (BRISC fills this)
+        cb_id_scalar_src = 10  # CB backed by scalar tensor (NCRISC sets up, BRISC reads)
+
+        if enable_scalar_mul:
+            assert enable_mul, "scalar_tensor requires mul_tensor to be provided"
+            scalar_dtype = scalar_tensor.dtype
+
+            # CB 9: 16x16 working CB for scalar mul (NOT backed by tensor)
+            # BRISC will read scalar from CB 10 and write one value here
+            scalar_tile_16x16 = ttnn.Tile([16, 16])
+            scalar_tile_desc_16x16 = ttnn.TileDescriptor(scalar_tile_16x16)
+            scalar_tile_size_16x16 = scalar_tile_16x16.get_tile_size(scalar_dtype)
+
+            cb9_format = ttnn.CBFormatDescriptor(
+                buffer_index=cb_id_scalar,
+                data_format=scalar_dtype,
+                page_size=scalar_tile_size_16x16,
+                tile=scalar_tile_desc_16x16,
+            )
+            cb9_descriptor = ttnn.CBDescriptor(
+                total_size=scalar_tile_size_16x16,  # 1 tile of 16x16
+                core_ranges=compute_cores,
+                format_descriptors=[cb9_format],
+            )
+            cb_descriptors.append(cb9_descriptor)
+
+            # CB 10: scalar source CB backed by scalar tensor (1x16 tile)
+            cb10_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_id_scalar_src, scalar_tensor)
+            cb_descriptors.append(cb10_descriptor)
+
         # ========== KERNEL ARGS ==========
 
         # CB IDs
@@ -402,6 +442,9 @@ class DRAMStreamingMatmul:
             ("dram_mm_enable_mul", 1 if enable_mul else 0),
             ("dram_mm_cb_mul_in1", cb_id_mul_in1),
             ("dram_mm_mul_num_tiles", mul_num_tiles),
+            # Scalar mul parameters (NCRISC sets up scalar source CB)
+            ("dram_mm_enable_scalar_mul", 1 if enable_scalar_mul else 0),
+            ("dram_mm_cb_scalar_src", cb_id_scalar_src if enable_scalar_mul else 0),
         ]
 
         # Named compile-time args for BRISC (in1 reader / DRAM streaming)
@@ -426,6 +469,10 @@ class DRAMStreamingMatmul:
             ("dram_mm_cb_mul_in1", cb_id_mul_in1),
             ("dram_mm_cb_final_out", cb_id_out),
             ("dram_mm_mul_num_tiles", mul_num_tiles),
+            # Scalar mul parameters
+            ("dram_mm_enable_scalar_mul", 1 if enable_scalar_mul else 0),
+            ("dram_mm_cb_scalar", cb_id_scalar if enable_scalar_mul else 0),
+            ("dram_mm_cb_scalar_src", cb_id_scalar_src if enable_scalar_mul else 0),
         ]
 
         # Named compile-time args for TRISC (compute)
@@ -445,6 +492,9 @@ class DRAMStreamingMatmul:
             ("dram_mm_cb_mul_in1", cb_id_mul_in1),
             ("dram_mm_cb_mul_out", cb_id_out),
             ("dram_mm_mul_num_tiles", mul_num_tiles),
+            # Scalar mul parameters
+            ("dram_mm_enable_scalar_mul", 1 if enable_scalar_mul else 0),
+            ("dram_mm_cb_scalar", cb_id_scalar if enable_scalar_mul else 0),
         ]
 
         # Unified kernel descriptor (same pattern as matmul)
@@ -497,6 +547,8 @@ class DRAMStreamingMatmul:
         if enable_mul:
             io_tensors.append(mul_tensor)
             io_tensors.append(mm_out_tensor)
+        if enable_scalar_mul:
+            io_tensors.append(scalar_tensor)
         ttnn.generic_op(io_tensors, program_descriptor)
 
         # Output is written in-place to output_tensor
