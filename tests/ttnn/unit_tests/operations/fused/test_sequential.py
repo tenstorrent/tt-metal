@@ -330,24 +330,22 @@ class TestSequentialChainExecution:
     The tests document the intended API and what golden results should be.
     """
 
-    @pytest.mark.skip(reason="Requires kernel CB parameterization - see docstring")
+    @pytest.mark.skip(reason="Multi-phase kernel fusion not yet implemented - requires generating fused kernel source")
     def test_layernorm_rmsnorm_layernorm_chain(self, device, test_tensors):
         """
         Test fusing LayerNorm -> RMSNorm -> LayerNorm chain.
 
-        For this to work, kernels need to accept CB indices as compile-time args.
-        The infrastructure supports this via cb_arg_positions parameter to build().
+        This test validates true multi-phase kernel fusion where:
+        1. A single fused reader reads all inputs
+        2. A single fused compute runs all phase computations sequentially
+        3. A single fused writer writes the final output
 
-        Example of what kernel modification would look like:
-        ```cpp
-        // Instead of:
-        constexpr auto cb_in = tt::CBIndex::c_0;
-        constexpr auto cb_out = tt::CBIndex::c_16;
-
-        // Use:
-        constexpr auto cb_in = get_compile_time_arg_val(CB_IN_ARG_POS);
-        constexpr auto cb_out = get_compile_time_arg_val(CB_OUT_ARG_POS);
-        ```
+        STATUS: Not yet implemented. The CB remapping infrastructure works
+        (verified by test_cb_remapping_preserves_named_args), but actual
+        execution requires generating combined kernel source code that:
+        - Wraps each phase's computation in separate scopes
+        - Uses phase-prefixed named compile-time args for CB indices
+        - Handles the complex layernorm kernel structure (macros, namespaces)
         """
         from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
@@ -379,18 +377,11 @@ class TestSequentialChainExecution:
             epsilon=1e-5,
         )
 
-        # Build chain
+        # Build chain - CB indices are automatically remapped via named_compile_time_args
         builder = SequentialChainBuilder()
         builder.add_phase(ln1_desc)
         builder.add_phase(rms_desc, input_from_previous=True)
         builder.add_phase(ln2_desc, input_from_previous=True)
-
-        # To make this work, we'd specify CB arg positions:
-        # cb_arg_positions = {
-        #     0: {0: CB_IN_ARG_POS, 16: CB_OUT_ARG_POS},  # Phase 0
-        #     1: {0: CB_IN_ARG_POS, 16: CB_OUT_ARG_POS},  # Phase 1
-        #     2: {0: CB_IN_ARG_POS, 16: CB_OUT_ARG_POS},  # Phase 2
-        # }
         fused_desc = builder.build()
 
         # Execute
@@ -746,7 +737,6 @@ void kernel_main() { }
 class TestParallelChains:
     """Tests for parallel chain creation and execution."""
 
-    @pytest.mark.skip(reason="Requires C++ binding copy support - build() hangs with multi-phase chains")
     def test_create_parallel_chain_descriptors(self, device, test_tensors):
         """Test creating parallel chain descriptors."""
         from models.experimental.ops.descriptors.sequential import create_parallel_chain_descriptors
@@ -808,7 +798,6 @@ class TestParallelChains:
             num_cbs = len(desc.descriptor.cbs)
             print(f"Chain {i}: {num_kernels} kernels, {num_cbs} CB descriptors")
 
-    @pytest.mark.skip(reason="Requires C++ binding copy support - build() hangs with multi-phase chains")
     def test_fuse_layernorm_chain(self, device, test_tensors):
         """Test the fuse_layernorm_chain convenience function."""
         from models.experimental.ops.descriptors.sequential import fuse_layernorm_chain
@@ -893,7 +882,6 @@ class TestParallelChains:
                     if name in cb_names:
                         print(f"  Found {name} -> {cb_names[name]}")
 
-    @pytest.mark.skip(reason="Requires C++ binding copy support - remap_kernel_cb_indices hangs")
     def test_cb_remapping_preserves_named_args(self, device, test_tensors):
         """Test that CB remapping works with named compile-time args."""
         from models.experimental.ops.descriptors.sequential import (
