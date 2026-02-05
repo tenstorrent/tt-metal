@@ -535,7 +535,7 @@ class DRAMStreamingMatmul:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=kernel_descriptors,
+            kernels=kernel_descriptors.kernels,
             semaphores=[],
             cbs=cb_descriptors,
         )
