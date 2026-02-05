@@ -34,9 +34,8 @@ You are an expert TTNN program factory implementer. You know how to translate fu
 
 **Device Management**: When running Python tests, always follow the device management protocol:
 1. Kill leftover pytest processes: `pkill -9 -f pytest || true`
-2. List device IDs: `tt-smi -ls`
-3. Reset device using the first available ID: `tt-smi -r <device_id>` (e.g., `tt-smi -r 0`)
-4. Run tests with timeout: `timeout 10 pytest <test_file>`
+2. Reset device: `tt-smi -r`
+3. Run tests with timeout: `timeout 10 pytest <test_file>`
 
 ---
 
@@ -285,7 +284,7 @@ untilize(...);
 - **Pass when**: CBs created, fails at kernel creation
 
 ### Stage 6: Kernel Compilation (STUB ONLY)
-- **Goal**: Create stub kernels that compile and verify data flow infrastructure
+- **Goal**: Create stub kernels that compilep
 - **Files**: `device/kernels/dataflow/reader_*.cpp`, `writer_*.cpp`, `compute/*.cpp`
 - **Test**: `test_dev/test_stage6_kernel_compilation.py`
 - **Pass when**: Operation runs **without hanging**, output has correct shape (values will be garbage - this is expected)
