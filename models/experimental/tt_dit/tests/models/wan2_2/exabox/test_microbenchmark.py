@@ -1,0 +1,466 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+This file implements microbenchmarks for Wan2.2.
+We will run microbenchmarks for two configurations: single galaxy and quad galaxy.
+On single galaxy (4x8 torus), Wan is parallelized SP=8, TP=4.
+On quad galaxy (4x32 torus), Wan is parallelized SP=32, TP=4.
+
+Ops are grouped into the following groups:
+
+## spatial layernorm
+Distributed layernorm with dynamic affine parameters.
+
+## spatial RMSNorm
+Distributed RMSNorm on spatial QK. One variant is with fused rope, the other is without.
+
+## prompt RMSNorm
+Distributed RMSNorm on prompt K.
+
+## spatial QKV
+AllGather of spatial on TP axis followed by QKV projection.
+
+## Ring Attention
+RingAttention on spatial, which is SP and TP.
+
+## Spatial dense out / unfused Q proj
+AllGather of spatial on TP axis followed by dense output / unfused Q projection, both are same shape.
+
+## prompt KV projection
+Fused KV projection linear layer on prompt.
+
+## Cross Attention
+Cross attention of spatial Q against prompt KV.
+
+## Spatial FF1
+AllGather of spatial on TP axis followed by FF1.
+
+## Spatial FF2
+FF2 followed by reduce scatter on TP axis.
+"""
+
+import pytest
+import torch
+import ttnn
+import pandas as pd
+from loguru import logger
+
+from tracy.process_model_log import (
+    get_latest_ops_log_filename,
+    run_device_profiler,
+)
+
+from .....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from .....layers.normalization import DistributedLayerNorm
+from .....parallel.manager import CCLManager
+from .....utils.test import line_params
+
+
+# Wan2.2 14B model configuration
+WAN_DIM = 5120
+WAN_FFN_DIM = 13824
+WAN_NUM_HEADS = 40
+WAN_HEAD_DIM = WAN_DIM // WAN_NUM_HEADS
+WAN_EPS = 1e-6
+
+# 14B-720p generation sequence lengths
+# Base sequence length: 75600 tokens (T=21, H=90, W=160, patch_size=(1,2,2))
+# patch_F=21, patch_H=45, patch_W=80 => N = 21 * 45 * 80 = 75600
+
+# Padded sequence lengths for different configurations
+# Must be divisible by 32 * SP_size
+SEQ_LEN_1XGLX = 75776  # 4x8 mesh, SP=8, divisible by 32*8=256
+SEQ_LEN_4XGLX_EMULATED = 18944  # 75776 / 4, emulating quad galaxy workload on single galaxy
+
+# Mesh configuration for BH Galaxy
+SP_AXIS = 1  # Sequence parallel on axis 1
+TP_AXIS = 0  # Tensor parallel on axis 0
+NUM_LINKS = 2  # BH uses 2 links
+TOPOLOGY = ttnn.Topology.Linear
+MESH_SHAPE = (4, 8)
+
+# Number of warmup and measurement iterations
+NUM_WARMUP_ITERS = 3
+NUM_MEASUREMENT_ITERS = 10
+
+# CCL op names for determining aggregation method
+CCL_OP_NAMES = [
+    "AllGather",
+    "ReduceScatter",
+]
+
+# Profiler output subdirectory
+PROFILER_OUTPUT_DIR = "wan_microbench"
+
+
+def post_process_ops_log(
+    output_logs_subdir: str,
+    float_columns: list[str] | None = None,
+    columns: list[str] | None = None,
+    op_name: str = "",
+    sum_vals: bool = True,
+    has_signposts: bool = False,
+) -> dict | pd.DataFrame:
+    """
+    Process the ops log CSV file from Tracy profiler output.
+
+    Args:
+        output_logs_subdir: Subdirectory containing profiler output
+        float_columns: List of columns to parse as float and optionally sum
+        columns: List of columns to extract as-is
+        op_name: Filter to specific op name (empty string for all ops)
+        sum_vals: If True, sum float columns; if False, return as numpy array
+        has_signposts: If True, filter to ops between start/stop signposts
+
+    Returns:
+        Dictionary of results or full DataFrame if no columns specified
+    """
+    filename = get_latest_ops_log_filename(output_logs_subdir)
+    df = pd.read_csv(filename)
+
+    if has_signposts:
+        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
+        start = markers[markers == "start"].index[0]
+        stop = markers[markers == "stop"].index[0]
+        df = df.iloc[start + 1 : stop]
+
+    if op_name != "":
+        df = df[df["OP CODE"] == op_name]
+
+    results = {}
+    if float_columns:
+        for col in float_columns:
+            df_filtered = df[df[col] != "-"]
+            if sum_vals:
+                results[col] = df_filtered[col].astype(float).sum()
+            else:
+                results[col] = df_filtered[col].astype(float).to_numpy()
+
+    if columns:
+        for col in columns:
+            df_filtered = df[df[col] != "-"]
+            results[col] = df_filtered[col]
+
+    if not float_columns and not columns:
+        return df
+
+    return results
+
+
+def is_ccl_op(op_name: str) -> bool:
+    """Check if an operation is a CCL operation."""
+    return any(ccl_name in op_name for ccl_name in CCL_OP_NAMES)
+
+
+def aggregate_device_time(df: pd.DataFrame, op_name: str) -> float:
+    """
+    Aggregate device time for an operation across all devices.
+
+    For non-CCL ops: use MAX device time across chips (worst case)
+    For CCL ops: use MIN device time across chips (slowest device determines completion)
+
+    Args:
+        df: DataFrame with profiler results for a specific op
+        op_name: Operation name for determining aggregation method
+
+    Returns:
+        Aggregated device time in microseconds
+    """
+    if df.empty:
+        return 0.0
+
+    durations_ns = df["DEVICE KERNEL DURATION [ns]"].astype(float)
+    durations_us = durations_ns / 1000.0
+
+    if is_ccl_op(op_name):
+        return durations_us.min()
+    else:
+        return durations_us.max()
+
+
+def analyze_layernorm_ops(output_logs_subdir: str, num_measurement_iters: int = NUM_MEASUREMENT_ITERS) -> dict:
+    """
+    Analyze spatial layernorm results from Tracy profiler output.
+
+    Args:
+        output_logs_subdir: Path to profiler output directory
+        num_measurement_iters: Number of measurement iterations that were run
+
+    Returns:
+        Dictionary with per-op times and total time in microseconds
+    """
+    df = post_process_ops_log(output_logs_subdir)
+
+    # Ops that make up spatial layernorm
+    layernorm_ops = [
+        ("PreAllGatherDeviceOperation", "pre_allgather"),
+        ("AllGatherAsyncDeviceOperation", "all_gather"),
+        ("PostAllGatherDeviceOperation", "post_allgather"),
+    ]
+
+    results = {}
+    total_time_us = 0.0
+
+    for op_name, short_name in layernorm_ops:
+        op_df = df[df["OP CODE"] == op_name]
+        if op_df.empty:
+            logger.warning(f"  {op_name}: NOT FOUND")
+            results[short_name] = 0.0
+            continue
+
+        # Get all call counts and take the last N (measurement iterations)
+        # Skip warmup iterations
+        call_counts = sorted(op_df["GLOBAL CALL COUNT"].unique())
+        if len(call_counts) > num_measurement_iters:
+            measurement_call_counts = call_counts[-num_measurement_iters:]
+        else:
+            measurement_call_counts = call_counts
+
+        # Aggregate across iterations
+        iter_times = []
+        for call_count in measurement_call_counts:
+            call_df = op_df[op_df["GLOBAL CALL COUNT"] == call_count]
+            agg_time = aggregate_device_time(call_df, op_name)
+            iter_times.append(agg_time)
+
+        avg_time_us = sum(iter_times) / len(iter_times) if iter_times else 0.0
+        results[short_name] = avg_time_us
+        total_time_us += avg_time_us
+
+    results["total"] = total_time_us
+    return results
+
+
+# =============================================================================
+# Tests that run the actual operations (to be profiled with Tracy)
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        [MESH_SHAPE, line_params],
+    ],
+    ids=["bh_4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "config_name, seq_len",
+    [
+        ("1xGLX_14b_720p", SEQ_LEN_1XGLX),
+        ("4xGLX_14b_720p_emulated", SEQ_LEN_4XGLX_EMULATED),
+    ],
+    ids=["1xGLX", "4xGLX_emulated"],
+)
+def test_run_spatial_layernorm(
+    mesh_device: ttnn.MeshDevice,
+    config_name: str,
+    seq_len: int,
+    reset_seeds,
+) -> None:
+    """
+    Run spatial layernorm (norm1) in Wan transformer layer.
+
+    This test is meant to be run with Tracy profiler via test_spatial_layernorm_perf.
+    It runs the DistributedLayerNorm with dynamic affine parameters.
+    """
+    torch_dtype = torch.float32
+
+    sp_factor = MESH_SHAPE[SP_AXIS]  # 8
+    tp_factor = MESH_SHAPE[TP_AXIS]  # 4
+
+    logger.info(f"Running spatial layernorm: {config_name}")
+    logger.info(f"  Sequence length: {seq_len}")
+    logger.info(f"  SP factor: {sp_factor}, TP factor: {tp_factor}")
+
+    # Create CCL manager
+    ccl_manager = CCLManager(
+        mesh_device=mesh_device,
+        num_links=NUM_LINKS,
+        topology=TOPOLOGY,
+    )
+
+    # Create DistributedLayerNorm (norm1 in transformer block)
+    norm = DistributedLayerNorm(
+        embedding_dim=WAN_DIM,
+        norm_eps=WAN_EPS,
+        norm_elementwise_affine=False,
+        bias=False,
+        mesh_axis=TP_AXIS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+    )
+
+    # Create input tensors
+    torch.manual_seed(0)
+    batch_size = 1
+
+    spatial_torch = torch.randn((1, batch_size, seq_len, WAN_DIM), dtype=torch_dtype)
+    dynamic_weight_torch = torch.randn((1, batch_size, 1, WAN_DIM), dtype=torch_dtype)
+    dynamic_bias_torch = torch.randn((1, batch_size, 1, WAN_DIM), dtype=torch_dtype)
+
+    # Convert to TT tensors with proper sharding
+    tt_spatial = bf16_tensor_2dshard(
+        spatial_torch,
+        device=mesh_device,
+        shard_mapping={SP_AXIS: 2, TP_AXIS: 3},
+    )
+    tt_dynamic_weight = bf16_tensor(
+        dynamic_weight_torch,
+        device=mesh_device,
+        mesh_axis=TP_AXIS,
+        shard_dim=3,
+    )
+    tt_dynamic_bias = bf16_tensor(
+        dynamic_bias_torch,
+        device=mesh_device,
+        mesh_axis=TP_AXIS,
+        shard_dim=3,
+    )
+
+    logger.info(f"  TT spatial shape: {tt_spatial.shape}")
+
+    # Warmup iterations
+    for _ in range(NUM_WARMUP_ITERS):
+        _ = norm(tt_spatial, dynamic_weight=tt_dynamic_weight, dynamic_bias=tt_dynamic_bias)
+    ttnn.synchronize_device(mesh_device)
+
+    # Measurement iterations
+    for _ in range(NUM_MEASUREMENT_ITERS):
+        _ = norm(tt_spatial, dynamic_weight=tt_dynamic_weight, dynamic_bias=tt_dynamic_bias)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info(f"Completed {NUM_WARMUP_ITERS} warmup + {NUM_MEASUREMENT_ITERS} measurement iterations")
+
+
+# =============================================================================
+# Performance tests that use Tracy profiler
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "config_name, seq_len",
+    [
+        ("1xGLX_14b_720p", SEQ_LEN_1XGLX),
+        ("4xGLX_14b_720p_emulated", SEQ_LEN_4XGLX_EMULATED),
+    ],
+    ids=["1xGLX", "4xGLX_emulated"],
+)
+def test_spatial_layernorm_perf(config_name: str, seq_len: int) -> None:
+    """
+    Measure device performance for spatial layernorm using Tracy profiler.
+
+    This test:
+    1. Runs test_run_spatial_layernorm with Tracy profiler
+    2. Parses the profiler output
+    3. Aggregates device times (max for non-CCL, min for CCL ops)
+    4. Prints a performance summary table
+    """
+    # Build pytest command to run the actual test
+    test_module = "models/experimental/tt_dit/tests/models/wan2_2/exabox/test_microbenchmark.py"
+    if config_name == "1xGLX_14b_720p":
+        test_id = "1xGLX"
+    else:
+        test_id = "4xGLX_emulated"
+
+    command = f"pytest {test_module}::test_run_spatial_layernorm[blackhole-{test_id}-bh_4x8] -v"
+
+    logger.info(f"Running Tracy profiler for: {config_name}")
+    logger.info(f"  Command: {command}")
+
+    # Run with Tracy profiler
+    run_device_profiler(
+        command,
+        PROFILER_OUTPUT_DIR,
+        device_analysis_types=["device_kernel_duration"],
+    )
+
+    # Analyze results
+    results = analyze_layernorm_ops(PROFILER_OUTPUT_DIR, NUM_MEASUREMENT_ITERS)
+
+    # Print results table
+    print("\n" + "=" * 80)
+    print(f"SPATIAL LAYERNORM PERFORMANCE: {config_name}")
+    print("=" * 80)
+    print(f"  Configuration: {config_name}")
+    print(f"  Sequence length: {seq_len}")
+    print(f"  Mesh shape: {MESH_SHAPE}")
+    print(f"  SP={MESH_SHAPE[SP_AXIS]}, TP={MESH_SHAPE[TP_AXIS]}")
+    print("-" * 80)
+    print(f"  {'Operation':<45} | {'Time (us)':>12} | {'Agg Method':>10}")
+    print("-" * 80)
+    print(f"  {'FusedRMSNormPreAllGatherDeviceOperation':<45} | {results['pre_allgather']:>12.2f} | {'max':>10}")
+    print(f"  {'AllGatherAsyncDeviceOperation':<45} | {results['all_gather']:>12.2f} | {'min':>10}")
+    print(f"  {'FusedRMSNormPostAllGatherDeviceOperation':<45} | {results['post_allgather']:>12.2f} | {'max':>10}")
+    print("-" * 80)
+    print(f"  {'TOTAL':<45} | {results['total']:>12.2f} |")
+    print("=" * 80 + "\n")
+
+    # Log for structured output
+    logger.info(f"[RESULT] {config_name} spatial_layernorm:")
+    logger.info(f"  pre_allgather: {results['pre_allgather']:.2f} us")
+    logger.info(f"  all_gather: {results['all_gather']:.2f} us")
+    logger.info(f"  post_allgather: {results['post_allgather']:.2f} us")
+    logger.info(f"  total: {results['total']:.2f} us")
+
+
+def test_spatial_layernorm_perf_all() -> None:
+    """
+    Run performance tests for all configurations and print a combined summary table.
+    """
+    configs = [
+        ("1xGLX_14b_720p", SEQ_LEN_1XGLX),
+        ("4xGLX_14b_720p_emulated", SEQ_LEN_4XGLX_EMULATED),
+    ]
+
+    all_results = {}
+
+    for config_name, seq_len in configs:
+        # Build pytest command
+        test_module = "models/experimental/tt_dit/tests/models/wan2_2/exabox/test_microbenchmark.py"
+        if config_name == "1xGLX_14b_720p":
+            test_id = "1xGLX"
+        else:
+            test_id = "4xGLX_emulated"
+
+        command = f"pytest {test_module}::test_run_spatial_layernorm[bh_4x8-{test_id}] -v"
+
+        logger.info(f"Running Tracy profiler for: {config_name}")
+
+        # Run with Tracy profiler
+        run_device_profiler(
+            command,
+            PROFILER_OUTPUT_DIR,
+            device_analysis_types=["device_kernel_duration"],
+        )
+
+        # Analyze results
+        results = analyze_layernorm_ops(PROFILER_OUTPUT_DIR, NUM_MEASUREMENT_ITERS)
+        all_results[config_name] = results
+
+    # Print combined summary table
+    print("\n" + "=" * 100)
+    print("SPATIAL LAYERNORM PERFORMANCE SUMMARY")
+    print("=" * 100)
+    print(
+        f"  {'Config':<30} | {'pre_ag (us)':>12} | {'all_gather (us)':>15} | {'post_ag (us)':>13} | {'Total (us)':>12}"
+    )
+    print("-" * 100)
+
+    for config_name, results in all_results.items():
+        print(
+            f"  {config_name:<30} | "
+            f"{results['pre_allgather']:>12.2f} | "
+            f"{results['all_gather']:>15.2f} | "
+            f"{results['post_allgather']:>13.2f} | "
+            f"{results['total']:>12.2f}"
+        )
+
+    print("=" * 100)
+    print("\nNotes:")
+    print("  - pre_ag/post_ag: Aggregated using MAX across devices (worst case)")
+    print("  - all_gather: Aggregated using MIN across devices (CCL completion time)")
+    print("  - 4xGLX_emulated: Emulates quad galaxy workload on single galaxy (1/4 seq len)")
+    print("")
