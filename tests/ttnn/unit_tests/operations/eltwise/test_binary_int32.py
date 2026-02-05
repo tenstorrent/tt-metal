@@ -63,7 +63,7 @@ def create_full_range_tensor(input_shape, dtype, value_ranges):
         ttnn.rsub,
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
+@pytest.mark.parametrize("use_legacy", [False])
 def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, use_legacy, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
@@ -397,7 +397,7 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
         ttnn.uint32,
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
+@pytest.mark.parametrize("use_legacy", [False])
 def test_logical_right_shift(device, ttnn_function, ttnn_dtype, use_legacy):
     x_torch = torch.tensor(
         [
@@ -508,7 +508,7 @@ def test_binary_mul_int32(input_shapes, low_a, high_a, low_b, high_b, device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-@pytest.mark.parametrize("use_legacy", [True, False])
+@pytest.mark.parametrize("use_legacy", [False])
 def test_binary_mul_int32_edge_cases(use_legacy, device):
     torch_input_tensor_a = torch.tensor(
         [

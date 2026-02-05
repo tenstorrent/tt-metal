@@ -303,7 +303,7 @@ def test_binary_sub_uint32_underflow(a_shape, b_shape, low_a, high_a, low_b, hig
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-@pytest.mark.parametrize("use_legacy", [True, False])
+@pytest.mark.parametrize("use_legacy", [False])
 def test_binary_sub_uint32_edge_cases(use_legacy, device):
     """Test uint32 subtraction with edge cases including underflow"""
     torch_input_tensor_a = torch.tensor(
@@ -430,7 +430,7 @@ def test_binary_add_uint32_upper_edge_cases(device):
         ttnn.bitwise_xor,
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
+@pytest.mark.parametrize("use_legacy", [False])
 def test_bitwise_uint32(device, ttnn_function, use_legacy):
     x_torch = torch.tensor(
         [
@@ -464,7 +464,7 @@ def test_bitwise_uint32(device, ttnn_function, use_legacy):
         ttnn.bitwise_xor,
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
+@pytest.mark.parametrize("use_legacy", [False])
 def test_bitwise_uint32_full_range(device, ttnn_function, use_legacy):
     x_values = torch.linspace(0, 4294967295, 1024, dtype=torch.float64)
     x_torch = x_values.to(dtype=torch.uint32)

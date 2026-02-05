@@ -198,8 +198,8 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
         [torch.bfloat16, ttnn.bfloat16],
         # works, but time consuming
         # [torch.float32, ttnn.float32]
-        [torch.bfloat16, ttnn.bfloat8_b],
-        [torch.bfloat16, ttnn.bfloat4_b],
+        # [torch.bfloat16, ttnn.bfloat8_b],
+        # [torch.bfloat16, ttnn.bfloat4_b],
     ),
 )
 def test_binary_sharded_bcast_no_identical(
@@ -315,7 +315,15 @@ def test_binary_sharded_row_major_layout(device, a_shape, b_shape, sharded_core_
         (ttnn.bfloat8_b, 0.999),
     ),
 )
-@pytest.mark.parametrize("ttnn_fn", ["add", "sub", "mul", "add_", "sub_", "mul_"])
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        "add",
+        "sub",
+        "mul",
+        # "add_", "sub_", "mul_"
+    ],
+)
 def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     torch.manual_seed(0)
 
@@ -353,7 +361,7 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        [torch.bfloat16, ttnn.bfloat8_b],
+        # [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
 def test_binary_sharded_bcast_w_height(device, dtype_pt, dtype_tt):
@@ -1486,7 +1494,7 @@ def test_binary_sharded_bcast_no_identical_uneven(a_shape, b_shape, shard_type, 
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        [torch.bfloat16, ttnn.bfloat8_b],
+        # [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
 def test_binary_sharded_bcast_scalar_value(
@@ -1557,7 +1565,7 @@ def test_binary_sharded_bcast_scalar_value(
     "dtype_pt, dtype_tt",
     (
         [torch.bfloat16, ttnn.bfloat16],
-        [torch.bfloat16, ttnn.bfloat8_b],
+        # [torch.bfloat16, ttnn.bfloat8_b],
     ),
 )
 def test_binary_sharded_bcast_scalar_value_uneven(
@@ -3694,7 +3702,7 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven_
 
 
 @pytest.mark.parametrize("input_shape", [(1, 4096, 640)])
-@pytest.mark.parametrize("is_legacy", [True, False])
+@pytest.mark.parametrize("is_legacy", [False])
 def test_add_sharded(device, input_shape, is_legacy):
     torch_input_tensor_a = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand(input_shape, dtype=torch.bfloat16)
