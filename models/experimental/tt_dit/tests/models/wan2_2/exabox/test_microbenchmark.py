@@ -77,6 +77,9 @@ WAN_EPS = 1e-6
 SEQ_LEN_1XGLX = 75776  # 4x8 mesh, SP=8, divisible by 32*8=256
 SEQ_LEN_4XGLX_EMULATED = 18944  # 75776 / 4, emulating quad galaxy workload on single galaxy
 
+# Prompt sequence length (text tokens, replicated across SP)
+PROMPT_SEQ_LEN = 512
+
 # Mesh configuration for BH Galaxy
 SP_AXIS = 1  # Sequence parallel on axis 1
 TP_AXIS = 0  # Tensor parallel on axis 0
@@ -502,6 +505,88 @@ def test_run_spatial_rmsnorm(
     logger.info(f"Completed {NUM_WARMUP_ITERS} warmup + {NUM_MEASUREMENT_ITERS} measurement iterations")
 
 
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        [MESH_SHAPE, line_params],
+    ],
+    ids=["bh_4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "config_name",
+    [
+        "1xGLX_14b_720p",
+        "4xGLX_14b_720p_emulated",
+    ],
+    ids=["1xGLX", "4xGLX_emulated"],
+)
+def test_run_prompt_rmsnorm(
+    mesh_device: ttnn.MeshDevice,
+    config_name: str,
+    reset_seeds,
+) -> None:
+    """
+    Run prompt RMSNorm (norm_k on prompt K) in Wan cross-attention.
+
+    This test is meant to be run with Tracy profiler via test_prompt_rmsnorm_perf.
+    It runs the DistributedRMSNorm without RoPE, as used for K normalization
+    in the cross-attention path.
+    """
+    tp_factor = MESH_SHAPE[TP_AXIS]
+    n_local_heads = WAN_NUM_HEADS // tp_factor
+
+    logger.info(f"Running prompt RMSNorm: {config_name}")
+    logger.info(f"  Prompt length: {PROMPT_SEQ_LEN}")
+    logger.info(f"  TP factor: {tp_factor}, local heads: {n_local_heads}")
+
+    # Create CCL manager
+    ccl_manager = CCLManager(
+        mesh_device=mesh_device,
+        num_links=NUM_LINKS,
+        topology=TOPOLOGY,
+    )
+
+    # Create DistributedRMSNorm (norm_k in cross-attention)
+    norm = DistributedRMSNorm(
+        embedding_dim=WAN_DIM,
+        norm_eps=WAN_EPS,
+        norm_elementwise_affine=True,
+        bias=False,
+        mesh_axis=TP_AXIS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+    )
+
+    # Load dummy weights via state dict
+    torch.manual_seed(0)
+    dummy_state_dict = {"weight": torch.randn(WAN_DIM)}
+    norm.load_state_dict(dummy_state_dict)
+
+    # Create input tensor (shape after K projection on prompt, fractured on TP)
+    # Prompt is replicated on SP, but K projection output is fractured on TP
+    # Input is [1, B, L, D_local] where L=prompt_len, D_local = D / TP
+    batch_size = 1
+    local_dim = WAN_DIM // tp_factor
+
+    input_torch = torch.randn((1, batch_size, PROMPT_SEQ_LEN, local_dim), dtype=torch.float32)
+    tt_input = bf16_tensor(input_torch, device=mesh_device)
+
+    logger.info(f"  TT input shape: {tt_input.shape}")
+
+    # Warmup iterations (no RoPE for prompt/cross-attention)
+    for _ in range(NUM_WARMUP_ITERS):
+        _ = norm(tt_input, num_heads_per_device=n_local_heads)
+    ttnn.synchronize_device(mesh_device)
+
+    # Measurement iterations
+    for _ in range(NUM_MEASUREMENT_ITERS):
+        _ = norm(tt_input, num_heads_per_device=n_local_heads)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info(f"Completed {NUM_WARMUP_ITERS} warmup + {NUM_MEASUREMENT_ITERS} measurement iterations")
+
+
 # =============================================================================
 # Op group definitions
 # =============================================================================
@@ -515,6 +600,14 @@ SPATIAL_LAYERNORM_OPS = [
 
 # Spatial RMSNorm: DistributedRMSNorm with fused RoPE (norm_q/norm_k in self-attention)
 SPATIAL_RMSNORM_OPS = [
+    ("FusedRMSNormPreAllGatherDeviceOperation", "pre_allgather"),
+    ("AllGatherAsyncDeviceOperation", "all_gather"),
+    ("FusedRMSNormPostAllGatherDeviceOperation", "post_allgather"),
+]
+
+# Prompt RMSNorm: DistributedRMSNorm without RoPE (norm_k on prompt K in cross-attention)
+# Uses same ops as spatial RMSNorm, just without RoPE in post_allgather
+PROMPT_RMSNORM_OPS = [
     ("FusedRMSNormPreAllGatherDeviceOperation", "pre_allgather"),
     ("AllGatherAsyncDeviceOperation", "all_gather"),
     ("FusedRMSNormPostAllGatherDeviceOperation", "post_allgather"),
@@ -581,3 +674,31 @@ def test_spatial_rmsnorm_perf(config_name: str, seq_len: int) -> None:
 
     results = analyze_op_group(PROFILER_OUTPUT_DIR, SPATIAL_RMSNORM_OPS)
     print_perf_table("SPATIAL RMSNORM", config_name, seq_len, SPATIAL_RMSNORM_OPS, results)
+
+
+@pytest.mark.parametrize(
+    "config_name",
+    [
+        "1xGLX_14b_720p",
+        "4xGLX_14b_720p_emulated",
+    ],
+    ids=["1xGLX", "4xGLX_emulated"],
+)
+def test_prompt_rmsnorm_perf(config_name: str) -> None:
+    """
+    Measure device performance for prompt RMSNorm using Tracy profiler.
+
+    This benchmarks DistributedRMSNorm without RoPE, as used for K
+    normalization on prompt in the cross-attention path.
+    """
+    test_id = CONFIG_TO_TEST_ID[config_name]
+    command = f"pytest {TEST_MODULE}::test_run_prompt_rmsnorm[blackhole-{test_id}-bh_4x8] -v"
+
+    run_device_profiler_quiet(
+        command,
+        PROFILER_OUTPUT_DIR,
+        device_analysis_types=["device_kernel_duration"],
+    )
+
+    results = analyze_op_group(PROFILER_OUTPUT_DIR, PROMPT_RMSNORM_OPS)
+    print_perf_table("PROMPT RMSNORM", config_name, PROMPT_SEQ_LEN, PROMPT_RMSNORM_OPS, results)
