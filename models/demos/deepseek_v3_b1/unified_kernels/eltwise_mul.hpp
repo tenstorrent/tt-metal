@@ -51,13 +51,15 @@ struct EltwiseMul {
         uint32_t num_tiles_,
         uint32_t enable_scalar_mul_ = 0,
         uint32_t cb_scalar_ = 0,
-        uint32_t cb_scalar_src_ = 0>
+        uint32_t cb_scalar_src_ = 0,
+        uint32_t scalar_index_offset_ = 0>
     struct WriterCTArgs {
         static constexpr uint32_t cb_out = cb_out_;
         static constexpr uint32_t num_tiles = num_tiles_;
         static constexpr uint32_t enable_scalar_mul = enable_scalar_mul_;
         static constexpr uint32_t cb_scalar = cb_scalar_;
         static constexpr uint32_t cb_scalar_src = cb_scalar_src_;
+        static constexpr uint32_t scalar_index_offset = scalar_index_offset_;  // offset into scalar source tensor
     };
 
     // Compute CTArgs (TRISC)
@@ -115,10 +117,10 @@ struct EltwiseMul {
                 // Wait for scalar source CB (set up by NCRISC)
                 cb_wait_front(CTArgs::cb_scalar_src, 1);
 
-                // Read scalar value from source CB (first element, bfloat16 = 2 bytes)
+                // Read scalar value from source CB at index_offset (bfloat16 = 2 bytes)
                 uint32_t cb_read_addr = get_read_ptr(CTArgs::cb_scalar_src);
                 volatile tt_l1_ptr uint16_t* src_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_read_addr);
-                uint16_t scalar_val = src_ptr[0];
+                uint16_t scalar_val = src_ptr[CTArgs::scalar_index_offset];
 
                 // Write one value to destination CB (BroadcastType::SCALAR will broadcast)
                 cb_reserve_back(CTArgs::cb_scalar, 1);
