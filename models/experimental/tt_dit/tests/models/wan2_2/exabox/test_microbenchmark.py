@@ -41,6 +41,9 @@ AllGather of spatial on TP axis followed by FF1.
 FF2 followed by reduce scatter on TP axis.
 """
 
+import subprocess
+import shlex
+
 import pytest
 import torch
 import ttnn
@@ -49,7 +52,7 @@ from loguru import logger
 
 from tracy.process_model_log import (
     get_latest_ops_log_filename,
-    run_device_profiler,
+    get_profiler_folder,
 )
 
 from .....utils.tensor import bf16_tensor, bf16_tensor_2dshard
@@ -94,59 +97,61 @@ CCL_OP_NAMES = [
 # Profiler output subdirectory
 PROFILER_OUTPUT_DIR = "wan_microbench"
 
+# Test module path for building pytest commands
+TEST_MODULE = "models/experimental/tt_dit/tests/models/wan2_2/exabox/test_microbenchmark.py"
 
-def post_process_ops_log(
+# Config name to test ID mapping
+CONFIG_TO_TEST_ID = {
+    "1xGLX_14b_720p": "1xGLX",
+    "4xGLX_14b_720p_emulated": "4xGLX_emulated",
+}
+
+
+def run_device_profiler_quiet(
+    command: str,
     output_logs_subdir: str,
-    float_columns: list[str] | None = None,
-    columns: list[str] | None = None,
-    op_name: str = "",
-    sum_vals: bool = True,
-    has_signposts: bool = False,
-) -> dict | pd.DataFrame:
+    device_analysis_types: list[str] | None = None,
+) -> None:
     """
-    Process the ops log CSV file from Tracy profiler output.
+    Run Tracy device profiler with output suppressed unless there's an error.
 
     Args:
-        output_logs_subdir: Subdirectory containing profiler output
-        float_columns: List of columns to parse as float and optionally sum
-        columns: List of columns to extract as-is
-        op_name: Filter to specific op name (empty string for all ops)
-        sum_vals: If True, sum float columns; if False, return as numpy array
-        has_signposts: If True, filter to ops between start/stop signposts
-
-    Returns:
-        Dictionary of results or full DataFrame if no columns specified
+        command: The pytest command to run
+        output_logs_subdir: Subdirectory for profiler output
+        device_analysis_types: List of analysis types to run
     """
-    filename = get_latest_ops_log_filename(output_logs_subdir)
-    df = pd.read_csv(filename)
+    output_profiler_dir = get_profiler_folder(output_logs_subdir)
 
-    if has_signposts:
-        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
-        start = markers[markers == "start"].index[0]
-        stop = markers[markers == "stop"].index[0]
-        df = df.iloc[start + 1 : stop]
+    device_analysis_opt = ""
+    if device_analysis_types:
+        device_analysis_opt = "".join([f" -a {analysis}" for analysis in device_analysis_types])
 
-    if op_name != "":
-        df = df[df["OP CODE"] == op_name]
+    profiler_cmd = (
+        f"python3 -m tracy -p -r -o {output_profiler_dir} --check-exit-code "
+        f"{device_analysis_opt} -t 5000 -m {shlex.quote(command)}"
+    )
 
-    results = {}
-    if float_columns:
-        for col in float_columns:
-            df_filtered = df[df[col] != "-"]
-            if sum_vals:
-                results[col] = df_filtered[col].astype(float).sum()
-            else:
-                results[col] = df_filtered[col].astype(float).to_numpy()
+    result = subprocess.run(
+        profiler_cmd,
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
 
-    if columns:
-        for col in columns:
-            df_filtered = df[df[col] != "-"]
-            results[col] = df_filtered[col]
-
-    if not float_columns and not columns:
-        return df
-
-    return results
+    if result.returncode != 0:
+        # On error, print the captured output
+        print("=" * 80)
+        print("PROFILER COMMAND FAILED")
+        print("=" * 80)
+        print(f"Command: {profiler_cmd}")
+        print("-" * 80)
+        print("STDOUT:")
+        print(result.stdout)
+        print("-" * 80)
+        print("STDERR:")
+        print(result.stderr)
+        print("=" * 80)
+        raise RuntimeError(f"Tracy profiler failed with return code {result.returncode}")
 
 
 def is_ccl_op(op_name: str) -> bool:
@@ -180,30 +185,29 @@ def aggregate_device_time(df: pd.DataFrame, op_name: str) -> float:
         return durations_us.max()
 
 
-def analyze_layernorm_ops(output_logs_subdir: str, num_measurement_iters: int = NUM_MEASUREMENT_ITERS) -> dict:
+def analyze_op_group(
+    output_logs_subdir: str,
+    ops: list[tuple[str, str]],
+    num_measurement_iters: int = NUM_MEASUREMENT_ITERS,
+) -> dict:
     """
-    Analyze spatial layernorm results from Tracy profiler output.
+    Analyze a group of operations from Tracy profiler output.
 
     Args:
         output_logs_subdir: Path to profiler output directory
+        ops: List of (op_code, short_name) tuples defining the op group
         num_measurement_iters: Number of measurement iterations that were run
 
     Returns:
-        Dictionary with per-op times and total time in microseconds
+        Dictionary with per-op times (keyed by short_name) and total time in microseconds
     """
-    df = post_process_ops_log(output_logs_subdir)
-
-    # Ops that make up spatial layernorm
-    layernorm_ops = [
-        ("PreAllGatherDeviceOperation", "pre_allgather"),
-        ("AllGatherAsyncDeviceOperation", "all_gather"),
-        ("PostAllGatherDeviceOperation", "post_allgather"),
-    ]
+    filename = get_latest_ops_log_filename(output_logs_subdir)
+    df = pd.read_csv(filename)
 
     results = {}
     total_time_us = 0.0
 
-    for op_name, short_name in layernorm_ops:
+    for op_name, short_name in ops:
         op_df = df[df["OP CODE"] == op_name]
         if op_df.empty:
             logger.warning(f"  {op_name}: NOT FOUND")
@@ -231,6 +235,58 @@ def analyze_layernorm_ops(output_logs_subdir: str, num_measurement_iters: int = 
 
     results["total"] = total_time_us
     return results
+
+
+def print_perf_table(
+    title: str,
+    config_name: str,
+    seq_len: int,
+    ops: list[tuple[str, str]],
+    results: dict,
+) -> None:
+    """
+    Print a formatted performance results table.
+
+    Args:
+        title: Table title (e.g., "SPATIAL LAYERNORM")
+        config_name: Configuration name
+        seq_len: Sequence length used
+        ops: List of (op_code, short_name) tuples
+        results: Dictionary with timing results keyed by short_name
+    """
+    print("\n" + "=" * 80)
+    print(f"{title} PERFORMANCE: {config_name}")
+    print("=" * 80)
+    print(f"  Configuration: {config_name}")
+    print(f"  Sequence length: {seq_len}")
+    print(f"  Mesh shape: {MESH_SHAPE}")
+    print(f"  SP={MESH_SHAPE[SP_AXIS]}, TP={MESH_SHAPE[TP_AXIS]}")
+    print("-" * 80)
+    print(f"  {'Operation':<45} | {'Time (us)':>12} | {'Agg Method':>10}")
+    print("-" * 80)
+
+    for op_name, short_name in ops:
+        agg_method = "min" if is_ccl_op(op_name) else "max"
+        print(f"  {op_name:<45} | {results[short_name]:>12.2f} | {agg_method:>10}")
+
+    print("-" * 80)
+    print(f"  {'TOTAL':<45} | {results['total']:>12.2f} |")
+    print("=" * 80 + "\n")
+
+
+def build_test_command(test_name: str, config_name: str) -> str:
+    """
+    Build a pytest command for running a test with Tracy profiler.
+
+    Args:
+        test_name: Name of the test function (e.g., "test_run_spatial_layernorm")
+        config_name: Configuration name
+
+    Returns:
+        Formatted pytest command string
+    """
+    test_id = CONFIG_TO_TEST_ID[config_name]
+    return f"pytest {TEST_MODULE}::{test_name}[blackhole-{test_id}-bh_4x8] -v"
 
 
 # =============================================================================
@@ -336,7 +392,19 @@ def test_run_spatial_layernorm(
 
 
 # =============================================================================
-# Performance tests that use Tracy profiler
+# Op group definitions
+# =============================================================================
+
+# Spatial layernorm: DistributedLayerNorm with dynamic affine parameters
+SPATIAL_LAYERNORM_OPS = [
+    ("PreAllGatherDeviceOperation", "pre_allgather"),
+    ("AllGatherAsyncDeviceOperation", "all_gather"),
+    ("PostAllGatherDeviceOperation", "post_allgather"),
+]
+
+
+# =============================================================================
+# Performance tests (run with Tracy profiler)
 # =============================================================================
 
 
@@ -358,49 +426,13 @@ def test_spatial_layernorm_perf(config_name: str, seq_len: int) -> None:
     3. Aggregates device times (max for non-CCL, min for CCL ops)
     4. Prints a performance summary table
     """
-    # Build pytest command to run the actual test
-    test_module = "models/experimental/tt_dit/tests/models/wan2_2/exabox/test_microbenchmark.py"
-    if config_name == "1xGLX_14b_720p":
-        test_id = "1xGLX"
-    else:
-        test_id = "4xGLX_emulated"
+    command = build_test_command("test_run_spatial_layernorm", config_name)
 
-    command = f"pytest {test_module}::test_run_spatial_layernorm[blackhole-{test_id}-bh_4x8] -v"
-
-    logger.info(f"Running Tracy profiler for: {config_name}")
-    logger.info(f"  Command: {command}")
-
-    # Run with Tracy profiler
-    run_device_profiler(
+    run_device_profiler_quiet(
         command,
         PROFILER_OUTPUT_DIR,
         device_analysis_types=["device_kernel_duration"],
     )
 
-    # Analyze results
-    results = analyze_layernorm_ops(PROFILER_OUTPUT_DIR, NUM_MEASUREMENT_ITERS)
-
-    # Print results table
-    print("\n" + "=" * 80)
-    print(f"SPATIAL LAYERNORM PERFORMANCE: {config_name}")
-    print("=" * 80)
-    print(f"  Configuration: {config_name}")
-    print(f"  Sequence length: {seq_len}")
-    print(f"  Mesh shape: {MESH_SHAPE}")
-    print(f"  SP={MESH_SHAPE[SP_AXIS]}, TP={MESH_SHAPE[TP_AXIS]}")
-    print("-" * 80)
-    print(f"  {'Operation':<45} | {'Time (us)':>12} | {'Agg Method':>10}")
-    print("-" * 80)
-    print(f"  {'PreAllGatherDeviceOperation':<45} | {results['pre_allgather']:>12.2f} | {'max':>10}")
-    print(f"  {'AllGatherAsyncDeviceOperation':<45} | {results['all_gather']:>12.2f} | {'min':>10}")
-    print(f"  {'PostAllGatherDeviceOperation':<45} | {results['post_allgather']:>12.2f} | {'max':>10}")
-    print("-" * 80)
-    print(f"  {'TOTAL':<45} | {results['total']:>12.2f} |")
-    print("=" * 80 + "\n")
-
-    # Log for structured output
-    logger.info(f"[RESULT] {config_name} spatial_layernorm:")
-    logger.info(f"  pre_allgather: {results['pre_allgather']:.2f} us")
-    logger.info(f"  all_gather: {results['all_gather']:.2f} us")
-    logger.info(f"  post_allgather: {results['post_allgather']:.2f} us")
-    logger.info(f"  total: {results['total']:.2f} us")
+    results = analyze_op_group(PROFILER_OUTPUT_DIR, SPATIAL_LAYERNORM_OPS)
+    print_perf_table("SPATIAL LAYERNORM", config_name, seq_len, SPATIAL_LAYERNORM_OPS, results)
