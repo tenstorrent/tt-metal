@@ -2024,7 +2024,14 @@ inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, u
         // data race.
         noc_async_writes_flushed();
         uint32_t pages_to_free = (can_read_now + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
-        relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
+        // data_ptr may not be page-aligned mid-stream, so allow it to be up to one page ahead
+        relay_client.release_pages<
+            my_noc_index,
+            upstream_noc_xy,
+            upstream_cb_sem_id,
+            cmddat_q_base,
+            cmddat_q_end,
+            cmddat_q_page_size>(pages_to_free, data_ptr, /*round_to_page_size=*/true);
     }
     local_downstream_data_ptr =
         round_up_pow2(local_downstream_data_ptr, DispatchRelayInlineState::downstream_page_size);
@@ -2138,6 +2145,7 @@ void kernel_main_d() {
     uint32_t heartbeat = 0;
     uint32_t l1_cache[l1_cache_elements_rounded];
 
+
     // Cmdbuf allocation is not defined yet for fabric so we can't use stateful APIs on Dispatch D
 #if defined(FABRIC_RELAY)
     relay_client.init<
@@ -2166,6 +2174,9 @@ void kernel_main_d() {
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, my_noc_index);
 #endif
 
+    // Initialize cmd_ptr tracking for release_pages synchronization assertions
+    relay_client.init_cmd_ptr_tracking<cmddat_q_base>();
+
     while (!done) {
         // cmds come in packed batches based on HostQ reads in prefetch_h
         // once a packed batch ends, we need to jump to the next page
@@ -2187,15 +2198,25 @@ void kernel_main_d() {
         uint32_t pages_to_free = (total_length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
         // Ensure all writes that consumed this payload have completed before releasing upstream pages
         noc_async_writes_flushed();
-        relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, cmddat_q_page_size);
+        relay_client.release_pages<
+            my_noc_index,
+            upstream_noc_xy,
+            upstream_cb_sem_id,
+            cmddat_q_base,
+            cmddat_q_end,
+            cmddat_q_page_size>(pages_to_free, cmd_ptr);
     }
 
     // Set upstream semaphore MSB to signal completion and path teardown
     // in case prefetch_d is connected to a depacketizing stage.
     relay_client.teardown<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>();
+    WATCHER_RING_BUFFER_PUSH(h_cmddat_q_reader.acquired_count());
+    WATCHER_RING_BUFFER_PUSH(relay_client.released_pages());
+
+    ASSERT(h_cmddat_q_reader.acquired_count() == relay_client.released_pages());
 }
 
 void kernel_main_hd() {
