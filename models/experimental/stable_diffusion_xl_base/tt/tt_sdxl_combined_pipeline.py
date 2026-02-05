@@ -31,7 +31,6 @@ class TtSDXLCombinedPipelineConfig:
     """
 
     # Common parameters (apply to both base and refiner)
-    image_resolution: tuple
     num_inference_steps: int
     guidance_scale: float
     is_galaxy: bool
@@ -67,7 +66,6 @@ class TtSDXLCombinedPipelineConfig:
 
     def create_base_config(self) -> TtSDXLPipelineConfig:
         return TtSDXLPipelineConfig(
-            image_resolution=self.image_resolution,
             num_inference_steps=self.num_inference_steps,
             guidance_scale=self.guidance_scale,
             is_galaxy=self.is_galaxy,
@@ -84,7 +82,6 @@ class TtSDXLCombinedPipelineConfig:
             raise ValueError("Cannot create refiner config when use_refiner=False")
 
         return TtSDXLImg2ImgPipelineConfig(
-            image_resolution=self.image_resolution,
             num_inference_steps=self.num_inference_steps,
             guidance_scale=self.guidance_scale,
             is_galaxy=self.is_galaxy,
@@ -113,7 +110,6 @@ class TtSDXLCombinedPipeline:
 
     Usage (base-only):
         config = TtSDXLCombinedPipelineConfig(
-            image_resolution=(1024, 1024),
             num_inference_steps=50,
             guidance_scale=5.0,
             is_galaxy=True,
@@ -130,7 +126,6 @@ class TtSDXLCombinedPipeline:
 
     Usage (with refiner):
         config = TtSDXLCombinedPipelineConfig(
-            image_resolution=(1024, 1024),
             num_inference_steps=50,
             guidance_scale=5.0,
             is_galaxy=True,
