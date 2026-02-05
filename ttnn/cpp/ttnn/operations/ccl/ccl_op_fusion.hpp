@@ -108,6 +108,9 @@ struct ReduceScatterFusedOpSignaler {
 
     bool initialized_reduce_scatter = false;
     bool initialized_fused_op = false;
+    bool is_minimal_matmul = false;
+    uint32_t M_block_size;
+    tt::tt_metal::CoreCoord grid_size;
 
     void init_reduce_scatter(
         tt::tt_metal::Program& program,
@@ -117,6 +120,21 @@ struct ReduceScatterFusedOpSignaler {
     void init_fused_op();
 
     void push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "num_fused_op_cores_to_signal",
+        "fused_op_receiver_cores_noc",
+        "fused_op_receiver_signal_semaphores",
+        "fused_op_signaler_mode",
+        "M_block_size",
+        "grid_size");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->num_fused_op_cores_to_signal),
+            std::cref(this->fused_op_receiver_cores_noc),
+            std::cref(this->fused_op_receiver_signal_semaphores),
+            std::cref(this->fused_op_signaler_mode));
+    }
 };
 
 enum class MatmulFusedOpSignalerType {
@@ -233,10 +251,28 @@ struct MatmulFusedOpSignaler {
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t curr_worker_in0_idx, uint32_t curr_worker_in1_idx);
     void push_matmul_fused_op_rt_args(std::vector<uint32_t>& out_rt_args, bool use_in1_offset);
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "fused_op_type",
+        "num_fused_op_cores_to_signal",
+        "fused_op_receiver_cores_noc",
+        "fused_op_receiver_signal_semaphores",
+        "fused_op_signaler_mode");
+
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->fused_op_type),
+            std::cref(this->num_fused_op_cores_to_signal),
+            std::cref(this->fused_op_receiver_cores_noc),
+            std::cref(this->fused_op_receiver_signal_semaphores),
+            std::cref(this->fused_op_signaler_mode));
+    }
 };
 
 // Used to propagate semaphore information from matmul to all_gather or reduce_scatter
 struct MinimalMatmulFusedOpSignaler {
+    MatmulFusedOpSignalerType fused_op_type = MatmulFusedOpSignalerType::EMPTY;
+
     /* Matmul info for All Gather */
     uint32_t num_fused_op_cores_to_signal = 0;
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
@@ -251,10 +287,16 @@ struct MinimalMatmulFusedOpSignaler {
     bool read_local_slice_from_input = false;
     std::optional<tt::tt_metal::Tensor> ag_input;
 
+    /* Matmul info for Reduce Scatter */
+    std::vector<CoreCoord> matmul_worker_cores_noc;
+    std::vector<CoreCoord> matmul_worker_cores;
+    uint32_t matmul_worker_sync_semaphore = 0;
+
     bool initialized_all_gather = false;
+    bool initialized_reduce_scatter = false;
     bool initialized_fused_op = false;
 
-    MinimalMatmulFusedOpSignaler() = default;
+    MinimalMatmulFusedOpSignaler(MatmulFusedOpSignalerType signaler_type) : fused_op_type(signaler_type) {}
 
     void init_all_gather(
         uint32_t ring_size,
@@ -270,8 +312,28 @@ struct MinimalMatmulFusedOpSignaler {
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
+    void init_fused_op(
+        tt::tt_metal::Program& program,
+        const tt::tt_metal::IDevice* device,
+        const CoreRange& matmul_workers,
+        const std::vector<CoreCoord>& matmul_worker_cores);
+
+    void init_reduce_scatter(
+        const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
+        const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
+        FusedOpSignalerMode fused_op_signaler_mode);
+
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
+
+    void push_matmul_fused_reduce_scatter_rt_args(
+        bool transpose_core_grid,
+        std::vector<uint32_t>& out_rt_args,
+        uint32_t curr_worker_in0_idx,
+        uint32_t curr_worker_in1_idx);
+
+    bool is_all_gather() const;
+    bool is_reduce_scatter() const;
 };
 
 }  // namespace ttnn::experimental::ccl

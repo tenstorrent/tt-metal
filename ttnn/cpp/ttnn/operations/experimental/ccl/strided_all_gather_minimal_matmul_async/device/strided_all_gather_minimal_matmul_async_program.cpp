@@ -101,7 +101,8 @@ strided_all_gather_minimal_matmul_async_program(
     // Create a matmul signal info object that gets populated by the matmul kernel
     uint32_t TILE_WIDTH = 32;
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> matmul_fused_op_signaler =
-        ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler();
+        ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler(
+            ttnn::experimental::ccl::MatmulFusedOpSignalerType::ALL_GATHER);
     matmul_fused_op_signaler->init_all_gather(
         ring_size,
         ring_index,

@@ -1,0 +1,45 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/device_operation.hpp"
+#include "minimal_matmul_reduce_scatter_async_device_operation_types.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_factory.hpp"
+#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
+
+namespace ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::program {
+
+struct MinimalMatmulReduceScatterAsyncSharedVariables {
+    ::ttnn::operations::ccl::ReduceScatterProgramArtifacts reduce_scatter_artifacts;
+    ttnn::experimental::prim::MinimalMatmulProgramFactory::shared_variables_t matmul_shared_variables;
+};
+
+struct MinimalMatmulReduceScatterAsyncProgramFactory {
+    using shared_variables_t = MinimalMatmulReduceScatterAsyncSharedVariables;
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const operation_attributes_t& args,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output_tensors);
+
+    static void override_runtime_arguments(
+        cached_mesh_workload_t& cached_workload,
+        const operation_attributes_t& args,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output_tensors);
+
+private:
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create_at(
+        const operation_attributes_t& args,
+        const ttnn::MeshCoordinate& mesh_coord,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output_tensors);
+};
+
+}  // namespace ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::program

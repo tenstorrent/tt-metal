@@ -33,6 +33,12 @@ struct MinimalMatmulProgramFactory {
         const MinimalMatmulParams& operation_attributes,
         const MinimalMatmulInputs& tensor_args,
         Tensor& tensor_return_value);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const MinimalMatmulProgramFactory::shared_variables_t& override_variables,
+        const MinimalMatmulInputs& tensor_args,
+        Tensor& tensor_return_value);
 };
 
 MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
@@ -65,6 +71,15 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 // Common helper for override_runtime_arguments - used by both minimal_matmul and minimal_matmul_split
 void override_runtime_arguments_common(
     MinimalMatmulProgramFactory::cached_program_t& cached_program,
+    uint32_t in0_addr,
+    uint32_t in1_addr,
+    uint32_t in2_addr,
+    uint32_t in3_addr,
+    const std::vector<uint32_t>& output_addrs);
+
+void override_runtime_arguments_common(
+    tt::tt_metal::Program& program,
+    const MinimalMatmulProgramFactory::shared_variables_t& override_variables,
     uint32_t in0_addr,
     uint32_t in1_addr,
     uint32_t in2_addr,

@@ -4,6 +4,7 @@
 ///
 #include <algorithm>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -665,16 +666,44 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         input_tensor_shape[-1],
         tt::constants::TILE_WIDTH);
 
-    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
+    auto [normalized_dim, input_tensor_C, input_tensor_B] =
         (input_tensor_shape.rank() == 2) ? operations::experimental::ccl::detail::map_2d_to_4d(dim)
                                          : operations::experimental::ccl::detail::map_nd_to_4d(input_tensor_shape, dim);
-    const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
+    uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
 
     uint32_t slice_B = input_tensor_B;
     uint32_t slice_C = input_tensor_C;
     uint32_t slice_Ht = input_tensor_Ht;
     uint32_t slice_Wt = input_tensor_Wt;
+
+    if (fuse_op && fused_op_signaler->is_minimal_matmul) {
+        uint32_t N = input_tensor_shape[-1];
+        uint32_t M = input_tensor.physical_volume() / N;
+        uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
+        uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
+        bool transpose_core_grid = M > N;
+        log_debug(
+            tt::LogOp,
+            "Fused MinMatMul detected with M_tiles = {}, N_tiles = {}, transpose_core_grid = {}, grid_size = {}",
+            M_tiles,
+            N_tiles,
+            (int)transpose_core_grid,
+            fused_op_signaler->grid_size);
+        uint32_t in0_parallel_axis_cores =
+            transpose_core_grid ? fused_op_signaler->grid_size.x : fused_op_signaler->grid_size.y;
+
+        uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
+        uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
+        uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, fused_op_signaler->M_block_size);
+
+        slice_B = M_blocks_per_core;
+        input_tensor_B = slice_B;
+
+        slice_Ht = M_tiles / slice_B;
+        input_tensor_Ht = slice_Ht;
+    }
+
     if (normalized_dim == 0) {
         slice_B /= ring_size;
     } else if (normalized_dim == 1) {
@@ -742,6 +771,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
     if (input_is_sharded) {
         reader_compute_defines["INPUT_IS_SHARDED"] = "1";
+    }
+    if (fuse_op && fused_op_signaler->is_minimal_matmul) {
+        reader_compute_defines["FUSED_MINIMAL_MATMUL"] = "1";
     }
     if (intermediate_is_sharded) {
         reader_compute_defines["INTERMEDIATE_IS_SHARDED"] = "1";
@@ -959,7 +991,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
                         topology, tiles_to_process_per_slice, tile_granularity));
-                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 std::vector<uint32_t> reader_rt_args = {
                     input_tensor.buffer()->address(),         // input_tensor_address
@@ -1564,7 +1595,15 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                         slice_Wt,
                         input_tensor_Wt,
                         normalized_dim);
-
+                log_debug(
+                    tt::LogOp,
+                    "For core = {},start_tiles_read = {}, start_tiles_to_read = {}, start_pages_read_in_row = {}, "
+                    "start_row_offset = {}",
+                    core,
+                    start_tiles_read,
+                    start_tiles_to_read,
+                    start_pages_read_in_row,
+                    start_row_offset);
                 // for dim 0 scatters we process each slice in batches
                 // for all other dims we process each slice in channels
                 uint32_t tiles_to_process_per_slice =
