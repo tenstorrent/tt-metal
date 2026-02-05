@@ -7,10 +7,10 @@ TTNN Post SDPA Fused Op Test
 
 Tests the full post_sdpa fused operation which implements:
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] per core on 64 cores (8x8)
-- Gather1: Collect to [1, 8192] on gather core (11, 9)
+- Gather1: Collect to [1, 8192] on gather core (12, 9)
 - Mcast: Broadcast [1, 8192] to 117 cores (13x9 rectangular grid)
 - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 112 active cores
-- Gather2: Collect to [1, 7168] on gather core (11, 9)
+- Gather2: Collect to [1, 7168] on gather core (12, 9)
 
 The mcast grid (13x9=117 cores) includes 5 inactive cores (row 8, cols 8-12)
 that receive mcast data but skip matmul2 via is_matmul2_core=false.
@@ -81,7 +81,7 @@ def test_post_sdpa(device, M, K1, intermediate, K2, output_size, in0_dtype, in1_
             ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(7, 8)),  # 8x1 = 8 cores
         ]
     )
-    gather_core = ttnn.CoreCoord(11, 9)
+    gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
     # ========================================================================

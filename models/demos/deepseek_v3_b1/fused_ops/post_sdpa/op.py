@@ -7,10 +7,10 @@ Post SDPA fused operation.
 
 This implements Matmul1 + Gather1 + Mcast + Matmul2 + Gather2 as a fused execution:
 - Matmul1: [1, 512] x [512, 128] -> [1, 128] distributed across 64 cores (8x8 grid)
-- Gather1: Collect results from all 64 cores to [1, 8192] on gather core (11, 9)
+- Gather1: Collect results from all 64 cores to [1, 8192] on gather core (12, 9)
 - Mcast: Broadcast [1, 8192] to 117 cores (13x9 grid, rectangular for efficient mcast)
 - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (rows 0-7 full 13 + row 8 cols 0-7)
-- Gather2: Collect results from all 112 active cores to [1, 7168] on gather core (11, 9)
+- Gather2: Collect results from all 112 active cores to [1, 7168] on gather core (12, 9)
 
 The 13x9 mcast grid contains 117 cores, but only 112 are active for matmul2.
 The 5 inactive cores (row 8, cols 8-12) receive mcast data but skip matmul via is_matmul2_core=false.
@@ -107,8 +107,8 @@ class PostSDPA:
         matmul1_core_grid = ttnn.CoreRangeSet([matmul1_grid])
         num_matmul1_cores = matmul1_grid.grid_size().x * matmul1_grid.grid_size().y  # 64
 
-        # Gather receiver core: (11, 9)
-        gather_core = ttnn.CoreCoord(11, 9)
+        # Gather receiver core: (12, 9)
+        gather_core = ttnn.CoreCoord(12, 9)
         gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
         # Mcast grid: 13x9 = 117 cores (full rectangular for efficient mcast)
