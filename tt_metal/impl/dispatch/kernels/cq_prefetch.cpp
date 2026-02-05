@@ -1992,7 +1992,7 @@ CBReaderWithManualRelease<
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
 inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, uint32_t& local_downstream_data_ptr) {
     // In initial return, we return the header bytes as well
-    uint32_t initial_data_to_clear = sizeof(CQPrefetchHToPrefetchDHeader);
+    uint32_t initial_data_to_return = sizeof(CQPrefetchHToPrefetchDHeader);
     data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
     wlength -= sizeof(CQPrefetchHToPrefetchDHeader);
     // Stream data to downstream as it arrives. Acquire upstream pages incrementally.
@@ -2028,8 +2028,8 @@ inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, u
         // data race.
         noc_async_writes_flushed();
         // wait_for_available_data always returns up to a page boundary, so the rounding only matters on the final chunk and lets us return the final bytes in the page early.
-        uint32_t pages_to_free = (can_read_now + initial_data_to_clear + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
-        initial_data_to_clear = 0;
+        uint32_t pages_to_free = (can_read_now + initial_data_to_return + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
+        initial_data_to_return = 0;
         uint32_t watcher_data_ptr = data_ptr;
 #if ASSERT_ENABLED
         if (wlength == 0) {
