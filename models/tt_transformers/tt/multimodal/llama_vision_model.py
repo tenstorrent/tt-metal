@@ -7,12 +7,12 @@ import logging
 from functools import partial
 from typing import List, Tuple
 
-import llama_models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
 import torch
 from PIL import Image as PIL_Image
 from torch import Tensor
 
 import ttnn
+from models.common.llama_models import VariableSizeImageTransform
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len
@@ -155,7 +155,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         self.max_num_chunks = configuration.vision_max_num_chunks
         self.num_vision_tokens = self.max_num_chunks * nearest_32(self.configuration.vision_chunk_ntok)
         self.image_transform = partial(
-            llama_reference_image_transforms.VariableSizeImageTransform(size=configuration.vision_chunk_size),
+            VariableSizeImageTransform(size=configuration.vision_chunk_size),
             max_num_chunks=configuration.vision_max_num_chunks,
         )
 
