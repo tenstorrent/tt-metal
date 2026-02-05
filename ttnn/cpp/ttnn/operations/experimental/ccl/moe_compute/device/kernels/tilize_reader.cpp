@@ -802,12 +802,20 @@ void kernel_main() {
 
         // == 1 ==
 
-        // determine encoded value
-        // NOTE: hardcoded to 2 experts
+        // Determine encoded value
+        // NOTE: can handle up to 3 experts:
+        // - 1 valid bit
+        // - 10 bits per expert, valid num_tokens is [0, 512]
+        // - 32 bits available in semaphore (4 Bytes), 0 value reserved as init value
         volatile tt_l1_ptr uint32_t* num_tokens_per_expert =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
-        uint32_t encoded_value =
-            (num_tokens_per_expert[0] & 0x1FF) | ((num_tokens_per_expert[1] & 0x1FF) << 9) | (1 << 18);
+
+        constexpr uint32_t bits_per_expert = 10;
+        constexpr uint32_t expert_mask = 0x3FFu;
+        uint32_t encoded_value = 1u;  // flag bit
+        for (uint32_t e = 0; e < experts_per_device; ++e) {
+            encoded_value |= (num_tokens_per_expert[e] & expert_mask) << (1 + bits_per_expert * e);
+        }
 
         // set local semaphore value
         volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =

@@ -2,19 +2,490 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from loguru import logger
+import math
 import pytest
 import random
-from loguru import logger
+import torch
 import ttnn
 
-from tests.ttnn.nightly.unit_tests.operations.experimental.test_moe import (
-    create_torch_w0,
-    create_torch_w1,
-    create_torch_w2,
-    prepare_w0_w1_tensor,
-    prepare_w2_tensor,
-)
+
+def validate_per_expert_tokens(
+    mesh_device, experts_per_device, num_devices, per_expert_total_tokens_output_tensor, expert_token_counts
+):
+    logger.info(f"\n========== Per Expert Total Tokens Tensor Validation ==========")
+    per_expert_tokens_all_passed = True
+
+    # L1 alignment constant (16 bytes)
+    l1_alignment = 16
+
+    # Validate shape: [num_devices, aligned_row_elements]
+    # Row is experts_per_device uint32s, aligned to 16 bytes
+    per_expert_row_bytes = ((experts_per_device * 4 + l1_alignment - 1) // l1_alignment) * l1_alignment
+    per_expert_row_elements = per_expert_row_bytes // 4
+    expected_per_expert_shape = (num_devices, per_expert_row_elements)
+
+    # Convert per_expert_total_tokens tensor to torch
+    # Shape per device: [1, aligned_elements] as uint32
+    per_expert_total_tokens_torch = ttnn.to_torch(
+        per_expert_total_tokens_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    )
+    logger.info(f"Per expert total tokens torch shape: {per_expert_total_tokens_torch.shape}")
+
+    assert per_expert_total_tokens_torch.shape == expected_per_expert_shape, (
+        f"per_expert_total_tokens shape mismatch: expected {expected_per_expert_shape}, "
+        f"got {per_expert_total_tokens_torch.shape}"
+    )
+
+    for device_idx in range(num_devices):
+        device_counts = per_expert_total_tokens_torch[device_idx].flatten()
+
+        for local_exp_idx in range(experts_per_device):
+            expected_count = expert_token_counts[device_idx, local_exp_idx].item()
+            actual_count = device_counts[local_exp_idx].item()
+
+            if actual_count != expected_count:
+                logger.warning(
+                    f"  Device {device_idx}, Expert {local_exp_idx}: "
+                    f"count mismatch - expected {expected_count}, got {actual_count}"
+                )
+                per_expert_tokens_all_passed = False
+            else:
+                logger.info(f"  Device {device_idx}, Expert {local_exp_idx}: count={actual_count} PASSED")
+
+    return per_expert_tokens_all_passed
+
+
+def validate_activation(
+    mesh_device, experts_per_device, num_devices, expert_activation_output_tensor, golden_activation
+):
+    logger.info(f"\n========== Expert Activation Tensor Validation ==========")
+    activation_all_passed = True
+
+    # Row size in uint32 elements (aligned to 16 bytes = 4 uint32s)
+    row_elements_unaligned = 2 * experts_per_device + 1  # token_id + k_indices + scores
+    row_bytes_unaligned = row_elements_unaligned * 4
+    aligned_row_bytes = ((row_bytes_unaligned + 15) // 16) * 16
+    aligned_row_elements = aligned_row_bytes // 4
+
+    # Convert expert_activation tensor to torch
+    # Shape per device: [1, total_bytes / 4] as uint32
+    expert_activation_torch = ttnn.to_torch(
+        expert_activation_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    )
+    logger.info(f"Expert activation torch shape: {expert_activation_torch.shape}")
+
+    for device_idx in range(num_devices):
+        golden_rows = golden_activation[device_idx]
+        num_expected_rows = len(golden_rows)
+
+        # Extract this device's activation data
+        # The tensor is flattened, so we need to parse rows
+        device_activation = expert_activation_torch[device_idx].flatten().to(torch.int64)
+        max_rows = len(device_activation) // aligned_row_elements
+
+        logger.info(
+            f"Device {device_idx}: expecting {num_expected_rows} activated tokens, tensor has space for {max_rows} rows"
+        )
+
+        # Validate each row in sequential order (kernel preserves global token order)
+        for row_idx, golden_row in enumerate(golden_rows):
+            if row_idx >= max_rows:
+                logger.warning(f"  Device {device_idx}: row {row_idx} out of bounds (max {max_rows})")
+                activation_all_passed = False
+                break
+
+            row_start = row_idx * aligned_row_elements
+
+            # Extract token_id
+            actual_token_id = device_activation[row_start].item()
+            expected_token_id = golden_row["token_id"]
+
+            if actual_token_id != expected_token_id:
+                logger.warning(
+                    f"  Device {device_idx}, Row {row_idx}: token_id mismatch - "
+                    f"expected {expected_token_id}, got {actual_token_id}"
+                )
+                activation_all_passed = False
+                continue
+
+            # Validate k_indices and scores for each local expert
+            for local_exp_idx in range(experts_per_device):
+                expected_k = golden_row["k_indices"][local_exp_idx]
+                expected_score = golden_row["scores"][local_exp_idx]
+
+                if expected_k >= 0:  # This expert was selected
+                    actual_k = device_activation[row_start + 1 + local_exp_idx].item()
+                    actual_score_bits = device_activation[row_start + 1 + experts_per_device + local_exp_idx].item()
+
+                    # Convert score bits back to bfloat16 then float
+                    # The score is stored as uint16 in the lower bits of uint32
+                    actual_score_bf16 = torch.tensor([actual_score_bits & 0xFFFF], dtype=torch.int16).view(
+                        torch.bfloat16
+                    )
+                    actual_score = actual_score_bf16.item()
+
+                    if actual_k != expected_k:
+                        logger.warning(
+                            f"  Device {device_idx}, Row {row_idx}, Expert {local_exp_idx}: "
+                            f"k_index mismatch - expected {expected_k}, got {actual_k}"
+                        )
+                        activation_all_passed = False
+
+                    # Compare scores with tolerance (bfloat16 precision)
+                    if abs(actual_score - expected_score) > 1e-2:
+                        logger.warning(
+                            f"  Device {device_idx}, Row {row_idx}, Expert {local_exp_idx}: "
+                            f"score mismatch - expected {expected_score:.4f}, got {actual_score:.4f}"
+                        )
+                        activation_all_passed = False
+
+        # Validate sentinel row (token_id = -1 = 0xFFFFFFFF as uint32)
+        sentinel_row_idx = num_expected_rows
+        if sentinel_row_idx >= max_rows:
+            logger.warning(f"  Device {device_idx}: sentinel row {sentinel_row_idx} out of bounds")
+            activation_all_passed = False
+        else:
+            sentinel_row_start = sentinel_row_idx * aligned_row_elements
+            sentinel_token_id = device_activation[sentinel_row_start].item()
+            # -1 as uint32 (0xFFFFFFFF) becomes -1 when sign-extended to int64
+            is_sentinel = (sentinel_token_id == -1) or (sentinel_token_id == 0xFFFFFFFF)
+
+            if not is_sentinel:
+                logger.warning(
+                    f"  Device {device_idx}: sentinel row token_id mismatch - " f"expected -1, got {sentinel_token_id}"
+                )
+                activation_all_passed = False
+            else:
+                logger.info(f"  Device {device_idx}: {num_expected_rows} tokens validated, sentinel PASSED")
+
+    return activation_all_passed
+
+
+def validate_e_t(mesh_device, total_tokens, experts_per_device, num_devices, e_t_output_tensor, golden_e_t):
+    logger.info(f"\n========== E-T (Expert-to-Token) Tensor Validation ==========")
+    e_t_all_passed = True
+
+    # L1 alignment constant (16 bytes)
+    l1_alignment = 16
+
+    # Each entry is 16B aligned (4 uint32s per token ID)
+    e_t_entry_size_bytes = ((4 + l1_alignment - 1) // l1_alignment) * l1_alignment  # align sizeof(uint32_t) to 16B
+    e_t_entry_elements = e_t_entry_size_bytes // 4  # elements per entry (4 for 16B alignment)
+
+    # Validate shape: [num_devices * experts_per_device, e_t_row_elements]
+    # Each expert has (total_tokens + 1) entries (tokens + sentinel), each entry is 16B aligned
+    e_t_row_elements = (total_tokens + 1) * e_t_entry_elements
+    expected_e_t_shape = (num_devices * experts_per_device, e_t_row_elements)
+
+    # Convert e_t tensor to torch
+    # Shape per device: [experts_per_device, e_t_row_elements] as uint32
+    e_t_torch = ttnn.to_torch(e_t_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    logger.info(f"E-T torch shape: {e_t_torch.shape}")
+
+    if e_t_torch.shape != expected_e_t_shape:
+        logger.info(f"e_t shape mismatch: expected {expected_e_t_shape}, got {e_t_torch.shape}")
+        return False
+
+    for device_idx in range(num_devices):
+        for local_exp_idx in range(experts_per_device):
+            expected_tokens = golden_e_t[device_idx][local_exp_idx]
+            num_expected_tokens = len(expected_tokens)
+
+            # Get the row for this expert from this device
+            # Each device has experts_per_device rows in the tensor
+            row_idx = device_idx * experts_per_device + local_exp_idx
+            device_expert_row = e_t_torch[row_idx].flatten().to(torch.int64)
+
+            # Validate each token in the e_t list
+            tokens_match = True
+            for i, expected_token_id in enumerate(expected_tokens):
+                # Each entry is at 16B (e_t_entry_elements) offset
+                actual_token_id = device_expert_row[i * e_t_entry_elements].item()
+
+                if actual_token_id != expected_token_id:
+                    logger.warning(
+                        f"  Device {device_idx}, Expert {local_exp_idx}, Entry {i}: "
+                        f"token_id mismatch - expected {expected_token_id}, got {actual_token_id}"
+                    )
+                    tokens_match = False
+                    e_t_all_passed = False
+
+            # Validate sentinel (-1) at end of list
+            sentinel_idx = num_expected_tokens * e_t_entry_elements
+            if sentinel_idx < len(device_expert_row):
+                sentinel_value = device_expert_row[sentinel_idx].item()
+                is_sentinel = (sentinel_value == -1) or (sentinel_value == 0xFFFFFFFF)
+
+                if not is_sentinel:
+                    logger.warning(
+                        f"  Device {device_idx}, Expert {local_exp_idx}: "
+                        f"sentinel mismatch - expected -1, got {sentinel_value}"
+                    )
+                    e_t_all_passed = False
+                elif tokens_match:
+                    logger.info(
+                        f"  Device {device_idx}, Expert {local_exp_idx}: "
+                        f"{num_expected_tokens} tokens validated, sentinel PASSED"
+                    )
+            else:
+                logger.warning(
+                    f"  Device {device_idx}, Expert {local_exp_idx}: " f"sentinel index {sentinel_idx} out of bounds"
+                )
+                e_t_all_passed = False
+
+    return e_t_all_passed
+
+
+def validate_matmul(layer_id, experts_per_device, output_tensor):
+    logger.info(f"\n========== Matmul Output Tensor Validation ==========")
+    matmul_all_passed = True
+
+    MATMUL_PCC_THRESHOLD = 0.988
+
+    for expert_id in range(experts_per_device):
+        # TODO: (GR)
+        torch_layer_output = torch_output_ref[layer_id, expert_id, :, :]
+        tt_layer_output = tt_to_torch_outputs[layer_id, expert_id, :, :]
+
+        _pcc_passed, pcc_val = comp_pcc(torch_layer_output, tt_layer_output)
+        std = torch_layer_output.std().item()
+        relative_rmse_val = (
+            (torch.nn.functional.mse_loss(torch_layer_output, tt_layer_output).sqrt().item() / std) if std != 0 else 0.0
+        )
+        allclose_passed, allclose_val = comp_allclose(torch_layer_output, tt_layer_output)
+
+        if pcc < MATMUL_PCC_THRESHOLD:
+            matmul_all_passed = False
+            logger.warning(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc:.6f}")
+        else:
+            logger.info(f"Layer {layer_id}, Expert {expert_id}: PCC={pcc:.6f} (Passed)")
+
+    return matmul_all_passed
+
+
+def create_torch_w0(L, E, K, N):
+    """
+    Create torch w0 weight tensor.
+
+    Args:
+        L: Number of layers
+        E: Number of experts
+        K: Input dimension
+        N: Output dimension
+
+    Returns:
+        torch_w0: Tensor of shape (L, E, K, N)
+    """
+    # torch_w0 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
+    # le_val = 1
+    # for l in range(L):
+    #     for e in range(E):
+    #         for k_chunk in range(K // 32):
+    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
+    #             k_val = k_chunk * 0.001
+    #             for n_chunk in range(N // 32):
+    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
+    #                 n_val = n_chunk
+    #                 torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
+    #         le_val *= -1
+
+    torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    return torch_w0
+
+
+def create_torch_w1(L, E, K, N):
+    """
+    Create torch w1 weight tensor.
+
+    Args:
+        L: Number of layers
+        E: Number of experts
+        K: Input dimension
+        N: Output dimension
+
+    Returns:
+        torch_w1: Tensor of shape (L, E, K, N)
+    """
+    # torch_w1 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
+    # le_val = -1
+    # for l in range(L):
+    #     for e in range(E):
+    #         for k_chunk in range(K // 32):
+    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
+    #             k_val = k_chunk * 0.001
+    #             for n_chunk in range(N // 32):
+    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
+    #                 n_val = n_chunk
+    #                 torch_w1[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
+    #         le_val *= -1
+
+    torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    return torch_w1
+
+
+def create_torch_w2(L, E, N, K):
+    """
+    Create torch w2 weight tensor.
+
+    Args:
+        L: Number of layers
+        E: Number of experts
+        N: Intermediate dimension
+        K: Output dimension
+
+    Returns:
+        torch_w2: Tensor of shape (L, E, N, K)
+    """
+    # torch_w2 = torch.empty((L, E, N, K), dtype=torch.bfloat16)
+    # le_val = 1
+    # for l in range(L):
+    #     for e in range(E):
+    #         for n_chunk in range(N // 32):
+    #             n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
+    #             n_val = 0.001 * n_chunk
+    #             for k_chunk in range(K // 32):
+    #                 k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
+    #                 k_val = k_chunk
+    #                 torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
+    #         le_val *= -1
+    torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
+    return torch_w2
+
+
+def prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores):
+    """
+    Prepare the w0_w1 tensor by interleaving chunks of w0 and w1 width-wise.
+
+    Args:
+        torch_w0: Weight tensor of shape (L, E, K, N)
+        torch_w1: Weight tensor of shape (L, E, K, N)
+        L: Number of layers
+        E: Number of experts
+        K: Input dimension
+        N: Output dimension
+        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
+
+    Returns:
+        torch_w0_w1_interleaved: Interleaved tensor of shape (L, E, K, 4096)
+    """
+    Nt = N // ttnn.TILE_SIZE  # 2048 / 32 = 64 chunks per tensor
+
+    # Reshape to expose chunks: (L, E, K, N) -> (L, E, K, Nt, ttnn.TILE_SIZE)
+    w0_chunks = torch_w0.view(L, E, K, Nt, ttnn.TILE_SIZE)
+    w1_chunks = torch_w1.view(L, E, K, Nt, ttnn.TILE_SIZE)
+
+    # Stack w0 and w1 chunks together: (L, E, K, Nt, 2, ttnn.TILE_SIZE)
+    # This puts w0_chunk_i and w1_chunk_i adjacent to each other
+    stacked = torch.stack([w0_chunks, w1_chunks], dim=4)
+
+    # Reshape to interleave: (L, E, K, Nt * 2 * ttnn.TILE_SIZE) = (L, E, K, 4096)
+    # The order will be: w0_chunk_0, w1_chunk_0, w0_chunk_1, w1_chunk_1, ...
+    torch_w0_w1_interleaved = stacked.view(L, E, K, Nt, 2 * ttnn.TILE_SIZE)
+
+    # Permute to move Nt before K: (L, E, K, Nt, 2*TILE) -> (L, E, Nt, K, 2*TILE)
+    torch_w0_w1_permuted = torch_w0_w1_interleaved.permute(0, 1, 3, 2, 4)
+
+    each_shard = []
+
+    # Pick appropriate number of column tiles for each core based on the ring position.
+    start_tile = 0
+    for ring_pos in range(len(ring2cores)):
+        (_, _, pad_flag) = ring2cores[ring_pos]
+        num_tiles = 5 if pad_flag else 6
+        each_shard.append(torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :])
+
+        if pad_flag:
+            each_shard.append(torch.zeros(L, E, 1, K, 2 * ttnn.TILE_SIZE, dtype=torch_w0_w1_permuted.dtype))
+        start_tile += num_tiles
+
+    torch_w0_w1_reordered = torch.cat(each_shard, dim=2)  # (L, E, 5 * 8 + 1 * 8 + 6 * 4, K, 64)
+    all_groups_per_bank = torch_w0_w1_reordered.view(L, E, 12, -1, K, 2 * ttnn.TILE_SIZE)  # (L, E, 12, 6, K, 64)
+    all_groups_per_bank = all_groups_per_bank.permute(2, 0, 1, 3, 4, 5)  # (12, L, E, 6, K, 64)
+
+    # Let us further make the 6 as 3 and 64 as 128.
+    torch_w0_w1_pair_2_tiles = all_groups_per_bank.view(12, L, E, 3, -1, K, 2 * ttnn.TILE_SIZE)
+    # (12, L, E, 3, 2, K, 64) -> (12, L, E, 3, K, 2, 64)
+    torch_w0_w1_pair_2_tiles = torch_w0_w1_pair_2_tiles.permute(0, 1, 2, 3, 5, 4, 6)
+    torch_w0_w1_paired = torch_w0_w1_pair_2_tiles.reshape(12, L, E, 3, -1, 4 * ttnn.TILE_SIZE)
+
+    return torch_w0_w1_paired
+
+
+def prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores):
+    """
+    Prepare the w2 tensor by padding and reordering tiles.
+
+    Args:
+        torch_w2: Weight tensor of shape (L, E, N, K)
+        L: Number of layers
+        E: Number of experts
+        N: Intermediate dimension
+        K: Output dimension
+        ring2cores: Dictionary mapping ring position to (core_coord, dram_bank_id, pad_flag)
+
+    Returns:
+        torch_w2_reordered: Reordered tensor of shape (L, E, N_padded, 7680)
+    """
+    # Separate the tensor into 4 groups of 4 * 32 tiles and then 1 group of 2/3 * 32 tiles.
+    each_shard = []
+
+    start_col = 0
+    for ring_pos in range(len(ring2cores)):
+        (_, _, pad_flag) = ring2cores[ring_pos]
+        last_group_tiles = 3 if pad_flag else 2
+        last_group_pad_tiles = 1 if pad_flag else 2
+
+        # Get the first 4 groups of 4 * 32 tiles.
+        each_shard.append(torch_w2[:, :, :, start_col : start_col + 4 * 4 * ttnn.TILE_SIZE])
+        start_col += 4 * 4 * ttnn.TILE_SIZE
+        each_shard.append(torch_w2[:, :, :, start_col : start_col + last_group_tiles * ttnn.TILE_SIZE])
+        start_col += last_group_tiles * ttnn.TILE_SIZE
+
+        # Add padding for the last group.
+        each_shard.append(torch.zeros(L, E, N, last_group_pad_tiles * ttnn.TILE_SIZE, dtype=torch_w2.dtype))
+
+    torch_w2_reordered = torch.cat(each_shard, dim=-1)  # (L, E, N, 12 * (4 * 4 * 32 + 4 * 32))
+    all_groups_per_bank = torch_w2_reordered.view(L, E, N, 12, -1, 4 * ttnn.TILE_SIZE)
+
+    # (L, E, N, 12, 5, 128) -> (12, L, E, 5, N, 128)
+    all_groups_per_bank = all_groups_per_bank.permute(3, 0, 1, 4, 2, 5)
+
+    # Group N in terms of tiles first
+    N_grouped = all_groups_per_bank.view(
+        12, L, E, 5, -1, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE
+    )  # (12, L, E, 5, 64, 32, 128)
+
+    # Figure out the order of N tiles based on the ring position.
+    core_chunk_order = torch.tensor(list(reversed(range(len(ring2cores))))).roll(1)
+
+    # Figure out the starting position for each chunk
+    chunk_sizes = [5 if ring2cores[ring_pos][2] else 6 for ring_pos in range(len(ring2cores))]
+    chunk_start_positions = torch.cat(
+        [torch.zeros(1, dtype=torch.int32), torch.cumsum(torch.tensor(chunk_sizes, dtype=torch.int32), dim=0)]
+    )
+
+    each_shard = []
+    # Assemble the number of such N tiles based on the ring position.
+    for core_id in range(len(ring2cores)):
+        each_chunk = []
+        for chunk_id in core_chunk_order:
+            start_pos = chunk_start_positions[chunk_id]
+            end_pos = chunk_start_positions[chunk_id + 1]
+            this_chunk = N_grouped[core_id, :, :, :, start_pos:end_pos, :, :]
+            each_chunk.append(this_chunk)
+        each_shard.append(torch.cat(each_chunk, dim=3))
+
+        core_chunk_order = core_chunk_order.roll(1)
+
+    N_reordered = torch.stack(each_shard).view(12, L, E, 5, -1, 4 * ttnn.TILE_SIZE)
+
+    # Pad "N" dimension to make it divisible by 7 tiles, since we read 7 tiles at a time.
+    Nt = N // ttnn.TILE_SIZE  # 2048 / 32 = 64 chunks per tensor
+    N_padding = math.ceil(Nt / 7) * 7 * ttnn.TILE_SIZE - N
+    padding = torch.zeros(12, L, E, 5, N_padding, 4 * ttnn.TILE_SIZE, dtype=torch_w2.dtype)
+    all_groups_per_bank = torch.cat([N_reordered, padding], dim=4)  # (12, L, E, 5, N + 192, 128)
+    return all_groups_per_bank
 
 
 def tt_to_torch_dtype(tt_dtype):
@@ -340,7 +811,6 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     )
 
 
-# Performance tests
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -366,7 +836,7 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("selected_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_moe(
+def test_moe_compute(
     mesh_device,
     mesh_shape,
     cluster_axis,
@@ -378,149 +848,169 @@ def test_moe(
     device_params,
 ):
     """
-    Test the moe operation without tracing.
-
     This test:
     1. Generates a sparse buffer (simulating output from all_to_all_dispatch)
     2. Generates all-gathered expert indices and scores
     3. Generates per-device expert mapping
     4. Runs the moe operation
-    5. Verifies the output against a golden reference
+    5. Verifies the outputs against a golden reference
     """
     torch.manual_seed(2005)
     random.seed(2005)
 
+    L = 3
+
+    #################################
+    # TEST SETUP
+    #################################
+
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
     total_tokens = tokens_per_device * num_dispatch_devices
+    experts_per_device = experts // num_devices
 
     logger.info(f"Test configuration:")
     logger.info(f"  mesh_shape: {mesh_shape}")
     logger.info(f"  cluster_axis: {cluster_axis}")
     logger.info(f"  num_devices: {num_devices}, num_dispatch_devices: {num_dispatch_devices}")
     logger.info(f"  tokens_per_device: {tokens_per_device}, total_tokens: {total_tokens}")
-    logger.info(f"  experts: {experts}, selected_experts_k: {selected_experts_k}")
+    logger.info(
+        f"  experts: {experts}, selected_experts_k: {selected_experts_k}, experts_per_device: {experts_per_device}"
+    )
     logger.info(f"  hidden_size: {hidden_size}")
+    logger.info(f"  dtype: {dtype}")
 
-    # Generate test data
-    sparse_buffer, expert_indices, expert_scores, original_tokens = gen_sparse_buffer_and_indices(
-        tokens_per_device,
-        hidden_size,
-        experts,
-        selected_experts_k,
-        mesh_shape,
-        cluster_axis,
-        dtype=tt_to_torch_dtype(dtype),
-    )
-
-    expert_mapping = gen_expert_mapping(experts, mesh_shape, cluster_axis)
-
-    logger.info(f"Generated tensors:")
-    logger.info(f"  sparse_buffer shape: {sparse_buffer.shape}")
-    logger.info(f"  expert_indices shape: {expert_indices.shape}")
-    logger.info(f"  expert_scores shape: {expert_scores.shape}")
-    logger.info(f"  expert_mapping shape: {expert_mapping.shape}")
-
-    # Compute golden output
-    golden_output, expert_token_counts = compute_selective_tilize_golden(
-        sparse_buffer, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
-    )
-    logger.info(f"  golden_output shape: {golden_output.shape}")
-    logger.info(f"  expert_token_counts:\n{expert_token_counts}")
-
-    # Compute golden expert_activation
-    golden_activation, experts_per_device_check = compute_expert_activation_golden(
-        expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
-    )
-    for d in range(num_devices):
-        logger.info(f"  Device {d} activated tokens: {len(golden_activation[d])}")
+    #################################
+    # CREATE TILIZE INPUT TENSORS AND GOLDENS
+    #################################
 
     # Drain tilize core is core (5,0) where indices and scores are sharded
-    tilize_drain_core = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(5, 0),
-                ttnn.CoreCoord(5, 0),
-            ),
-        }
-    )
+    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0))})
 
-    # Create memory configs
-    tilize_input_memory_config = ttnn.DRAM_MEMORY_CONFIG
-
-    # Create L1 sharded memory config for indices and scores on drain tilizer core
-    # expert_indices shape per device: [tokens_per_device, selected_experts_k] (after shard along dispatch axis)
-    # But we need the all-gathered version, so shape is [num_dispatch_devices * tokens_per_device, selected_experts_k]
-    # which is [total_tokens, selected_experts_k]
-    indices_shard_shape = [total_tokens, selected_experts_k]
-    indices_sharded_mem_config = create_sharded_memory_config(tilize_drain_core, indices_shard_shape, ttnn.uint16)
-
-    scores_shard_shape = [total_tokens, selected_experts_k]
-    scores_sharded_mem_config = create_sharded_memory_config(tilize_drain_core, scores_shard_shape, dtype)
-
-    # Sparse buffer is sharded across devices (dim 0)
-    tt_sparse_buffer = ttnn.from_torch(
-        sparse_buffer,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=dtype,
-        memory_config=tilize_input_memory_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-    )
-
-    # Expert indices - all-gathered (replicated on all devices)
-    # Shape: [num_dispatch_devices, tokens_per_device, K]
-    # Flatten to [num_dispatch_devices * tokens_per_device, K] = [total_tokens, K] per device
-    expert_indices_flat = expert_indices.reshape(total_tokens, selected_experts_k)
-    # Replicate on all devices
-    expert_indices_replicated = expert_indices_flat.unsqueeze(0).repeat(num_devices, 1, 1)
-
-    tt_expert_indices = ttnn.from_torch(
-        expert_indices_replicated,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.uint16,
-        memory_config=indices_sharded_mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-    )
-
-    # Expert scores - same distribution as indices
-    expert_scores_flat = expert_scores.reshape(total_tokens, selected_experts_k)
-    expert_scores_replicated = expert_scores_flat.unsqueeze(0).repeat(num_devices, 1, 1)
-
-    tt_expert_scores = ttnn.from_torch(
-        expert_scores_replicated,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=dtype,
-        memory_config=scores_sharded_mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-    )
-
-    # Expert mapping - per-device [num_devices, experts], replicated on every device
+    #### Expert mapping - per-device [num_devices, experts], replicated on every device ###
     # Each device gets its own row after sharding, but since it's replicated,
-    # we give each device the full tensor and it uses its own row
+    # we give each device the full tensor and it uses its own row.
+    # Expert mapping is constant across all runs.
+    expert_mapping = gen_expert_mapping(experts, mesh_shape, cluster_axis)
+    expert_mapping_mem_config = ttnn.DRAM_MEMORY_CONFIG
     tt_expert_mapping = ttnn.from_torch(
         expert_mapping,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.uint16,
-        memory_config=tilize_input_memory_config,
+        memory_config=expert_mapping_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    logger.info(f"TTNN tensor shapes:")
-    logger.info(f"  tt_sparse_buffer: {tt_sparse_buffer.shape}")
-    logger.info(f"  tt_expert_indices: {tt_expert_indices.shape}")
-    logger.info(f"  tt_expert_scores: {tt_expert_scores.shape}")
-    logger.info(f"  tt_expert_mapping: {tt_expert_mapping.shape}")
+    # Sparse memory config
+    sparse_mem_config = ttnn.L1_MEMORY_CONFIG
+
+    # Create L1 sharded memory config for indices on drain tilizer core
+    # expert_indices shape per device: [tokens_per_device, selected_experts_k] (after shard along dispatch axis)
+    # But we need the all-gathered version, so shape is [num_dispatch_devices * tokens_per_device, selected_experts_k]
+    # which is [total_tokens, selected_experts_k]
+    expert_indices_shard_shape = [total_tokens, selected_experts_k]
+    expert_indices_mem_config = create_sharded_memory_config(tilize_drain_core, expert_indices_shard_shape, ttnn.uint16)
+
+    # Create L1 sharded memory config for indices and scores on drain tilizer core
+    expert_scores_shard_shape = [total_tokens, selected_experts_k]
+    expert_scores_mem_config = create_sharded_memory_config(tilize_drain_core, expert_scores_shard_shape, dtype)
+
+    tt_sparse_buffers = []
+    tt_expert_indices_buffers = []
+    tt_expert_scores_buffers = []
+
+    per_expert_tokens_goldens = []
+    activation_goldens = []
+    e_t_goldens = []
+    for layer_id in range(L):
+        # Generate test data
+        sparse_buffer, expert_indices, expert_scores, original_tokens = gen_sparse_buffer_and_indices(
+            tokens_per_device,
+            hidden_size,
+            experts,
+            selected_experts_k,
+            mesh_shape,
+            cluster_axis,
+            dtype=tt_to_torch_dtype(dtype),
+        )
+
+        # Compute goldens
+        golden_output, expert_token_counts = compute_selective_tilize_golden(
+            sparse_buffer, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
+        )
+        logger.info(f"  expert_token_counts:\n{expert_token_counts}")
+        per_expert_tokens_goldens.append(expert_token_counts)
+
+        golden_activation, experts_per_device_check = compute_expert_activation_golden(
+            expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
+        )
+        for d in range(num_devices):
+            logger.info(f"  Device {d} activated tokens: {len(golden_activation[d])}")
+        activation_goldens.append(golden_activation)
+
+        golden_e_t, _ = compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
+        e_t_goldens.append(golden_e_t)
+
+        # Create input tensors
+        # NOTE:
+        # - when running multiple layers we initially create tt_sparse_buffer, tt_expert_indices and tt_expert_scores in DRAM, we'll move to L1 before running moe_compute
+        # - we're extremely tight on L1 for a single invocation of the op
+        if L == 1:
+            init_sparse_mem_config = sparse_mem_config
+            init_expert_indices_mem_config = expert_indices_mem_config
+            init_expert_scores_mem_config = expert_scores_mem_config
+        else:
+            init_sparse_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            init_expert_indices_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            init_expert_scores_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+        ### Sparse buffer is sharded across devices (dim 0) ###
+        tt_sparse_buffer = ttnn.from_torch(
+            sparse_buffer,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=init_sparse_mem_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        tt_sparse_buffers.append(tt_sparse_buffer)
+
+        ### Expert indices - all-gathered (replicated on all devices) ###
+        # Shape: [num_dispatch_devices, tokens_per_device, K]
+        # Flatten to [num_dispatch_devices * tokens_per_device, K] = [total_tokens, K] per device
+        # Replicate on all devices
+        expert_indices_flat = expert_indices.reshape(total_tokens, selected_experts_k)
+        expert_indices_replicated = expert_indices_flat.unsqueeze(0).repeat(num_devices, 1, 1)
+        tt_expert_indices = ttnn.from_torch(
+            expert_indices_replicated,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            memory_config=init_expert_indices_mem_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        tt_expert_indices_buffers.append(tt_expert_indices)
+
+        ### Expert scores - same distribution as indices ###
+        expert_scores_flat = expert_scores.reshape(total_tokens, selected_experts_k)
+        expert_scores_replicated = expert_scores_flat.unsqueeze(0).repeat(num_devices, 1, 1)
+        tt_expert_scores = ttnn.from_torch(
+            expert_scores_replicated,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=init_expert_scores_mem_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+        tt_expert_scores_buffers.append(tt_expert_scores)
 
     #################################
-    ###### START: MATMUL SETUP ######
+    # CREATE MATMUL INPUT TENSORS
     #################################
 
     SHAPE2TIME = {
-        (32, 7168, 2048, 2, 1): 225.0,
+        (32, 7168, 2048, 2, 3): 225.0,
         # (32, 7168, 2048, 3, 1): 329.0,
     }
 
@@ -617,338 +1107,135 @@ def test_moe(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    ###############################
-    ###### END: MATMUL SETUP ######
-    ###############################
+    #################################
+    # RUN OP
+    #################################
 
-    # TODO: (GR)
-    # Run the operation
-    (
-        per_expert_total_tokens_output_tensor,
-        expert_activation_output_tensor,
-        e_t_output_tensor,
-        matmul_output_tensor,
-    ) = ttnn.experimental.moe_compute(
-        tt_sparse_buffer,
-        tt_expert_indices,
-        tt_expert_scores,
-        tt_expert_mapping,
-        tt_w0_w1,
-        tt_w2,
-        layer_id=layer_id,
-        cluster_axis=cluster_axis,
-    )
+    def run_op():
+        moe_compute_outputs = []
 
-    # logger.info(f"Output tensor shape: {output_tensor.shape}")
-    logger.info(f"Expert activation tensor shape: {expert_activation_output_tensor.shape}")
-
-    # Convert output to torch for verification
-    # output_torch = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    # logger.info(f"Output torch shape: {output_torch.shape}")
-
-    experts_per_device = experts // num_devices
-
-    # The output from the op is [experts_per_device, total_tokens, hidden_size] per device (TILE_LAYOUT)
-    # After concat along dim=0, shape is [num_devices * experts_per_device, total_tokens, hidden_size]
-    # We need to reshape to [num_devices, experts_per_device, total_tokens, hidden_size] for comparison
-
-    # Handle potential tile padding in the output
-    # output_total_tokens = output_torch.shape[1]
-    # output_hidden_size = output_torch.shape[2]
-
-    # logger.info(f"Expected shape (per device): [{experts_per_device}, {total_tokens}, {hidden_size}]")
-    # logger.info(f"Actual output (concatenated): {output_torch.shape}")
-
-    # Reshape concatenated output to [num_devices, experts_per_device, total_tokens, hidden_size]
-    # output_reshaped = output_torch.reshape(num_devices, experts_per_device, output_total_tokens, output_hidden_size)
-
-    # Remove tile padding if present (output may be padded to tile boundaries)
-    # if output_total_tokens > total_tokens:
-    #     output_reshaped = output_reshaped[:, :, :total_tokens, :]
-    # if output_hidden_size > hidden_size:
-    #     output_reshaped = output_reshaped[:, :, :, :hidden_size]
-
-    # logger.info(f"Output reshaped (after removing padding): {output_reshaped.shape}")
-    # logger.info(f"Golden output shape: {golden_output.shape}")
-
-    # Verify output against golden
-    # The output is dense: for each expert, the first N tokens are valid (where N = expert_token_counts)
-    # and the remaining tokens are garbage. We only compare the valid tokens.
-    # all_passed = True
-    # total_comparisons = 0
-    # total_mismatches = 0
-
-    # for device_idx in range(num_devices):
-    #     for expert_idx in range(experts_per_device):
-    #         num_valid_tokens = expert_token_counts[device_idx, expert_idx].item()
-
-    #         if num_valid_tokens == 0:
-    #             continue
-
-    #         # Extract valid tokens from output and golden
-    #         output_slice = output_reshaped[device_idx, expert_idx, :num_valid_tokens, :]
-    #         golden_slice = golden_output[device_idx, expert_idx, :num_valid_tokens, :]
-
-    #         # Convert to float32 for comparison (bfloat16 comparison can be tricky)
-    #         output_slice_f32 = output_slice.to(torch.float32)
-    #         golden_slice_f32 = golden_slice.to(torch.float32)
-
-    #         # Compute PCC (Pearson Correlation Coefficient)
-    #         output_flat = output_slice_f32.flatten()
-    #         golden_flat = golden_slice_f32.flatten()
-
-    #         if golden_flat.numel() > 1:
-    #             pcc = torch.corrcoef(torch.stack([output_flat, golden_flat]))[0, 1].item()
-    #         else:
-    #             pcc = 1.0 if torch.allclose(output_flat, golden_flat, rtol=1e-2, atol=1e-2) else 0.0
-
-    #         # Check for exact match (with tolerance for bfloat16)
-    #         is_close = torch.allclose(output_slice_f32, golden_slice_f32, rtol=1e-2, atol=1e-2)
-
-    #         # Count mismatches
-    #         mismatches = (~torch.isclose(output_slice_f32, golden_slice_f32, rtol=1e-2, atol=1e-2)).sum().item()
-    #         total_comparisons += output_slice_f32.numel()
-    #         total_mismatches += mismatches
-
-    #         if not is_close or pcc < 0.99:
-    #             logger.warning(
-    #                 f"Device {device_idx}, Expert {expert_idx}: "
-    #                 f"PCC={pcc:.6f}, is_close={is_close}, "
-    #                 f"mismatches={mismatches}/{output_slice_f32.numel()}"
-    #             )
-    #             all_passed = False
-    #         else:
-    #             logger.info(
-    #                 f"Device {device_idx}, Expert {expert_idx}: " f"PCC={pcc:.6f}, PASSED ({num_valid_tokens} tokens)"
-    #             )
-
-    # # Summary for tilized output
-    # accuracy = (total_comparisons - total_mismatches) / total_comparisons * 100 if total_comparisons > 0 else 100
-    # logger.info(f"\nTilized Output Verification Summary:")
-    # logger.info(f"  Total comparisons: {total_comparisons}")
-    # logger.info(f"  Total mismatches: {total_mismatches}")
-    # logger.info(f"  Accuracy: {accuracy:.2f}%")
-    # logger.info(f"  Overall result: {'PASSED' if all_passed else 'FAILED'}")
-
-    # ========== Expert Activation Tensor Validation ==========
-    logger.info(f"\n========== Expert Activation Tensor Validation ==========")
-
-    # Convert expert_activation tensor to torch
-    # Shape per device: [1, total_bytes / 4] as uint32
-    expert_activation_torch = ttnn.to_torch(
-        expert_activation_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-    )
-    logger.info(f"Expert activation torch shape: {expert_activation_torch.shape}")
-
-    # Row size in uint32 elements (aligned to 16 bytes = 4 uint32s)
-    row_elements_unaligned = 2 * experts_per_device + 1  # token_id + k_indices + scores
-    row_bytes_unaligned = row_elements_unaligned * 4
-    aligned_row_bytes = ((row_bytes_unaligned + 15) // 16) * 16
-    aligned_row_elements = aligned_row_bytes // 4
-
-    activation_all_passed = True
-    for device_idx in range(num_devices):
-        golden_rows = golden_activation[device_idx]
-        num_expected_rows = len(golden_rows)
-
-        # Extract this device's activation data
-        # The tensor is flattened, so we need to parse rows
-        device_activation = expert_activation_torch[device_idx].flatten().to(torch.int64)
-        max_rows = len(device_activation) // aligned_row_elements
-
-        logger.info(
-            f"Device {device_idx}: expecting {num_expected_rows} activated tokens, tensor has space for {max_rows} rows"
-        )
-
-        # Validate each row in sequential order (kernel preserves global token order)
-        for row_idx, golden_row in enumerate(golden_rows):
-            if row_idx >= max_rows:
-                logger.warning(f"  Device {device_idx}: row {row_idx} out of bounds (max {max_rows})")
-                activation_all_passed = False
-                break
-
-            row_start = row_idx * aligned_row_elements
-
-            # Extract token_id
-            actual_token_id = device_activation[row_start].item()
-            expected_token_id = golden_row["token_id"]
-
-            if actual_token_id != expected_token_id:
-                logger.warning(
-                    f"  Device {device_idx}, Row {row_idx}: token_id mismatch - "
-                    f"expected {expected_token_id}, got {actual_token_id}"
-                )
-                activation_all_passed = False
-                continue
-
-            # Validate k_indices and scores for each local expert
-            for local_exp_idx in range(experts_per_device):
-                expected_k = golden_row["k_indices"][local_exp_idx]
-                expected_score = golden_row["scores"][local_exp_idx]
-
-                if expected_k >= 0:  # This expert was selected
-                    actual_k = device_activation[row_start + 1 + local_exp_idx].item()
-                    actual_score_bits = device_activation[row_start + 1 + experts_per_device + local_exp_idx].item()
-
-                    # Convert score bits back to bfloat16 then float
-                    # The score is stored as uint16 in the lower bits of uint32
-                    actual_score_bf16 = torch.tensor([actual_score_bits & 0xFFFF], dtype=torch.int16).view(
-                        torch.bfloat16
-                    )
-                    actual_score = actual_score_bf16.item()
-
-                    if actual_k != expected_k:
-                        logger.warning(
-                            f"  Device {device_idx}, Row {row_idx}, Expert {local_exp_idx}: "
-                            f"k_index mismatch - expected {expected_k}, got {actual_k}"
-                        )
-                        activation_all_passed = False
-
-                    # Compare scores with tolerance (bfloat16 precision)
-                    if abs(actual_score - expected_score) > 1e-2:
-                        logger.warning(
-                            f"  Device {device_idx}, Row {row_idx}, Expert {local_exp_idx}: "
-                            f"score mismatch - expected {expected_score:.4f}, got {actual_score:.4f}"
-                        )
-                        activation_all_passed = False
-
-        # Validate sentinel row (token_id = -1 = 0xFFFFFFFF as uint32)
-        sentinel_row_idx = num_expected_rows
-        if sentinel_row_idx >= max_rows:
-            logger.warning(f"  Device {device_idx}: sentinel row {sentinel_row_idx} out of bounds")
-            activation_all_passed = False
-        else:
-            sentinel_row_start = sentinel_row_idx * aligned_row_elements
-            sentinel_token_id = device_activation[sentinel_row_start].item()
-            # -1 as uint32 (0xFFFFFFFF) becomes -1 when sign-extended to int64
-            is_sentinel = (sentinel_token_id == -1) or (sentinel_token_id == 0xFFFFFFFF)
-
-            if not is_sentinel:
-                logger.warning(
-                    f"  Device {device_idx}: sentinel row token_id mismatch - " f"expected -1, got {sentinel_token_id}"
-                )
-                activation_all_passed = False
+        for layer_id in range(L):
+            # if only running a single layer, we can fit the single set of inputs in L1 initially
+            # otherwise with multiple layers, and multiple sets of inputs, we need to move inputs into L1 before a given
+            if L == 1:
+                tt_sparse_buffer = tt_sparse_buffers[0]
+                tt_expert_indices = tt_expert_indices_buffers[0]
+                tt_expert_scores = tt_expert_scores_buffers[0]
             else:
-                logger.info(f"  Device {device_idx}: {num_expected_rows} tokens validated, sentinel PASSED")
+                tt_sparse_buffer = ttnn.to_memory_config(tt_sparse_buffers[layer_id], memory_config=sparse_mem_config)
+                tt_expert_indices = ttnn.to_memory_config(
+                    tt_expert_indices_buffers[layer_id], memory_config=expert_indices_mem_config
+                )
+                tt_expert_scores = ttnn.to_memory_config(
+                    tt_expert_scores_buffers[layer_id], memory_config=expert_scores_mem_config
+                )
 
-    logger.info(f"\nExpert Activation Verification: {'PASSED' if activation_all_passed else 'FAILED'}")
+            # run the op
+            (
+                l1_per_expert_total_tokens_output_tensor,
+                l1_expert_activation_output_tensor,
+                l1_e_t_output_tensor,
+                l1_output_tensor,
+            ) = ttnn.experimental.moe_compute(
+                tt_sparse_buffer,  # tt_sparse_buffers[layer_id],
+                tt_expert_indices,
+                tt_expert_scores,
+                tt_expert_mapping,
+                tt_w0_w1,
+                tt_w2,
+                layer_id=layer_id,
+                cluster_axis=cluster_axis,
+            )
 
-    # ========== Per Expert Total Tokens Tensor Validation ==========
-    logger.info(f"\n========== Per Expert Total Tokens Tensor Validation ==========")
+            # deallocate L1 inputs
+            # if running with multiple layers, we have to deallocate previous inputs to free up L1 space
+            if L != 1:
+                ttnn.deallocate(tt_sparse_buffer)
+                ttnn.deallocate(tt_expert_indices)
+                ttnn.deallocate(tt_expert_scores)
 
-    # L1 alignment constant (16 bytes)
-    l1_alignment = 16
+            # convert outputs to DRAM (we don't have enough L1 space to leave outputs in L1 when running multiple invocations)
+            dram_per_expert_total_tokens_output_tensor = ttnn.to_memory_config(
+                l1_per_expert_total_tokens_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            dram_expert_activation_output_tensor = ttnn.to_memory_config(
+                l1_expert_activation_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            dram_e_t_output_tensor = ttnn.to_memory_config(l1_e_t_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            dram_output_tensor = ttnn.to_memory_config(l1_output_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    # Convert per_expert_total_tokens tensor to torch
-    # Shape per device: [1, aligned_elements] as uint32
-    per_expert_total_tokens_torch = ttnn.to_torch(
-        per_expert_total_tokens_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-    )
-    logger.info(f"Per expert total tokens torch shape: {per_expert_total_tokens_torch.shape}")
+            # # deallocate L1 outputs
+            ttnn.deallocate(l1_per_expert_total_tokens_output_tensor)
+            ttnn.deallocate(l1_expert_activation_output_tensor)
+            ttnn.deallocate(l1_e_t_output_tensor)
+            ttnn.deallocate(l1_output_tensor)
 
-    # Validate shape: [num_devices, aligned_row_elements]
-    # Row is experts_per_device uint32s, aligned to 16 bytes
-    per_expert_row_bytes = ((experts_per_device * 4 + l1_alignment - 1) // l1_alignment) * l1_alignment
-    per_expert_row_elements = per_expert_row_bytes // 4
-    expected_per_expert_shape = (num_devices, per_expert_row_elements)
-    assert per_expert_total_tokens_torch.shape == expected_per_expert_shape, (
-        f"per_expert_total_tokens shape mismatch: expected {expected_per_expert_shape}, "
-        f"got {per_expert_total_tokens_torch.shape}"
-    )
+            # save outputs to verify later
+            moe_compute_output = (
+                dram_per_expert_total_tokens_output_tensor,
+                dram_expert_activation_output_tensor,
+                dram_e_t_output_tensor,
+                dram_output_tensor,
+            )
+            moe_compute_outputs.append(moe_compute_output)
 
+        return moe_compute_outputs
+
+    moe_compute_outputs = run_op()
+
+    #################################
+    # VALIDATE OUTPUTS PER LAYER
+    #################################
     per_expert_tokens_all_passed = True
-    for device_idx in range(num_devices):
-        device_counts = per_expert_total_tokens_torch[device_idx].flatten()
-
-        for local_exp_idx in range(experts_per_device):
-            expected_count = expert_token_counts[device_idx, local_exp_idx].item()
-            actual_count = device_counts[local_exp_idx].item()
-
-            if actual_count != expected_count:
-                logger.warning(
-                    f"  Device {device_idx}, Expert {local_exp_idx}: "
-                    f"count mismatch - expected {expected_count}, got {actual_count}"
-                )
-                per_expert_tokens_all_passed = False
-            else:
-                logger.info(f"  Device {device_idx}, Expert {local_exp_idx}: count={actual_count} PASSED")
-
-    logger.info(f"\nPer Expert Total Tokens Verification: {'PASSED' if per_expert_tokens_all_passed else 'FAILED'}")
-
-    # ========== E-T (Expert-to-Token) Tensor Validation ==========
-    logger.info(f"\n========== E-T (Expert-to-Token) Tensor Validation ==========")
-
-    # Compute golden e_t
-    golden_e_t, _ = compute_e_t_golden(expert_indices, expert_mapping, mesh_shape, cluster_axis)
-
-    # Convert e_t tensor to torch
-    # Shape per device: [experts_per_device, e_t_row_elements] as uint32
-    e_t_torch = ttnn.to_torch(e_t_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    logger.info(f"E-T torch shape: {e_t_torch.shape}")
-
-    # Each entry is 16B aligned (4 uint32s per token ID)
-    e_t_entry_size_bytes = ((4 + l1_alignment - 1) // l1_alignment) * l1_alignment  # align sizeof(uint32_t) to 16B
-    e_t_entry_elements = e_t_entry_size_bytes // 4  # elements per entry (4 for 16B alignment)
-
-    # Validate shape: [num_devices * experts_per_device, e_t_row_elements]
-    # Each expert has (total_tokens + 1) entries (tokens + sentinel), each entry is 16B aligned
-    e_t_row_elements = (total_tokens + 1) * e_t_entry_elements
-    expected_e_t_shape = (num_devices * experts_per_device, e_t_row_elements)
-    assert (
-        e_t_torch.shape == expected_e_t_shape
-    ), f"e_t shape mismatch: expected {expected_e_t_shape}, got {e_t_torch.shape}"
-
+    activation_all_passed = True
     e_t_all_passed = True
-    for device_idx in range(num_devices):
-        for local_exp_idx in range(experts_per_device):
-            expected_tokens = golden_e_t[device_idx][local_exp_idx]
-            num_expected_tokens = len(expected_tokens)
+    matmul_all_passed = True
+    for layer_id in range(L):
+        (
+            per_expert_total_tokens_output_tensor,
+            expert_activation_output_tensor,
+            e_t_output_tensor,
+            output_tensor,
+        ) = moe_compute_outputs[layer_id]
 
-            # Get the row for this expert from this device
-            # Each device has experts_per_device rows in the tensor
-            row_idx = device_idx * experts_per_device + local_exp_idx
-            device_expert_row = e_t_torch[row_idx].flatten().to(torch.int64)
+        logger.info(f"\n========== Layer {layer_id} Validation ==========")
+        logger.info(f"Per expert total tokens tensor shape: {per_expert_total_tokens_output_tensor.shape}")
+        logger.info(f"Expert activation tensor shape: {expert_activation_output_tensor.shape}")
+        logger.info(f"E-T (expert-to-token) tensor shape: {e_t_output_tensor.shape}")
+        logger.info(f"Output tensor shape: {output_tensor.shape}")
 
-            # Validate each token in the e_t list
-            tokens_match = True
-            for i, expected_token_id in enumerate(expected_tokens):
-                # Each entry is at 16B (e_t_entry_elements) offset
-                actual_token_id = device_expert_row[i * e_t_entry_elements].item()
+        # ========== Per Expert Total Tokens Tensor Validation ==========
+        expert_token_counts = per_expert_tokens_goldens[layer_id]
+        if not validate_per_expert_tokens(
+            mesh_device, experts_per_device, num_devices, per_expert_total_tokens_output_tensor, expert_token_counts
+        ):
+            per_expert_tokens_all_passed = False
 
-                if actual_token_id != expected_token_id:
-                    logger.warning(
-                        f"  Device {device_idx}, Expert {local_exp_idx}, Entry {i}: "
-                        f"token_id mismatch - expected {expected_token_id}, got {actual_token_id}"
-                    )
-                    tokens_match = False
-                    e_t_all_passed = False
+        # ========== Expert Activation Tensor Validation ==========
+        golden_activation = activation_goldens[layer_id]
+        if not validate_activation(
+            mesh_device, experts_per_device, num_devices, expert_activation_output_tensor, golden_activation
+        ):
+            activation_all_passed = False
 
-            # Validate sentinel (-1) at end of list
-            sentinel_idx = num_expected_tokens * e_t_entry_elements
-            if sentinel_idx < len(device_expert_row):
-                sentinel_value = device_expert_row[sentinel_idx].item()
-                is_sentinel = (sentinel_value == -1) or (sentinel_value == 0xFFFFFFFF)
+        # ========== E-T (Expert-to-Token) Tensor Validation ==========
+        golden_e_t = e_t_goldens[layer_id]
+        if not validate_e_t(mesh_device, total_tokens, experts_per_device, num_devices, e_t_output_tensor, golden_e_t):
+            e_t_all_passed = False
 
-                if not is_sentinel:
-                    logger.warning(
-                        f"  Device {device_idx}, Expert {local_exp_idx}: "
-                        f"sentinel mismatch - expected -1, got {sentinel_value}"
-                    )
-                    e_t_all_passed = False
-                elif tokens_match:
-                    logger.info(
-                        f"  Device {device_idx}, Expert {local_exp_idx}: "
-                        f"{num_expected_tokens} tokens validated, sentinel PASSED"
-                    )
-            else:
-                logger.warning(
-                    f"  Device {device_idx}, Expert {local_exp_idx}: " f"sentinel index {sentinel_idx} out of bounds"
-                )
-                e_t_all_passed = False
+        # ========== Matmul Output Tensor Validation ==========
+        # TODO: (GR)
+        # if not validate_matmul(layer_id, experts_per_device, output_tensor):
+        #     matmul_all_passed = False
 
+    # Asserts
+    logger.info(f"\n========== Asserts ==========")
+    logger.info(f"\nPer Expert Total Tokens Verification: {'PASSED' if per_expert_tokens_all_passed else 'FAILED'}")
+    logger.info(f"\nExpert Activation Verification: {'PASSED' if activation_all_passed else 'FAILED'}")
     logger.info(f"\nE-T Tensor Verification: {'PASSED' if e_t_all_passed else 'FAILED'}")
+    logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
 
-    # assert all_passed, f"Tilized output verification failed! Accuracy: {accuracy:.2f}%"
-    assert activation_all_passed, "Expert activation tensor verification failed!"
     assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"
+    assert activation_all_passed, "Expert activation tensor verification failed!"
     assert e_t_all_passed, "E-T tensor verification failed!"
+    assert matmul_all_passed, "Matmul output tensor verification failed!"
