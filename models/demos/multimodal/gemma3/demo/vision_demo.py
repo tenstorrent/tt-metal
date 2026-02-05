@@ -16,7 +16,7 @@ from models.common.llama_models import sample_top_p
 from models.tt_transformers.tt.common import ImageMedia
 from models.tt_transformers.tt.generator import create_submeshes
 
-IMG_PATH = (Path(__file__).parent / "sample_prompts/llama_models").resolve()
+IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
 import os
 import time

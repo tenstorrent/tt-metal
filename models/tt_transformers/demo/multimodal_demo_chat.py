@@ -12,7 +12,7 @@ from transformers import AutoProcessor
 
 import ttnn
 
-IMG_PATH = (Path(__file__).parent / "sample_prompts/llama_models").resolve()
+IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
 from models.common.llama_models import GeneratorChat
 from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
