@@ -1666,12 +1666,9 @@ class PreSDPA:
                     ],
                     # Per-core runtime args for fabric (BRISC only, on worker_core)
                     # Initialize empty args that will be populated by setup_routing_plane_connection
-                    per_core_runtime_args_descriptors=[
-                        PerCoreRuntimeArgsDescriptor(
-                            risc="brisc",
-                            core_args=[(worker_core, [])],  # Fabric args appended after program creation
-                        ),
-                    ],
+                    per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                        brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                    ),
                 )
 
                 # ================================================================

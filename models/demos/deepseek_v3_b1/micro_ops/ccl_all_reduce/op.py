@@ -409,13 +409,12 @@ class DeepseekMinimalAllReduce:
                             other_value=0,
                         ),
                     ],
-                    per_core_runtime_args_descriptors=[
+                    per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         # Sender core: NCRISC and BRISC need per-core runtime args for fabric
-                        PerCoreRuntimeArgsDescriptor(risc="ncrisc", core_args=[(sender_core, [])]),
-                        PerCoreRuntimeArgsDescriptor(risc="brisc", core_args=[(sender_core, [])]),
                         # Receiver core: NCRISC needs per-core runtime args for fabric
-                        PerCoreRuntimeArgsDescriptor(risc="ncrisc", core_args=[(receiver_core, [])]),
-                    ],
+                        ncrisc_args=[(sender_core, []), (receiver_core, [])],
+                        brisc_args=[(sender_core, [])],
+                    ),
                 )
 
                 # Get kernel descriptors - generates separate kernels for sender and receiver groups

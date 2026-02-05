@@ -360,13 +360,10 @@ class BroadcastRMSNorm:
                         dst_full_sync_en=fp32_dest_acc_en,
                     ),
                     defines=kernel_defines,
-                    # Per-core runtime args: empty for NCRISC/BRISC (fabric args appended later)
-                    per_core_runtime_args_descriptors=[
-                        PerCoreRuntimeArgsDescriptor(
-                            risc="brisc",
-                            core_args=[(worker_core, [])],  # Fabric args appended after program creation
-                        ),
-                    ],
+                    # Per-core runtime args: empty for BRISC (fabric args appended later)
+                    per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                        brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                    ),
                 )
 
                 # Program descriptor

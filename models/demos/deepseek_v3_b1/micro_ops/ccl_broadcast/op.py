@@ -267,13 +267,10 @@ class DeepseekMinimalBroadcast:
                     brisc_named_compile_time_args=union_named_compile_time_args,
                     ncrisc_common_runtime_args=reader_common_rt_args,
                     brisc_common_runtime_args=writer_common_rt_args,
-                    # Per-core runtime args: empty for NCRISC/BRISC (fabric args appended later)
-                    per_core_runtime_args_descriptors=[
-                        PerCoreRuntimeArgsDescriptor(
-                            risc="brisc",
-                            core_args=[(worker_core, [])],  # Fabric args appended after program creation
-                        ),
-                    ],
+                    # Per-core runtime args: empty for BRISC (fabric args appended later)
+                    per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                        brisc_args=[(worker_core, [])],  # Fabric args appended after program creation
+                    ),
                 )
 
                 # Create program descriptor (only reader and writer, no compute)
