@@ -2030,6 +2030,12 @@ inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, u
         // wait_for_available_data always returns up to a page boundary, so the rounding only matters on the final chunk and lets us return the final bytes in the page early.
         uint32_t pages_to_free = (can_read_now + initial_data_to_clear + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
         initial_data_to_clear = 0;
+        uint32_t watcher_data_ptr = data_ptr;
+#if ASSERT_ENABLED
+        if (wlength == 0) {
+            watcher_data_ptr = round_up_pow2(watcher_data_ptr, cmddat_q_page_size);
+        }
+#endif
         // data_ptr may not be page-aligned mid-stream, so allow it to be up to one page ahead
         relay_client.release_pages<
             my_noc_index,
@@ -2037,7 +2043,7 @@ inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, u
             upstream_cb_sem_id,
             cmddat_q_base,
             cmddat_q_end,
-            cmddat_q_page_size>(pages_to_free, data_ptr, /*round_to_page_size=*/true);
+            cmddat_q_page_size>(pages_to_free, watcher_data_ptr, /*round_to_page_size=*/true);
     }
     local_downstream_data_ptr =
         round_up_pow2(local_downstream_data_ptr, DispatchRelayInlineState::downstream_page_size);

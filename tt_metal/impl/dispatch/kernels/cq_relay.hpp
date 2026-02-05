@@ -276,7 +276,7 @@ public:
                         one_page_ahead = (adjusted_cmd_ptr == expected_plus_page) ||
                                          ((expected_plus_page == buffer_end) && (adjusted_cmd_ptr == buffer_base));
                     }
-                    #if 0
+                    #if 1
                     if (!(
                         (adjusted_cmd_ptr == expected) ||
                         ((expected == buffer_end) && (adjusted_cmd_ptr == buffer_base)) || one_page_ahead)) {
