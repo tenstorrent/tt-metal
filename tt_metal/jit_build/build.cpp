@@ -262,6 +262,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_LLK_ASSERT ";
     }
 
+    if (rtoptions.get_disable_sfploadmacro()) {
+        this->defines_ += "-DDISABLE_SFPLOADMACRO ";
+    }
+
     // Includes
     // TODO(pgk) this list is insane
     std::vector<std::string> includeDirs = {
