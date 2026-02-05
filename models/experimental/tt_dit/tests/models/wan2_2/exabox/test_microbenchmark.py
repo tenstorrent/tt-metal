@@ -92,10 +92,11 @@ MESH_SHAPE = (4, 8)
 NUM_WARMUP_ITERS = 3
 NUM_MEASUREMENT_ITERS = 10
 
-# CCL op names for determining aggregation method
+# CCL op names for determining aggregation method (use MIN across devices)
 CCL_OP_NAMES = [
     "AllGather",
     "ReduceScatter",
+    "RingJoint",  # Ring attention involves CCL
 ]
 
 # Profiler output subdirectory
@@ -561,6 +562,34 @@ def test_run_prompt_rmsnorm(
     ttnn.synchronize_device(mesh_device)
 
 
+def get_ring_sdpa_configs(mesh_device: ttnn.MeshDevice, config_name: str):
+    """Get program and compute configs for ring SDPA."""
+    full_grid = mesh_device.compute_with_storage_grid_size()
+    sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
+
+    # Chunk sizes: 1xGLX (SP=8) uses (128, 512), 4xGLX (SP=32) uses (128, 128)
+    if "4xGLX" in config_name:
+        q_chunk_size, k_chunk_size = 128, 128
+    else:
+        q_chunk_size, k_chunk_size = 128, 512
+
+    ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_worker_grid,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+
+    sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+    )
+
+    return ring_sdpa_program_config, sdpa_compute_kernel_config, sdpa_worker_grid
+
+
 @MESH_DEVICE_PARAMS
 @CONFIG_WITH_SEQ_LEN_PARAMS
 def test_run_spatial_qkv(
@@ -617,6 +646,87 @@ def test_run_spatial_qkv(
     ttnn.synchronize_device(mesh_device)
 
 
+@MESH_DEVICE_PARAMS
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_run_ring_attention(
+    mesh_device: ttnn.MeshDevice,
+    config_name: str,
+    seq_len: int,
+    reset_seeds,
+) -> None:
+    """
+    Run ring attention (ring_joint_scaled_dot_product_attention) for spatial self-attention.
+    Profiled via test_ring_attention_perf.
+    """
+    tp_factor = MESH_SHAPE[TP_AXIS]
+    sp_factor = MESH_SHAPE[SP_AXIS]
+    n_local_heads = WAN_NUM_HEADS // tp_factor
+    seq_len_local = seq_len // sp_factor
+
+    logger.info(f"Running ring attention: {config_name}, seq_len={seq_len}")
+
+    ccl_manager = create_ccl_manager(mesh_device)
+
+    # Get SDPA configs
+    ring_sdpa_program_config, sdpa_compute_kernel_config, sdpa_worker_grid = get_ring_sdpa_configs(
+        mesh_device, config_name
+    )
+
+    # Create Q, K, V tensors in BHNE format (after create_heads)
+    # Shape: [B, H, N_local, E] where B=1, H=local_heads, N=seq_len_local, E=head_dim
+    batch_size = 1
+    q_shape = (batch_size, n_local_heads, seq_len_local, WAN_HEAD_DIM)
+    k_shape = (batch_size, n_local_heads, seq_len_local, WAN_HEAD_DIM)
+    v_shape = (batch_size, n_local_heads, seq_len_local, WAN_HEAD_DIM)
+
+    torch.manual_seed(0)
+    q_torch = torch.randn(q_shape, dtype=torch.float32)
+    k_torch = torch.randn(k_shape, dtype=torch.float32)
+    v_torch = torch.randn(v_shape, dtype=torch.float32)
+
+    tt_q = bf16_tensor(q_torch, device=mesh_device)
+    tt_k = bf16_tensor(k_torch, device=mesh_device)
+    tt_v = bf16_tensor(v_torch, device=mesh_device)
+
+    # Dummy joint inputs (empty tensors for pure self-attention)
+    dummy_joint = bf16_tensor(torch.zeros((batch_size, n_local_heads, 0, WAN_HEAD_DIM)), device=mesh_device)
+
+    def run_ring_attention():
+        spatial_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            dummy_joint,
+            dummy_joint,
+            dummy_joint,
+            persistent_output_buffer_k=ccl_manager.get_ag_ping_pong_buffer(tt_k.shape, 2, SP_AXIS),
+            persistent_output_buffer_v=ccl_manager.get_ag_ping_pong_buffer(tt_v.shape, 2, SP_AXIS),
+            joint_strategy="rear",
+            logical_n=seq_len,
+            program_config=ring_sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(SP_AXIS),
+            num_links=ccl_manager.num_links,
+            cluster_axis=SP_AXIS,
+            mesh_device=mesh_device,
+            topology=ttnn.Topology.Linear,
+            subdevice_id=ccl_manager.ccl_sub_device_id,
+            ccl_core_grid_offset=(0, sdpa_worker_grid[1]),
+        )
+        return spatial_out
+
+    # Warmup
+    for _ in range(NUM_WARMUP_ITERS):
+        _ = run_ring_attention()
+    ttnn.synchronize_device(mesh_device)
+
+    # Measurement
+    for _ in range(NUM_MEASUREMENT_ITERS):
+        _ = run_ring_attention()
+    ttnn.synchronize_device(mesh_device)
+
+
 # =============================================================================
 # Op group definitions
 # =============================================================================
@@ -639,6 +749,11 @@ RMSNORM_OPS = [
 SPATIAL_QKV_OPS = [
     ("AllGatherAsyncDeviceOperation", "all_gather"),
     ("MinimalMatmulDeviceOperation", "matmul", 3),  # Q + K + V matmuls
+]
+
+# Ring Attention: ring_joint_scaled_dot_product_attention
+RING_ATTENTION_OPS = [
+    ("RingJointSDPADeviceOperation", "ring_sdpa"),
 ]
 
 
@@ -669,3 +784,9 @@ def test_prompt_rmsnorm_perf(config_name: str) -> None:
 def test_spatial_qkv_perf(config_name: str, seq_len: int) -> None:
     """Measure device performance for spatial QKV (AllGather + Q/K/V projections)."""
     run_perf_test("test_run_spatial_qkv", config_name, seq_len, "SPATIAL QKV", SPATIAL_QKV_OPS)
+
+
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_ring_attention_perf(config_name: str, seq_len: int) -> None:
+    """Measure device performance for ring attention (spatial self-attention)."""
+    run_perf_test("test_run_ring_attention", config_name, seq_len, "RING ATTENTION", RING_ATTENTION_OPS)
