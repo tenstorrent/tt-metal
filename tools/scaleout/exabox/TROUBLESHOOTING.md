@@ -9,6 +9,7 @@ Real issues encountered and their solutions.
 - [Setup & Access](#setup--access)
   - [SSH Agent Forwarding for MPI](#ssh-agent-forwarding-for-mpi)
   - [Tests Fail with "Permission denied" on tt-metal-cache](#tests-fail-with-permission-denied-on-tt-metal-cache)
+  - [Recovery Script Fails with "could not access or execute an executable"](#recovery-script-fails-with-could-not-access-or-execute-an-executable)
 - [SLURM Issues](#slurm-issues)
   - [SLURM Nodes Showing Down](#slurm-nodes-showing-down)
   - [tt-smi Reset Requires Sudo Password in SLURM Session](#tt-smi-reset-requires-sudo-password-in-slurm-session)
@@ -30,6 +31,10 @@ Real issues encountered and their solutions.
   - [Transient Ethernet Connectivity Loss](#transient-ethernet-connectivity-loss)
   - [Z Ports Showing Down](#z-ports-showing-down)
   - [Trace Connections Hanging After Reset](#trace-connections-hanging-after-reset-30-failure-rate)
+- [Fabric Tests](#fabric-tests)
+  - [Fabric Test Fails with "Graph could not fit in physical topology"](#fabric-test-fails-with-graph-could-not-fit-in-physical-topology)
+  - [Fabric Test Fails with "Failed to initialize FW"](#fabric-test-fails-with-failed-to-initialize-fw)
+  - [Fabric Router Sync Timeout](#fabric-router-sync-timeout)
 - [Tensix & Validation](#tensix--validation)
   - [Tensix Cores Unresponsive During Validation](#tensix-cores-unresponsive-during-validation)
   - [Intermittent Tensix Cores Hung at Device Startup](#intermittent-tensix-cores-hung-at-device-startup)
@@ -208,6 +213,52 @@ Error points to `/tmp/tt-metal-cache/...`
 1. **Set a custom kernel directory**: Configure TT-Metal to use a user-specific cache directory to avoid permission conflicts
 2. **Clear the cache**: Reboot the machine to clear `/tmp` and remove the stale cache directory
 3. **Debug mpi-docker**: Contact @tt-asaigal or @jpanasiukTT if the issue persists. They can help debug the `mpi-docker` setup and permissions.
+
+---
+
+## Recovery Script Fails with "could not access or execute an executable"
+
+**Symptom**: Running `recover_4x32.sh` or `recover_8x16.sh` fails with:
+```
+mpirun was unable to launch the specified application as it could not access
+or execute an executable:
+
+Executable: ./build/tools/scaleout/run_cluster_validation
+Node: bh-glx-d01u08
+
+while attempting to start process rank 0.
+```
+
+**Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker) and require a local build of tt-metal. Unlike the Docker-based scripts (`run_validation_*.sh`, `run_fabric_tests_*.sh`), they don't use containers.
+
+**Key distinction**:
+| Script Type | Requires Build? | Uses Docker? |
+|-------------|----------------|--------------|
+| `recover_*.sh` | **Yes** | No |
+| `run_validation_*.sh` | No | Yes |
+| `run_fabric_tests_*.sh` | No | Yes |
+| `run_dispatch_tests.sh` | No | Yes |
+
+**Solution**: Build tt-metal before running recovery scripts:
+
+```bash
+# From your tt-metal repo directory
+./create_venv.sh
+source python_env/bin/activate
+./build_metal.sh --build-metal-tests
+
+# Now the recovery script will work
+./tools/scaleout/exabox/recover_4x32.sh <hosts>
+```
+
+**Alternative - Use Docker-based validation instead**: If you don't need a local build, use the Docker-based validation scripts which don't require building:
+
+```bash
+# This doesn't require a build - it uses Docker
+./tools/scaleout/exabox/run_validation_4x32.sh <hosts> <docker-image>
+```
+
+**Common confusion**: People often confuse the `recover_*.sh` scripts (developer tools, require build) with the `run_validation_*.sh` scripts (operator tools, use Docker). For hardware qualification, use the Docker-based scripts.
 
 ---
 
@@ -441,13 +492,38 @@ This error typically appears across multiple MPI ranks with the same hostname me
 - Running validation on a different cluster than the FSD was created for
 - The FSD file wasn't updated after cluster reconfiguration
 - Using a template FSD without customizing hostnames
+- **The recovery scripts have hardcoded FSD paths** that may not match your cluster
 
 **Resolution steps**:
-1. Verify which FSD file is being used (check the validation script arguments or environment)
-2. Open the FSD file and check if the missing hostname is present
-3. Either:
-   - Use the correct FSD file for your cluster topology, or
-   - Update the FSD to include all hosts in your cluster
+
+1. **Identify which FSD file is being used**:
+   - For `recover_*.sh` scripts: Check the `--factory-descriptor-path` argument in the script
+   - For `run_validation_*.sh` scripts: Check the `--cabling-descriptor-path` and `--deployment-descriptor-path` arguments
+
+2. **Find the correct FSD for your cluster**:
+   - Check `/data/scaleout_configs/` for available FSD files
+   - Ask in `#exabox-infra` if unsure which FSD to use for your cluster
+   - Common locations:
+     - `/data/scaleout_configs/merged_fsd.textproto` - consolidated FSD for multiple clusters
+     - `/data/scaleout_configs/4xBH_4x32_intrapod_updated/` - updated 4x32 configs
+
+3. **Update the script or use a custom command**:
+   
+   Option A - Modify the recovery script temporarily:
+   ```bash
+   # Edit recover_4x32.sh and change the --factory-descriptor-path to the correct FSD
+   ```
+   
+   Option B - Run the validation command directly with the correct FSD:
+   ```bash
+   mpirun --host <hosts> tt-smi -r
+   sleep 30
+   mpirun --host <hosts> --tag-output ./build/tools/scaleout/run_cluster_validation \
+       --factory-descriptor-path /data/scaleout_configs/merged_fsd.textproto \
+       --send-traffic --num-iterations 5
+   ```
+
+**Common mistake**: The `recover_*.sh` scripts have hardcoded paths like `/data/scaleout_configs/4xBH_4x32_intrapod/fsd.textproto`. If you're running on a different cluster (e.g., C34 instead of the original cluster the script was written for), you'll get this error.
 
 **Note**: This is a configuration error, not a hardware issue. Ensure the FSD matches your actual cluster topology before running validation.
 
@@ -565,6 +641,156 @@ Only investigate if Z ports are supposed to be connected in your topology.
 ```bash
 export TT_METAL_DISABLE_MULTI_AERISC=1
 ```
+
+---
+
+# Fabric Tests
+
+## Fabric Test Fails with "Graph could not fit in physical topology"
+
+**Symptom**: Running `run_fabric_tests_4x32.sh` fails with:
+```
+TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology for mesh 0.
+Could not find valid mapping for mesh 0 under the given constraints.
+Logical graph may not fit in the physical topology.
+Either relax pinnings or modify the MGD.
+```
+
+The error originates from `tt_metal/fabric/topology_mapper.cpp` during `TopologyMapper::build_mapping()`.
+
+**Cause**: Host ordering mismatch between MPI ranks and physical connectivity.
+
+In a 4x32 pod, the 4 Galaxies are connected in a ring: `1 <-> 2 <-> 3 <-> 4 <-> 1`. Hosts 1 & 3 are **not** directly connected, and neither are hosts 2 & 4.
+
+When you pass hostnames to MPI in an arbitrary order, MPI assigns rank values that may not respect the physical connectivity. For example, if hosts 1 & 3 are placed adjacent in "MPI space" (consecutive ranks), the fabric test assumes they must be physically connected. When it validates against actual connectivity and finds no physical links between them, it fails.
+
+**Visual representation of 4x32 connectivity:**
+```
+    Host 1 -------- Host 2
+       |              |
+       |              |
+    Host 4 -------- Host 3
+```
+
+Hosts are connected in a ring: 1-2, 2-3, 3-4, 4-1. There are no diagonal connections (1-3 or 2-4).
+
+**Solution**: Specify hosts in physical connectivity order.
+
+1. Identify which host is "Host 1" in your pod (the starting point)
+2. Log onto that host
+3. Pass hosts in ring order: `1,2,3,4` (not `1,3,2,4` or any other order)
+
+**Example**: For a pod with hosts `b02u08`, `b02u02`, `b09u02`, `b09u08`:
+- Log onto `b02u08` (Host 1)
+- Run: `./run_fabric_tests_4x32.sh b02u08,b02u02,b09u02,b09u08 <docker-image>`
+
+The host order must follow the physical ring topology.
+
+**How to determine the correct order**:
+1. Check the cabling diagram or FSD for your pod
+2. Identify which hosts are directly connected via QSFP cables
+3. Order them so consecutive hosts in your list are physically connected
+
+**Long-term fix**: Automatic mesh placement and rank binding is being developed to eliminate this manual ordering requirement (TT-Distributed infrastructure improvement).
+
+**Diagnostic**: If you're unsure about connectivity, run physical validation first:
+```bash
+./run_validation_4x32.sh <hosts> <docker-image>
+```
+
+The validation output shows which hosts have physical connections to each other.
+
+---
+
+## Fabric Test Fails with "Failed to initialize FW"
+
+**Symptom**: Fabric test fails during device initialization with:
+```
+TT_THROW: Device 31: Timeout (10000 ms) waiting for physical cores to finish: (x=2,y=10)
+TT_THROW: Device 31 init: failed to initialize FW! Try resetting the board.
+```
+
+The error originates from `tt_metal/impl/context/metal_context.cpp` during `MetalContext::initialize_and_launch_firmware()`.
+
+**Context**: This typically happens after running several successful tests without resetting the cluster in between. The cluster gets into a bad state where firmware initialization fails.
+
+**Cause**: The cluster entered a bad state after repeated test runs. This is seen periodically across all machines (local and CI) and is not specific to any particular hardware.
+
+**Solution**:
+
+1. **Immediate fix**: Reset the cluster and retry:
+   ```bash
+   mpirun --host <hosts> tt-smi -r
+   sleep 30
+   # Re-run the test
+   ```
+
+2. **For automated pipelines**: Always run a distributed reset and physical validation before starting fabric tests:
+   ```bash
+   # Reset all hosts
+   mpirun --host <hosts> tt-smi -r
+   sleep 30
+   
+   # Validate cluster health
+   ./run_validation_4x32.sh <hosts> <docker-image>
+   
+   # Only proceed if validation passes
+   ./run_fabric_tests_4x32.sh <hosts> <docker-image>
+   ```
+
+3. **Pipeline best practice**: Implement retry logic with reset on failure. Early exit if reset + validation fails multiple times.
+
+---
+
+## Fabric Router Sync Timeout
+
+**Symptom**: Fabric test fails during mesh device creation with:
+```
+TT_THROW: Fabric Router Sync: Timeout after 10000 ms. Device 0: Expected status 0xa2b2c2d2, got 0xa1b1c1d1
+```
+
+The error originates from `tt_metal/impl/device/device_manager.cpp` during `DeviceManager::wait_for_fabric_router_sync()`.
+
+**Context**: This can happen even after resetting the cards. The status value `0xa1b1c1d1` indicates the sync handshake started but didn't complete (expected `0xa2b2c2d2`).
+
+**Cause**: Handshakes over Ethernet links during fabric initialization failed. This happens when:
+- A link or its peer is down
+- Links didn't fully train after reset
+- Reset sleep time was insufficient
+
+**Solution**:
+
+1. **Increase reset sleep time**: 30 seconds may not be enough. Try 60 seconds or more:
+   ```bash
+   mpirun --host <hosts> tt-smi -r
+   sleep 60  # Increased from 30
+   ```
+
+2. **Increase sync timeout**: Set `TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS` to a higher value (e.g., 60000 for 1 minute):
+   ```bash
+   export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=60000
+   ```
+
+3. **Run physical validation first**: This catches unhealthy links before attempting fabric tests:
+   ```bash
+   ./run_validation_4x32.sh <hosts> <docker-image>
+   ```
+   If validation shows missing connections or unhealthy links, fix those issues before running fabric tests.
+
+4. **For automated pipelines**: Add physical validation as a pre-check and implement retry logic:
+   ```bash
+   # Reset and wait
+   mpirun --host <hosts> tt-smi -r
+   sleep 60
+   
+   # Validate - exit early if cluster is unhealthy
+   ./run_validation_4x32.sh <hosts> <docker-image> || exit 1
+   
+   # Run fabric tests
+   ./run_fabric_tests_4x32.sh <hosts> <docker-image>
+   ```
+
+**Note**: These clusters are not 100% stable. Running reset + validation before every test batch significantly improves reliability.
 
 ---
 

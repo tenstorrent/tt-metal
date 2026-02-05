@@ -167,6 +167,25 @@ The script parses the test log and provides:
 - **Recommendations**: Actionable next steps including escalation paths for persistent issues
 - **Final Test Result**: Clear pass/fail indication with appropriate exit code
 
+
+**Important: Host Ordering Matters for 4x32 Clusters**
+
+For 4x32 topology, you **must** specify hosts in physical connectivity order. The 4 Galaxies are connected in a ring (`1 <-> 2 <-> 3 <-> 4 <-> 1`), and MPI rank assignment depends on the order you pass hosts.
+
+If you see this error:
+```
+TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology
+```
+
+It means hosts were passed in the wrong order. Fix by:
+1. Identifying which host is "Host 1" in your pod
+2. Logging onto that host
+3. Passing hosts in ring order: `host1,host2,host3,host4`
+
+See [Fabric Test Fails with "Graph could not fit in physical topology"](./TROUBLESHOOTING.md#fabric-test-fails-with-graph-could-not-fit-in-physical-topology) for details.
+
+**Note:** These topology-specific scripts will eventually be replaced with a unified cluster-level descriptor approach that handles host ordering automatically.
+
 If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
 
 **Exabox Physical Layout:**
@@ -175,15 +194,26 @@ If these tests fail, raise the issue in the `#exabox-infra` Slack channel and ta
 
 ## Quick Health Check (For Developers)
 
-For day-to-day use when you just need to verify a cluster is working. Unlike the Docker-based qualification scripts above, these run directly on the host, so you need a local build:
+For day-to-day use when you just need to verify a cluster is working.
 
+**Important: These scripts require a local build!**
+
+Unlike the Docker-based qualification scripts above (`run_validation_*.sh`, `run_fabric_tests_*.sh`), the recovery scripts run binaries directly on the host and require you to build tt-metal first.
+
+| Script Type | Requires Build? | Uses Docker? |
+|-------------|----------------|--------------|
+| `recover_*.sh` | **Yes** | No |
+| `run_validation_*.sh` | No | Yes |
+| `run_fabric_tests_*.sh` | No | Yes |
+
+**Build first:**
 ```bash
 ./create_venv.sh
 source python_env/bin/activate
 ./build_metal.sh --build-metal-tests
 ```
 
-Then run:
+**Then run:**
 ```bash
 ./tools/scaleout/exabox/recover_8x16.sh <hosts>
 # or
@@ -191,6 +221,8 @@ Then run:
 ```
 
 Look for `All Detected Links are healthy` in the output.
+
+**If you see "could not access or execute an executable"**: You haven't built tt-metal. Either build it (see above) or use the Docker-based `run_validation_*.sh` scripts instead, which don't require a build.
 
 ## Troubleshooting
 
