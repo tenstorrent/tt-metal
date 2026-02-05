@@ -1,65 +1,53 @@
-name: "(T3K) T3000 unit tests"
+name: "All Models Demo Tests"
 
 on:
   workflow_dispatch:
     inputs:
-      model:
-        description: "Select model to test"
+      device:
+        description: 'Select devices to test on'
         required: true
-        default: all
+        default: 'all'
         type: choice
         options:
           - all
-          - falcon7b
-          - falcon40b
-          - llama3-small
-          - llama3.2-11b
-          - llama3.2-11b-vision
-          - n300 mesh llama3.2-11b-vision
-          - llama3.2-90b-vision
-          # - llama3.1-70b
-          - llama3.2-90b
-          - mistral
-          - mixtral
-          - grok
-          - unet shallow
-          - qwen25_vl
-          - qwen3_vl
-          - gemma3-small
-          - dits
-          - deepseek
-          - gpt-oss
-          - tttv2 modules
-      platform:
-        required: false
+          - n150
+          - n300
+          - p100
+          - p150
+          - p300
+          - wh-loudbox
+          - bh-loudbox
+          - bh-qb2
+          - wh-6u
+          - bh-6u
+      model-type:
+        description: 'Select model types to test'
+        required: true
+        default: 'all'
         type: choice
-        default: "Ubuntu 22.04"
         options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
-      build-type:
-        required: false
-        type: choice
-        default: Release
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        description: "Build type configuration"
-      enable-lto:
+          - all
+          - tt-transformers
+          - standalone
+      regenerate-ttnn-cache:
+        description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
         required: false
         type: boolean
         default: false
-        description: "Enable Link Time Optimization (LTO)"
-  schedule:
-    - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
-
-permissions:
-  packages: write
-  contents: write
+  workflow_call:
+    inputs:
+      device:
+        required: false
+        type: string
+        default: 'all'
+      model-type:
+        required: false
+        type: string
+        default: 'all'
+      regenerate-ttnn-cache:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-artifact:
@@ -68,16 +56,510 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto || false }}
-  t3000-unit-tests:
+      version: 22.04
+
+  # N150 Tests (Wormhole single chip)
+  n150-tests:
+    if: ${{ contains(inputs.device, 'all') || contains(inputs.device, 'n150') }}
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
     with:
+      device-type: 'n150'
+      runner-label: 'N150'
+      arch: 'wormhole_b0'
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      model: ${{ inputs.model || 'all' }}
+      model-type: ${{ inputs.model-type || 'all' }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # N300 Tests (Wormhole dual chip)
+  n300-tests:
+    if: ${{ contains(inputs.device, 'all') || contains(inputs.device, 'n300') }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'n300'
+      runner-label: 'N300'
+      arch: 'wormhole_b0'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # P100 Tests (Blackhole single chip)
+  p100-tests:
+    if: ${{ contains(inputs.device, 'all') || contains(inputs.device, 'p100') }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'p100'
+      runner-label: 'P100'
+      arch: 'blackhole'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # P150 Tests (Blackhole single chip)
+  p150-tests:
+    if: ${{ contains(inputs.device, 'all') || contains(inputs.device, 'p150') }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'p150'
+      runner-label: 'P150'
+      arch: 'blackhole'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # P300 Tests (Blackhole dual chip)
+  p300-tests:
+    if: ${{ contains(inputs.device, 'all') || contains(inputs.device, 'p300') }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'p300'
+      runner-label: 'P300-viommu'
+      arch: 'blackhole'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+      extra-tag: 'in-service'
+
+  # WH LoudBox Tests (4xN300)
+  wh-loudbox-tests:
+    if: ${{ contains(inputs.device, 'all') || contains(inputs.device, 'wh-loudbox') }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'WH-LB'
+      runner-label: 'config-t3000'
+      arch: 'wormhole_b0'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # BH QuietBox2 Tests (2xP300)
+  bh-quietbox-tests:
+    if: ${{ contains(inputs.device, 'all') || contains(inputs.device, 'bh-qb2') }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'BH-QB2'
+      runner-label: 'BH-QB-GE'
+      arch: 'blackhole'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+
+  # BH LoudBox Tests
+  bh-loudbox-tests:
+    if: ${{ contains(inputs.device, 'all') || contains(inputs.device, 'bh-loudbox') }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'BH-LB'
+      runner-label: 'BH-loudbox'
+      arch: 'blackhole'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+      extra-tag: 'in-service'
+
+  # WH Galaxy Tests (Wormhole Galaxy 32 chips)
+  wh-galaxy-tests:
+    if: ${{ contains(inputs.device, 'all') || contains(inputs.device, 'wh-6u') }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'WH-6U'
+      runner-label: 'topology-6u'
+      arch: 'wormhole_b0'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+      extra-tag: 'in-service'
+
+  # BH Galaxy Tests (Blackhole Galaxy 32 chips)
+  bh-galaxy-tests:
+    if: ${{ inputs.device == 'all' || contains(inputs.device, 'bh-6u') }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/all-models-demo-tests-impl.yaml
+    with:
+      device-type: 'BH-6U'
+      runner-label: 'topology-6u'
+      arch: 'blackhole'
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model-type: ${{ inputs.model-type || 'all' }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false }}
+      extra-tag: 'in-service'
+
+  # Generate Model Status Chart
+  generate-status-chart:
+    if: always()
+    needs: [n150-tests, n300-tests, p100-tests, p150-tests, p300-tests, wh-loudbox-tests, bh-quietbox-tests, bh-loudbox-tests, wh-galaxy-tests, bh-galaxy-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Download all test result artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: test-artifacts/
+
+      - name: Download model configuration artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: model-config-*
+          path: model-configs/
+
+      - name: Generate Model Status Chart
+        env:
+          MODEL_TYPE: ${{ inputs.model-type || 'all' }}
+        run: |
+          python3 << 'EOF'
+          import json
+          import os
+          import glob
+          import xml.etree.ElementTree as ET
+          from collections import defaultdict
+
+          print("=== Debug: Finding XML files ===")
+
+          # List all files in test-artifacts directory
+          for root, dirs, files in os.walk('test-artifacts'):
+              print(f"Directory: {root}")
+              for file in files:
+                  print(f"  File: {file}")
+
+          # Find all XML files
+          xml_files = glob.glob('test-artifacts/**/*.xml', recursive=True)
+          print(f"Found {len(xml_files)} XML files:")
+          for xml_file in xml_files:
+              print(f"  {xml_file}")
+
+          # Determine which devices actually ran based on available test artifacts
+          available_devices = set()
+          for xml_file in xml_files:
+              filename = os.path.basename(xml_file)
+              print(f"Processing filename: {filename}")
+
+              if filename.startswith('results-'):
+                  parts = filename[8:].replace('.xml', '').split('-')
+                  print(f"  Filename parts after 'results-': {parts}")
+                  if len(parts) >= 1:
+                      device = parts[0]
+                      available_devices.add(device)
+                      print(f"  Added device: {device}")
+
+          devices = sorted(list(available_devices))
+          print(f"=== Available devices: {devices} ===")
+
+          if not devices:
+              print("No devices found! This suggests either:")
+              print("1. No XML test result files were downloaded")
+              print("2. The XML files don't follow the expected naming pattern")
+              print("3. The artifact download didn't work correctly")
+
+              # Create empty results as fallback
+              output_data = {
+                  "tt_transformers": {},
+                  "standalone": {},
+                  "devices": []
+              }
+              with open('model-status.json', 'w') as f:
+                  json.dump(output_data, f, indent=2)
+
+              with open('model-status-report.md', 'w') as f:
+                  f.write("# Model Test Status Report\n\n**Error:** No test results found.\n")
+
+              print("Generated empty status files due to missing test data.")
+              exit(0)
+
+          # Load model configurations from device config artifacts
+          print("=== Loading model configurations ===")
+          all_tt_transformers_models = {}
+          all_standalone_models = {}
+
+          config_files = glob.glob('model-configs/**/device-model-config.json', recursive=True)
+          print(f"Found {len(config_files)} config files")
+
+          for config_file in config_files:
+              print(f"Loading config: {config_file}")
+              try:
+                  with open(config_file, 'r') as f:
+                      config = json.load(f)
+                      device = config['device']
+                      print(f"  Device: {device}")
+                      print(f"  TT-Transformers: {config.get('tt_transformers', [])}")
+                      print(f"  Standalone: {config.get('standalone', [])}")
+
+                      if device in devices:
+                          all_tt_transformers_models[device] = config.get('tt_transformers', [])
+                          all_standalone_models[device] = config.get('standalone', [])
+              except Exception as e:
+                  print(f"  Error loading config: {e}")
+
+          # Filter to only available devices
+          tt_transformers_models = {device: models for device, models in all_tt_transformers_models.items() if device in available_devices}
+          standalone_models = {device: models for device, models in all_standalone_models.items() if device in available_devices}
+
+          # Get all unique models for available devices
+          all_tt_models = set()
+          all_standalone_models_set = set()
+          for device_models in tt_transformers_models.values():
+              all_tt_models.update(device_models)
+          for device_models in standalone_models.values():
+              all_standalone_models_set.update(device_models)
+
+          print(f"=== TT-Transformers models for available devices: {sorted(all_tt_models)} ===")
+          print(f"=== Standalone models for available devices: {sorted(all_standalone_models_set)} ===")
+
+          # Parse test results
+          test_results = defaultdict(lambda: defaultdict(list))  # test_results[device][model] = [test_results]
+
+          # Find and parse XML files
+          parsed_files = 0
+          for xml_file in xml_files:
+              try:
+                  tree = ET.parse(xml_file)
+                  root = tree.getroot()
+
+                  # Extract device and model from filename
+                  filename = os.path.basename(xml_file)
+                  print(f"Processing XML: {filename}")
+
+                  if filename.startswith('results-'):
+                      parts = filename[8:].replace('.xml', '').split('-')
+                      print(f"  After removing 'results-' and .xml: {filename[8:].replace('.xml', '')}")
+                      print(f"  Split parts: {parts}")
+
+                      if len(parts) >= 2:
+                          device = parts[0]
+
+                          # Find where test name starts (marks end of model name)
+                          # TT-Transformers tests: "Batch", "Long"
+                          # Standalone tests: "Demo"
+                          test_markers = ['Demo', 'Batch', 'Long']
+                          test_start_index = len(parts)  # default to end if no marker found
+
+                          for i, part in enumerate(parts[1:], start=1):
+                              if part in test_markers:
+                                  test_start_index = i
+                                  break
+
+                          # Join all parts between device and test name to get full model name
+                          model = '-'.join(parts[1:test_start_index])
+
+                          print(f"  Extracted - Device: '{device}', Model: '{model}'")
+
+                          # Get test result from <testsuite> element (not root <testsuites>)
+                          testsuite = root.find('testsuite')
+                          if testsuite is not None:
+                              failures = int(testsuite.get('failures', '0'))
+                              errors = int(testsuite.get('errors', '0'))
+                              tests = int(testsuite.get('tests', '0'))
+                              skipped = int(testsuite.get('skipped', '0'))
+                          else:
+                              # Fallback: try root element for backwards compatibility
+                              failures = int(root.get('failures', '0'))
+                              errors = int(root.get('errors', '0'))
+                              tests = int(root.get('tests', '0'))
+                              skipped = int(root.get('skipped', '0'))
+
+                          # A test passes if there are tests run, no failures, and no errors
+                          passed = tests > 0 and failures == 0 and errors == 0
+
+                          print(f"  Tests: {tests}, Failures: {failures}, Errors: {errors}, Skipped: {skipped}")
+                          print(f"  Result: {'PASSED' if passed else 'FAILED'}")
+                          print(f"  Storing in test_results['{device}']['{model}']")
+
+                          test_results[device][model].append(passed)
+                          parsed_files += 1
+                      else:
+                          print(f"  ERROR: Not enough parts in filename (expected at least 2, got {len(parts)})")
+                  else:
+                      print(f"  Skipping - doesn't start with 'results-'")
+              except Exception as e:
+                  print(f"Error parsing {xml_file}: {e}")
+                  import traceback
+                  traceback.print_exc()
+
+          print(f"=== Parsed {parsed_files} test result files ===")
+          print(f"=== Test results dictionary: ===")
+          for device in test_results:
+              print(f"Device: {device}")
+              for model in test_results[device]:
+                  print(f"  Model: {model} -> {test_results[device][model]}")
+
+          print(f"=== Parsed {parsed_files} test result files ===")
+
+          # Get model type filter from environment
+          model_type_filter = os.environ.get('MODEL_TYPE', 'all')
+          print(f"=== Model type filter: {model_type_filter} ===")
+
+          # Generate status for TT-Transformers models (only if requested)
+          tt_status = {}
+          if model_type_filter in ['all', 'tt-transformers']:
+              for model in sorted(all_tt_models):
+                  tt_status[model] = {}
+                  for device in devices:
+                      if model in tt_transformers_models.get(device, []):
+                          results = test_results[device].get(model, [])
+                          if len(results) == 0:
+                              status = "Failed"  # No results means failed
+                          elif len(results) < 3:
+                              status = "Partial"  # Missing some tests
+                          else:
+                              passed_count = sum(results)
+                              if passed_count == 3:
+                                  status = "Passed"
+                              elif passed_count >= 1:
+                                  status = "Partial"
+                              else:
+                                  status = "Failed"
+                          print(f"TT-Transformers {model} on {device}: {len(results)} results, status = {status}")
+                      else:
+                          status = "NC"  # Not Compatible
+                      tt_status[model][device] = status
+
+          # Generate status for Standalone models (only if requested)
+          standalone_status = {}
+          if model_type_filter in ['all', 'standalone']:
+              for model in sorted(all_standalone_models_set):
+                  standalone_status[model] = {}
+                  for device in devices:
+                      if model in standalone_models.get(device, []):
+                          results = test_results[device].get(model, [])
+                          if len(results) > 0 and results[0]:
+                              status = "Passed"
+                          elif len(results) > 0:
+                              status = "Failed"
+                          else:
+                              status = "Failed"  # No results means failed
+                          print(f"Standalone {model} on {device}: {len(results)} results, status = {status}")
+                      else:
+                          status = "NC"  # Not Compatible
+                      standalone_status[model][device] = status
+
+          # Generate JSON output
+          output_data = {
+              "tt_transformers": tt_status,
+              "standalone": standalone_status,
+              "devices": devices
+          }
+
+          with open('model-status.json', 'w') as f:
+              json.dump(output_data, f, indent=2)
+
+          # Generate Markdown report
+          def generate_markdown_table(title, status_data):
+              if not status_data:
+                  return f"## {title}\n\nNo models found for the tested devices.\n\n"
+
+              md = f"## {title}\n\n"
+
+              # Header
+              md += "| Model |"
+              for device in devices:
+                  md += f" {device} |"
+              md += "\n"
+
+              # Separator
+              md += "|-------|"
+              for _ in devices:
+                  md += "-------|"
+              md += "\n"
+
+              # Data rows
+              for model in sorted(status_data.keys()):
+                  md += f"| {model} |"
+                  for device in devices:
+                      status = status_data[model][device]
+                      # Add emoji for better visualization
+                      if status == "Passed":
+                          emoji = "✅"
+                      elif status == "Partial":
+                          emoji = "⚠️"
+                      elif status == "Failed":
+                          emoji = "❌"
+                      else:  # NC
+                          emoji = "➖"
+                      md += f" {emoji} {status} |"
+                  md += "\n"
+
+              return md + "\n"
+
+          # Generate full markdown report
+          device_list = ", ".join(devices) if devices else "None"
+          markdown_content = f"""# Model Test Status Report
+
+          **Devices Tested:** {device_list}
+          **Model Type Filter:** {model_type_filter}
+          **Run ID:** {os.environ.get('GITHUB_RUN_ID', 'Unknown')}
+
+          **Legend:**
+          - ✅ **Passed**: All tests passed
+          - ⚠️ **Partial**: Some tests passed (TT-Transformers only)
+          - ❌ **Failed**: All tests failed
+          - ➖ **NC**: Not Compatible (model not tested on this device)
+
+          """
+
+          # Only generate tables for selected model types
+          if tt_status:
+              markdown_content += generate_markdown_table("TT-Transformers Models", tt_status)
+          if standalone_status:
+              markdown_content += generate_markdown_table("Standalone Models", standalone_status)
+
+          with open('model-status-report.md', 'w') as f:
+              f.write(markdown_content)
+
+          print("Generated model status files:")
+          print("- model-status.json")
+          print("- model-status-report.md")
+          EOF
+
+      - name: Upload Model Status Chart
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-status-chart
+          path: |
+            model-status.json
+            model-status-report.md
+          retention-days: 30
