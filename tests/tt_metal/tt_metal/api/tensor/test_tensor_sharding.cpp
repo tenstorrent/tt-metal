@@ -1,42 +1,34 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
-#include <fmt/base.h>
-#include <cstddef>
-#include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt_stl/span.hpp>
-#include <algorithm>
-#include <functional>
-#include <iostream>
-#include <iterator>
-#include <optional>
-#include <set>
-#include <stdexcept>
-#include <string>
-#include <utility>
-#include <vector>
+// Tests for TensorSpec validation of sharding configurations.
+//
+// These tests verify that TensorSpec correctly rejects illegal shard specifications
+// with appropriate error messages. Specifically, it validates:
+// - HEIGHT_SHARDED: Shard width must match tensor physical width, and enough cores must be available
+// - WIDTH_SHARDED: Shard height must match tensor physical height, and enough cores must be available
+//
+// These are pure validation tests that don't require device access.
 
-#include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <gtest/gtest.h>
+#include <gmock/gmock.h>
+
+#include <functional>
+#include <string>
+
 #include <tt-metalium/buffer_types.hpp>
-#include "common_tensor_test_utils.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
-#include <tt-metalium/math.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/layout/page_config.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn_test_fixtures.hpp"
+#include <tt-metalium/work_split.hpp>
 
-namespace {
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+
+using namespace tt::tt_metal;
+
 const CoreCoord grid_size{8, 7};
 
 struct IllegalShardSpecParams {
@@ -45,7 +37,6 @@ struct IllegalShardSpecParams {
     MemoryConfig memory_config;
     std::string expected_err_msg;
 };
-}  // namespace
 
 class IllegalTensorSpecCreationTests : public ::testing::TestWithParam<IllegalShardSpecParams> {};
 
