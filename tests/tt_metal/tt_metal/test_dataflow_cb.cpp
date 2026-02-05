@@ -17,14 +17,15 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-TEST_F(MeshDeviceSingleCardFixture, DataflowCb) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+TEST_F(MeshDispatchFixture, DataflowCb) {
+    auto mesh_device = devices_[0];
+    IDevice* dev = mesh_device->get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};
 
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t num_tiles = 2048;
+    uint32_t num_tiles = 1800;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     InterleavedBufferConfig dram_config{
@@ -35,37 +36,32 @@ TEST_F(MeshDeviceSingleCardFixture, DataflowCb) {
     auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    int num_cbs = 1;
-    ASSERT_EQ(num_tiles % num_cbs, 0) << "num_tiles must be divisible by num_cbs";
-    int num_tiles_per_cb = num_tiles / num_cbs;
+    const uint32_t start_cb = 0;
+    const uint32_t stride = 8;
+    const uint32_t num_cbs_stride = (max_cbs_ / stride);
+    const uint32_t topmost_cb = max_cbs_ - 1;
 
-    uint32_t cb0_index = 0;
+    const uint32_t total_cbs = num_cbs_stride + 1;
+    ASSERT_EQ(num_tiles % total_cbs, 0) << "num_tiles must be divisible by total CBs";
+    uint32_t num_tiles_per_cb = num_tiles / total_cbs;
     uint32_t num_cb_tiles = 8;
-    CircularBufferConfig cb0_config =
-        CircularBufferConfig(num_cb_tiles * single_tile_size, {{cb0_index, tt::DataFormat::Float16_b}})
-            .set_page_size(cb0_index, single_tile_size);
-    CreateCircularBuffer(program, core, cb0_config);
 
-    uint32_t cb1_index = 8;
-    CircularBufferConfig cb1_config =
-        CircularBufferConfig(num_cb_tiles * single_tile_size, {{cb1_index, tt::DataFormat::Float16_b}})
-            .set_page_size(cb1_index, single_tile_size);
-    CreateCircularBuffer(program, core, cb1_config);
+    auto create_cb = [&](uint32_t cb_index) {
+        CircularBufferConfig cb_config =
+            CircularBufferConfig(num_cb_tiles * single_tile_size, {{cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(cb_index, single_tile_size);
+        CreateCircularBuffer(program, core, cb_config);
+    };
 
-    uint32_t cb2_index = 16;
-    CircularBufferConfig cb2_config =
-        CircularBufferConfig(num_cb_tiles * single_tile_size, {{cb2_index, tt::DataFormat::Float16_b}})
-            .set_page_size(cb2_index, single_tile_size);
-    CreateCircularBuffer(program, core, cb2_config);
+    // Create CBs at 0, 8, 16, ...
+    for (uint32_t cb_idx = 0; cb_idx < max_cbs_; cb_idx += 8) {
+        create_cb(cb_idx);
+    }
+    // Also test topmost
+    create_cb(topmost_cb);
 
-    uint32_t cb3_index = 24;
-    CircularBufferConfig cb3_config =
-        CircularBufferConfig(num_cb_tiles * single_tile_size, {{cb3_index, tt::DataFormat::Float16_b}})
-            .set_page_size(cb3_index, single_tile_size);
-    CreateCircularBuffer(program, core, cb3_config);
-
-    std::vector<uint32_t> reader_cb_kernel_args = {8, 2};
-    std::vector<uint32_t> writer_cb_kernel_args = {8, 4};
+    std::vector<uint32_t> reader_cb_kernel_args = {start_cb, num_cbs_stride, stride, topmost_cb, 2};
+    std::vector<uint32_t> writer_cb_kernel_args = {start_cb, num_cbs_stride, stride, topmost_cb, 4};
 
     auto reader_cb_kernel = CreateKernel(
         program,
@@ -93,7 +89,12 @@ TEST_F(MeshDeviceSingleCardFixture, DataflowCb) {
     SetRuntimeArgs(program, reader_cb_kernel, core, {dram_buffer_src_addr, 0, (uint32_t)num_tiles_per_cb});
     SetRuntimeArgs(program, writer_cb_kernel, core, {dram_buffer_dst_addr, 0, (uint32_t)num_tiles_per_cb});
 
-    detail::LaunchProgram(dev, program);
+    // Execute
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    this->RunProgram(mesh_device, workload);
 
     std::vector<uint32_t> result_vec;
     detail::ReadFromBuffer(dst_dram_buffer, result_vec);
