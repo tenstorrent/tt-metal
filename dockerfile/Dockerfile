@@ -65,6 +65,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Install yq (YAML processor) for CI workflows
+# Note: mikefarah/yq is not available in apt, download binary from GitHub releases
+ARG YQ_VERSION=v4.44.6
+RUN wget -q "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq && \
+    chmod +x /usr/local/bin/yq
+
 # Set up virtual environment using uv
 # Uses the system Python version (3.10 on Ubuntu 22.04, 3.12 on Ubuntu 24.04)
 
