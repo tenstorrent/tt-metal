@@ -163,8 +163,10 @@ void kernel_main() {
                                                             c_in_offset_bytes / in_row_size_bytes;
                                                         in_offset_bytes =
                                                             c_in_offset_bytes - (col_page_idx * in_row_size_bytes);
+                                                        const auto& dspec = in_reader.dspec();
                                                         const uint32_t width_in_pages =
-                                                            in_reader.dspec().tensor_shape()[1];
+                                                            dspec.tensor_shape()[dspec.rank() - 1];
+                                                        ASSERT(col_page_idx < width_in_pages);
                                                         in_page_id = in_page_idx * width_in_pages + col_page_idx;
                                                     }
                                                     const uint64_t in_noc_addr =
