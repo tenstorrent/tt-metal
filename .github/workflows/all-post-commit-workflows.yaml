@@ -141,6 +141,52 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       ref: ${{ inputs.ref || github.sha }}
 
+  validate-tests-to-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate tests-to-run input
+        run: |
+          VALID_TESTS="ttnn-unit-tests,models-unit-tests,tt-train-cpp-unit-tests,run-profiler-regression,t3000-apc-fast-tests,ops-unit-tests"
+          TESTS_TO_RUN="${{ inputs.tests-to-run }}"
+
+          echo "Valid tests: $VALID_TESTS"
+          echo "Tests to run: $TESTS_TO_RUN"
+
+          # Split comma-separated lists into arrays
+          IFS=',' read -ra VALID_ARRAY <<< "$VALID_TESTS"
+          IFS=',' read -ra INPUT_ARRAY <<< "$TESTS_TO_RUN"
+
+          # Check each test in tests-to-run
+          INVALID_TESTS=()
+          for test in "${INPUT_ARRAY[@]}"; do
+            test=$(echo "$test" | xargs)  # Trim whitespace
+            if [[ -n "$test" ]]; then
+              FOUND=false
+              for valid in "${VALID_ARRAY[@]}"; do
+                valid=$(echo "$valid" | xargs)
+                if [[ "$test" == "$valid" ]]; then
+                  FOUND=true
+                  break
+                fi
+              done
+              if [[ "$FOUND" == "false" ]]; then
+                INVALID_TESTS+=("$test")
+              fi
+            fi
+          done
+
+          # Report results
+          if [[ ${#INVALID_TESTS[@]} -gt 0 ]]; then
+            echo "ERROR: Invalid test names found in tests-to-run:"
+            printf '  - %s\n' "${INVALID_TESTS[@]}"
+            echo ""
+            echo "Valid test names are:"
+            printf '  - %s\n' "${VALID_ARRAY[@]}"
+            exit 1
+          else
+            echo "All test names are valid"
+          fi
+
   find-changed-files:
     runs-on: ubuntu-latest
     outputs:
@@ -190,7 +236,7 @@ jobs:
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: [build-artifact, find-changed-files]
+    needs: [build-artifact, find-changed-files, validate-tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -198,7 +244,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 }
         ]
-    if: ${{ contains(inputs.tests-to-run, 'ttnn-unit-tests') || needs.find-changed-files.outputs.test-ttnn == 'true' }}
+    if: ${{ contains(inputs.tests-to-run, 'ttnn-unit-tests') || (inputs.force-test-everything && needs.find-changed-files.outputs.test-ttnn == 'true') }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -208,7 +254,7 @@ jobs:
 
   # FD Model Tests
   models-unit-tests:
-    needs: [build-artifact, find-changed-files]
+    needs: [build-artifact, find-changed-files, validate-tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -216,7 +262,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ contains(inputs.tests-to-run, 'models-unit-tests') || needs.find-changed-files.outputs.test-everything == 'true' }}
+    if: ${{ contains(inputs.tests-to-run, 'models-unit-tests') || (inputs.force-test-everything && needs.find-changed-files.outputs.test-everything == 'true') }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -225,7 +271,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   tt-train-cpp-unit-tests:
-    needs: [build-artifact, find-changed-files]
+    needs: [build-artifact, find-changed-files, validate-tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -233,7 +279,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ contains(inputs.tests-to-run, 'tt-train-cpp-unit-tests') || needs.find-changed-files.outputs.test-tt-train == 'true' }}
+    if: ${{ contains(inputs.tests-to-run, 'tt-train-cpp-unit-tests') || (inputs.force-test-everything && needs.find-changed-files.outputs.test-tt-train == 'true') }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -243,7 +289,7 @@ jobs:
       gtest_filter: "*-*NIGHTLY_*"
 
   run-profiler-regression:
-    needs: [build-artifact, find-changed-files]
+    needs: [build-artifact, find-changed-files, validate-tests-to-run]
 
     strategy:
       fail-fast: false
@@ -251,7 +297,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ contains(inputs.tests-to-run, 'run-profiler-regression') || needs.find-changed-files.outputs.test-everything == 'true' }}
+    if: ${{ contains(inputs.tests-to-run, 'run-profiler-regression') || (inputs.force-test-everything && needs.find-changed-files.outputs.test-everything == 'true') }}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     with:
@@ -262,8 +308,8 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   t3000-apc-fast-tests:
-    if: ${{ contains(inputs.tests-to-run, 't3000-apc-fast-tests') || needs.find-changed-files.outputs.test-everything == 'true' }}
-    needs: [build-artifact, find-changed-files]
+    if: ${{ contains(inputs.tests-to-run, 't3000-apc-fast-tests') || (inputs.force-test-everything && needs.find-changed-files.outputs.test-everything == 'true') }}
+    needs: [build-artifact, find-changed-files, validate-tests-to-run]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
@@ -272,7 +318,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   ops-unit-tests:
-    needs: [build-artifact, find-changed-files]
+    needs: [build-artifact, find-changed-files, validate-tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -280,7 +326,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ contains(inputs.tests-to-run, 'ops-unit-tests') || needs.find-changed-files.outputs.test-everything == 'true' }}
+    if: ${{ contains(inputs.tests-to-run, 'ops-unit-tests') || (inputs.force-test-everything && needs.find-changed-files.outputs.test-everything == 'true') }}
     uses: ./.github/workflows/ops-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
