@@ -106,3 +106,4 @@ models:
     wh_llmbox: 685
   demo:
     wh_llmbox: 1090
+    wh_galaxy: 270
