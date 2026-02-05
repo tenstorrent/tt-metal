@@ -10,9 +10,76 @@
 
 namespace ttml::metal::ops::swiglu_fw::device {
 
+namespace {
+
+// Check if True Flash algorithm is beneficial and fits in L1
+bool should_use_true_flash(const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+    const auto& w1 = tensor_args.w1;
+    auto* device = input.device();
+
+    const uint32_t embed_dim = input.logical_shape()[-1];
+    const uint32_t hidden_dim = w1.logical_shape()[-1];
+    const uint32_t Wt = embed_dim / tt::constants::TILE_WIDTH;
+    const uint32_t hidden_Wt = hidden_dim / tt::constants::TILE_WIDTH;
+    const uint32_t block_size = 4U;
+
+    const uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+
+    // Calculate True Flash memory requirements
+    const uint32_t twice_block_size = 2U * block_size;
+    const uint64_t input_mem = twice_block_size * bfloat16_tile_size;
+    const uint64_t w_mem = 3U * (2U * block_size * block_size) * bfloat16_tile_size;  // W1, W2, W3
+    const uint64_t intermediate_mem = 5U * block_size * bfloat16_tile_size;           // XW1/XW3 partial/final, M
+    const uint64_t y_mem = 2U * Wt * bfloat16_tile_size;                              // Y_partial + Y
+
+    const uint64_t true_flash_total = input_mem + w_mem + intermediate_mem + y_mem;
+
+    // Calculate original algorithm memory requirements
+    const uint32_t hidden_Wt_rounded = ((hidden_Wt + block_size - 1U) / block_size) * block_size;
+    const uint64_t original_intermediate_mem =
+        5U * hidden_Wt_rounded * bfloat16_tile_size;                             // XW1/XW3 partial/final, M (full rows)
+    const uint64_t original_y_mem = 2U * twice_block_size * bfloat16_tile_size;  // Y_partial + Y (block_size)
+    const uint64_t original_total = input_mem + w_mem + original_intermediate_mem + original_y_mem;
+
+    // Use True Flash if:
+    // 1. It fits in L1
+    // 2. It saves significant memory (True Flash is beneficial when hidden_dim > embed_dim)
+    const bool true_flash_fits = true_flash_total <= available_L1;
+    const bool original_fits = original_total <= available_L1;
+    const bool true_flash_saves_memory = true_flash_total < original_total;
+
+    // If only True Flash fits, use it
+    if (true_flash_fits && !original_fits) {
+        return true;
+    }
+
+    // If both fit, prefer True Flash when it saves memory (prepares for Phase 2 block matmul)
+    if (true_flash_fits && original_fits && true_flash_saves_memory) {
+        // For now, default to original for stability. Enable True Flash via explicit flag.
+        // TODO: Enable True Flash by default after Phase 2 (block matmul) is implemented
+        return false;
+    }
+
+    return false;
+}
+
+}  // namespace
+
 SwiGLUForwardDeviceOperation::program_factory_t SwiGLUForwardDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return SwiGLUForwardProgramFactory{};
+    switch (args.algorithm) {
+        case SwiGLUAlgorithm::TRUE_FLASH: return SwiGLUTrueFlashProgramFactory{};
+        case SwiGLUAlgorithm::ORIGINAL: return SwiGLUForwardProgramFactory{};
+        case SwiGLUAlgorithm::AUTO:
+        default:
+            if (should_use_true_flash(tensor_args)) {
+                return SwiGLUTrueFlashProgramFactory{};
+            }
+            return SwiGLUForwardProgramFactory{};
+    }
 }
 
 void SwiGLUForwardDeviceOperation::validate_on_program_cache_miss(
@@ -127,10 +194,11 @@ ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation::tensor_return
     const ttnn::Tensor& m1,
     const ttnn::Tensor& m2,
     const ttnn::Tensor& m3,
-    const std::optional<ttnn::Tensor>& preallocated_swiglu) {
+    const std::optional<ttnn::Tensor>& preallocated_swiglu,
+    ttml::metal::ops::swiglu_fw::device::SwiGLUAlgorithm algorithm) {
     using OperationType = ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{};
+    auto operation_attributes = OperationType::operation_attributes_t{.algorithm = algorithm};
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor, .w1 = m1, .w2 = m2, .w3 = m3, .preallocated_swiglu = preallocated_swiglu};
 

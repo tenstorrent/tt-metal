@@ -9,6 +9,7 @@
 #include "metal/ttnn_all_includes.hpp"
 #include "swiglu_fw_device_operation_types.hpp"
 #include "swiglu_fw_program_factory.hpp"
+#include "swiglu_fw_true_flash_program_factory.hpp"
 
 namespace ttml::metal::ops::swiglu_fw::device {
 
@@ -17,7 +18,8 @@ struct SwiGLUForwardDeviceOperation {
     using tensor_args_t = tensor_args_t;
     using spec_return_value_t = spec_return_value_t;
     using tensor_return_value_t = tensor_return_value_t;
-    using program_factory_t = std::variant<SwiGLUForwardProgramFactory>;
+    // Support both original and True Flash algorithms
+    using program_factory_t = std::variant<SwiGLUForwardProgramFactory, SwiGLUTrueFlashProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -39,6 +41,8 @@ ttml::metal::ops::swiglu_fw::device::SwiGLUForwardDeviceOperation::tensor_return
     const ttnn::Tensor& m1,
     const ttnn::Tensor& m2,
     const ttnn::Tensor& m3,
-    const std::optional<ttnn::Tensor>& preallocated_swiglu = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_swiglu = std::nullopt,
+    ttml::metal::ops::swiglu_fw::device::SwiGLUAlgorithm algorithm =
+        ttml::metal::ops::swiglu_fw::device::SwiGLUAlgorithm::AUTO);
 
 }  // namespace ttnn::prim
