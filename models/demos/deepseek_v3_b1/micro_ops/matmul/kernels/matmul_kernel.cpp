@@ -50,7 +50,9 @@ void kernel_main() {
 
 #elif defined(COMPILE_FOR_TRISC)
     // CTArgs type alias (required for Op template) - out_w is compile-time for TRISC
-    using MatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul_out_w")>;
+    using MatmulCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
+        get_named_compile_time_arg_val("matmul_out_w"),
+        get_named_compile_time_arg_val("matmul_transpose")>;
 
     // Named compile-time args
     constexpr uint32_t in0_cb = get_named_compile_time_arg_val("matmul_in0");
