@@ -138,12 +138,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv for multi-host access (handles race conditions)
-            ./tests/scripts/multihost/setup_shared_venv.sh
-            # Deactivate any currently active venv before activating the shared venv
-            deactivate 2>/dev/null || true
-            # Activate the shared venv before running tests
-            source ./python_env/bin/activate
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
@@ -195,12 +191,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv for multi-host access (handles race conditions)
-            ./tests/scripts/multihost/setup_shared_venv.sh
-            # Deactivate any currently active venv before activating the shared venv
-            deactivate 2>/dev/null || true
-            # Activate the shared venv before running tests
-            source ./python_env/bin/activate
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
@@ -253,7 +245,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests
       - name: Run DeepSeek V3 unit tests
         if: ${{ github.event.inputs.glx_4x_deepseekv3_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
@@ -276,11 +269,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
-            # Deactivate any currently active venv before activating the shared venv
-            deactivate 2>/dev/null || true
-            # Activate the shared venv before running tests
-            source ./python_env/bin/activate
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh deepseekv3_unit_tests
       - name: Run DeepSeek V3 module tests
         if: ${{ github.event.inputs.glx_4x_deepseekv3_module_tests == 'true' || github.event.schedule == '0 4 * * *' }}
@@ -303,11 +293,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
-            # Deactivate any currently active venv before activating the shared venv
-            deactivate 2>/dev/null || true
-            # Activate the shared venv before running tests
-            source ./python_env/bin/activate
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh deepseekv3_module_tests
       - name: Run teacher forced accuracy test
         if: ${{ github.event.inputs.glx_4x_teacher_forced == 'true' || github.event.schedule == '0 4 * * *' }}
@@ -330,11 +317,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
-            # Deactivate any currently active venv before activating the shared venv
-            deactivate 2>/dev/null || true
-            # Activate the shared venv before running tests
-            source ./python_env/bin/activate
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh teacher_forced
       - name: Upload teacher forced accuracy artifacts
         if: ${{ always() && (github.event.inputs.glx_4x_teacher_forced == 'true' || github.event.schedule == '0 4 * * *') }}
@@ -366,11 +350,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
-            # Deactivate any currently active venv before activating the shared venv
-            deactivate 2>/dev/null || true
-            # Activate the shared venv before running tests
-            source ./python_env/bin/activate
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo
       - name: Upload dual demo output artifacts
         if: ${{ always() && (github.event.inputs.glx_4x_dual_demo == 'true' || github.event.schedule == '0 4 * * *') }}
@@ -402,11 +383,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
-            # Deactivate any currently active venv before activating the shared venv
-            deactivate 2>/dev/null || true
-            # Activate the shared venv before running tests
-            source ./python_env/bin/activate
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_stress
       - name: Upload stress demo output artifacts
         if: ${{ always() && (github.event.inputs.glx_4x_dual_demo_stress == 'true' || github.event.schedule == '0 4 * * *') }}
