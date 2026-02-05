@@ -68,7 +68,8 @@ run_quad_galaxy_deepseekv3_module_tests() {
     setup_dual_galaxy_env
 
     local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    local TEST_CASE="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/tests"
+    # Note: venv activation not needed here - tt-run passes VIRTUAL_ENV and PATH from the calling shell
+    local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests"
 
     tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
@@ -85,7 +86,8 @@ run_quad_galaxy_teacher_forced_test() {
     setup_dual_galaxy_env
 
     local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    local TEST_TEACHER_FORCED="source ./python_env/bin/activate && pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/teacher_forced_output.log"
+    # Note: venv activation not needed here - tt-run passes VIRTUAL_ENV and PATH from the calling shell
+    local TEST_TEACHER_FORCED="pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/teacher_forced_output.log"
 
     tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
@@ -109,7 +111,8 @@ run_quad_galaxy_dual_demo_test() {
     setup_dual_galaxy_env
 
     local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    local TEST_DEMO="source ./python_env/bin/activate && pytest -svvv 'models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual[full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log"
+    # Note: venv activation not needed here - tt-run passes VIRTUAL_ENV and PATH from the calling shell
+    local TEST_DEMO="pytest -svvv 'models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual[full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log"
 
     tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
@@ -126,7 +129,8 @@ run_quad_galaxy_dual_demo_stress_test() {
     setup_dual_galaxy_env
 
     local MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
-    local TEST_DEMO_STRESS="source ./python_env/bin/activate && pytest -svvv 'models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual[stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log"
+    # Note: venv activation not needed here - tt-run passes VIRTUAL_ENV and PATH from the calling shell
+    local TEST_DEMO_STRESS="pytest -svvv 'models/demos/deepseek_v3/demo/test_demo_dual.py::test_demo_dual[stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log"
 
     tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
@@ -158,9 +162,10 @@ run_quad_galaxy_deepseekv3_unit_tests() {
     local MESH_DEVICE="QUAD"
     local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests/unit"
 
+    # Note: venv activation not needed here - tt-run passes VIRTUAL_ENV and PATH from the calling shell
     tt-run --tcp-interface $TCP_INTERFACE --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
-        bash -c "source ./python_env/bin/activate && export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
+        bash -c "export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1

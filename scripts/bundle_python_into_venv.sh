@@ -42,7 +42,9 @@ fi
 needs_bundling() {
     local venv_dir="$1"
     for py_exec in "$venv_dir/bin/python" "$venv_dir/bin/python3" "$venv_dir/bin/python3".*; do
-        if [[ -L "$py_exec" ]]; then
+        # Only consider paths that actually exist to avoid literal unmatched glob patterns
+        # (bash passes unmatched globs as literal strings when nullglob is not set)
+        if [[ -e "$py_exec" && -L "$py_exec" ]]; then
             return 0  # true - needs bundling
         fi
     done

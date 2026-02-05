@@ -126,13 +126,16 @@ runs:
 
           install_wheel=${{ inputs.install_wheel }}
           if [ "${install_wheel,,}" == "true" ]; then
-            WHEEL_FILENAME=$(ls -1 *.whl 2>/dev/null || true)
-            if [ -z "$WHEEL_FILENAME" ]; then
+            WHEEL_FILES=(*.whl)
+            if [ ! -e "${WHEEL_FILES[0]}" ]; then
               echo "::warning::No .whl file found in workspace. Skipping wheel installation."
-            elif uv pip install "$WHEEL_FILENAME"; then
-              echo "INFO: Successfully installed wheel '$WHEEL_FILENAME' into venv"
+            elif [ ${#WHEEL_FILES[@]} -gt 1 ]; then
+              echo "::error::Multiple .whl files found in workspace: ${WHEEL_FILES[*]}. Please ensure only one wheel file is present."
+              exit 1
+            elif uv pip install "${WHEEL_FILES[0]}"; then
+              echo "INFO: Successfully installed wheel '${WHEEL_FILES[0]}' into venv"
             else
-              echo "::warning::Failed to install wheel '$WHEEL_FILENAME'. Continuing anyway."
+              echo "::warning::Failed to install wheel '${WHEEL_FILES[0]}'. Continuing anyway."
             fi
           fi
 

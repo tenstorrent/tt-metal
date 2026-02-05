@@ -87,10 +87,12 @@ class TTRunConfig(BaseModel):
 
     rank_bindings: List[RankBinding] = Field(..., min_length=1, description="Rank to fabric bindings")
     global_env: Dict[str, str] = Field(default_factory=dict, description="Global environment variables for all ranks")
-    mesh_graph_desc_path: str = Field(..., description="Path to mesh graph descriptor")
+    mesh_graph_desc_path: Path = Field(..., description="Path to mesh graph descriptor")
     mock_cluster_rank_binding: Dict[int, Path] = Field(
-        default_factory=dict, description="Mock cluster rank binding configuration"
+        default_factory=dict, description="Mock cluster rank binding configuration (rank -> resolved path)"
     )
+
+    model_config = {"arbitrary_types_allowed": True}
 
     @field_validator("rank_bindings")
     def validate_ranks(cls, bindings: List[RankBinding]) -> List[RankBinding]:
@@ -106,14 +108,13 @@ class TTRunConfig(BaseModel):
 
         return bindings
 
-    @field_validator("mesh_graph_desc_path")
-    def validate_mesh_graph_exists(cls, path: str) -> str:
+    @field_validator("mesh_graph_desc_path", mode="before")
+    def validate_mesh_graph_exists(cls, path: Union[str, Path]) -> Path:
         """Ensure mesh graph descriptor file exists.
 
         Uses resolve_path() to search multiple locations for relative paths.
         """
-        resolved = resolve_path(path, description="Mesh graph descriptor", must_be_file=True)
-        return str(resolved)
+        return resolve_path(path, description="Mesh graph descriptor", must_be_file=True)
 
 
 def get_search_paths() -> List[Optional[Path]]:
@@ -174,13 +175,27 @@ def resolve_path(
     search_paths = get_search_paths()
     check_fn = Path.is_file if must_be_file else Path.exists
 
+    # Track TT_METAL_HOME for fallback warning
+    tt_metal_home = os.environ.get("TT_METAL_HOME")
+    tt_metal_home_checked = False
+
     for base_path in search_paths:
         if base_path is None:
             continue
         candidate = (base_path / expanded_path).resolve()
         if check_fn(candidate):
-            logger.debug(f"{TT_RUN_PREFIX} Resolved {description}: {path} -> {candidate}")
+            # Warn if TT_METAL_HOME was set but we found the file elsewhere (fallback occurred)
+            if tt_metal_home and tt_metal_home_checked and str(base_path) != tt_metal_home:
+                logger.debug(
+                    f"{TT_RUN_PREFIX} {description} not found in TT_METAL_HOME ({tt_metal_home}), "
+                    f"using fallback location: {candidate}"
+                )
+            else:
+                logger.debug(f"{TT_RUN_PREFIX} Resolved {description}: {path} -> {candidate}")
             return candidate
+        # Track if we checked TT_METAL_HOME
+        if tt_metal_home and str(base_path) == str(Path(tt_metal_home).expanduser()):
+            tt_metal_home_checked = True
 
     # Path not found
     if must_exist:
@@ -224,7 +239,7 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
             mock_data = yaml.safe_load(f)
 
         # Validate and resolve mock cluster rank binding configuration paths
-        resolved_mock_bindings = {}
+        resolved_mock_bindings: Dict[int, Path] = {}
         for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
             resolved_path = resolve_path(
                 path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
@@ -276,20 +291,29 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # Start with automatic pass-through of TT-related environment variables
     # This ensures variables like ARCH_NAME, WH_ARCH_YAML, TTNN_CONFIG_OVERRIDES are propagated
     env = {}
+    passthrough_vars = []
     for key, value in os.environ.items():
         if key.startswith(ENV_PASSTHROUGH_PREFIXES):
             env[key] = value
+            passthrough_vars.append(key)
+
+    if passthrough_vars:
+        logger.debug(
+            f"{TT_RUN_PREFIX} Auto-propagating {len(passthrough_vars)} environment variables "
+            f"with prefixes {ENV_PASSTHROUGH_PREFIXES}: {', '.join(sorted(passthrough_vars))}"
+        )
 
     # Use ORIGINAL_CWD as the default for TT_METAL_HOME when not explicitly set.
     # This assumes the launch directory is on a shared filesystem (NFS) visible to all nodes.
     default_tt_metal_home = os.environ.get("TT_METAL_HOME", str(ORIGINAL_CWD))
 
     # Set/override core tt-run managed variables
+    # Note: Path objects are converted to str here at the env var boundary
     env.update(
         {
             "TT_METAL_CACHE": cache_path,
             "TT_MESH_ID": str(binding.mesh_id),
-            "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
+            "TT_MESH_GRAPH_DESC_PATH": str(config.mesh_graph_desc_path),
             "TT_METAL_HOME": default_tt_metal_home,
             "TT_METAL_RUNTIME_ROOT": os.environ.get("TT_METAL_RUNTIME_ROOT", default_tt_metal_home),
             "PYTHONPATH": os.environ.get("PYTHONPATH", str(ORIGINAL_CWD)),
@@ -323,7 +347,7 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         env["TT_MESH_HOST_RANK"] = str(binding.mesh_host_rank)
 
     if config.mock_cluster_rank_binding:
-        env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = config.mock_cluster_rank_binding[binding.rank]
+        env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = str(config.mock_cluster_rank_binding[binding.rank])
 
     # Apply environment variables with expansion and proper precedence
     # Global environment variables first
@@ -444,7 +468,12 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     help="Rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
 )
 @click.option("--dry-run", is_flag=True, help="Print command without executing")
-@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Show path resolution diagnostics, environment propagation, and MPI command details",
+)
 @click.option(
     "--mpi-args",
     callback=lambda ctx, param, value: shlex.split(value) if value else None,
