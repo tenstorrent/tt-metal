@@ -106,6 +106,68 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
+def compute_forwarder_scratch_size(
+    l_width: int,
+    num_cores: int,
+    tile_height: int = 8,
+    tile_width: int = 32,
+    bytes_per_element: int = 2,
+) -> int:
+    """
+    Compute the required forwarder scratch buffer size in bytes.
+
+    The forwarder needs slots for packets sent by workers:
+    - Each worker sends: 1 MS packet + num_l_chunks L chunk packets
+    - For both R1 and R2 rounds
+    - For both BRISC (FWD direction) and NCRISC (BWD direction)
+
+    Args:
+        l_width: Width of L tensor per core in elements
+        num_cores: Number of worker cores
+        tile_height: Tile height (default 8)
+        tile_width: Tile width (default 32)
+        bytes_per_element: Bytes per element (default 2 for bfloat16)
+
+    Returns:
+        Total buffer size in bytes (conservative estimate)
+    """
+    # Hardware constraint: max tiles per SDPA block (DST register limit)
+    MAX_TILES_PER_CHUNK = 8
+
+    # Conservative header estimate - no API to query actual size (~32 bytes)
+    # Using 256 bytes to be safe
+    PACKET_HEADER_SIZE_BYTES_ESTIMATE = 256
+
+    # L1 alignment requirement
+    L1_ALIGNMENT = 16
+
+    # Calculate tiles per core for L data
+    tiles_per_core_l = l_width // tile_width
+
+    # Conservative chunk estimate: use hardware max constraint
+    # Actual chunking determined by program factory, we use worst-case
+    num_l_chunks = (tiles_per_core_l + MAX_TILES_PER_CHUNK - 1) // MAX_TILES_PER_CHUNK
+
+    # Slots per round: each worker sends MS (1 slot) + L chunks
+    slots_per_worker = 1 + num_l_chunks
+    slots_per_round = num_cores * slots_per_worker
+
+    # Slot size: header + largest payload (L chunk)
+    # L chunk is larger than MS, so use L chunk size
+    tiles_per_chunk = (tiles_per_core_l + num_l_chunks - 1) // num_l_chunks  # ceil
+    l_chunk_size_bytes = tiles_per_chunk * tile_height * tile_width * bytes_per_element
+    slot_size_bytes = PACKET_HEADER_SIZE_BYTES_ESTIMATE + l_chunk_size_bytes
+
+    # Align slot size to L1 alignment
+    slot_size_bytes = ((slot_size_bytes + L1_ALIGNMENT - 1) // L1_ALIGNMENT) * L1_ALIGNMENT
+
+    # Total buffer: R1 + R2 regions for both BRISC and NCRISC
+    # Layout: [BRISC R1][BRISC R2][NCRISC R1][NCRISC R2]
+    forwarder_buffer_size_bytes = 2 * slots_per_round * slot_size_bytes * 2
+
+    return forwarder_buffer_size_bytes
+
+
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
@@ -265,34 +327,33 @@ def test_reduce_to_all_with_trace(bh_1d_mesh_device):
     )
 
     # Create forwarder scratch tensor for forwarder cores
-    # The forwarder needs 8 slots per core (4 FWD + 4 BWD), each slot = header + L + MS packed
-    # Slot layout: [header (256B reserved)] [L payload] [MS payload]
-    # - Header: 256B reserved (actual header is smaller, but generous padding avoids overflow)
-    # - L: 4 tiles * 256B = 1024B (128 elements width / 32 tile_width = 4 tiles)
-    # - MS: 1 tile * 256B = 256B (combined max/sum in single tile)
-    # Total per slot: 256 + 1024 + 256 = 1536B
-    # 8 slots * 1536B = 12288B per core
-    #
-    # In bfloat16 elements per core:
-    # - Payload: 160 * 4 = 640 columns (L+MS per slot * 4 slots per round direction * 2 rounds)
-    # - Header padding: 256B * 8 slots / 2 bytes = 1024 elements = 128 columns (at 8 rows)
-    # Total shard width: 640 + 128 = 768 columns
-    header_size_bytes = 256
-    # use conservative number of slots
-    num_pkt_slots_per_round = 16
-    num_rounds = 2
-    # although we will chunk later, we allocate full size here for simplicity
-    max_payload_size_per_slot = l_width
-    packet_slot_size_bytes = header_size_bytes + max_payload_size_per_slot
-    total_packet_slots = num_pkt_slots_per_round * num_rounds
+    # Uses helper function to compute conservative buffer size
+    tile_height, tile_width = 8, 32
+    bytes_per_element = 2  # bfloat16
+
+    forwarder_buffer_size_bytes = compute_forwarder_scratch_size(
+        l_width=l_width,
+        num_cores=num_cores,
+        tile_height=tile_height,
+        tile_width=tile_width,
+        bytes_per_element=bytes_per_element,
+    )
+
+    # Convert to tensor dimensions
+    # Buffer is split across 2 forwarder cores (BRISC region on each)
+    # Shard shape is [tile_height, width], so: shard_bytes = tile_height * width * bytes_per_element
+    num_forwarder_cores = 2
+    forwarder_shard_bytes = forwarder_buffer_size_bytes // num_forwarder_cores
+    forwarder_shard_width_elements = forwarder_shard_bytes // (tile_height * bytes_per_element)
+
     forwarder_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(forwarder_cores[0], forwarder_cores[1])})
     forwarder_shard_spec = ttnn.ShardSpec(
-        forwarder_shard_grid, [8, packet_slot_size_bytes * total_packet_slots], ttnn.ShardOrientation.ROW_MAJOR
+        forwarder_shard_grid, [tile_height, forwarder_shard_width_elements], ttnn.ShardOrientation.ROW_MAJOR
     )
     forwarder_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, forwarder_shard_spec
     )
-    forwarder_scratch_shape = [8, (packet_slot_size_bytes * total_packet_slots) * 2]  # shard_width * 2 cores
+    forwarder_scratch_shape = [tile_height, forwarder_shard_width_elements * num_forwarder_cores]
     forwarder_scratch_tensor = ttnn.from_torch(
         torch.zeros(forwarder_scratch_shape, dtype=torch.bfloat16),
         device=submesh_device,

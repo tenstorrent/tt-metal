@@ -141,7 +141,7 @@ void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
 namespace ckernel {
 
 // =============================================================================
-// SDPA Tail Helpers - Composable building blocks for streaming/chunked processing
+// SDPA Tail Helpers
 // =============================================================================
 
 /**
@@ -155,8 +155,8 @@ namespace ckernel {
  *   - If normalize=false: MS output is packed to cb_cur_ms, tile_regs released
  *   - If normalize=true: tile_regs still held (caller can process first L block immediately)
  *
- * @param cb_worker_ms Neighbor MS tile (max in col 0, sum in col 1)
- * @param cb_prev_ms Local MS tile (max in col 0, sum in col 1)
+ * @param cb_worker_ms Worker MS tile (MS1) (max in col 0, sum in col 1)
+ * @param cb_prev_ms Previous MS tile (MS2) (max in col 0, sum in col 1)
  * @param cb_cur_ms Output MS tile (only used when normalize=false)
  * @param cb_l_for_init CB used for sdpa_mul_bcast_col_reuse_tiles_init
  */
@@ -204,8 +204,8 @@ ALWI void sdpa_tail_ms_reduce(uint32_t cb_worker_ms, uint32_t cb_prev_ms, uint32
  * Processes one block of L tiles using P1/P2 already in SRCB from sdpa_tail_ms_reduce.
  * Caller is responsible for cb_wait_front/cb_reserve_back before and cb_push_back/cb_pop_front after.
  *
- * @param cb_l1 First L input CB (neighbor)
- * @param cb_l2 Second L input CB (local)
+ * @param cb_l1 First L input CB
+ * @param cb_l2 Second L input CB
  * @param cb_l_out Output L CB
  * @param tile_index Starting tile index within the CB (for current block)
  * @param acquire_regs Whether to acquire tile_regs (false if regs already held from MS phase)
@@ -228,8 +228,8 @@ ALWI void sdpa_tail_l_block(uint32_t cb_l1, uint32_t cb_l2, uint32_t cb_l_out, u
  * Cleanup: calls postamble and pops MS input tiles.
  * Call this after all L blocks have been processed.
  *
- * @param cb_worker_ms Neighbor MS tile CB (to pop)
- * @param cb_prev_ms Local MS tile CB (to pop)
+ * @param cb_worker_ms Worker MS tile CB (to pop)
+ * @param cb_prev_ms Previous MS tile CB (to pop)
  */
 ALWI void sdpa_tail_finalize(uint32_t cb_worker_ms, uint32_t cb_prev_ms) {
     sdpa_bcast_col_reuse_postamble();
@@ -253,11 +253,11 @@ ALWI void sdpa_tail_finalize(uint32_t cb_worker_ms, uint32_t cb_prev_ms) {
  * 6. cb_s_out = cb_s1 + cb_s2  (s1*P1 + s2*P2)
  * 7. cb_l_out = cb_l1 * P1 + cb_l2 * P2
  *
- * @param cb_worker_max_sum Neighbor MS tile (max in col 0, sum in col 1)
- * @param cb_prev_max_sum Local MS tile (max in col 0, sum in col 1)
+ * @param cb_worker_max_sum Worker MS tile (MS1) (max in col 0, sum in col 1)
+ * @param cb_prev_max_sum Previous MS tile (MS2) (max in col 0, sum in col 1)
  * @param cb_cur_max_sum Output MS tile (only used when normalize=false)
- * @param cb_l1 Local L tiles
- * @param cb_l2 Neighbor L tiles
+ * @param cb_l1 Worker L tiles
+ * @param cb_l2 Previous L tiles
  * @param cb_l_out Output L tiles
  */
 template <

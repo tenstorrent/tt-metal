@@ -99,18 +99,19 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // - L chunks sent after (slots 1..num_l_chunks)
     // Buffer layout on receiver: [L_chunk0][L_chunk1]...[L_chunkN-1][MS]
     //
-    // Block size derivation:
-    // - block_size = tiles_per_l_chunk (each chunk = one SDPA block)
-    // - Hardware constraint: block_size <= 8 (DST register limit)
+    // Chunking and SDPA block size:
+    // - tiles_per_l_chunk = SDPA block size (each chunk = one SDPA block)
+    // - Hardware constraint: tiles_per_l_chunk <= 8 (DST register limit)
     // - This means: num_l_chunks >= ceil(out_tiles / 8)
     //
-    // For out_tiles=16: num_l_chunks >= 2 (block_size=8)
-    constexpr uint32_t max_block_size = 8;  // DST register limit
-    const uint32_t min_num_l_chunks = (out_tiles + max_block_size - 1) / max_block_size;
+    // For out_tiles=16: num_l_chunks >= 2 (tiles_per_l_chunk=8)
+    constexpr uint32_t max_tiles_per_chunk = 8;  // DST register limit
+    const uint32_t min_num_l_chunks = (out_tiles + max_tiles_per_chunk - 1) / max_tiles_per_chunk;
 
     // Configure num_l_chunks (must satisfy hardware constraint)
-    // const uint32_t num_l_chunks = min_num_l_chunks;  // Use minimum for now (largest valid block_size)
-    const uint32_t num_l_chunks = 4;
+    // Heuristic: num_l_chunks = 4 provides good balance of streaming overlap vs overhead.
+    // This op will be fused in production; chunk factor can be exposed as parameter if needed.
+    const uint32_t num_l_chunks = std::max(min_num_l_chunks, 4u);
 
     TT_FATAL(num_l_chunks >= 1, "num_l_chunks must be at least 1");
     TT_FATAL(
@@ -122,15 +123,11 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     const uint32_t tiles_per_l_chunk = out_tiles / num_l_chunks;
     const uint32_t l_chunk_size_bytes = tiles_per_l_chunk * input_page_size_bytes;
 
-    // Derive block_size from chunking (each chunk = one SDPA block)
-    const uint32_t block_size = tiles_per_l_chunk;
-    const uint32_t num_blocks = num_l_chunks;  // blocks_per_chunk = 1, so num_blocks = num_l_chunks
-
     TT_FATAL(
-        block_size <= max_block_size,
-        "block_size ({}) exceeds maximum ({}). Increase num_l_chunks to at least {}.",
-        block_size,
-        max_block_size,
+        tiles_per_l_chunk <= max_tiles_per_chunk,
+        "tiles_per_l_chunk ({}) exceeds maximum ({}). Increase num_l_chunks to at least {}.",
+        tiles_per_l_chunk,
+        max_tiles_per_chunk,
         min_num_l_chunks);
 
     // Slot sizing: largest packet is L chunk (MS is smaller)
@@ -142,26 +139,6 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         "L chunk payload ({} bytes) exceeds fabric max ({})",
         max_chunk_payload_size,
         max_fabric_payload_size);
-
-    log_info(
-        tt::LogTest,
-        "Tile width={}, height={}, ms_tile_size_bytes={}, out_tiles={}, input_page_size_bytes={}, aligned_page_size={}",
-        tile_width,
-        tile_height,
-        ms_tile_size_bytes,
-        out_tiles,
-        input_page_size_bytes,
-        aligned_page_size);
-    log_info(
-        tt::LogTest,
-        "Chunking: num_l_chunks={}, tiles_per_l_chunk={}, block_size={}, num_blocks={}, l_chunk_size_bytes={}, "
-        "max_chunk_payload_size={}",
-        num_l_chunks,
-        tiles_per_l_chunk,
-        block_size,
-        num_blocks,
-        l_chunk_size_bytes,
-        max_chunk_payload_size);
 
     // Scale encoding
     union {
@@ -280,32 +257,19 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             .set_tile_dims(cb_ms_out, stats_tile);
     CreateCircularBuffer(program, shard_grid, cb_ms_out_config);
 
-    // Packet slot CB for writer (unified header + payload in single buffer)
-    // This enables single NOC transfer instead of separate header + payload writes
-    // Slot size based on largest chunk (L chunk, since MS is smaller)
+    // Packet header CB for writer (header only - payload is zero-copy from source CB)
     const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    const uint32_t slot_size_unaligned = packet_header_size_bytes + max_chunk_payload_size;
-    const uint32_t slot_size = tt::round_up(slot_size_unaligned, l1_alignment);
-    log_info(
-        tt::LogTest,
-        "ReduceToAll packet slot size: header={} + max_payload={} = total={} (aligned to {})",
-        packet_header_size_bytes,
-        max_chunk_payload_size,
-        slot_size_unaligned,
-        slot_size);
-    TT_FATAL(
-        slot_size == slot_size_unaligned,
-        "Slot size ({}) must be L1 aligned ({}). Header={}, max_payload={}",
-        slot_size_unaligned,
-        l1_alignment,
-        packet_header_size_bytes,
-        max_chunk_payload_size);
+    const uint32_t header_cb_size = tt::round_up(packet_header_size_bytes, l1_alignment);
 
     tt::tt_metal::CircularBufferConfig cb_packet_slot_config =
-        tt::tt_metal::CircularBufferConfig(2 * slot_size, {{cb_packet_slot, tt::DataFormat::RawUInt32}})
-            .set_page_size(cb_packet_slot, slot_size)
+        tt::tt_metal::CircularBufferConfig(2 * header_cb_size, {{cb_packet_slot, tt::DataFormat::RawUInt32}})
+            .set_page_size(cb_packet_slot, header_cb_size)
             .set_tile_dims(cb_packet_slot, stats_tile);
     CreateCircularBuffer(program, shard_grid, cb_packet_slot_config);
+
+    // Forwarder slot size: header + largest payload (L chunk)
+    // Used for forwarder buffer allocation (separate from header CB)
+    const uint32_t slot_size = tt::round_up(packet_header_size_bytes + max_chunk_payload_size, l1_alignment);
 
     // =========================================================================
     // Setup forwarder cores and config
@@ -388,11 +352,11 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // Maximum 32 slots per semaphore (limited by 32-bit width).
     std::vector<uint32_t> forwarder_sem_addrs;
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
-        CoreCoord agg_core = forwarder_cores[link_idx];
-        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd_r1
-        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // fwd_r2
-        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd_r1
-        forwarder_sem_addrs.push_back(CreateSemaphore(program, {agg_core}, 0));  // bwd_r2
+        CoreCoord fwd_core = forwarder_cores[link_idx];
+        forwarder_sem_addrs.push_back(CreateSemaphore(program, {fwd_core}, 0));  // fwd_r1
+        forwarder_sem_addrs.push_back(CreateSemaphore(program, {fwd_core}, 0));  // fwd_r2
+        forwarder_sem_addrs.push_back(CreateSemaphore(program, {fwd_core}, 0));  // bwd_r1
+        forwarder_sem_addrs.push_back(CreateSemaphore(program, {fwd_core}, 0));  // bwd_r2
     }
 
     // forwarder compile-time args (two-semaphore design)
@@ -417,12 +381,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         cb_r1_neighbor_ms,   // 3
         cb_r2_neighbor_l,    // 4
         cb_r2_neighbor_ms,   // 5
-        Sq_chunk_t,          // 6
-        vDHt,                // 7
-        ms_tile_size_bytes,  // 8 - MS tile size
-        l_chunk_size_bytes,  // 9 - L chunk size
-        num_l_chunks,        // 10 - number of L chunks
-        tiles_per_l_chunk,   // 11 - tiles per L chunk
+        ms_tile_size_bytes,  // 6 - MS tile size
+        l_chunk_size_bytes,  // 7 - L chunk size
+        num_l_chunks,        // 8 - number of L chunks
+        tiles_per_l_chunk,   // 9 - tiles per L chunk
     };
 
     // Writer compile-time args
@@ -455,10 +417,8 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         cb_l_out,           // 8 - ALIASED to output_l
         cb_ms_out,          // 9 - intermediate MS
         scale_val,          // 10
-        block_size,         // 11 - block_size (= tiles_per_l_chunk, max 8)
-        num_blocks,         // 12 - num_blocks (= num_l_chunks)
-        num_l_chunks,       // 13 - number of L chunks
-        tiles_per_l_chunk,  // 14 - tiles per L chunk
+        tiles_per_l_chunk,  // 11 - tiles per L chunk (max 8)
+        num_l_chunks,       // 12 - number of L chunks
     };
 
     // =========================================================================
@@ -527,7 +487,7 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
     // Two-semaphore design: each forwarder instance has R1 and R2 semaphores
     const auto src_node_id = mesh_device->get_fabric_node_id(device_coordinate);
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
-        CoreCoord agg_core = forwarder_cores[link_idx];
+        CoreCoord fwd_core = forwarder_cores[link_idx];
 
         // Semaphore addresses for this forwarder core (4 per core: fwd_r1, fwd_r2, bwd_r1, bwd_r2)
         uint32_t fwd_r1_sem = forwarder_sem_addrs[link_idx * 4 + 0];
@@ -544,8 +504,8 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             fwd_r2_sem,             // 3: R2 semaphore
         };
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src_node_id, forward_node_id, link_idx, program, agg_core, brisc_rt_args);
-        tt::tt_metal::SetRuntimeArgs(program, forwarder_brisc_kernel, agg_core, brisc_rt_args);
+            src_node_id, forward_node_id, link_idx, program, fwd_core, brisc_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, forwarder_brisc_kernel, fwd_core, brisc_rt_args);
 
         // NCRISC runtime args (BWD direction)
         // buffer_offset = ncrisc_buffer_offset (NCRISC uses second region)
@@ -556,16 +516,27 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             bwd_r2_sem,             // 3: R2 semaphore
         };
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src_node_id, backward_node_id, link_idx, program, agg_core, ncrisc_rt_args);
-        tt::tt_metal::SetRuntimeArgs(program, forwarder_ncrisc_kernel, agg_core, ncrisc_rt_args);
+            src_node_id, backward_node_id, link_idx, program, fwd_core, ncrisc_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, forwarder_ncrisc_kernel, fwd_core, ncrisc_rt_args);
     }
 
     // Set kernel runtime args per worker core
     std::vector<CoreCoord> all_cores;
+    // Direction configuration for Type A/B worker assignment
+    // Type A: R1=FWD, R2=BWD; Type B: R1=BWD, R2=FWD
+    struct DirectionConfig {
+        uint32_t r1_sem;
+        uint32_t r2_sem;
+        tt::tt_fabric::FabricNodeId dst_node_id;
+        uint32_t buffer_base;
+        uint32_t r1_worker_idx = 0;
+        uint32_t r2_worker_idx = 0;
+    };
+
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
         const auto& cores_for_link = (link_idx == 0) ? cores_link_1 : cores_link_2;
-        CoreCoord agg_core = forwarder_cores[link_idx];
-        CoreCoord agg_core_noc = mesh_device->worker_core_from_logical_core(agg_core);
+        CoreCoord fwd_core = forwarder_cores[link_idx];
+        CoreCoord fwd_core_noc = mesh_device->worker_core_from_logical_core(fwd_core);
 
         // Semaphore addresses for this forwarder core (4 per core: fwd_r1, fwd_r2, bwd_r1, bwd_r2)
         uint32_t fwd_r1_sem = forwarder_sem_addrs[link_idx * 4 + 0];
@@ -573,13 +544,10 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
         uint32_t bwd_r1_sem = forwarder_sem_addrs[link_idx * 4 + 2];
         uint32_t bwd_r2_sem = forwarder_sem_addrs[link_idx * 4 + 3];
 
-        // Track slot indices for R1 and R2 within each semaphore
-        // Each worker gets slots_per_worker consecutive slots (1 MS + num_l_chunks L)
-        // Separate indices for FWD vs BWD direction
-        uint32_t fwd_r1_worker_idx = 0;  // FWD direction R1 worker count
-        uint32_t fwd_r2_worker_idx = 0;  // FWD direction R2 worker count
-        uint32_t bwd_r1_worker_idx = 0;  // BWD direction R1 worker count
-        uint32_t bwd_r2_worker_idx = 0;  // BWD direction R2 worker count
+        // Setup direction configs for FWD and BWD
+        // FWD uses BRISC region (offset 0), BWD uses NCRISC region
+        DirectionConfig fwd_cfg{fwd_r1_sem, fwd_r2_sem, forward_node_id, forwarder_buffer_base};
+        DirectionConfig bwd_cfg{bwd_r1_sem, bwd_r2_sem, backward_node_id, forwarder_buffer_base + ncrisc_buffer_offset};
 
         for (uint32_t worker_idx = 0; worker_idx < cores_for_link.size(); worker_idx++) {
             CoreCoord core = cores_for_link[worker_idx];
@@ -589,48 +557,18 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
             // Type A: R1=FWD, R2=BWD; Type B: R1=BWD, R2=FWD
             const bool is_type_a = ((device_index + worker_idx) % 2) == 0;
 
-            // Assign BASE slot indices within each semaphore's slot space
-            // Each worker gets slots_per_worker consecutive slots (1 MS + num_l_chunks L)
-            // R1 and R2 use separate semaphores but share buffer space
-            uint32_t r1_slot_idx;  // Base slot for R1 (MS=slot 0, L=slots 1..num_l_chunks)
-            uint32_t r2_slot_idx;  // Base slot for R2
-            uint32_t r1_agg_sem;
-            uint32_t r2_agg_sem;
-            auto r1_dst_node_id = forward_node_id;   // Default to forward
-            auto r2_dst_node_id = backward_node_id;  // Default to backward
+            // Select direction configs based on worker type
+            DirectionConfig& r1_cfg = is_type_a ? fwd_cfg : bwd_cfg;
+            DirectionConfig& r2_cfg = is_type_a ? bwd_cfg : fwd_cfg;
 
-            if (is_type_a) {
-                // Type A: R1=FWD, R2=BWD
-                r1_slot_idx = fwd_r1_worker_idx * slots_per_worker;
-                fwd_r1_worker_idx++;
-                r2_slot_idx = bwd_r2_worker_idx * slots_per_worker;
-                bwd_r2_worker_idx++;
-                r1_agg_sem = fwd_r1_sem;
-                r2_agg_sem = bwd_r2_sem;
-                r1_dst_node_id = forward_node_id;
-                r2_dst_node_id = backward_node_id;
-            } else {
-                // Type B: R1=BWD, R2=FWD
-                r1_slot_idx = bwd_r1_worker_idx * slots_per_worker;
-                bwd_r1_worker_idx++;
-                r2_slot_idx = fwd_r2_worker_idx * slots_per_worker;
-                fwd_r2_worker_idx++;
-                r1_agg_sem = bwd_r1_sem;
-                r2_agg_sem = fwd_r2_sem;
-                r1_dst_node_id = backward_node_id;
-                r2_dst_node_id = forward_node_id;
-            }
+            // Assign slot indices (each worker gets slots_per_worker consecutive slots)
+            uint32_t r1_slot_idx = r1_cfg.r1_worker_idx++ * slots_per_worker;
+            uint32_t r2_slot_idx = r2_cfg.r2_worker_idx++ * slots_per_worker;
 
-            // Calculate forwarder slot addresses based on direction
+            // Calculate forwarder slot addresses
             // R1 and R2 use SEPARATE buffer regions to support streaming overlap
-            // R1 slots: buffer_base + slot_idx * slot_size
-            // R2 slots: buffer_base + r2_buffer_offset + slot_idx * slot_size
-            uint32_t r1_slot_base = is_type_a ? forwarder_buffer_base : (forwarder_buffer_base + ncrisc_buffer_offset);
-            uint32_t r2_slot_base = is_type_a ? (forwarder_buffer_base + ncrisc_buffer_offset) : forwarder_buffer_base;
-
-            // Calculate actual slot addresses (R2 includes r2_buffer_offset for separate region)
-            uint32_t r1_slot_addr = r1_slot_base + (r1_slot_idx * slot_size);
-            uint32_t r2_slot_addr = r2_slot_base + r2_buffer_offset + (r2_slot_idx * slot_size);
+            uint32_t r1_slot_addr = r1_cfg.buffer_base + (r1_slot_idx * slot_size);
+            uint32_t r2_slot_addr = r2_cfg.buffer_base + r2_buffer_offset + (r2_slot_idx * slot_size);
 
             // Reader runtime args
             std::vector<uint32_t> reader_rt_args = {
@@ -643,24 +581,24 @@ ttnn::device_operation::CachedProgram<ReduceToAllOp::ReduceToAll::shared_variabl
 
             // Writer runtime args (with slot indices for bit-packed semaphore signaling)
             std::vector<uint32_t> writer_rt_args = {
-                *r1_dst_node_id.mesh_id,             // 0: R1 neighbor destination mesh ID
-                r1_dst_node_id.chip_id,              // 1: R1 neighbor destination chip ID
+                *r1_cfg.dst_node_id.mesh_id,         // 0: R1 neighbor destination mesh ID
+                r1_cfg.dst_node_id.chip_id,          // 1: R1 neighbor destination chip ID
                 r1_recv_tensor.buffer()->address(),  // 2: R1 neighbor destination
                 r1_recv_sem.address(),               // 3: R1 neighbor semaphore
-                *r2_dst_node_id.mesh_id,             // 4: R2 neighbor destination mesh ID
-                r2_dst_node_id.chip_id,              // 5: R2 neighbor destination chip ID
+                *r2_cfg.dst_node_id.mesh_id,         // 4: R2 neighbor destination mesh ID
+                r2_cfg.dst_node_id.chip_id,          // 5: R2 neighbor destination chip ID
                 r2_recv_tensor.buffer()->address(),  // 6: R2 neighbor destination
                 r2_recv_sem.address(),               // 7: R2 neighbor semaphore
                 core_noc.x,                          // 8: current_core_x
                 core_noc.y,                          // 9: current_core_y
                 // forwarder-specific args
-                agg_core_noc.x,  // 10: forwarder_core_x
-                agg_core_noc.y,  // 11: forwarder_core_y
+                fwd_core_noc.x,  // 10: forwarder_core_x
+                fwd_core_noc.y,  // 11: forwarder_core_y
                 r1_slot_addr,    // 12: R1 forwarder slot address
-                r1_agg_sem,      // 13: R1 forwarder semaphore
+                r1_cfg.r1_sem,   // 13: R1 forwarder semaphore
                 r1_slot_idx,     // 14: R1 BASE slot index (chunk i signals: 1 << (base + i))
                 r2_slot_addr,    // 15: R2 forwarder slot address
-                r2_agg_sem,      // 16: R2 forwarder semaphore
+                r2_cfg.r2_sem,   // 16: R2 forwarder semaphore
                 r2_slot_idx,     // 17: R2 BASE slot index (chunk i signals: 1 << (base + i))
             };
 
@@ -736,41 +674,26 @@ void ReduceToAllOp::ReduceToAll::override_runtime_arguments(
 
         // Update CB addresses for aliased buffers (critical for trace replay)
         // When trace replays, the CBs still point to old buffer addresses unless updated
-        if (shared_variables.cb_local_l_handle.has_value()) {
-            UpdateDynamicCircularBufferAddressAndTotalSize(
-                program,
-                shared_variables.cb_local_l_handle.value(),
-                *input_tensor_l.buffer(),
-                shared_variables.l_tile_size);
-        }
-        if (shared_variables.cb_local_ms_handle.has_value()) {
-            UpdateDynamicCircularBufferAddressAndTotalSize(
-                program,
-                shared_variables.cb_local_ms_handle.value(),
-                *input_tensor_ms.buffer(),
-                shared_variables.ms_tile_size);
-        }
-        if (shared_variables.cb_r1_neighbor_l_handle.has_value()) {
-            UpdateDynamicCircularBufferAddressAndTotalSize(
-                program,
-                shared_variables.cb_r1_neighbor_l_handle.value(),
-                *intermediate_tensors[0].buffer(),
-                shared_variables.l_tile_size);
-        }
-        if (shared_variables.cb_r2_neighbor_l_handle.has_value()) {
-            UpdateDynamicCircularBufferAddressAndTotalSize(
-                program,
-                shared_variables.cb_r2_neighbor_l_handle.value(),
-                *intermediate_tensors[1].buffer(),
-                shared_variables.l_tile_size);
-        }
-        if (shared_variables.cb_l_out_handle.has_value()) {
-            UpdateDynamicCircularBufferAddressAndTotalSize(
-                program,
-                shared_variables.cb_l_out_handle.value(),
-                *output_tensors_l[0].buffer(),
-                shared_variables.l_tile_size);
-        }
+        UpdateDynamicCircularBufferAddressAndTotalSize(
+            program, shared_variables.cb_local_l_handle, *input_tensor_l.buffer(), shared_variables.l_tile_size);
+
+        UpdateDynamicCircularBufferAddressAndTotalSize(
+            program, shared_variables.cb_local_ms_handle, *input_tensor_ms.buffer(), shared_variables.ms_tile_size);
+
+        UpdateDynamicCircularBufferAddressAndTotalSize(
+            program,
+            shared_variables.cb_r1_neighbor_l_handle,
+            *intermediate_tensors[0].buffer(),
+            shared_variables.l_tile_size);
+
+        UpdateDynamicCircularBufferAddressAndTotalSize(
+            program,
+            shared_variables.cb_r2_neighbor_l_handle,
+            *intermediate_tensors[1].buffer(),
+            shared_variables.l_tile_size);
+
+        UpdateDynamicCircularBufferAddressAndTotalSize(
+            program, shared_variables.cb_l_out_handle, *output_tensors_l[0].buffer(), shared_variables.l_tile_size);
     }
 };
 

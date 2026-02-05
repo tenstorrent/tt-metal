@@ -48,11 +48,11 @@ struct ReduceToAllOp {
             std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
 
             // CB handles for aliased buffers (needed for UpdateDynamicCircularBufferAddressAndTotalSize in trace)
-            std::optional<tt::tt_metal::CBHandle> cb_local_l_handle;
-            std::optional<tt::tt_metal::CBHandle> cb_local_ms_handle;
-            std::optional<tt::tt_metal::CBHandle> cb_r1_neighbor_l_handle;
-            std::optional<tt::tt_metal::CBHandle> cb_r2_neighbor_l_handle;
-            std::optional<tt::tt_metal::CBHandle> cb_l_out_handle;
+            tt::tt_metal::CBHandle cb_local_l_handle;
+            tt::tt_metal::CBHandle cb_local_ms_handle;
+            tt::tt_metal::CBHandle cb_r1_neighbor_l_handle;
+            tt::tt_metal::CBHandle cb_r2_neighbor_l_handle;
+            tt::tt_metal::CBHandle cb_l_out_handle;
 
             // Tile sizes for updating CB total sizes
             uint32_t l_tile_size = 0;

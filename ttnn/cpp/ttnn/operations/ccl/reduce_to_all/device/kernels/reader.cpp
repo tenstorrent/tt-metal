@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -12,7 +12,6 @@
 //
 // This allows:
 // - L CB to be aliased at buffer base
-// - MS at fixed location that won't be overwritten
 // - Compute can start after MS arrives, stream L chunks during compute
 
 #include "api/dataflow/dataflow_api.h"
@@ -32,15 +31,12 @@ static constexpr uint32_t cb_r1_neighbor_ms = get_compile_time_arg_val(3);
 static constexpr uint32_t cb_r2_neighbor_l = get_compile_time_arg_val(4);
 static constexpr uint32_t cb_r2_neighbor_ms = get_compile_time_arg_val(5);
 
-static constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);
-static constexpr uint32_t vDHt = get_compile_time_arg_val(7);
+static constexpr uint32_t ms_tile_size_bytes = get_compile_time_arg_val(6);
+static constexpr uint32_t l_chunk_size_bytes = get_compile_time_arg_val(7);
+static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(8);
+static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(9);
 
-static constexpr uint32_t ms_tile_size_bytes = get_compile_time_arg_val(8);
-static constexpr uint32_t l_chunk_size_bytes = get_compile_time_arg_val(9);
-static constexpr uint32_t num_l_chunks = get_compile_time_arg_val(10);
-static constexpr uint32_t tiles_per_l_chunk = get_compile_time_arg_val(11);
-
-static constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+static constexpr uint32_t out_tiles = num_l_chunks * tiles_per_l_chunk;
 static constexpr uint32_t total_l_bytes = num_l_chunks * l_chunk_size_bytes;
 
 // Semaphore thresholds: MS = 1, L_chunk_i = 2 + i
@@ -60,13 +56,9 @@ FORCE_INLINE void prepare_ms_for_compute(
     cb_reserve_back(cb_ms, 1);
 
     // Wait for MS packet (sem >= 1)
-    DPRINT << "waiting for MS packet, sem_ptr=" << *sem_ptr << ENDL();
     noc_semaphore_wait_min(sem_ptr, MS_SEM_THRESHOLD);
-    DPRINT << "MS packet arrived, sem_ptr=" << *sem_ptr << ENDL();
 
     // MS is at end of buffer (offset = total_l_bytes)
-    DPRINT << "wr ptr: " << get_write_ptr(cb_ms)
-           << ", recv_buffer_addr + total_l_bytes: " << (recv_buffer_addr + total_l_bytes) << ENDL();
     tt_memmove<true, false, false, 0>(get_write_ptr(cb_ms), recv_buffer_addr + total_l_bytes, ms_tile_size_bytes);
     cb_push_back(cb_ms, 1);
 }
@@ -131,11 +123,9 @@ void kernel_main() {
     // Prepare R1 neighbor data for compute
     // =========================================================================
     prepare_data_for_compute(cb_r1_neighbor_l, cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
-    DPRINT << "Prepared R1 neighbor data for compute" << ENDL();
 
     // =========================================================================
     // Prepare R2 neighbor data for compute
     // =========================================================================
     prepare_data_for_compute(cb_r2_neighbor_l, cb_r2_neighbor_ms, r2_neighbor_sem_addr, r2_recv_buffer_addr);
-    DPRINT << "reader done" << ENDL();
 }
