@@ -495,6 +495,16 @@ class TtTransformer(LightweightModule):
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
         rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
+        # Debug: log rope_idxs values for comparison
+        try:
+            rope_preview = rope_idxs[:8].tolist() if hasattr(rope_idxs, "tolist") else str(rope_idxs)[:100]
+            logger.info(
+                "[DECODE_ROPE_DEBUG] rot_current_pos_first8={} rope_idxs_first8={}",
+                rot_current_pos[:8].tolist(),
+                rope_preview,
+            )
+        except Exception as e:
+            logger.info("[DECODE_ROPE_DEBUG] failed: {}", e)
         cur_pos_shard_dim = 0
         if is_cur_pos_sharded:
             cur_pos_shard_dim = 1
@@ -768,6 +778,19 @@ class TtTransformer(LightweightModule):
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
+        # Debug: sample output logits for comparison
+        try:
+            logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()
+            last_idx = get_last_token[0] if isinstance(get_last_token, list) else get_last_token
+            logits_sample = logits_torch[0, 0, last_idx, :8].tolist()
+            logits_norm = float(logits_torch[0, 0, last_idx, :].norm().item())
+            logger.info(
+                "[PREFILL_LOGITS_DEBUG] logits_sample={} logits_norm={:.4f}",
+                [f"{v:.4f}" for v in logits_sample],
+                logits_norm,
+            )
+        except Exception as e:
+            logger.info("[PREFILL_LOGITS_DEBUG] failed: {}", e)
         return tt_logits
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs, is_cur_pos_sharded=False):
@@ -801,6 +824,18 @@ class TtTransformer(LightweightModule):
         """
         rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
         x_embd = self.embd(x)
+        # Debug: sample embedding values for comparison
+        try:
+            emb_torch = ttnn.to_torch(ttnn.get_device_tensors(x_embd)[0]).float()
+            emb_sample = emb_torch[0, 0, 0, :8].tolist()
+            emb_norm = float(emb_torch[0, 0, 0, :].norm().item())
+            logger.info(
+                "[DECODE_EMB_DEBUG] x_embd_sample={} emb_norm={:.4f}",
+                [f"{v:.4f}" for v in emb_sample],
+                emb_norm,
+            )
+        except Exception as e:
+            logger.info("[DECODE_EMB_DEBUG] failed: {}", e)
         tt_logits = self.forward(
             x_embd,
             current_pos,
@@ -809,6 +844,20 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
+        # Debug: sample logits values for comparison
+        try:
+            logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits[0])[0]).float()
+            logits_sample = logits_torch[0, 0, 0, :8].tolist()
+            logits_norm = float(logits_torch[0, 0, 0, :].norm().item())
+            logits_argmax = int(logits_torch[0, 0, 0, :].argmax().item())
+            logger.info(
+                "[DECODE_LOGITS_DEBUG] logits_sample={} logits_norm={:.4f} argmax={}",
+                [f"{v:.4f}" for v in logits_sample],
+                logits_norm,
+                logits_argmax,
+            )
+        except Exception as e:
+            logger.info("[DECODE_LOGITS_DEBUG] failed: {}", e)
         self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
 
         if return_logits:
