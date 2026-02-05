@@ -462,7 +462,7 @@ class PostSDPA:
         # Program descriptor
         # ========================================================================
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[
                 matmul1_in0_cb_descriptor,
                 matmul1_in1_cb_descriptor,
