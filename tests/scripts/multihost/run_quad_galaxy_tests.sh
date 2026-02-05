@@ -11,7 +11,7 @@ run_quad_galaxy_unit_tests() {
   fail=0
 
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
-  local mpi_args="--host g05glx04,g05glx03,g05glx02,g05glx01 $mpi_args_base"
+  local mpi_args="--host UF-EV-A9-GWH02,UF-EV-A9-GWH01,UF-EV-A8-GWH01,UF-EV-A8-GWH01  $mpi_args_base"
   local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
   local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
 
@@ -25,7 +25,7 @@ run_quad_galaxy_unit_tests() {
   # TODO: Currently failing on 1D/2D tests
   #tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
 
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x16_quad_galaxy\"" ; fail+=$?
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_quad_host_mesh\"" ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -37,8 +37,8 @@ run_dual_galaxy_deepseekv3_tests_on_quad_galaxy() {
 
     # Run dual galaxy tests on quad galaxy since this is the only available machine
     local RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
-    local HOSTS="g05glx01,g05glx02"
-    local RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
+    local HOSTS="UF-EV-A8-GWH01 ,UF-EV-A8-GWH01"
+    local RANKFILE=/etc/mpirun/rankfile_UF-EV-A8-GWH01 _UF-EV-A8-GWH01
     mkdir -p logs
 
     if ! test -f "$RANKFILE"; then
@@ -82,7 +82,7 @@ run_quad_galaxy_deepseekv3_unit_tests() {
 
     local RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
     local MPI_ARGS_BASE="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
-    local MPI_ARGS="--host g05glx04,g05glx03,g05glx02,g05glx01 ${MPI_ARGS_BASE}"
+    local MPI_ARGS="--host UF-EV-A9-GWH02,UF-EV-A9-GWH01,UF-EV-A8-GWH01,UF-EV-A8-GWH01  ${MPI_ARGS_BASE}"
 
     local DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
     local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"

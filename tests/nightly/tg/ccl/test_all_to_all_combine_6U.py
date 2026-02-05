@@ -198,10 +198,10 @@ def test_all_to_all_combine_8x8_dual_galaxy(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         },
     ],
-    ids=["fabric_1d_line"],
+    ids=["fabric_1d_ring"],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
@@ -220,12 +220,12 @@ def test_all_to_all_combine_8x8_dual_galaxy(
 @pytest.mark.parametrize("seq", [1], ids=["s1"])
 @pytest.mark.parametrize("local_reduce", [True], ids=["sparse"])
 @pytest.mark.parametrize("num_iters", [2])
-@pytest.mark.parametrize("num_links", [1], ids=["num_links_1"])
+@pytest.mark.parametrize("num_links", [4], ids=["num_links_4"])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-def test_all_to_all_combine_8x16_quad_galaxy(
+def test_all_to_all_combine_quad_host_mesh(
     mesh_device,
     trace_mode,
     mesh_shape,
