@@ -438,18 +438,4 @@ void UntilizeWithHaloProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }
 
-struct InplaceCBIndices {
-    uint32_t src_cb_id = 32;
-    uint32_t pad_cb_id = 32;
-    uint32_t out_cb_id = 32;
-    uint32_t padding_config_cb_id = 32;
-    uint32_t local_config_cb_id = 32;
-    uint32_t remote_config_cb_id = 32;
-    uint32_t untilize_out_cb_id = 32;
-    uint32_t get_next_cb_id() { return next_cb_id++; }
-
-private:
-    uint32_t next_cb_id = tt::CBIndex::c_0;
-};
-
 }  // namespace ttnn::prim
