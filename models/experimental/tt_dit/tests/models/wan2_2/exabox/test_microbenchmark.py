@@ -391,9 +391,9 @@ def test_spatial_layernorm_perf(config_name: str, seq_len: int) -> None:
     print("-" * 80)
     print(f"  {'Operation':<45} | {'Time (us)':>12} | {'Agg Method':>10}")
     print("-" * 80)
-    print(f"  {'FusedRMSNormPreAllGatherDeviceOperation':<45} | {results['pre_allgather']:>12.2f} | {'max':>10}")
+    print(f"  {'PreAllGatherDeviceOperation':<45} | {results['pre_allgather']:>12.2f} | {'max':>10}")
     print(f"  {'AllGatherAsyncDeviceOperation':<45} | {results['all_gather']:>12.2f} | {'min':>10}")
-    print(f"  {'FusedRMSNormPostAllGatherDeviceOperation':<45} | {results['post_allgather']:>12.2f} | {'max':>10}")
+    print(f"  {'PostAllGatherDeviceOperation':<45} | {results['post_allgather']:>12.2f} | {'max':>10}")
     print("-" * 80)
     print(f"  {'TOTAL':<45} | {results['total']:>12.2f} |")
     print("=" * 80 + "\n")
@@ -404,63 +404,3 @@ def test_spatial_layernorm_perf(config_name: str, seq_len: int) -> None:
     logger.info(f"  all_gather: {results['all_gather']:.2f} us")
     logger.info(f"  post_allgather: {results['post_allgather']:.2f} us")
     logger.info(f"  total: {results['total']:.2f} us")
-
-
-def test_spatial_layernorm_perf_all() -> None:
-    """
-    Run performance tests for all configurations and print a combined summary table.
-    """
-    configs = [
-        ("1xGLX_14b_720p", SEQ_LEN_1XGLX),
-        ("4xGLX_14b_720p_emulated", SEQ_LEN_4XGLX_EMULATED),
-    ]
-
-    all_results = {}
-
-    for config_name, seq_len in configs:
-        # Build pytest command
-        test_module = "models/experimental/tt_dit/tests/models/wan2_2/exabox/test_microbenchmark.py"
-        if config_name == "1xGLX_14b_720p":
-            test_id = "1xGLX"
-        else:
-            test_id = "4xGLX_emulated"
-
-        command = f"pytest {test_module}::test_run_spatial_layernorm[bh_4x8-{test_id}] -v"
-
-        logger.info(f"Running Tracy profiler for: {config_name}")
-
-        # Run with Tracy profiler
-        run_device_profiler(
-            command,
-            PROFILER_OUTPUT_DIR,
-            device_analysis_types=["device_kernel_duration"],
-        )
-
-        # Analyze results
-        results = analyze_layernorm_ops(PROFILER_OUTPUT_DIR, NUM_MEASUREMENT_ITERS)
-        all_results[config_name] = results
-
-    # Print combined summary table
-    print("\n" + "=" * 100)
-    print("SPATIAL LAYERNORM PERFORMANCE SUMMARY")
-    print("=" * 100)
-    print(
-        f"  {'Config':<30} | {'pre_ag (us)':>12} | {'all_gather (us)':>15} | {'post_ag (us)':>13} | {'Total (us)':>12}"
-    )
-    print("-" * 100)
-
-    for config_name, results in all_results.items():
-        print(
-            f"  {config_name:<30} | "
-            f"{results['pre_allgather']:>12.2f} | "
-            f"{results['all_gather']:>15.2f} | "
-            f"{results['post_allgather']:>13.2f} | "
-            f"{results['total']:>12.2f}"
-        )
-
-    print("=" * 100)
-    print("\nNotes:")
-    print("  - pre_ag/post_ag: Aggregated using MAX across devices (worst case)")
-    print("  - all_gather: Aggregated using MIN across devices (CCL completion time)")
-    print("  - 4xGLX_emulated: Emulates quad galaxy workload on single galaxy (1/4 seq len)")
-    print("")
