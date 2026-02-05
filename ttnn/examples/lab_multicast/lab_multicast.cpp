@@ -273,6 +273,8 @@ void multicast_tensor_tensix(
     // Semaphores are used for synchronization between the coordinator and receiver cores.
     // receivers_ready_semaphore: receivers signal when they're ready to receive a tile
     // tile_sent_semaphore: coordinator signals when a tile has been multicast
+    // For simplicity, we create semaphores on all cores, although not all cores
+    // will use all the semaphores.
     uint32_t receivers_ready_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
     uint32_t tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
 
@@ -338,11 +340,7 @@ void multicast_tensor_tensix(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab_multicast/kernels/compute/tiles_copy.cpp",
         receiver_cores_logical,
-        ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = tiles_copy_compile_args});
+        tt_metal::ComputeConfig{.compile_args = tiles_copy_compile_args});
 
     ////////// RUNTIME ARGS SETUP //////////
 

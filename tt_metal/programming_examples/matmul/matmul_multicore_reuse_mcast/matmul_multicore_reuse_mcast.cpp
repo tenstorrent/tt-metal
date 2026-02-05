@@ -339,8 +339,6 @@ void matmul_multicore_reuse_mcast(
     /*
      * Kernels - Runtime arguments
      */
-    std::vector<KernelHandle> reader_kernel_ids;
-    std::vector<KernelHandle> writer_kernel_ids;
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
@@ -430,26 +428,18 @@ void matmul_multicore_reuse_mcast(
                 tt_metal::SetRuntimeArgs(
                     program, mm_reader_kernel_in0_sender_in1_sender_id, core, mm_reader_args);      // RISCV_0_default
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1_id, core, writer_args);  // RISCV_1_default
-                reader_kernel_ids.push_back(mm_reader_kernel_in0_sender_in1_sender_id);
-                writer_kernel_ids.push_back(unary_writer_kernel_noc1_id);
             } else if (core_idx_x == 0 and core_idx_y != 0) {
                 tt_metal::SetRuntimeArgs(
                     program, mm_reader_kernel_in0_sender_in1_receiver_id, core, mm_reader_args);    // RISCV_0_default
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1_id, core, writer_args);  // RISCV_1_default
-                reader_kernel_ids.push_back(mm_reader_kernel_in0_sender_in1_receiver_id);
-                writer_kernel_ids.push_back(unary_writer_kernel_noc1_id);
             } else if (core_idx_x != 0 and core_idx_y == 0) {
                 tt_metal::SetRuntimeArgs(
                     program, mm_reader_kernel_in0_receiver_in1_sender_id, core, mm_reader_args);    // RISCV_1_default
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args);  // RISCV_0_default
-                reader_kernel_ids.push_back(mm_reader_kernel_in0_receiver_in1_sender_id);
-                writer_kernel_ids.push_back(unary_writer_kernel_noc0_id);
             } else {
                 tt_metal::SetRuntimeArgs(
                     program, mm_reader_kernel_in0_receiver_in1_receiver_id, core, mm_reader_args);  // RISCV_1_default
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args);  // RISCV_0_default
-                reader_kernel_ids.push_back(mm_reader_kernel_in0_receiver_in1_receiver_id);
-                writer_kernel_ids.push_back(unary_writer_kernel_noc0_id);
             }
         }
     }
