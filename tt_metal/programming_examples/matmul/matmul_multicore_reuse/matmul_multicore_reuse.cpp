@@ -263,6 +263,12 @@ void matmul_multicore_reuse(
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args});
 
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t src0_dram_buffer_addr = static_cast<uint32_t>(src0_dram_buffer->address());
+    const uint32_t src1_dram_buffer_addr = static_cast<uint32_t>(src1_dram_buffer->address());
+    const uint32_t dst_dram_buffer_addr = static_cast<uint32_t>(dst_dram_buffer->address());
+
     /*
      * Kernels - Runtime arguments
      */
@@ -271,11 +277,11 @@ void matmul_multicore_reuse(
         for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
             int core_idx_x = num_blocks_read % num_cores_x;
             int core_idx_y = num_blocks_read / num_cores_x;
-            CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
+            tt::tt_metal::CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
             // Write runtime args to device
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)src0_dram_buffer->address(),     // in0_tensor_addr
+                src0_dram_buffer_addr,                          // in0_tensor_addr
                 (std::uint32_t)Kt * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)1,                               // in0_tensor_stride_w
                 (std::uint32_t)Kt,                              // in0_tensor_stride_h
@@ -285,11 +291,11 @@ void matmul_multicore_reuse(
                 (std::uint32_t)per_core_M,                // in0_block_h
                 (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
 
-                (std::uint32_t)src1_dram_buffer->address(),  // in1_tensor_addr
-                (std::uint32_t)per_core_N * output_idx_x,    // in1_tensor_start_tile_id
-                (std::uint32_t)1,                            // in1_tensor_stride_w
-                (std::uint32_t)Nt,                           // in1_tensor_stride_h
-                (std::uint32_t)in0_block_w * Nt,             // in1_tensor_next_block_stride
+                src1_dram_buffer_addr,                     // in1_tensor_addr
+                (std::uint32_t)per_core_N * output_idx_x,  // in1_tensor_start_tile_id
+                (std::uint32_t)1,                          // in1_tensor_stride_w
+                (std::uint32_t)Nt,                         // in1_tensor_stride_h
+                (std::uint32_t)in0_block_w * Nt,           // in1_tensor_next_block_stride
 
                 (std::uint32_t)per_core_N,                // in1_block_w
                 (std::uint32_t)in0_block_w,               // in1_block_h
@@ -304,7 +310,7 @@ void matmul_multicore_reuse(
             };
 
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)dst_dram_buffer->address(),  // out_buffer_addr
+                dst_dram_buffer_addr,  // out_buffer_addr
                 ((std::uint32_t)output_idx_x * per_core_N) +
                     (output_idx_y * per_core_M * Nt),  // out_tensor_start_tile_id
                 (std::uint32_t)1,                      // out_tensor_stride_w

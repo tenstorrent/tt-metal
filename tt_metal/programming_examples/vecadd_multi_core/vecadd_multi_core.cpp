@@ -225,14 +225,20 @@ int main(int argc, char** argv) {
     auto work_groups = {
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
         std::make_pair(core_group_2, num_tiles_per_core_group_2)};
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t a_addr = static_cast<uint32_t>(a->address());
+    const uint32_t b_addr = static_cast<uint32_t>(b->address());
+    const uint32_t c_addr = static_cast<uint32_t>(c->address());
+
     // Set the runtime arguments for each core in the work groups. Give them a different starting and ending point to
     // achieve SPMD
     uint32_t start_tile_id = 0;
     for (const auto& [group, work_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                SetRuntimeArgs(program, reader, core, {a->address(), b->address(), work_per_core, start_tile_id});
-                SetRuntimeArgs(program, writer, core, {c->address(), work_per_core, start_tile_id});
+                SetRuntimeArgs(program, reader, core, {a_addr, b_addr, work_per_core, start_tile_id});
+                SetRuntimeArgs(program, writer, core, {c_addr, work_per_core, start_tile_id});
                 SetRuntimeArgs(program, compute, core, {work_per_core, start_tile_id});
                 core_tile_idx[core] = start_tile_id;  // Save the mapping so we can print the results later.
 

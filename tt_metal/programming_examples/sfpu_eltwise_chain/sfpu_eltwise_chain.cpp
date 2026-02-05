@@ -107,7 +107,7 @@ int main() {
     Program program = CreateProgram();
 
     // Core range setup
-    constexpr CoreCoord core = {0, 0};
+    constexpr tt::tt_metal::CoreCoord core = {0, 0};
 
     // Input data preparation
     std::mt19937 rng(std::random_device{}());
@@ -188,9 +188,14 @@ int main() {
         core,
         tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
 
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t src_dram_buffer_addr = static_cast<uint32_t>(src_dram_buffer->address());
+    const uint32_t dst_dram_buffer_addr = static_cast<uint32_t>(dst_dram_buffer->address());
+
     // Runtime args setup
-    SetRuntimeArgs(program, reader_kernel_id, core, {src_dram_buffer->address()});
-    SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer->address()});
+    SetRuntimeArgs(program, reader_kernel_id, core, {src_dram_buffer_addr});
+    SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer_addr});
 
     // Program enqueue
     workload.add_program(device_range, std::move(program));

@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
     distributed::MeshWorkload workload;
     Program program = CreateProgram();
     // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
-    CoreCoord core = {0, 0};
+    tt::tt_metal::CoreCoord core = {0, 0};
     const auto device_coord = distributed::MeshCoordinate(0, 0);
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
@@ -180,10 +180,16 @@ int main(int argc, char** argv) {
         core,
         ComputeConfig{.math_approx_mode = false, .compile_args = {}, .defines = {}});
 
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t a_addr = static_cast<uint32_t>(a->address());
+    const uint32_t b_addr = static_cast<uint32_t>(b->address());
+    const uint32_t c_addr = static_cast<uint32_t>(c->address());
+
     // Set the runtime arguments for the kernels. This also registers
     // the kernels with the program.
-    SetRuntimeArgs(program, reader, core, {a->address(), b->address(), n_tiles});
-    SetRuntimeArgs(program, writer, core, {c->address(), n_tiles});
+    SetRuntimeArgs(program, reader, core, {a_addr, b_addr, n_tiles});
+    SetRuntimeArgs(program, writer, core, {c_addr, n_tiles});
     SetRuntimeArgs(program, compute, core, {n_tiles});
 
     // We have setup the program. Now we can add it to the workload and queue it for execution.

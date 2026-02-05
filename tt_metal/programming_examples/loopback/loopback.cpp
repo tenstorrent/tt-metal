@@ -73,7 +73,7 @@ int main() {
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0} (the most top-left core).
-        constexpr CoreCoord core = {0, 0};
+        constexpr tt::tt_metal::CoreCoord core = {0, 0};
 
         // Create the data movement kernel. This kernel will be used to copy data from DRAM to DRAM (see the
         // `loopback_dram_copy.cpp` file for the actual implementation). The kernel is created on the Tensix core
@@ -105,9 +105,14 @@ int main() {
         // memory holding the data is freed.
         distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, /*blocking=*/false);
 
-        // Set runtime arguments for the kernel.
+        // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+        // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+        const uint32_t l1_buffer_addr = static_cast<uint32_t>(l1_buffer->address());
+        const uint32_t input_dram_buffer_addr = static_cast<uint32_t>(input_dram_buffer->address());
+        const uint32_t output_dram_buffer_addr = static_cast<uint32_t>(output_dram_buffer->address());
+
         const std::vector<uint32_t> runtime_args = {
-            l1_buffer->address(), input_dram_buffer->address(), output_dram_buffer->address(), num_tiles};
+            l1_buffer_addr, input_dram_buffer_addr, output_dram_buffer_addr, num_tiles};
 
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 

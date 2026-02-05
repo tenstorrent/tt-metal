@@ -40,7 +40,7 @@ int main() {
         Program program = CreateProgram();
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
-        constexpr CoreCoord core = {0, 0};
+        constexpr tt::tt_metal::CoreCoord core = {0, 0};
 
         constexpr uint32_t n_tiles = 64;
         constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
@@ -118,6 +118,11 @@ int main() {
         // setting kerenel args) in this case
         distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
 
+        // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+        // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+        const uint32_t src0_dram_buffer_addr = static_cast<uint32_t>(src0_dram_buffer->address());
+        const uint32_t dst_dram_buffer_addr = static_cast<uint32_t>(dst_dram_buffer->address());
+
         // Set up the runtime arguments for the kernels.
         SetRuntimeArgs(program, eltwise_sfpu_kernel_id, core, {n_tiles});
         SetRuntimeArgs(
@@ -125,11 +130,11 @@ int main() {
             unary_reader_kernel_id,
             core,
             {
-                src0_dram_buffer->address(),
+                src0_dram_buffer_addr,
                 n_tiles,
             });
 
-        SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer_addr, n_tiles});
 
         // Enqueue the program as a mesh workload (non-blocking) and wait for completion before reading results.
         workload.add_program(device_range, std::move(program));

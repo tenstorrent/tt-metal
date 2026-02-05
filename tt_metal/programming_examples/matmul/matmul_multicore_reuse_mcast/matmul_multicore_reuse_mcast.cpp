@@ -167,7 +167,7 @@ void matmul_multicore_reuse_mcast(
     uint32_t num_blocks_x = Nt / per_core_N;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
-    CoreCoord start_core = {0, 0};
+    tt::tt_metal::CoreCoord start_core = {0, 0};
     CoreCoord core_range = bmm_op_utils::get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
 
     uint32_t start_core_x = start_core.x;
@@ -224,9 +224,11 @@ void matmul_multicore_reuse_mcast(
     auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
     auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
 
-    uint32_t src0_addr = src0_dram_buffer->address();
-    uint32_t src1_addr = src1_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t src0_addr = static_cast<uint32_t>(src0_dram_buffer->address());
+    const uint32_t src1_addr = static_cast<uint32_t>(src1_dram_buffer->address());
+    const uint32_t dst_addr = static_cast<uint32_t>(dst_dram_buffer->address());
 
     /*
      * Config of Circular Buffer in the device L1
@@ -343,14 +345,15 @@ void matmul_multicore_reuse_mcast(
     std::vector<KernelHandle> writer_kernel_ids;
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
+            tt::tt_metal::CoreCoord core = {
+                (std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
 
-            CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-            CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
-            CoreCoord right_core = {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)core.y};
-            CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-            CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
-            CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_r - 1};
+            tt::tt_metal::CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
+            tt::tt_metal::CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+            tt::tt_metal::CoreCoord right_core = {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)core.y};
+            tt::tt_metal::CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
+            tt::tt_metal::CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+            tt::tt_metal::CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_r - 1};
 
             auto left_core_physical = mesh_device->worker_core_from_logical_core(left_core);
             auto left_core_plus_one_physical = mesh_device->worker_core_from_logical_core(left_core_plus_one);
@@ -360,7 +363,7 @@ void matmul_multicore_reuse_mcast(
             auto bottom_core_physical = mesh_device->worker_core_from_logical_core(bottom_core);
 
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t)src0_dram_buffer->address(),   // in0_buffer_addr
+                src0_addr,                                    // in0_buffer_addr
                 (std::uint32_t)Kt * per_core_M * core_idx_y,  // in0_buffer_start_tile_id
                 (std::uint32_t)1,                             // in0_buffer_stride_w
                 (std::uint32_t)Kt,                            // in0_buffer_stride_h
@@ -370,11 +373,11 @@ void matmul_multicore_reuse_mcast(
                 (std::uint32_t)per_core_M,                // in0_block_h
                 (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
 
-                (std::uint32_t)src1_dram_buffer->address(),  // in1_buffer_addr
-                (std::uint32_t)per_core_N * core_idx_x,      // in1_buffer_start_tile_id
-                (std::uint32_t)1,                            // in1_buffer_stride_w
-                (std::uint32_t)Nt,                           // in1_buffer_stride_h
-                (std::uint32_t)in0_block_w * Nt,             // in1_buffer_next_block_stride
+                src1_addr,                               // in1_buffer_addr
+                (std::uint32_t)per_core_N * core_idx_x,  // in1_buffer_start_tile_id
+                (std::uint32_t)1,                        // in1_buffer_stride_w
+                (std::uint32_t)Nt,                       // in1_buffer_stride_h
+                (std::uint32_t)in0_block_w * Nt,         // in1_buffer_next_block_stride
 
                 (std::uint32_t)per_core_N,                // in1_block_w
                 (std::uint32_t)in0_block_w,               // in1_block_h
@@ -409,7 +412,7 @@ void matmul_multicore_reuse_mcast(
             };
 
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)dst_dram_buffer->address(),                              // out_buffer_addr
+                dst_addr,                                                               // out_buffer_addr
                 (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * Nt,  // out_buffer_start_tile_id
                 (std::uint32_t)1,                                                       // out_buffer_stride_w
                 (std::uint32_t)Nt,                                                      // out_buffer_stride_h

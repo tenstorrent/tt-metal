@@ -29,7 +29,7 @@ int main() {
     }
 
     // Initialize mesh device, command queue, workload, device range, and program
-    constexpr CoreCoord core = {0, 0};
+    constexpr tt::tt_metal::CoreCoord core = {0, 0};
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -64,8 +64,12 @@ int main() {
     std::vector<float> init_data = {1.23};
     distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, init_data, false);
 
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t dram_buffer_addr = static_cast<uint32_t>(dram_buffer->address());
+
     // Set runtime args, add program to mesh workload, and enqueue (non-blocking)
-    SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_buffer->address()});
+    SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_buffer_addr});
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 

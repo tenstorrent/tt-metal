@@ -78,9 +78,15 @@ Program CreateEltwiseAddProgram(
             .compile_args = {},
             .defines = {{"ELTWISE_OP", "add_tiles"}, {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"}}});
 
+    // Set runtime arguments for the kernel. Runtime args are 32-bit only; device addresses
+    // fit in 32 bits on current hardware, so we cast from DeviceAddr (uint64_t) to uint32_t.
+    const uint32_t a_addr = static_cast<uint32_t>(a->address());
+    const uint32_t b_addr = static_cast<uint32_t>(b->address());
+    const uint32_t c_addr = static_cast<uint32_t>(c->address());
+
     // Set runtime arguments for each device
-    SetRuntimeArgs(program, reader, target_tensix_core, {a->address(), b->address(), num_tiles});
-    SetRuntimeArgs(program, writer, target_tensix_core, {c->address(), num_tiles});
+    SetRuntimeArgs(program, reader, target_tensix_core, {a_addr, b_addr, num_tiles});
+    SetRuntimeArgs(program, writer, target_tensix_core, {c_addr, num_tiles});
     SetRuntimeArgs(program, compute, target_tensix_core, {num_tiles});
 
     return program;
