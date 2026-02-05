@@ -12,9 +12,11 @@
 #include "top2.h"
 #include "top4.h"
 #include "top8.h"
+#include "enumerate.h"
 
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "api/debug/dprint_tensix.h"
+#include "api/debug/dprint_pages.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
 #ifdef TRISC_UNPACK
@@ -211,6 +213,20 @@ void kernel_main() {
 
     // Unpacker A is for weight, so Float16_b
     reconfig_data_format_srca(cb_r2c_w);
+
+    tile_regs_acquire();
+    enumerate_tile_init();
+    enumerate_tile<false>(0);
+    tile_regs_commit();
+    cb_reserve_back(cb_c2w_rdy, 1);
+    pack_tile(0, cb_s2c_out);
+    cb_push_back(cb_c2w_rdy, 1);
+
+    tile_regs_wait();
+    tile_regs_release();
+    cb_wait_front(cb_c2w_rdy, 1);
+    UNPACK(tt::compute::common::print_full_tile(cb_c2w_rdy, 0, true));
+    cb_pop_front(cb_c2w_rdy, 1);
 
     if (is_send_core) {
         // Initialize matmul: input @ weight -> output
