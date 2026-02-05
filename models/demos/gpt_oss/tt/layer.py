@@ -104,16 +104,17 @@ class DecoderLayer:
 
         # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
         # hidden_states_post_norm: [1, 1, tokens/num_rows, hidden_size]
-        hidden_states = self.self_attn(
-            hidden_states_post_norm,
-            rope_mats=position_embeddings,
-            position_idx=position_idx,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            is_decode=is_decode,
-            user_id=user_id,
-        )
-        hidden_states_post_norm.deallocate(True)
+        hidden_states = hidden_states_post_norm
+        # hidden_states = self.self_attn(
+        #     hidden_states_post_norm,
+        #     rope_mats=position_embeddings,
+        #     position_idx=position_idx,
+        #     page_table=page_table,
+        #     kv_cache=kv_cache,
+        #     is_decode=is_decode,
+        #     user_id=user_id,
+        # )
+        # hidden_states_post_norm.deallocate(True)
 
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
