@@ -91,7 +91,7 @@ def compute_reference_reduce_to_root(
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 217872}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 225280}),
     ],
     indirect=["device_params"],
     ids=["fabric_1d_linear_trace"],

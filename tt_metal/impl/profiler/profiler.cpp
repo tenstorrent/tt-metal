@@ -24,7 +24,6 @@
 #include <iostream>
 
 #include <tt_stl/assert.hpp>
-#include "dispatch/hardware_command_queue.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_analysis.hpp"
@@ -86,7 +85,11 @@ NOCDebugEvent make_noc_debug_event(
         case EMD::NocEventType::WRITE_: [[fallthrough]];
         case EMD::NocEventType::WRITE_MULTICAST: [[fallthrough]];
         case EMD::NocEventType::SEMAPHORE_SET_MULTICAST: [[fallthrough]];
-        case EMD::NocEventType::SEMAPHORE_SET_REMOTE:
+        case EMD::NocEventType::SEMAPHORE_SET_REMOTE: {
+            bool is_semaphore = event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_MULTICAST ||
+                                event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_REMOTE;
+            bool is_mcast = event.noc_xfer_type == EMD::NocEventType::WRITE_MULTICAST ||
+                            event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_SET_MULTICAST;
             return NOCDebugEvent(NocWriteEvent{
                 trailer.getSrcAddr(),
                 trailer.getDstAddr(),
@@ -97,7 +100,12 @@ NOCDebugEvent make_noc_debug_event(
                 event.dst_x,
                 event.dst_y,
                 static_cast<bool>(event.posted),
-                event.noc_type == EMD::NocType::NOC_1});
+                event.noc_type == EMD::NocType::NOC_1,
+                is_semaphore,
+                is_mcast,
+                event.mcast_end_dst_x,
+                event.mcast_end_dst_y});
+        }
         case EMD::NocEventType::READ_BARRIER_END:
             return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::WRITE_BARRIER_END: [[fallthrough]];
@@ -1350,6 +1358,8 @@ void DeviceProfiler::resetControlBuffers(
     for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
         writeToCoreControlBuffer(mesh_device, device, virtual_core, control_buffer_reset, force_slow_dispatch);
     }
+
+    this->resetActiveDramBufferIndices();
 }
 
 void DeviceProfiler::readProfilerBuffer(
@@ -2038,6 +2048,19 @@ void DeviceProfiler::setProfileBufferBankSizeBytes(uint32_t size, uint32_t num_d
     this->profile_buffer.resize(size * num_dram_banks / sizeof(uint32_t));
 }
 
+void DeviceProfiler::clearStateForDeviceReinit() {
+    this->core_control_buffers.clear();
+    this->core_l1_data_buffers.clear();
+    this->active_dram_buffer_per_core_risc_map.clear();
+    this->device_markers_per_core_risc_map.clear();
+}
+
+void DeviceProfiler::resetActiveDramBufferIndices() {
+    // Reset all active DRAM buffer indices to 0 for all cores and RISCs
+    // This keeps host state in sync when device-side profiler buffers are cleared
+    this->active_dram_buffer_per_core_risc_map.clear();
+}
+
 DeviceAddr DeviceProfiler::getProfilerDramBufferAddress(uint8_t active_dram_buffer_index) const {
     const auto base_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
     const auto offset = getProfileBufferBankSizeBytes() * active_dram_buffer_index;
@@ -2200,7 +2223,7 @@ void DeviceProfiler::readResults(
 
     TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
 
-    bool force_slow_dispatch = MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
+    bool force_slow_dispatch = MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled();
 
     constexpr uint8_t default_dram_buffer_index = 0;
 
@@ -2717,7 +2740,7 @@ void DeviceProfiler::pollDebugDumpResults(
 bool getDeviceProfilerState() { return MetalContext::instance().rtoptions().get_profiler_enabled(); }
 
 bool getDeviceDebugDumpEnabled() {
-    return MetalContext::instance().rtoptions().get_experimental_device_debug_dump_enabled();
+    return MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled();
 }
 
 }  // namespace tt::tt_metal

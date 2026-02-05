@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24...3.30)
+cmake_minimum_required(VERSION 3.24...4.2)
 
 # Forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
@@ -103,6 +103,9 @@ set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
 
 # Promote all IMPORTED targets discovered by find_package() to a GLOBAL scope
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
+
+# Reduce verbose "-- Up-to-date:" messages during install steps (e.g. cmake --install / target install)
+set(CMAKE_INSTALL_MESSAGE LAZY)
 
 ############################################################################################################################
 # Project Options

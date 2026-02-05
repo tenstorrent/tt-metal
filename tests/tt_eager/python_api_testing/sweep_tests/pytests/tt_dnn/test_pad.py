@@ -9,7 +9,6 @@ from functools import partial
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
-from models.common.utility_functions import is_grayskull
 import random
 
 # Seed here for fixed params
@@ -18,8 +17,6 @@ random.seed(213919)
 torch.manual_seed(213919)
 
 params = [pytest.param([[5, 5, 50, 50]], pad_args) for pad_args in generation_funcs.gen_pad_args([[5, 5, 50, 50]])]
-if is_grayskull():
-    params += [pytest.param([[5, 5, 64, 96]], pad_args) for pad_args in generation_funcs.gen_pad_args([[5, 5, 64, 96]])]
 
 
 @pytest.mark.parametrize("input_shapes, pad_args", params)

@@ -9,7 +9,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, tt_dtype_to_torch_dtype
-from models.common.utility_functions import is_grayskull
 from tests.ttnn.unit_tests.operations.test_utils import get_ttnn_torch_dtype
 
 pytestmark = pytest.mark.use_module_device
@@ -240,7 +239,6 @@ def test_typecast(N, C, H, W, memory_config, input_dtype, output_dtype, device):
 
 
 # The idea of the test is to convert bfloat16 to uint32 into preallocated uint32 tensor
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32/uint32/uint16 data types")
 def test_typecast_output_tensor(device):
     torch.manual_seed(0)
 

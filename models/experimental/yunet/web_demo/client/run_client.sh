@@ -18,13 +18,13 @@ echo "Client will start on: http://0.0.0.0:8501"
 echo ""
 
 # Check if streamlit is installed
-if ! python3 -c "import streamlit" 2>/dev/null; then
+if ! python -c "import streamlit" 2>/dev/null; then
     echo "ERROR: streamlit not found. Install with:"
-    echo "  pip3 install streamlit streamlit-webrtc opencv-python requests av"
+    echo "  pip install streamlit streamlit-webrtc opencv-python requests av"
     exit 1
 fi
 
 # Start the client
-python3 -m streamlit run yunet_streamlit.py \
+python -m streamlit run yunet_streamlit.py \
     --server.port 8501 \
     --server.address 0.0.0.0
