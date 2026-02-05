@@ -249,16 +249,16 @@ class TransformerBlock(LightweightModule):
             hidden_states = attn_out
         hidden_states = self.ff_norm(hidden_states, mode)
         if self.pre_ff_norm is not None:
-            distributed = ttnn.mesh_partition(
-                hidden_states,
-                memory_config=hidden_states.memory_config(),
-                dim=3,
-                cluster_axis=1,
-            )
+            if self.num_devices > 1:
+                hidden_states = ttnn.mesh_partition(
+                    hidden_states,
+                    memory_config=hidden_states.memory_config(),
+                    dim=3,
+                    cluster_axis=1,
+                )
             hidden_states = ttnn.add(
-                residual, distributed, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+                residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
-            ttnn.deallocate(distributed)
             residual = hidden_states
             hidden_states = self.pre_ff_norm(hidden_states, mode)
 
@@ -276,12 +276,13 @@ class TransformerBlock(LightweightModule):
 
         if self.post_ff_norm is not None:
             hidden_states = self.post_ff_norm(hidden_states, mode)  # Gathered
-            hidden_states = ttnn.mesh_partition(
-                hidden_states,
-                memory_config=hidden_states.memory_config(),
-                dim=3,
-                cluster_axis=1,
-            )
+            if self.num_devices > 1:
+                hidden_states = ttnn.mesh_partition(
+                    hidden_states,
+                    memory_config=hidden_states.memory_config(),
+                    dim=3,
+                    cluster_axis=1,
+                )
 
         out = ttnn.add(
             residual,
