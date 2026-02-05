@@ -7,11 +7,18 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
 #include "api/tensor/tensor_accessor.h"
+#include "tests/tt_metal/tt_metal/data_movement/multi_interleaved/kernels/barrier_sync.hpp"
 
 // L1 to DRAM write
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t l1_read_addr = get_arg_val<uint32_t>(1);
+    // Barrier synchronization args
+    uint32_t barrier_sem_id = get_arg_val<uint32_t>(2);
+    uint32_t barrier_coord_x = get_arg_val<uint32_t>(3);
+    uint32_t barrier_coord_y = get_arg_val<uint32_t>(4);
+    uint32_t num_cores = get_arg_val<uint32_t>(5);
+    uint32_t local_barrier_addr = get_arg_val<uint32_t>(6);  // Local scratch space for polling
 
     constexpr uint32_t num_of_transactions = get_compile_time_arg_val(0);
     constexpr uint32_t num_pages = get_compile_time_arg_val(1);
@@ -29,6 +36,9 @@ void kernel_main() {
     DeviceTimestampedData("Number of transactions", num_of_transactions * num_pages);
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
+
+    // Wait for all cores to reach this point before starting data movement
+    barrier_sync(barrier_sem_id, barrier_coord_x, barrier_coord_y, num_cores, local_barrier_addr);
 
     {
         DeviceZoneScopedN("RISCV1");
