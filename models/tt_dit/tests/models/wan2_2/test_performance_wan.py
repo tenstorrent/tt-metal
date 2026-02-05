@@ -101,6 +101,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
@@ -108,6 +109,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         "1x8sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
+        "bh_quad_4x32_sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -213,31 +215,6 @@ def test_pipeline_performance(
             )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
-
-    # Check output
-    if hasattr(result, "frames"):
-        frames = result.frames
-    else:
-        frames = result[0] if isinstance(result, tuple) else result
-
-    print(f"✓ Inference completed successfully")
-    print(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
-    print(f"  Output type: {type(frames)}")
-
-    # Basic validation
-    if isinstance(frames, np.ndarray):
-        print(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
-    elif isinstance(frames, torch.Tensor):
-        print(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
-
-    # Save video using diffusers utility
-    # Remove batch dimension
-    frames = frames[0]
-    try:
-        export_to_video(frames, "wan_output_video.mp4", fps=16)
-    except AttributeError as e:
-        logger.info(f"AttributeError: {e}")
-    print("✓ Saved video to: wan_output_video.mp4")
 
     # Performance measurement runs
     logger.info("Running performance measurement iterations...")
