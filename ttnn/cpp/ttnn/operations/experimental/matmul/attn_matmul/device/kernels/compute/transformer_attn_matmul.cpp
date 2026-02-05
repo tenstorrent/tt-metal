@@ -63,6 +63,8 @@ void kernel_main() {
                         onetile,
                         cb_intermed0,
                         cb_intermed1,
+                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                        compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
                         1, compute_kernel_lib::untilize_config::PreviousCBs{cb_in1, cb_intermed0});
 
@@ -75,10 +77,10 @@ void kernel_main() {
                 compute_kernel_lib::tilize<
                     cb_intermed2,
                     out_cb_id,
-                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure,
                     compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                    compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard>(
+                    compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
                     onetile,
                     1,
                     compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::disabled(),

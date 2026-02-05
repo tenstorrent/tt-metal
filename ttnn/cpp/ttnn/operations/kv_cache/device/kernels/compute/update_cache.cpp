@@ -36,6 +36,8 @@ void kernel_main() {
                 Wt,
                 cache_cb,
                 untilized_cache_cb,
+                compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
                 granularity, compute_kernel_lib::untilize_config::PreviousCBs{prev_cb_srca, prev_cb_output});
 
@@ -43,10 +45,10 @@ void kernel_main() {
             compute_kernel_lib::tilize<
                 untilized_cache2_cb,  // input_cb
                 out_cb,               // output_cb
-                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure,
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard>(
+                compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
                 Wt,           // block_width_tiles
                 granularity,  // num_blocks
                 compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::disabled(),

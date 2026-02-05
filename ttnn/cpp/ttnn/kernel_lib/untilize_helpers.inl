@@ -117,9 +117,9 @@ template <
     uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
-    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     untilize_config::InitUninitMode init_uninit_mode,
-    untilize_config::WaitMode wait_mode>
+    untilize_config::WaitMode wait_mode,
+    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode>
 ALWI void untilize(uint32_t num_blocks, untilize_config::PreviousCBs prev_cbs) {
 
     // Compile-time validation

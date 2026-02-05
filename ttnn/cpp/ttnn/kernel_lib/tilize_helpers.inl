@@ -16,10 +16,10 @@ namespace compute_kernel_lib {
 template <
     uint32_t input_cb,
     uint32_t output_cb,
-    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     tilize_config::InitUninitMode init_uninit_mode,
     tilize_config::WaitMode wait_mode,
-    tilize_config::TilizeSpeedMode speed_mode>
+    tilize_config::TilizeSpeedMode speed_mode,
+    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode>
 ALWI void tilize(
     uint32_t block_width_tiles,
     uint32_t num_blocks,

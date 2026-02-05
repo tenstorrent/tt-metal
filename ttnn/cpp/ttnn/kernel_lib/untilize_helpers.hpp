@@ -167,9 +167,9 @@ ALWI void untilize_uninit();
  * @tparam block_width_tiles Width in tiles (number of tiles per row) - FIRST template param
  * @tparam input_cb Input circular buffer ID (tiled data) - must be compile-time constant
  * @tparam output_cb Output circular buffer ID (row-major data) - must be compile-time constant
- * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
  * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
  * @tparam wait_mode Controls input synchronization strategy (default: Wait)
+ * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
  *
  * @param num_blocks Number of rows/blocks to process
  * @param prev_cbs Previous circular buffers for reconfiguration (used when reconfig_mode = Reconfigure)
@@ -190,7 +190,6 @@ ALWI void untilize_uninit();
  *   // Wait-upfront pattern (GroupNorm) - forces standard untilize
  *   using namespace compute_kernel_lib::untilize_config;
  *   untilize<10, cb_in, cb_out,
- *            ReconfigureRegisterDatatypeMode::NoReconfigure,
  *            InitUninitMode::InitAndUninit,
  *            WaitMode::WaitUpfront>(num_rows);
  *
@@ -198,6 +197,8 @@ ALWI void untilize_uninit();
  *   // Data type reconfiguration
  *   using namespace compute_kernel_lib::untilize_config;
  *   untilize<4, cb_in, cb_out,
+ *            InitUninitMode::InitAndUninit,
+ *            WaitMode::WaitBlock,
  *            ReconfigureRegisterDatatypeMode::Reconfigure>(10,
  *                PreviousCBs{old_cb_srcA, old_cb_output});
  *
@@ -223,10 +224,10 @@ template <
     uint32_t block_width_tiles,
     uint32_t input_cb,
     uint32_t output_cb,
-    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
     untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
-    untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock>
+    untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
+    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
+        untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>
 ALWI void untilize(uint32_t num_blocks, untilize_config::PreviousCBs prev_cbs = untilize_config::PreviousCBs());
 
 }  // namespace compute_kernel_lib

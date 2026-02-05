@@ -48,7 +48,8 @@
  *       InitUninitMode::InitAndUninit,
  *       WaitMode::WaitBlock,
  *       TilizeSpeedMode::Standard,
- *       old_cb>(16, num_blocks);
+ *       ReconfigureRegisterDatatypeMode::Reconfigure>(16, num_blocks, NonTileAlignedCBWaitConfig::disabled(),
+ *                                                      PreviousCBs{old_cb_srcA, old_cb_out});
  *
  *   // Non-tile-aligned: per-iteration pages
  *   compute_kernel_lib::tilize<cb_in, cb_out>(
@@ -254,10 +255,10 @@ struct PreviousCBs {
  *
  * @tparam input_cb Input circular buffer ID (compile-time for type safety)
  * @tparam output_cb Output circular buffer ID (compile-time for type safety)
- * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
  * @tparam init_uninit_mode Controls init/uninit behavior (default: InitAndUninit)
  * @tparam wait_mode Controls input synchronization strategy (default: Wait)
  * @tparam speed_mode Explicit tilize speed mode selection (default: Standard)
+ * @tparam reconfig_mode Controls register datatype reconfiguration (default: NoReconfigure)
  *
  * @param block_width_tiles Block width in tiles (FIRST runtime argument for consistency)
  * @param num_blocks Number of blocks to process
@@ -280,21 +281,21 @@ struct PreviousCBs {
  *   // Data type reconfiguration (standard mode - 2 params)
  *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<new_cb, cb_out,
- *          ReconfigureRegisterDatatypeMode::Reconfigure,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
- *          TilizeSpeedMode::Standard>(16, 5, NonTileAlignedCBWaitConfig::disabled(),
- *                                     PreviousCBs{old_cb_srcA, old_cb_out});
+ *          TilizeSpeedMode::Standard,
+ *          ReconfigureRegisterDatatypeMode::Reconfigure>(16, 5, NonTileAlignedCBWaitConfig::disabled(),
+ *                                                         PreviousCBs{old_cb_srcA, old_cb_out});
  *
  * @example
  *   // Fast + DT reconfiguration (fast mode - 3 params with srcB)
  *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<new_cb, cb_out,
- *          ReconfigureRegisterDatatypeMode::Reconfigure,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
- *          TilizeSpeedMode::Fast>(64, 5, NonTileAlignedCBWaitConfig::disabled(),
- *                                 PreviousCBs{old_cb_srcA, old_cb_srcB, old_cb_out});
+ *          TilizeSpeedMode::Fast,
+ *          ReconfigureRegisterDatatypeMode::Reconfigure>(64, 5, NonTileAlignedCBWaitConfig::disabled(),
+ *                                                         PreviousCBs{old_cb_srcA, old_cb_srcB, old_cb_out});
  *
  * @example
  *   // Per-iteration pages (asymmetric input/output - convert_to_hwc pattern)
@@ -338,11 +339,11 @@ struct PreviousCBs {
 template <
     uint32_t input_cb,
     uint32_t output_cb,
-    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
     tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
-    tilize_config::TilizeSpeedMode speed_mode = tilize_config::TilizeSpeedMode::Standard>
+    tilize_config::TilizeSpeedMode speed_mode = tilize_config::TilizeSpeedMode::Standard,
+    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
+        tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>
 ALWI void tilize(
     uint32_t block_width_tiles,
     uint32_t num_blocks,

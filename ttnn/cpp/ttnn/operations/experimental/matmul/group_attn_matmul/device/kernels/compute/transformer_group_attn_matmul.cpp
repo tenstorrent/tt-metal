@@ -157,10 +157,10 @@ void kernel_main() {
             compute_kernel_lib::tilize<
                 cb_intermed1,
                 out_cb_id,
-                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure,
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard>(
+                compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard,
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
                 out_num_tiles,
                 1,
                 compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::disabled(),

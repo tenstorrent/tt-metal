@@ -532,6 +532,8 @@ void kernel_main() {
                     out_chunk_tiles,
                     cb_out_accumulate_im,
                     cb_out_final,
+                    compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                     compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
                     1, compute_kernel_lib::untilize_config::PreviousCBs{cb_out_accumulate_im, cb_out_accumulate_im});
             } else {
