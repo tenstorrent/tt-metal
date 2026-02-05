@@ -133,31 +133,31 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     bool has_fused_ternary = operation_attributes.fused_ternary_scalar.has_value();
     if (has_fused_ternary) {
         TT_FATAL(
-            tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_c.has_value(),
-            "If fused_ternary_scalar is provided, both fused_ternary_input_a and fused_ternary_input_c must be "
+            tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value(),
+            "If fused_ternary_scalar is provided, both fused_ternary_input_a and fused_ternary_input_b must be "
             "provided");
 
         const auto& ternary_a = tensor_args.fused_ternary_input_a.value();
-        const auto& ternary_c = tensor_args.fused_ternary_input_c.value();
+        const auto& ternary_b = tensor_args.fused_ternary_input_b.value();
 
         TT_FATAL(ternary_a.storage_type() == StorageType::DEVICE, "fused_ternary_input_a must be on device");
-        TT_FATAL(ternary_c.storage_type() == StorageType::DEVICE, "fused_ternary_input_c must be on device");
+        TT_FATAL(ternary_b.storage_type() == StorageType::DEVICE, "fused_ternary_input_b must be on device");
         TT_FATAL(ternary_a.device() == act_tensor.device(), "fused_ternary_input_a must be on same device");
-        TT_FATAL(ternary_c.device() == act_tensor.device(), "fused_ternary_input_c must be on same device");
+        TT_FATAL(ternary_b.device() == act_tensor.device(), "fused_ternary_input_b must be on same device");
         TT_FATAL(ternary_a.buffer() != nullptr, "fused_ternary_input_a must be allocated");
-        TT_FATAL(ternary_c.buffer() != nullptr, "fused_ternary_input_c must be allocated");
+        TT_FATAL(ternary_b.buffer() != nullptr, "fused_ternary_input_b must be allocated");
 
         TT_FATAL(ternary_a.layout() == Layout::TILE, "fused_ternary_input_a must be TILE layout");
-        TT_FATAL(ternary_c.layout() == Layout::TILE, "fused_ternary_input_c must be TILE layout");
+        TT_FATAL(ternary_b.layout() == Layout::TILE, "fused_ternary_input_b must be TILE layout");
 
         TT_FATAL(
-            dtype_supported(ternary_a.dtype()) && dtype_supported(ternary_c.dtype()),
+            dtype_supported(ternary_a.dtype()) && dtype_supported(ternary_b.dtype()),
             "fused_ternary tensors must have supported dtypes");
 
         const auto& ternary_a_logical = ternary_a.logical_shape();
-        const auto& ternary_c_logical = ternary_c.logical_shape();
+        const auto& ternary_b_logical = ternary_b.logical_shape();
 
-        // ternary_a is broadcast [1, N], ternary_c matches output [M, N]
+        // ternary_a is broadcast [1, N], ternary_b matches output [M, N]
         TT_FATAL(
             ternary_a_logical[-2] == 1 && ternary_a_logical[-1] == N,
             "fused_ternary_input_a shape must be [1, N={}] (broadcast like bias), got [{}, {}]",
@@ -165,12 +165,12 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             ternary_a_logical[-2],
             ternary_a_logical[-1]);
         TT_FATAL(
-            ternary_c_logical[-2] == M && ternary_c_logical[-1] == N,
-            "fused_ternary_input_c shape must match output [M={}, N={}], got [{}, {}]",
+            ternary_b_logical[-2] == M && ternary_b_logical[-1] == N,
+            "fused_ternary_input_b shape must match output [M={}, N={}], got [{}, {}]",
             M,
             N,
-            ternary_c_logical[-2],
-            ternary_c_logical[-1]);
+            ternary_b_logical[-2],
+            ternary_b_logical[-1]);
     }
 
     // Config constraints
@@ -265,7 +265,7 @@ std::vector<Tensor> minimal_matmul(
     int32_t dim,
     std::optional<float> fused_ternary_scalar,
     const std::optional<Tensor>& fused_ternary_input_a,
-    const std::optional<Tensor>& fused_ternary_input_c) {
+    const std::optional<Tensor>& fused_ternary_input_b) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -291,7 +291,7 @@ std::vector<Tensor> minimal_matmul(
             .bias_tensor = bias_tensor,
             .optional_input_tensor = std::nullopt,
             .fused_ternary_input_a = fused_ternary_input_a,
-            .fused_ternary_input_c = fused_ternary_input_c});
+            .fused_ternary_input_b = fused_ternary_input_b});
 }
 
 }  // namespace ttnn::prim

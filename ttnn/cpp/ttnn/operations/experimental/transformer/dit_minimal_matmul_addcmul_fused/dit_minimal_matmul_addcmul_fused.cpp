@@ -33,8 +33,8 @@ ttnn::Tensor ExecuteDitMinimalMatmulAddcmulFused::invoke(
         1,                       // no splitting
         -1,                      // dim
         scalar,                  // fused_ternary_scalar
-        addcmul_input_tensor1,   // fused_ternary_input_a (residual/base)
-        addcmul_input_tensor2);  // fused_ternary_input_c (gate/multiplier)
+        addcmul_input_tensor1,   // fused_ternary_input_a (residual/base, broadcast)
+        addcmul_input_tensor2);  // fused_ternary_input_b (gate/multiplier, full shape)
 
     TT_FATAL(outputs.size() == 1, "Expected single output from minimal_matmul, got {}", outputs.size());
     return outputs[0];

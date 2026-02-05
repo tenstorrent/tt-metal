@@ -201,15 +201,15 @@ void write_block_sync(
 }
 
 /**
- *
  * Read ternary inputs (ternary_a and ternary_b) and write data to CB
  *
  * For ternary_a: only read 1 row of tiles (N_block_tiles). Compute kernel will bcast this row.
- * For ternary_b: read N_block_tiles * N_block_tiles tiles (full block)
+ * For ternary_b: read M_block_tiles * N_block_tiles tiles (full block)
  *
- * Note: Unlike read_in0_block_sync and read_in1_block_sync, pushes ternary_b tiles one row at a time.
- * This helps with compute utilization and overall performance, as compute kernel can start addcmul
- * without waiting for the full block of ternary_b tiles.
+ * Performance optimization: Unlike read_in0_block_sync and read_in1_block_sync, pushes ternary_b
+ * tiles one row at a time. This allows the compute kernel to begin processing addcmul operations
+ * as soon as the first row is ready, rather than waiting for the entire block. This overlapping
+ * of data movement and compute improves overall throughput.
  */
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void read_ternary_blocks_sync(

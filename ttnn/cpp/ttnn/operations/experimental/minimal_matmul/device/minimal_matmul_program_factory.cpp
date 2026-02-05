@@ -128,7 +128,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t N_chunks,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& fused_ternary_input_a,
-    const std::optional<const Tensor>& fused_ternary_input_c) {
+    const std::optional<const Tensor>& fused_ternary_input_b) {
     (void)fused_ternary_scalar;  // Scalar not needed in dataflow kernel, only in compute kernel
     auto* device = input_tensor.device();
 
@@ -144,7 +144,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto num_cores = core_grid.size();
 
     bool use_bias = bias_tensor.has_value();
-    bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_c.has_value();
+    bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_b.has_value();
 
     /**
      * Determine dataformats, compute kernel config
@@ -335,7 +335,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
         // Fused ternary input C - circular buffer c_6
         auto ternary_c_data_format =
-            tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_c.value().dtype());
+            tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_b.value().dtype());
         auto ternary_c_tile_size = tt::tile_size(ternary_c_data_format);
         uint32_t ternary_c_cb_num_tiles = out_block_num_tiles;  // Same as output block, not double buffered
 
@@ -447,7 +447,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         bias_tensor,
         (fuse_op && fused_op_signaler->read_local_slice_from_input) ? fused_op_signaler->ag_input : std::nullopt,
         fused_ternary_input_a,
-        fused_ternary_input_c);
+        fused_ternary_input_b);
     auto in0_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
@@ -489,7 +489,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         bias_tensor,
         std::nullopt,  // no ag_input for in0_receiver
         fused_ternary_input_a,
-        fused_ternary_input_c);
+        fused_ternary_input_b);
 
     auto in0_receiver_kernels_id = CreateKernel(
         program,
@@ -528,7 +528,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         bias_tensor,
         std::nullopt,  // no ag_input for in1_sender
         fused_ternary_input_a,
-        fused_ternary_input_c);
+        fused_ternary_input_b);
 
     auto in1_sender_kernels_id = CreateKernel(
         program,
@@ -567,7 +567,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         bias_tensor,
         std::nullopt,  // no ag_input for in1_receiver
         fused_ternary_input_a,
-        fused_ternary_input_c);
+        fused_ternary_input_b);
 
     auto in1_receiver_kernels_id = CreateKernel(
         program,
@@ -697,7 +697,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
             in0_args.push_back(fused_ternary_input_a.value().buffer()->address());
-            in0_args.push_back(fused_ternary_input_c.value().buffer()->address());
+            in0_args.push_back(fused_ternary_input_b.value().buffer()->address());
         }
         // Add output addresses at the end (unified layout for both regular and split)
         for (const auto& output_tensor : output_tensors) {
@@ -731,7 +731,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
             in1_args.push_back(fused_ternary_input_a.value().buffer()->address());
-            in1_args.push_back(fused_ternary_input_c.value().buffer()->address());
+            in1_args.push_back(fused_ternary_input_b.value().buffer()->address());
         }
         // Add output addresses at the end (unified layout for both regular and split)
         for (const auto& output_tensor : output_tensors) {
@@ -792,7 +792,7 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
         static_cast<uint32_t>(operation_attributes.chunks),
         operation_attributes.fused_ternary_scalar,
         tensor_args.fused_ternary_input_a,
-        tensor_args.fused_ternary_input_c);
+        tensor_args.fused_ternary_input_b);
 
     return {std::move(program), std::move(shared_vars)};
 }
@@ -829,7 +829,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
 
     // Check if ternary addresses are present
     bool has_fused_ternary =
-        tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_c.has_value();
+        tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
     // Output addresses start after ternary addresses (if present)
     uint32_t in0_out_addr_start_idx =
         has_fused_ternary ? 15 : 13;  // After defer_write_k_block and optional ternary addresses
@@ -853,7 +853,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
             // Update ternary addresses if present
             if (has_fused_ternary) {
                 in0_sender_args[in0_ternary_a_addr_idx] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                in0_sender_args[in0_ternary_b_addr_idx] = tensor_args.fused_ternary_input_c.value().buffer()->address();
+                in0_sender_args[in0_ternary_b_addr_idx] = tensor_args.fused_ternary_input_b.value().buffer()->address();
             }
             // Update N output addresses at the end
             for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
@@ -868,7 +868,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
                 in0_receiver_args[in0_ternary_a_addr_idx] =
                     tensor_args.fused_ternary_input_a.value().buffer()->address();
                 in0_receiver_args[in0_ternary_b_addr_idx] =
-                    tensor_args.fused_ternary_input_c.value().buffer()->address();
+                    tensor_args.fused_ternary_input_b.value().buffer()->address();
             }
             // Update N output addresses at the end
             for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
@@ -884,7 +884,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
             // Update ternary addresses if present
             if (has_fused_ternary) {
                 in1_sender_args[in1_ternary_a_addr_idx] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                in1_sender_args[in1_ternary_b_addr_idx] = tensor_args.fused_ternary_input_c.value().buffer()->address();
+                in1_sender_args[in1_ternary_b_addr_idx] = tensor_args.fused_ternary_input_b.value().buffer()->address();
             }
             // Update N output addresses at the end
             for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
@@ -899,7 +899,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
                 in1_receiver_args[in1_ternary_a_addr_idx] =
                     tensor_args.fused_ternary_input_a.value().buffer()->address();
                 in1_receiver_args[in1_ternary_b_addr_idx] =
-                    tensor_args.fused_ternary_input_c.value().buffer()->address();
+                    tensor_args.fused_ternary_input_b.value().buffer()->address();
             }
             // Update N output addresses at the end
             for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {

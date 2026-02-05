@@ -52,6 +52,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t N_chunks,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& fused_ternary_input_a = std::nullopt,
-    const std::optional<const Tensor>& fused_ternary_input_c = std::nullopt);
+    const std::optional<const Tensor>& fused_ternary_input_b = std::nullopt);
 
 }  // namespace ttnn::experimental::prim
