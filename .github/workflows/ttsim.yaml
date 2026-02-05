@@ -157,6 +157,9 @@ jobs:
     outputs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
     steps:
+      # Note: This checkout is needed because this is a separate job that runs before ttnn-pytests.
+      # Each job runs in a fresh environment, so we can't reuse the checkout from ttnn-pytests.
+      # We use sparse checkout to efficiently fetch only the test definitions YAML file.
       - name: Checkout repository for test definitions
         uses: actions/checkout@v4
         with:
@@ -263,6 +266,8 @@ jobs:
       - name: Install yq for YAML parsing
         run: uv pip install yq
 
+      # Note: The skip list YAML is available from the full checkout above (line 227-230).
+      # No sparse checkout is needed because the ttnn-pytests job does a full checkout with submodules.
       - name: Build skip list arguments
         id: skip-list
         run: |
