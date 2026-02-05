@@ -1,0 +1,62 @@
+# Example: Mixed Counts - Combining Different Grouping Types
+# This example shows mixing different types of lower-level groupings within a single grouping
+
+base_units {
+  # Base units are predefined constants - ASIC_LOCATION_1 through ASIC_LOCATION_8
+}
+
+groupings {
+  name: "trays"
+  items: [
+    { asic_location: ASIC_LOCATION_1 },
+    { asic_location: ASIC_LOCATION_2 },
+    { asic_location: ASIC_LOCATION_3 },
+    { asic_location: ASIC_LOCATION_4 },
+    { asic_location: ASIC_LOCATION_5 },
+    { asic_location: ASIC_LOCATION_6 },
+    { asic_location: ASIC_LOCATION_7 },
+    { asic_location: ASIC_LOCATION_8 }
+  ]
+}
+
+groupings {
+  name: "hosts"
+  items: [
+    { grouping_ref { grouping_name: "trays" count: 4 } }
+  ]
+}
+
+groupings {
+  name: "meshes"
+  items: [
+    { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh = 1 host (meshes can have 1 item)
+  ]
+}
+
+groupings {
+  name: "pods"
+  items: [
+    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Each pod contains 2 meshes
+  ]
+}
+
+# Superpod mixing pods and meshes
+groupings {
+  name: "superpods"
+  items: [
+    { grouping_ref { grouping_name: "pods" count: 2 } },  # Contains 2 pods
+    { grouping_ref { grouping_name: "meshes" count: 4 } }  # Also contains 4 meshes directly (mixed with pods)
+  ]
+  # Example: 2 pods + 4 meshes = 8 total meshes (2 from pods + 4 direct)
+}
+
+# Cluster mixing superpods, pods, and meshes
+groupings {
+  name: "clusters"
+  items: [
+    { grouping_ref { grouping_name: "superpods" count: 2 } },  # Contains 2 superpods
+    { grouping_ref { grouping_name: "pods" count: 2 } },  # Also contains 2 pods directly
+    { grouping_ref { grouping_name: "meshes" count: 3 } }  # Also contains 3 meshes directly
+  ]
+  # Example: 2 superpods (each with 2 pods + 4 meshes) + 2 pods + 3 meshes
+}
