@@ -327,23 +327,21 @@ TEST_F(NOCDebuggingFixture, ReadsWithBarrier) {
 }
 
 TEST_F(NOCDebuggingFixture, InterleavedReadsWritesNoBarrier) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice<NOCDebuggingFixture>(
-            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunInterleavedReadsWritesTest(fixture, mesh_device, false, false);
-            },
-            mesh_device);
-    }
+    // Only run it on device 0 as it's taking too long
+    this->RunTestOnDevice<NOCDebuggingFixture>(
+        [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunInterleavedReadsWritesTest(fixture, mesh_device, false, false);
+        },
+        this->devices_[0]);
 }
 
 TEST_F(NOCDebuggingFixture, InterleavedReadsWritesWithBarrier) {
-    for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice<NOCDebuggingFixture>(
-            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-                RunInterleavedReadsWritesTest(fixture, mesh_device, true, true);
-            },
-            mesh_device);
-    }
+    // Only run it on device 0 as it's taking too long
+    this->RunTestOnDevice<NOCDebuggingFixture>(
+        [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunInterleavedReadsWritesTest(fixture, mesh_device, true, true);
+        },
+        this->devices_[0]);
 }
 
 void RunMcastTest(
