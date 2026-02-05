@@ -2,7 +2,7 @@
 
 This guide covers how to add new hardware to an existing Exabox cluster by merging cabling descriptors and validating the expanded configuration.
 
-**Use case:** You've physically installed and cabled new Galaxy nodes and need to integrate them into the cluster's logical topology.
+**Use case:** You've physically installed new Galaxy nodes and need to generate cutsheets for technicians, create cabling descriptors, and validate the cluster.
 
 ## Introduction
 
@@ -16,35 +16,37 @@ SuperPod (9 pods)
 
 A **Galaxy** is a 6U server containing 32 Blackhole chips arranged in an 8×4 mesh. A **Pod** combines 4 Galaxies (128 chips) into a unified compute mesh using TT-Fabric. A **SuperPod** connects 9 pods for large-scale workloads.
 
-### Pod Topologies
+### Supported Topologies
 
-How the 4 Galaxies within a pod are arranged determines the mesh shape:
+For the full list of officially supported topologies with cable lengths and configurations, see the [Top Level Topologies spreadsheet](https://docs.google.com/spreadsheets/d/1mnZJueW4BKZGNvrtGiCQZa12hxQbg49Aref2FDrRBsQ/edit?gid=0#gid=0).
 
-| Topology | Arrangement | Mesh Shape | Use Case |
-|----------|-------------|------------|----------|
-| **4x32** | 4×1 line | 32 cols × 4 rows | Workloads with 1D data flow: video generation (Wan2.1/2.2), low-latency decode (Blitz, DeepSeek), ring allreduce |
-| **8x16** | 2×2 grid | 16 cols × 8 rows | Workloads with 2D data flow: all-to-all collectives, 2D tensor parallelism |
+| Topology | Hosts | Chips | Mesh Shape | Connectivity | Use Case |
+|----------|-------|-------|------------|--------------|----------|
+| **Single Galaxy** | 1 | 32 | 8×4 | Torus XY | Single-host workloads, development |
+| **4x32** | 4 | 128 | 32×4 | Torus XY | 1D data flow: video gen, decode, ring allreduce |
+| **8x16** | 4 | 128 | 16×8 | Torus XY | 2D data flow: all-to-all, 2D tensor parallelism |
+
+**Note:** 4x32 and 8x16 both use 4 Galaxies (128 chips) but with different host arrangements and cable lengths.
 
 ```
-4x32: ┌───┬───┬───┬───┐     8x16: ┌───┬───┐
-      │ 0 │ 1 │ 2 │ 3 │           │ 0 │ 1 │
-      └───┴───┴───┴───┘           ├───┼───┤
-                                  │ 2 │ 3 │
-                                  └───┴───┘
+Single Galaxy (1 host):        4x32 (4 hosts in line):        8x16 (4 hosts in grid):
+┌───────────────┐              ┌───┬───┬───┬───┐              ┌───────┬───────┐
+│    8×4 mesh   │              │ 0 │ 1 │ 2 │ 3 │              │   0   │   1   │
+│   (32 chips)  │              └───┴───┴───┴───┘              ├───────┼───────┤
+└───────────────┘                 32 cols × 4 rows            │   2   │   3   │
+                                                              └───────┴───────┘
+                                                                16 cols × 8 rows
 ```
 
-Within a pod, chips connect via **2D Torus** (wrap-around on both X and Y), enabling shorter hop counts and multiple routing paths.
+All multi-Galaxy topologies use **2D Torus** connectivity (wrap-around on both X and Y), enabling shorter hop counts and multiple routing paths.
+
+MGD files for these topologies are in `tt_metal/fabric/mesh_graph_descriptors/`.
 
 ### Current Deployment
 
-The Exabox SuperPod uses **4x32 topology** for all 9 pods, optimized for:
-- **Video Generation** (Wan2.1/2.2) - pipeline parallelism along the elongated X dimension
-- **Low-Latency LLM Inference** (Blitz Decode, DeepSeek) - efficient ring communication
+The Exabox SuperPod uses **4x32 topology** for all 9 pods, optimized for video generation and low-latency decode workloads.
 
-**Inter-pod connectivity** is workload-driven (not uniform 1:1 between nodes):
-- Daisy-chain loopback connections for decode pipelines
-- Overlay connections enabling 9-way all-to-all pod communication
-- Cable distribution optimized for target workloads rather than symmetric distribution
+**Inter-pod connectivity** is workload-driven (not uniform 1:1 between nodes)—daisy-chain connections for decode pipelines with overlay connections for pod-to-pod communication.
 
 For routing details, see [TT-Fabric Architecture](../../../tech_reports/TT-Fabric/TT-Fabric-Architecture.md).
 
@@ -55,12 +57,12 @@ Before starting, ensure you have:
 - **SSH access** to all cluster hosts (existing and new)
 - **NFS access** to shared config directories (e.g., `/data/scaleout_configs/`)
 - **tt-metal repository** cloned and built (see [README.md](./README.md#prerequisites))
-- **Cutsheet** for the new hardware (provided by the cabling team)
 
 ## Quick Reference
 
 | Item | Location |
 |------|----------|
+| **Cutsheets (Internal)** | [Top Level Topologies Spreadsheet](https://docs.google.com/spreadsheets/d/1mnZJueW4BKZGNvrtGiCQZa12hxQbg49Aref2FDrRBsQ/edit?gid=0#gid=0) |
 | Cabling Web Tool | https://aus2-cablegen.aus2.tenstorrent.com/ |
 | 4x32 IntraPod Configs (Current) | `/data/scaleout_configs/4xBH_4x32_intrapod_updated/` |
 | Legacy BH GLX Configs | `/data/scaleout_configs/bh_glx_exabox/` |
@@ -69,31 +71,37 @@ Before starting, ensure you have:
 
 ---
 
-## Step 0: Plan Your Topology
+## Step 0: Get or Create Cutsheet
 
-Before generating cabling descriptors, decide on your target topology.
+A **cutsheet** is a physical cabling instruction document (CSV/Excel) that tells technicians exactly which ports to connect. Before generating cabling descriptors, you need a cutsheet.
 
-### For Standard Configurations
+### Using a Standard Cutsheet
 
-Use an existing topology if your cluster matches a known configuration:
+For officially supported topologies (Single Galaxy, 4x32, 8x16), use existing cutsheets from the [Top Level Topologies spreadsheet](https://docs.google.com/spreadsheets/d/1mnZJueW4BKZGNvrtGiCQZa12hxQbg49Aref2FDrRBsQ/edit?gid=0#gid=0).
 
-| Cluster Size | Topology Options | MGD File |
-|-------------|------------------|----------|
-| 4 Galaxies (128 chips) | 8x16 or 4x32 | `16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto` or `32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto` |
-| 1 Galaxy (32 chips) | Single mesh | `single_bh_galaxy_torus_xy_graph_descriptor.textproto` |
+1. Find your topology in the spreadsheet
+2. Download the corresponding cutsheet (CSV format)
+3. Provide the cutsheet to your cabling technician
 
-MGD files are located in `tt_metal/fabric/mesh_graph_descriptors/`.
+**Example cutsheet format:**
 
-### For Custom Configurations
+```csv
+Source_Node,Source_Port,Dest_Node,Dest_Port,Cable_Length
+C1U02,eth0,C1U08,eth4,3m
+C1U02,eth1,C2U02,eth5,5m
+...
+```
+
+The cutsheet specifies physical connections: which port on which node connects to which port on another node, plus cable length.
+
+### Creating a Custom Cutsheet
 
 If you need a non-standard topology:
 
-1. **Define the mesh dimensions**: Determine `device_topology` (total chip grid) and `host_topology` (how hosts map to the grid)
-2. **Choose connectivity type**: RING (torus) or LINE (mesh with edges) for each dimension
-3. **Consider workload requirements**: Match the topology to your communication patterns
-4. **Generate the cabling descriptor**: The cabling web tool will produce cables matching your topology
+1. **Option A: Use the cabling web tool** - Generate a cutsheet from the [Cabling Web Tool](https://aus2-cablegen.aus2.tenstorrent.com/)
+2. **Option B: Edit manually** - Copy an existing cutsheet from the spreadsheet and modify as needed
 
-**Key topology parameters:**
+**Key topology parameters for custom configurations:**
 
 ```
 device_topology { dims: [ X, Y ] dim_types: [ RING|LINE, RING|LINE ] }
