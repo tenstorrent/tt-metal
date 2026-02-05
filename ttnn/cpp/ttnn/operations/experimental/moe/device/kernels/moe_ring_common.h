@@ -97,18 +97,18 @@ constexpr uint32_t W0_W1_TILES_PER_CORE_PER_STEP_B[NUM_CORES][NUM_CORES] = {
 };
 
 constexpr uint32_t W2_TILES_PER_CORE_A[NUM_CORES] = {
-    20,
-    20,
     18,
     18,
+    19,
+    19,
+    19,
+    19,
+    19,
+    19,
     18,
     18,
-    18,
-    18,
-    20,
-    20,
-    18,
-    18,
+    19,
+    19,
 };
 
 constexpr uint32_t W2_TILES_PER_CORE_B[NUM_CORES] = {
