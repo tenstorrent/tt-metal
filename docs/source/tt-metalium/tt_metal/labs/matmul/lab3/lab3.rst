@@ -1,9 +1,9 @@
 
-Multicast for Improved Data Reuse in Multi Core Matrix Multiplication
-=====================================================================
+Lab 3: Multicast for Improved Data Reuse in Multi Core Matrix Multiplication
+############################################################################
 
 Introduction
-------------
+************
 
 In Lab 2 you implemented **multi core matrix multiplication with data reuse within each core**. Each core read tiles of input matrices from DRAM into its own circular buffers (CBs) and reused them locally across multiple multiply-accumulate steps. However, **data was not reused across cores**: each core independently read its own tiles from DRAM, even when neighbor cores needed the exact same data.
 
@@ -642,6 +642,602 @@ At the end of Exercise 1, you should have:
   * NOC multicast distributes data across cores.
   * Semaphores synchronize sender and receivers.
   * CBs and double buffering fit into the pipeline.
+
+
+Applying multicast to multi core matmul
+---------------------------------------
+
+In Lab 2, you saw how to reduce DRAM traffic in multi core matrix multiplication by:
+
+* Dividing the output tiles into **blocks** ``C_block`` and assigning each block to a core.
+* Splitting the inner dimension into **K-blocks** of size ``K_block_tiles``, so that for each block index ``b`` you bring only a subset of tiles into on-chip SRAM at once.
+* Defining, for each core and each K-block index ``b``:
+
+  * ``A_slab(b)``: a set of tiles of ``A`` of size ``M_block_tiles x K_block_tiles`` that cover the rows of that core’s ``C_block`` and a small slice of the ``K`` dimension.
+  * ``B_slab(b)``: a set of tiles of ``B`` of size ``K_block_tiles x N_block_tiles`` that cover the columns of that core’s ``C_block`` and a small slice of the ``K`` dimension.
+
+The key property is that, for a given core, **all tiles it needs for its own ``C_block`` in K-block ``b`` are contained in ``A_slab(b)`` and ``B_slab(b)``**. In Lab 2, each core fetched its own slabs from DRAM into its input circular buffers (CBs) and reused them locally across all tiles of ``C_block`` before moving to the next K-block.
+
+In this lab, we keep the same **blocked** view and the same **slab** definitions, but we change **how slabs get into the CBs**:
+
+* Instead of every core independently loading its own ``A_slab(b)`` and ``B_slab(b)`` from DRAM,
+* A subset of cores load slabs and **multicast** tiles to other cores in the same row or column,
+* So that a tile that appears in multiple cores’ slabs is read from DRAM **only once** per row or column.
+
+Recall the blocked pseudocode from Lab 2 for a single compute core:
+
+.. code-block:: cpp
+
+   // For every K-block:
+   for (b in 0 ..
+        num_k_blocks - 1) {
+       Ensure that A_slab(b) is in CB0 // Size: M_block_tiles * K_block_tiles.
+       Ensure that B_slab(b) is in CB1 // Size: K_block_tiles * N_block_tiles.
+       // For every output tile (i,j) in this C_block:
+       for (i in 0 ..
+            M_block_tiles - 1) { // For every row in C_block
+           for (j in 0 ..
+                N_block_tiles - 1) { // For every column in C_block
+               // Get the current accumulator tile for C(i,j)
+               acc_tile = zero_tile()
+               if (b != 0) {
+                   // Middle or last K-block: partial result for C(i, j) already exists.
+                   // Load the partial result built so far
+                   acc_tile = partial_C_tile(i, j)
+               }
+               // Compute partial result for block b and add it to acc_tile
+               for (k_local in 0 ..
+                    K_block_tiles - 1) { // Iterate over K dimension of the K-block
+                   // Indices into the current A and B slabs
+                   a_tile = A_slab_tile(i, k_local)
+                   b_tile = B_slab_tile(k_local, j)
+                   // Multiply and accumulate into the accumulator tile
+                   acc_tile += matmul(a_tile, b_tile)
+               }
+               // Store updated result for C(i,j)
+               if (b == num_k_blocks - 1) {
+                   // Last K-block: acc_tile has the final result for C(i,j)
+                   // Store it to the final destination.
+                   final_C_tile(i, j) = acc_tile
+               } else {
+                   // Not last K-block: acc_tile is a partial result to be reused later
+                   partial_C_tile(i, j) = acc_tile
+               }
+           }
+       }
+   }
+
+In Lab 3, this pseudocode remains valid for each **compute core**. The only change is how ``Ensure that A_slab(b) is in CB0`` and ``Ensure that B_slab(b) is in CB1`` are implemented across cores.
+
+Core roles and slabs on a 5x5 grid
+==================================
+
+We assume a rectangular grid of logical cores of size ``core_grid.x`` by ``core_grid.y``. For concreteness, we will discuss a ``5x5`` grid, but the same ideas apply to other grid sizes.
+
+As in Lab 2, each core ``(x, y)`` is responsible for a **rectangular block** of output tiles ``C_block(x, y)``:
+
+* ``M_block_tiles`` rows of tiles,
+* ``N_block_tiles`` columns of tiles.
+
+The global output matrix ``C`` is tiled into ``Mt x Nt`` tiles, and these tiles are divided evenly among cores along the x and y dimensions so that:
+
+* Cores with the same ``y`` coordinate cover **different columns** but the same **rows** of ``C``,
+* Cores with the same ``x`` coordinate cover **different rows** but the same **columns** of ``C``.
+
+For each K-block index ``b``:
+
+* Core ``(x, y)`` has its own **local view** of the slabs:
+
+  * ``A_slab_{x,y}(b)``: the tiles in the rectangular region of A needed to update ``C_block(x, y)`` for this K-block.
+  * ``B_slab_{x,y}(b)``: the tiles in the rectangular region of B needed to update ``C_block(x, y)`` for this K-block.
+
+In Lab 2, every core loaded its own ``A_slab_{x,y}(b)`` and ``B_slab_{x,y}(b)`` directly from DRAM into its input CBs.
+
+In Lab 3, we introduce **row slabs** and **column slabs** to describe data shared across cores:
+
+* For each row index ``y`` and K-block index ``b``:
+
+  * ``A_row_slab(y, b)`` is the union of all A tiles in the ``M_block_tiles`` rows covered by row ``y`` of ``C_block``s and the K-block range for block ``b``.
+    It contains all tiles that appear in **any** ``A_slab_{x,y}(b)`` for ``x = 0 .. core_grid.x - 1``.
+
+* For each column index ``x`` and K-block index ``b``:
+
+  * ``B_col_slab(x, b)`` is the union of all B tiles in the ``N_block_tiles`` columns covered by column ``x`` of ``C_block``s and the K-block range for block ``b``.
+    It contains all tiles that appear in **any** ``B_slab_{x,y}(b)`` for ``y = 0 .. core_grid.y - 1``.
+
+We assign four roles to cores, at the level of ``C_block`` indices:
+
+* **Top-left core** ``(0, 0)``:
+  * Responsible for its own ``C_block(0, 0)``.
+  * Loads ``A_row_slab(0, b)`` and ``B_col_slab(0, b)`` from DRAM.
+  * Multicasts its A tiles across row 0 and its B tiles down column 0.
+
+* **Top row cores** ``(x, 0)``, ``x > 0``:
+  * Responsible for ``C_block(x, 0)``.
+  * For each K-block ``b``, they help load and multicast ``B_col_slab(x, b)`` down their column.
+  * They receive A tiles from ``A_row_slab(0, b)`` via multicast from the left.
+
+* **Left column cores** ``(0, y)``, ``y > 0``:
+  * Responsible for ``C_block(0, y)``.
+  * For each K-block ``b``, they help load and multicast ``A_row_slab(y, b)`` across their row.
+  * They receive B tiles from ``B_col_slab(0, b)`` via multicast from the top.
+
+* **Interior cores** ``(x, y)`` with ``x > 0`` and ``y > 0``:
+  * Responsible for ``C_block(x, y)``.
+  * For each K-block ``b``, they do not read ``A_slab_{x,y}(b)`` or ``B_slab_{x,y}(b)`` from DRAM directly.
+  * Instead:
+    * Their ``A_slab_{x,y}(b)`` arrives as a subset of ``A_row_slab(y, b)`` via multicast from core ``(0, y)``.
+    * Their ``B_slab_{x,y}(b)`` arrives as a subset of ``B_col_slab(x, b)`` via multicast from core ``(x, 0)``.
+
+A conceptual diagram for a 5x5 grid:
+
+.. code-block:: text
+
+   5x5 core grid roles (per C_block):
+
+       x = 0    1      2      3      4
+     +------+------+------+------+------+
+   y  |      |      |      |      |      |
+   =0 |  T   |  R   |  R   |  R   |  R   |
+     +------+------+------+------+------+
+   1 |  C   |  I   |  I   |  I   |  I   |
+     +------+------+------+------+------+
+   2 |  C   |  I   |  I   |  I   |  I   |
+     +------+------+------+------+------+
+   3 |  C   |  I   |  I   |  I   |  I   |
+     +------+------+------+------+------+
+   4 |  C   |  I   |  I   |  I   |  I   |
+
+Where:
+
+* ``T`` is the top-left core (loads both row and column slabs, and multicasts both).
+* ``R`` are top row B-source cores.
+* ``C`` are left column A-source cores.
+* ``I`` are interior cores that are multicast-only for inputs.
+
+In all cases:
+
+* Each core still sees its **local slabs** ``A_slab_{x,y}(b)`` and ``B_slab_{x,y}(b)`` as being present in its input CBs for each K-block.
+* The multicast pattern only changes **where those slabs come from** (local DRAM vs multicast), not how the compute kernel uses them.
+
+Slabs in CBs with multicast
+===========================
+
+Lab 2 required that, for each core:
+
+* Input CBs be large enough to hold an entire slab:
+
+  * CB0: ``A_slab(b)`` containing ``M_block_tiles * K_block_tiles`` tiles.
+  * CB1: ``B_slab(b)`` containing ``K_block_tiles * N_block_tiles`` tiles.
+
+* The compute kernel expects ``A_slab(b)`` and ``B_slab(b)`` to be present in CBs **at slab granularity** before computing contributions to all ``C_block`` tiles for that K-block.
+
+In Lab 3, this remains true:
+
+* Each core still needs a full slab in its CBs before entering the inner loops over ``i``, ``j``, and ``k_local``.
+* CB sizes for slabs do not change; only the producer changes (DRAM reader vs multicast receiver).
+
+From a CB perspective:
+
+* On A-source cores for row ``y``:
+  * CB0 holds ``A_row_slab(y, b)``. The A-source core uses CB0 tiles both for:
+
+    * Its own local ``A_slab_{0,y}(b)``, and
+    * Multicast to other cores in the row.
+
+* On other cores in the row:
+  * CB0 holds their local ``A_slab_{x,y}(b)`` tiles, received via multicast.
+  * These tiles are a subset of ``A_row_slab(y, b)``; they appear in CB0 in the same row-major slab order as on the A-source core.
+
+* Similarly for B:
+  * On B-source cores for column ``x``, CB1 holds ``B_col_slab(x, b)``.
+  * On other cores in the column, CB1 holds their local ``B_slab_{x,y}(b)`` tiles, as a subset in the same slab order.
+
+In other words, **every core in a row sees the same A tiles in the same slab order in CB0**, but uses only the subset its compute kernel refers to. The same is true vertically with B and CB1.
+
+Pseudocode with slabs and multicast
+===================================
+
+At a high level, the per-core compute pseudocode is unchanged from Lab 2:
+
+.. code-block:: cpp
+
+   for (b in 0 ..
+        num_k_blocks - 1) {
+
+       // Lab 2 view:
+       // Ensure that A_slab(b) is in CB0
+       // Ensure that B_slab(b) is in CB1
+
+       // Lab 3 view:
+       // A_slab and B_slab are present in CBs because:
+       //   * Source cores read A_row_slab and B_col_slab from DRAM into CBs.
+       //   * Source cores multicast tiles to receivers.
+       //   * Receivers fill their CB slabs via multicast.
+       // Local core simply waits for CB0 and CB1 to be filled for this slab.
+
+       for (i in 0 ..
+            M_block_tiles - 1) {
+           for (j in 0 ..
+                N_block_tiles - 1) {
+               // Accumulate contributions for C_block(i,j) as in Lab 2
+               ...
+           }
+       }
+   }
+
+The new part is the **slab loading phase** for each K-block, which now depends on core role.
+
+For A slabs (horizontal multicast):
+
+* On left column cores ``(0, y)``:
+
+  .. code-block:: cpp
+
+     // On A-source core for row y
+     for (b in 0 ..
+          num_k_blocks - 1) {
+
+         // For each tile index t within A_row_slab(y, b) in slab row-major order:
+         for (t in 0 ..
+              A_row_slab_tile_count - 1) {
+
+             // Read tile from DRAM into CB0
+             cb_reserve_back(A_cb, 1);
+             addr = get_write_ptr(A_cb);
+             noc_async_read_tile(global_a_tile_index(y, b, t), A_addr_gen, addr);
+             noc_async_read_barrier();
+             cb_push_back(A_cb, 1);
+
+             // Wait for all row receivers to be ready for this tile
+             noc_semaphore_wait(A_receivers_ready_sem_ptr[y], num_receivers_in_row[y]);
+             noc_semaphore_set(A_receivers_ready_sem_ptr[y], 0);
+
+             // Multicast tile across row y
+             // Use addr (L1 of this CB slot) as the destination L1 address on receivers
+             a_mcast_addr = get_noc_multicast_addr(
+                 row_start_x, y,
+                 row_end_x,   y,
+                 addr);
+
+             noc_async_write_multicast(addr, a_mcast_addr, tile_size_bytes, num_receivers_in_row[y]);
+             noc_async_writes_flushed();
+
+             // Multicast semaphore to signal tile is valid
+             *A_tile_sent_sem_ptr[y] = VALID;
+             noc_semaphore_set_multicast(
+                 A_tile_sent_sem_local_addr[y],
+                 A_tile_sent_sem_mcast_addr[y],
+                 num_receivers_in_row[y]);
+
+             // Wait for multicast completion before reading the next K-block's tile
+             noc_async_write_barrier();
+         }
+
+         // After this loop, this core's CB0 holds A_slab_{0,y}(b),
+         // and all cores in row y have their own A_slab_{x,y}(b) tiles in CB0.
+     }
+
+* On other cores in the row (receivers):
+
+  .. code-block:: cpp
+
+     // On A-receiver core in row y, column x > 0
+     for (b in 0 ..
+          num_k_blocks - 1) {
+
+         for (t in 0 ..
+              A_slab_xy_tile_count - 1) {
+             // Reserve CB space for incoming A tile
+             cb_reserve_back(A_cb, 1);
+
+             // Reset tile_sent semaphore to INVALID and signal ready
+             noc_semaphore_set(A_tile_sent_sem_ptr[y], INVALID);
+             noc_semaphore_inc(A_receivers_ready_sem_addr[y], 1);
+
+             // Wait for A-source to multicast this tile
+             noc_semaphore_wait(A_tile_sent_sem_ptr[y], VALID);
+
+             // Mark tile as ready in our A CB
+             cb_push_back(A_cb, 1);
+         }
+
+         // After this loop, CB0 holds the full local A_slab_{x,y}(b) for this core.
+     }
+
+For B slabs (vertical multicast), the pattern is analogous, but across columns:
+
+* B-source cores on top row ``(x, 0)`` read ``B_col_slab(x, b)`` from DRAM and multicast down their column.
+* B-receiver cores in column ``x`` reserve space, signal ready, wait on a B-specific "tile sent" semaphore, and push to CB1.
+
+Importantly, the **ordering of tiles within each slab in CBs** is still row-major within the slab, as in Lab 2, so that:
+
+* The compute kernel can continue to use the existing slab indexing functions (e.g., conceptual ``A_slab_tile(i, k_local)`` and ``B_slab_tile(k_local, j)``).
+* No changes are needed inside the compute kernel’s main loops.
+
+Interaction with double buffering
+=================================
+
+Lab 2 required that input CBs be sized to hold **full slabs** and use **double buffering**:
+
+* CBs that store ``A_slab(b)`` and ``B_slab(b)`` are sized for:
+
+  * ``2 * M_block_tiles * K_block_tiles`` tiles for A,
+  * ``2 * K_block_tiles * N_block_tiles`` tiles for B,
+
+  so that the reader kernel can overlap:
+
+  * Filling slab ``b+1`` while the compute kernel is still working on slab ``b``.
+
+In Lab 3:
+
+* You should keep this double-buffering structure unchanged.
+* The only difference is:
+
+  * On source cores, slab ``b`` is filled via DRAM reads and multicast, while slab ``b+1`` can begin filling as soon as it is safe to reuse CB slots (enforced by NOC barriers and CB pops).
+  * On receiver cores, slab ``b`` is filled via multicast and the same CB protocol (``reserve_back`` / ``push_back``), and slab ``b+1`` can start receiving tiles when earlier tiles are popped by compute.
+
+Double buffering and multicast are compatible as long as:
+
+* You maintain the same “slab-major then tile-major” order across all cores for each operand.
+* You ensure that a CB slot is not used to hold slab ``b+1`` tiles until:
+
+  * Both compute and multicast operations involving that slot for slab ``b`` are complete.
+
+This is enforced by:
+
+* The usual CB protocol between reader (slab loader) and compute (slab consumer),
+* ``noc_async_write_barrier()`` in source kernels before reusing a CB slot for new DRAM reads.
+
+Exercise 2: Multi core matrix multiplication with multicast and slabs
+*********************************************************************
+
+In this exercise, you will start from your **blocked multi core matrix multiplication with data reuse** implementation from Exercise 2 of Lab 2 and extend it to use multicast at the **slab** level.
+
+You should use:
+
+* Matrix sizes: ``A``: ``640x320``, ``B``: ``320x640``, ``C``: ``640x640``,
+* Tile size: ``TILE_HEIGHT == TILE_WIDTH == 32``,
+* The same core grids as in Lab 2 (at least ``5x5`` and ``10x10``).
+
+The goal is:
+
+* For each K-block index ``b``, each row of cores loads its ``A_row_slab(y, b)`` from DRAM **once** and distributes it by multicast.
+* For each K-block index ``b``, each column of cores loads its ``B_col_slab(x, b)`` from DRAM **once** and distributes it by multicast.
+* Each core still sees full local slabs ``A_slab_{x,y}(b)`` and ``B_slab_{x,y}(b)`` in its CBs and uses the **same compute kernel logic** as in Lab 2.
+
+Follow these steps:
+
+#. **Review your Lab 2 blocked matmul code for slabs**
+
+   Confirm that your implementation:
+
+   * Defines blocking variables ``M_block_tiles``, ``N_block_tiles``, ``K_block_tiles``, and ``num_k_blocks``.
+   * Sizes input CBs to hold full slabs:
+
+     * CB0: ``M_block_tiles * K_block_tiles`` tiles for ``A_slab(b)`` (with double buffering).
+     * CB1: ``K_block_tiles * N_block_tiles`` tiles for ``B_slab(b)`` (with double buffering).
+
+   * Loads slabs in row-major order within each slab.
+   * Uses the blocked pseudocode structure where each K-block is processed for all tiles of ``C_block`` before moving on.
+
+#. **Define core roles based on ``C_block`` indices**
+
+   For your chosen core grid (e.g., ``5x5``):
+
+   * Compute the mapping from core coordinates ``(x, y)`` to the range of tile indices in ``C`` that form ``C_block(x, y)``.
+   * Assign roles:
+
+     * Top-left: ``(0, 0)``,
+     * Top row B-source cores: ``(x, 0)``, ``x > 0``,
+     * Left column A-source cores: ``(0, y)``, ``y > 0``,
+     * Interior cores: ``(x, y)`` with ``x > 0``, ``y > 0``.
+
+   Ensure that:
+
+   * All cores in the same row share the same rows of ``C_block``, but cover different columns.
+   * All cores in the same column share the same columns of ``C_block``, but cover different rows.
+
+#. **Extend CB usage from per-core slabs to row/column slabs**
+
+   Without changing the CB capacities you derived in Lab 2, interpret slabs as follows:
+
+   * On A-source cores (left column):
+
+     * CB0 holds **row slabs** ``A_row_slab(y, b)`` in slab-major and then tile-major order.
+     * The local ``A_slab_{0,y}(b)`` corresponds to a subset of tiles in this CB (a contiguous region for that core’s columns).
+
+   * On other cores in the same row:
+
+     * CB0 holds their local ``A_slab_{x,y}(b)`` tiles in the same slab-major and tile-major order.
+     * These tiles are a subset of the corresponding row slab tiles: everyone shares a common sequence.
+
+   * Similarly for B:
+
+     * On B-source cores (top row), CB1 holds **column slabs** ``B_col_slab(x, b)``.
+     * On other cores in the same column, CB1 holds local ``B_slab_{x,y}(b)`` tiles, matching the same order.
+
+   This ensures that **all cores in a row/column can agree on a per-tile multicast order** within the slab.
+
+#. **Implement slab-level multicast for A**
+
+   Modify your A-reader logic from Lab 2 as follows:
+
+   * On left column cores:
+
+     * Replace or augment the existing A-reader kernel so that:
+
+       * For each K-block ``b``, it reads all tiles of ``A_row_slab(y, b)`` from DRAM into CB0.
+       * For each tile read, it:
+
+         * Waits for all receivers in row ``y`` to signal readiness.
+         * Uses ``get_noc_multicast_addr`` and ``noc_async_write_multicast`` to send the tile to all cores in that row that need it.
+         * Uses a row-specific "tile sent" semaphore to tell receivers that the tile has arrived.
+         * Calls ``noc_async_write_barrier()`` before reusing CB slots for future K-blocks.
+
+   * On other cores in the same row:
+
+     * Replace their A-reader kernel with an A-receiver kernel that:
+
+       * Reserves CB0 space for each tile of its local ``A_slab_{x,y}(b)``,
+       * Resets a local A "tile sent" semaphore to INVALID,
+       * Increments a shared "receivers ready" semaphore on the A-source core,
+       * Waits for the "tile sent" semaphore to become VALID,
+       * Pushes each received tile into CB0.
+
+   Keep the slab and tile ordering the same as in Lab 2 so that the compute kernel’s indexing remains unchanged.
+
+#. **Implement slab-level multicast for B**
+
+   Apply the same transformation for B slabs along columns:
+
+   * On top-row cores:
+
+     * Modify their B-reader kernel to become a B-source kernel that:
+
+       * For each K-block ``b``, loads all tiles in ``B_col_slab(x, b)`` from DRAM into CB1.
+       * For each tile in the slab, multicasts it down the column using ``noc_async_write_multicast``, with appropriate semaphores and NOC barriers.
+
+   * On other cores in the same column:
+
+     * Replace their B-reader kernel with a B-receiver kernel that:
+
+       * Reserves CB1 space for each tile in its local ``B_slab_{x,y}(b)``,
+       * Signals readiness to the B-source core via ``noc_semaphore_inc``,
+       * Waits for a B "tile sent" semaphore to be set to VALID,
+       * Pushes each received tile into CB1.
+
+#. **Reuse the Lab 2 compute and writer kernels**
+
+   The compute kernel from Lab 2 should **not** require any changes:
+
+   * It still sees full ``A_slab_{x,y}(b)`` in CB0 and ``B_slab_{x,y}(b)`` in CB1.
+   * It still iterates over ``b``, ``i``, ``j``, and ``k_local`` exactly as before, loading and updating partial results in the destination register array and in the intermediate CB.
+
+   The writer kernel also remains unchanged:
+
+   * It reads tiles of ``C_block(x, y)`` from the output CB in row-major order,
+   * Writes them to device DRAM at the correct offsets.
+
+   All multicast-related logic is confined to the **slab loading** stage (A and B source/receiver kernels).
+
+#. **Set per-core runtime arguments**
+
+   Update your host-side code that sets runtime arguments so that:
+
+   * A-source kernels know:
+
+     * Which row they are responsible for (logical and device coordinates),
+     * DRAM base addresses for A,
+     * Row-specific semaphores for A receivers and tile-sent signals.
+
+   * A-receiver kernels know:
+
+     * The device coordinates and semaphore addresses for their A-source core,
+     * How many tiles they expect in their local ``A_slab_{x,y}(b)``.
+
+   * Similarly for B-source and B-receiver kernels.
+
+   Carefully iterate over all logical core coordinates ``(x, y)`` in the grid, determine the role of each core, and set runtime args only for kernels that exist on that core.
+
+#. **Verify correctness**
+
+   As in Lab 2:
+
+   * Use your CPU reference implementation from Lab 1 (adapted to bfloat16) to compute the expected C matrix.
+   * After running the device program, read back the full tiled C tensor and compare it against the reference.
+   * Make sure that:
+
+     * Results are numerically close (within expected bfloat16 tolerances),
+     * All cores correctly contribute their own ``C_block(x, y)`` tiles from their slabs.
+
+#. **Profile performance**
+
+   Finally, compare the performance of your multicast implementation against your Lab 2 blocked multi core implementation (no multicast), using the same matrix sizes and core grids.
+
+   * Build in Release mode and ensure that DPRINT is disabled:
+
+     .. code-block:: bash
+
+        ./build_metal.sh --build-type Release
+        unset TT_METAL_DPRINT_CORES
+
+   * Enable the device profiler:
+
+     .. code-block:: bash
+
+        TT_METAL_DEVICE_PROFILER=1 ./build/ttnn/examples/example_lab2_matmul_reuse
+        TT_METAL_DEVICE_PROFILER=1 ./build/ttnn/examples/example_lab3_matmul_multicast
+
+   * For each run (e.g., 5x5 and 10x10 core grids):
+
+     * Locate the corresponding ``profile_log_device.csv`` file.
+     * As in Labs 1 and 2, compute elapsed firmware time by:
+
+       * Subtracting minimum and maximum ``time[cycles since reset]`` values,
+       * Multiplying the difference by the clock cycle time from the CSV header.
+
+   * Create a plot showing:
+
+     * Firmware time vs number of cores for:
+
+       * Single-core matmul (Lab 1),
+       * Multi core matmul with data reuse only (Lab 2),
+       * Multi core matmul with data reuse plus multicast (this lab).
+
+     * Or equivalently, speedup relative to the single-core baseline.
+
+   Discuss qualitatively:
+
+   * Whether multicast reduces firmware time for your test cases,
+   * How the benefit compares between 5x5 and 10x10 core grids,
+   * Whether the additional overhead from semaphores and multicast control is offset by reduced DRAM traffic.
+
+Conclusion
+**********
+
+In this lab, you extended the blocked multi core matrix multiplication implementation from Lab 2 by introducing **multicast-based cross-core data reuse** at the **slab** level.
+
+You saw how:
+
+* The same blocking structure from Lab 2, with ``C_block``, ``A_block``, ``B_block``, ``A_slab(b)``, and ``B_slab(b)``, can be retained while changing **only** how slabs are brought into CBs.
+* Slabs can be elevated from per-core objects to **row slabs** and **column slabs** that are shared across cores in a row or column:
+
+  * A Row slabs are loaded once per row and distributed horizontally via multicast.
+  * B Column slabs are loaded once per column and distributed vertically via multicast.
+
+* The NoC multicast primitives and semaphores from the standalone ``lab_multicast`` example can be used to:
+
+  * Coordinate slab loading across cores,
+  * Ensure correct ordering between data transfers and semaphores,
+  * Integrate cleanly with double-buffered CBs that still hold whole slabs.
+
+* Existing compute and writer kernels from Lab 2 can be reused unchanged when multicast is confined to the slab loading stage.
+
+Together with Labs 1 and 2, this lab illustrates a progression of techniques for matrix multiplication on Tenstorrent devices:
+
+* From single core tiled matmul,
+* To multi core work distribution,
+* To blocked matmul with partial result reuse in on-chip SRAM,
+* To cross-core reuse of slabs via multicast on the NoC.
+
+Natural next steps include exploring more aggressive optimizations that build on these ideas, such as:
+
+* Batching slab tiles into larger multicast units,
+* Combining multicast with subblocking and shared CB memory from the “Potential Additional Optimizations” section of Lab 2,
+* Applying similar slab and multicast patterns to other tensor operations beyond matmul.
+
+
+
+
+OLD CONTENT BELOW:
+OLD CONTENT BELOW:
+OLD CONTENT BELOW:
+OLD CONTENT BELOW:
+OLD CONTENT BELOW:
+
+
+
 
 Applying multicast to multi core matmul
 ---------------------------------------
