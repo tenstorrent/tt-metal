@@ -249,6 +249,9 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     // Build mesh-level adjacency map using MeshIds (lightweight)
     ::tt::tt_fabric::AdjacencyGraph<MeshId>::AdjacencyMap mesh_level_adjacency_map;
 
+    // Build exit node adjacency maps (only for strict mode)
+    std::map<MeshId, AdjacencyGraph<FabricNodeId>::AdjacencyMap> exit_node_adjacency_maps;
+
     // Get requested inter-mesh connections (relaxed mode) and ports (strict mode)
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
@@ -259,16 +262,40 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
         for (const auto& [src_mesh_id_val, dst_mesh_map] : requested_intermesh_ports) {
             MeshId src_mesh_id(src_mesh_id_val);
 
+            // Initialize exit node adjacency map for this mesh if needed
+            if (exit_node_adjacency_maps.find(src_mesh_id) == exit_node_adjacency_maps.end()) {
+                exit_node_adjacency_maps[src_mesh_id] = AdjacencyGraph<FabricNodeId>::AdjacencyMap();
+            }
+
             for (const auto& [dst_mesh_id_val, port_list] : dst_mesh_map) {
                 MeshId dst_mesh_id(dst_mesh_id_val);
                 // Skip self-connections
                 if (dst_mesh_id != src_mesh_id) {
+                    // Initialize exit node adjacency map for destination mesh if needed
+                    if (exit_node_adjacency_maps.find(dst_mesh_id) == exit_node_adjacency_maps.end()) {
+                        exit_node_adjacency_maps[dst_mesh_id] = AdjacencyGraph<FabricNodeId>::AdjacencyMap();
+                    }
+
                     // Add connections based on num_channels from each port entry
                     // Each tuple is (src_device, dst_device, num_channels)
                     for (const auto& port_entry : port_list) {
+                        uint32_t src_device = std::get<0>(port_entry);
+                        uint32_t dst_device = std::get<1>(port_entry);
                         uint32_t num_channels = std::get<2>(port_entry);
+
+                        // Create FabricNodeIds for exit nodes
+                        FabricNodeId src_exit_node(src_mesh_id, src_device);
+                        FabricNodeId dst_exit_node(dst_mesh_id, dst_device);
+
+                        // Add to mesh-level adjacency map (multiple entries for multiple channels)
                         for (uint32_t i = 0; i < num_channels; ++i) {
                             mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
+                        }
+
+                        // Add to exit node graphs (multiple entries for multiple channels)
+                        // Only add in the direction specified - the descriptor already handles bidirectional entries
+                        for (uint32_t i = 0; i < num_channels; ++i) {
+                            exit_node_adjacency_maps[src_mesh_id][src_exit_node].push_back(dst_exit_node);
                         }
                     }
                 }
@@ -305,6 +332,13 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
 
     // Build mesh-level graph from adjacency map
     logical_multi_mesh_graph.mesh_level_graph_ = ::tt::tt_fabric::AdjacencyGraph<MeshId>(mesh_level_adjacency_map);
+
+    // Convert exit node adjacency maps to graphs (only populated in strict mode)
+    for (const auto& [mesh_id, adj_map] : exit_node_adjacency_maps) {
+        if (!adj_map.empty()) {
+            logical_multi_mesh_graph.mesh_exit_node_graphs_[mesh_id] = AdjacencyGraph<FabricNodeId>(adj_map);
+        }
+    }
 
     return logical_multi_mesh_graph;
 }

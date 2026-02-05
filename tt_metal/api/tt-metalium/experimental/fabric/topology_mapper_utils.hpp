@@ -200,6 +200,13 @@ struct LogicalMultiMeshGraph {
 
     // Mesh-level adjacency graph using MeshIds (lightweight, no graph duplication)
     AdjacencyGraph<MeshId> mesh_level_graph_;
+
+    // Map from MeshId to exit node adjacency graph for that mesh (optional, only populated if specified)
+    // Contains only exit nodes (FabricNodeIds that connect to FabricNodeIds in other meshes) as nodes,
+    // and their connections to FabricNodeIds in other meshes as edges.
+    // Multiple channels between the same pair are represented by duplicate entries.
+    // Only populated when strict mode intermesh ports are specified.
+    std::map<MeshId, AdjacencyGraph<FabricNodeId>> mesh_exit_node_graphs_;
 };
 
 /**
@@ -208,12 +215,16 @@ struct LogicalMultiMeshGraph {
  * Creates a LogicalMultiMeshGraph with:
  * - Mesh-level adjacency graph (AdjacencyGraph<MeshId>) representing inter-mesh connectivity
  * - Map of mesh IDs to their internal adjacency graphs (AdjacencyGraph<FabricNodeId>)
+ * - Map of mesh IDs to exit node adjacency graphs (AdjacencyGraph<FabricNodeId>), optional
+ *   - Only populated when strict mode intermesh ports are specified
+ *   - Contains exit nodes (FabricNodeIds that connect to other meshes) and their intermesh connections
  *
  * The top layer represents inter-mesh connectivity (which meshes connect to which meshes),
  * while the internal graphs represent intra-mesh connectivity (which fabric nodes connect within each mesh).
+ * Exit node graphs track which specific logical nodes serve as intermesh connection points (strict mode only).
  *
  * @param mesh_graph Reference to the mesh graph object containing fabric topology
- * @return LogicalMultiMeshGraph containing mesh-level graph and internal mesh graphs
+ * @return LogicalMultiMeshGraph containing mesh-level graph, internal mesh graphs, and optional exit node graphs
  */
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph);
 

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <set>
@@ -750,6 +751,312 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_ClosetboxSuperpod) {
             }
         }
     }
+
+    // Verify exit nodes are NOT populated in relaxed mode
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.empty())
+        << "Exit nodes should not be populated in relaxed mode (only in strict mode)";
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_StrictModeIntermeshPorts) {
+    // Test build_logical_multi_mesh_adjacency_graph with strict mode intermesh connections
+    // Strict mode specifies exact device-to-device connections with channel counts
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_strict_connection_mgd.textproto";
+
+    ::tt::tt_fabric::MeshGraph mesh_graph(mesh_graph_desc_path.string());
+    const auto multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    // Verify we have 2 meshes
+    EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u) << "Should have 2 meshes";
+    EXPECT_TRUE(multi_mesh_graph.mesh_adjacency_graphs_.contains(MeshId{0})) << "Should have mesh 0";
+    EXPECT_TRUE(multi_mesh_graph.mesh_adjacency_graphs_.contains(MeshId{1})) << "Should have mesh 1";
+
+    // Verify each mesh has correct structure (2x2 = 4 devices each)
+    for (const auto& [mesh_id, adjacency_graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        const auto& internal_nodes = adjacency_graph.get_nodes();
+        EXPECT_EQ(internal_nodes.size(), 4u) << "Mesh " << mesh_id.get() << " should have 4 devices";
+    }
+
+    // Verify strict mode intermesh connections
+    // The descriptor specifies:
+    // - M0 D1 <-> M1 D0 with 2 channels
+    // - M0 D3 <-> M1 D2 with 2 channels
+    // So mesh 0 should connect to mesh 1 with 4 total connections (2 + 2)
+    const auto& mesh0_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_EQ(mesh0_neighbors.size(), 4u) << "Mesh 0 should have 4 connections to mesh 1 (2 channels x 2 connections)";
+
+    // Count occurrences of mesh 1 in neighbors (should be 4)
+    uint32_t mesh1_count = 0;
+    for (const auto& neighbor : mesh0_neighbors) {
+        if (neighbor == MeshId{1}) {
+            mesh1_count++;
+        }
+    }
+    EXPECT_EQ(mesh1_count, 4u) << "Mesh 0 should connect to mesh 1 with 4 channels total";
+
+    const auto& mesh1_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{1});
+    EXPECT_EQ(mesh1_neighbors.size(), 4u) << "Mesh 1 should have 4 connections to mesh 0 (2 channels x 2 connections)";
+
+    // Count occurrences of mesh 0 in neighbors (should be 4)
+    uint32_t mesh0_count = 0;
+    for (const auto& neighbor : mesh1_neighbors) {
+        if (neighbor == MeshId{0}) {
+            mesh0_count++;
+        }
+    }
+    EXPECT_EQ(mesh0_count, 4u) << "Mesh 1 should connect to mesh 0 with 4 channels total";
+
+    // Verify that requested_intermesh_ports was used (not requested_intermesh_connections)
+    const auto& requested_ports = mesh_graph.get_requested_intermesh_ports();
+    EXPECT_FALSE(requested_ports.empty()) << "Should have requested_intermesh_ports in strict mode";
+
+    // Verify the structure of requested_intermesh_ports
+    // Should have: mesh 0 -> mesh 1 -> [(device 1, device 0, 2), (device 3, device 2, 2)]
+    EXPECT_TRUE(requested_ports.contains(0)) << "Should have entries for mesh 0";
+    EXPECT_TRUE(requested_ports.at(0).contains(1)) << "Should have connections from mesh 0 to mesh 1";
+    const auto& mesh0_to_mesh1_ports = requested_ports.at(0).at(1);
+    EXPECT_EQ(mesh0_to_mesh1_ports.size(), 2u) << "Should have 2 port entries (2 device pairs)";
+
+    // Verify first connection: M0 D1 -> M1 D0 with 2 channels
+    EXPECT_EQ(std::get<0>(mesh0_to_mesh1_ports[0]), 1u) << "First connection: src device should be 1";
+    EXPECT_EQ(std::get<1>(mesh0_to_mesh1_ports[0]), 0u) << "First connection: dst device should be 0";
+    EXPECT_EQ(std::get<2>(mesh0_to_mesh1_ports[0]), 2u) << "First connection: should have 2 channels";
+
+    // Verify second connection: M0 D3 -> M1 D2 with 2 channels
+    EXPECT_EQ(std::get<0>(mesh0_to_mesh1_ports[1]), 3u) << "Second connection: src device should be 3";
+    EXPECT_EQ(std::get<1>(mesh0_to_mesh1_ports[1]), 2u) << "Second connection: dst device should be 2";
+    EXPECT_EQ(std::get<2>(mesh0_to_mesh1_ports[1]), 2u) << "Second connection: should have 2 channels";
+
+    // Verify requested_intermesh_connections is empty (strict mode doesn't use it)
+    const auto& requested_connections = mesh_graph.get_requested_intermesh_connections();
+    EXPECT_TRUE(requested_connections.empty()) << "requested_intermesh_connections should be empty in strict mode";
+
+    // Verify exit nodes are populated in strict mode
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
+        << "Should have exit node graph for mesh 0 in strict mode";
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
+        << "Should have exit node graph for mesh 1 in strict mode";
+
+    // Verify mesh 0 exit nodes: devices 1 and 3
+    const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_nodes0 = exit_graph0.get_nodes();
+    EXPECT_EQ(exit_nodes0.size(), 2u) << "Mesh 0 should have 2 exit nodes";
+
+    FabricNodeId exit_node0_1(MeshId{0}, 1);
+    FabricNodeId exit_node0_3(MeshId{0}, 3);
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_1) != exit_nodes0.end())
+        << "Device 1 should be an exit node in mesh 0";
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_3) != exit_nodes0.end())
+        << "Device 3 should be an exit node in mesh 0";
+
+    // Verify exit node connections: device 1 connects to mesh 1 device 0 (2 channels)
+    const auto& exit_neighbors0_1 = exit_graph0.get_neighbors(exit_node0_1);
+    EXPECT_EQ(exit_neighbors0_1.size(), 2u) << "Exit node 0_1 should have 2 connections (2 channels)";
+    FabricNodeId target0_1(MeshId{1}, 0);
+    // Count occurrences of target0_1 (should be 2 for 2 channels)
+    uint32_t target0_1_count = 0;
+    for (const auto& neighbor : exit_neighbors0_1) {
+        if (neighbor == target0_1) {
+            target0_1_count++;
+        }
+    }
+    EXPECT_EQ(target0_1_count, 2u) << "Exit node 0_1 should have 2 connections to mesh 1 device 0 (2 channels)";
+
+    // Verify exit node connections: device 3 connects to mesh 1 device 2 (2 channels)
+    const auto& exit_neighbors0_3 = exit_graph0.get_neighbors(exit_node0_3);
+    EXPECT_EQ(exit_neighbors0_3.size(), 2u) << "Exit node 0_3 should have 2 connections (2 channels)";
+    FabricNodeId target0_3(MeshId{1}, 2);
+    // Count occurrences of target0_3 (should be 2 for 2 channels)
+    uint32_t target0_3_count = 0;
+    for (const auto& neighbor : exit_neighbors0_3) {
+        if (neighbor == target0_3) {
+            target0_3_count++;
+        }
+    }
+    EXPECT_EQ(target0_3_count, 2u) << "Exit node 0_3 should have 2 connections to mesh 1 device 2 (2 channels)";
+
+    // Verify mesh 1 exit nodes: devices 0 and 2
+    const auto& exit_graph1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
+    const auto& exit_nodes1 = exit_graph1.get_nodes();
+    EXPECT_EQ(exit_nodes1.size(), 2u) << "Mesh 1 should have 2 exit nodes";
+
+    FabricNodeId exit_node1_0(MeshId{1}, 0);
+    FabricNodeId exit_node1_2(MeshId{1}, 2);
+    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), exit_node1_0) != exit_nodes1.end())
+        << "Device 0 should be an exit node in mesh 1";
+    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), exit_node1_2) != exit_nodes1.end())
+        << "Device 2 should be an exit node in mesh 1";
+
+    // Verify exit node connections: device 0 connects to mesh 0 device 1 (2 channels)
+    const auto& exit_neighbors1_0 = exit_graph1.get_neighbors(exit_node1_0);
+    EXPECT_EQ(exit_neighbors1_0.size(), 2u) << "Exit node 1_0 should have 2 connections (2 channels)";
+    // Count occurrences of exit_node0_1 (should be 2 for 2 channels)
+    uint32_t exit_node0_1_count = 0;
+    for (const auto& neighbor : exit_neighbors1_0) {
+        if (neighbor == exit_node0_1) {
+            exit_node0_1_count++;
+        }
+    }
+    EXPECT_EQ(exit_node0_1_count, 2u) << "Exit node 1_0 should have 2 connections to mesh 0 device 1 (2 channels)";
+
+    // Verify exit node connections: device 2 connects to mesh 0 device 3 (2 channels)
+    const auto& exit_neighbors1_2 = exit_graph1.get_neighbors(exit_node1_2);
+    EXPECT_EQ(exit_neighbors1_2.size(), 2u) << "Exit node 1_2 should have 2 connections (2 channels)";
+    // Count occurrences of exit_node0_3 (should be 2 for 2 channels)
+    uint32_t exit_node0_3_count = 0;
+    for (const auto& neighbor : exit_neighbors1_2) {
+        if (neighbor == exit_node0_3) {
+            exit_node0_3_count++;
+        }
+    }
+    EXPECT_EQ(exit_node0_3_count, 2u) << "Exit node 1_2 should have 2 connections to mesh 0 device 3 (2 channels)";
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_MixedStrictAndRelaxedConnections) {
+    // Test build_logical_multi_mesh_adjacency_graph with mixed connections:
+    // - Strict mode connections between mesh 0 and mesh 1 (device-to-device)
+    // - Relaxed mode connections between mesh 1 and mesh 2 (mesh-to-mesh)
+    //
+    // This verifies that:
+    // 1. Exit nodes are only tracked for strict mode connections
+    // 2. Mesh-level connectivity includes both types
+    // 3. Both connection types are processed correctly
+
+    // Create MGD textproto string with 3 meshes and strict connections between mesh 0-1
+    const std::string mgd_textproto = R"proto(
+        # --- Meshes ---------------------------------------------------------------
+
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 2, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+
+        # --- Graphs ---------------------------------------------------------------
+
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          # Instances: mesh ids 0,1,2 (all 2x2)
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+
+          # Strict connections between specific devices: Mesh 0 <-> Mesh 1
+          # M0 D1 <-> M1 D0 with 2 channels
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+            channels { count: 2 }
+          }
+        }
+
+        # --- Instantiation ----------------------------------------------------------
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Write MGD to a temporary file
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    const std::filesystem::path temp_mgd_path = std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" /
+                                                "tt_fabric" / "custom_mesh_descriptors" /
+                                                "test_mixed_connections_mgd.textproto";
+
+    // Write the MGD content to file
+    std::ofstream mgd_file(temp_mgd_path);
+    ASSERT_TRUE(mgd_file.is_open()) << "Failed to create temporary MGD file";
+    mgd_file << mgd_textproto;
+    mgd_file.close();
+
+    // Load MeshGraph from the MGD file
+    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+
+    // Manually add relaxed mode connections between mesh 1 and mesh 2
+    // Since MGD format doesn't support both types simultaneously, we add relaxed connections
+    // after loading the strict connections from MGD
+    // Access private members to add relaxed connections (testing-only workaround)
+    mesh_graph.requested_intermesh_connections_[1][2] = 3u;
+    mesh_graph.requested_intermesh_connections_[2][1] = 3u;
+
+    // Build the logical multi-mesh graph
+    const auto multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    // Verify we have 3 meshes
+    EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u) << "Should have 3 meshes";
+
+    // Verify mesh-level connectivity includes both connection types
+    const auto& mesh0_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_EQ(mesh0_neighbors.size(), 2u) << "Mesh 0 should have 2 connections to mesh 1 (strict mode)";
+
+    const auto& mesh1_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{1});
+    // Mesh 1 connects to both mesh 0 (strict, 2 channels) and mesh 2 (relaxed, 3 channels)
+    EXPECT_EQ(mesh1_neighbors.size(), 5u) << "Mesh 1 should have 5 connections total (2 to mesh 0, 3 to mesh 2)";
+
+    const auto& mesh2_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{2});
+    EXPECT_EQ(mesh2_neighbors.size(), 3u) << "Mesh 2 should have 3 connections to mesh 1 (relaxed mode)";
+
+    // Verify exit nodes are ONLY tracked for strict mode connections (mesh 0 <-> mesh 1)
+    // Mesh 0 should have exit nodes
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
+        << "Mesh 0 should have exit nodes (strict mode connection)";
+
+    // Mesh 1 should have exit nodes (strict mode connection to mesh 0)
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
+        << "Mesh 1 should have exit nodes (strict mode connection)";
+
+    // Mesh 2 should NOT have exit nodes (only relaxed mode connections)
+    EXPECT_FALSE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{2}))
+        << "Mesh 2 should NOT have exit nodes (only relaxed mode connections)";
+
+    // Verify exit node details for mesh 0
+    const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_nodes0 = exit_graph0.get_nodes();
+    EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node (device 1)";
+
+    FabricNodeId exit_node0_1(MeshId{0}, 1);
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_1) != exit_nodes0.end())
+        << "Device 1 should be an exit node in mesh 0";
+
+    // Verify exit node connections: device 1 connects to mesh 1 device 0 (2 channels)
+    const auto& exit_neighbors0_1 = exit_graph0.get_neighbors(exit_node0_1);
+    EXPECT_EQ(exit_neighbors0_1.size(), 2u) << "Exit node 0_1 should have 2 connections (2 channels)";
+    FabricNodeId target0_1(MeshId{1}, 0);
+    uint32_t target0_1_count = 0;
+    for (const auto& neighbor : exit_neighbors0_1) {
+        if (neighbor == target0_1) {
+            target0_1_count++;
+        }
+    }
+    EXPECT_EQ(target0_1_count, 2u) << "Exit node 0_1 should have 2 connections to mesh 1 device 0";
+
+    // Verify exit node details for mesh 1
+    const auto& exit_graph1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
+    const auto& exit_nodes1 = exit_graph1.get_nodes();
+    EXPECT_EQ(exit_nodes1.size(), 1u) << "Mesh 1 should have 1 exit node (device 0)";
+
+    FabricNodeId exit_node1_0(MeshId{1}, 0);
+    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), exit_node1_0) != exit_nodes1.end())
+        << "Device 0 should be an exit node in mesh 1";
+
+    // Verify exit node connections: device 0 connects to mesh 0 device 1 (2 channels)
+    const auto& exit_neighbors1_0 = exit_graph1.get_neighbors(exit_node1_0);
+    EXPECT_EQ(exit_neighbors1_0.size(), 2u) << "Exit node 1_0 should have 2 connections (2 channels)";
+    uint32_t exit_node0_1_count = 0;
+    for (const auto& neighbor : exit_neighbors1_0) {
+        if (neighbor == exit_node0_1) {
+            exit_node0_1_count++;
+        }
+    }
+    EXPECT_EQ(exit_node0_1_count, 2u) << "Exit node 1_0 should have 2 connections to mesh 0 device 1";
+
+    // Cleanup: remove temporary MGD file
+    std::filesystem::remove(temp_mgd_path);
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_MultiHostMultiMesh) {
