@@ -23,7 +23,7 @@ std::string serialize_physical_core_coords(const ttnn::CoreRangeSet& coreranges,
     std::vector<uint32_t> flat_physical_core_coords;
     flat_physical_core_coords.reserve(2 * coreranges.num_cores());
 
-    for (const auto& c : corerange_to_cores(coreranges)) {
+    for (const auto& c : corerange_to_cores(coreranges, /*max_cores=*/std::nullopt, /*row_wise=*/true)) {
         const auto pc = device.worker_core_from_logical_core(c);
         flat_physical_core_coords.push_back(pc.x);
         flat_physical_core_coords.push_back(pc.y);

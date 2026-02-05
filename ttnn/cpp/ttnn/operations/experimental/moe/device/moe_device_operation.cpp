@@ -27,15 +27,22 @@ void MoEDeviceOperation::validate_on_program_cache_miss(
 
 MoEDeviceOperation::spec_return_value_t MoEDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    // Use the output tensor's spec since it's passed in with the correct sharded memory config
-    const auto& output_tensor = tensor_args.output_tensor;
-    return output_tensor.tensor_spec();
+    const auto& tensor_spec = tensor_args.input_tensor.tensor_spec();
+    const auto& layout = tensor_spec.tensor_layout();
+
+    const tt::tt_metal::TensorLayout new_layout(layout.get_data_type(), ROW_MAJOR_LAYOUT, layout.get_memory_config());
+
+    return TensorSpec(tensor_args.input_tensor.logical_shape(), new_layout);
 }
 
 MoEDeviceOperation::tensor_return_value_t MoEDeviceOperation::create_output_tensors(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    // Return the preallocated output tensor (already sharded with correct memory config)
-    return tensor_args.output_tensor;
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // perceive input tensor as RM
+    const auto spec = MoEDeviceOperation::compute_output_specs(operation_attributes, tensor_args);
+    const auto& storage = tensor_args.input_tensor.device_storage();
+    const auto& topology = tensor_args.input_tensor.tensor_attributes->get_tensor_topology();
+
+    return Tensor(storage, spec, topology);
 }
 
 std::tuple<MoEDeviceOperation::operation_attributes_t, MoEDeviceOperation::tensor_args_t> MoEDeviceOperation::invoke(

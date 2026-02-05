@@ -10,6 +10,9 @@
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/pack_untilize.h"
 
+// DEBUG
+#include "compute_kernel_api/eltwise_unary/fill.h"
+
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
@@ -156,11 +159,11 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Apply SILU activation and then eltwise multiply
             //---------------------------------------------------------------------
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
-
-            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+            // PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
+            //             PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+            //
+            //             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
+            //             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
 
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
@@ -219,8 +222,15 @@ void kernel_main() {
                         /*rt_dim=*/1,
                         /*kt_dim=*/1);
                 }
+
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }
+
+            // fill_tile_init();
+            //             fill_tile_int(0, ring_core_id);
+            //             fill_tile_int(1, ring_core_id);
+            //             fill_tile_int(2, ring_core_id);
+            //             fill_tile_int(3, ring_core_id);
 
             tile_regs_commit();
 
@@ -233,10 +243,11 @@ void kernel_main() {
             tile_regs_release();
         }
 
+        cb_reserve_back(cb_c2w_rdy, 1);
+        cb_push_back(cb_c2w_rdy, 1);
         // Restore normal packer state after untilize
     }  // end for (expert_id)
-    cb_reserve_back(cb_c2w_rdy, 1);
-    cb_push_back(cb_c2w_rdy, 1);
+
     pack_untilize_uninit(cb_c2s_out_untilized);
 
     // Drain the pipeline - the last dummy push

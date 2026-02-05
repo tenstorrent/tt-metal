@@ -6,7 +6,18 @@
 #include "api/dataflow/dataflow_api.h"
 #include "moe_ring_common.h"
 
+#include "api/debug/dprint_pages.h"
+
 namespace detail {
+
+uint32_t accumulate(const uint32_t* a, const uint32_t idx) {
+    uint32_t sum(0);
+    for (uint32_t i = 0; i < idx; ++i) {
+        sum += a[i];
+    }
+
+    return sum;
+}
 
 inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
 }  // namespace detail
@@ -74,13 +85,12 @@ void kernel_main() {
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
-    constexpr uint32_t untilize_max_pages = 4;  // from Vash
-
     // constants needed for writing to combine sharded output
     constexpr uint32_t shard_offset_per_expert_bytes =
         num_tokens_total / height_shard_dim * combine_shard_width_tiles * tile_width_size_bytes;
-    constexpr uint32_t source_buffer_iter_offset = 224 * in_tile_size;
-    const uint32_t width_tile_base = ring_core_id * num_w2_tiles_w;
+    constexpr uint32_t source_buffer_iter_offset = 26 * in_tile_size;
+    const uint32_t width_tile_base = detail::accumulate(moe_ring::W2_TILES_PER_CORE_A, ring_core_id);
+    const uint32_t output_base_l1_addr = get_write_ptr(cb_s2c_in);
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -121,7 +131,7 @@ void kernel_main() {
     }
     uint32_t semaphore_value = 0;
 
-    // Set state for the writes
+    // Set state for the a2a writes
     noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
     // TODO get height_blocks from token_counts;
@@ -129,7 +139,7 @@ void kernel_main() {
     // uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
     uint32_t per_expert_counts_ptr[num_experts];
-    per_expert_counts_ptr[0] = per_expert_counts_ptr[1] = tile_height;
+    per_expert_counts_ptr[0] = per_expert_counts_ptr[1] = 32;
 
     bool source_buffer_iter = 0;
 
@@ -176,20 +186,18 @@ void kernel_main() {
                 }
             }
 
-            // TODO confirm num_w2_tiles_w is the correct value
             uint32_t width_tiles = num_w2_tiles_w;  // 18 or 20
             uint32_t wb = 0;
 
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - hb * tile_height);
 
-            DPRINT << "expert_id: " << expert_id << " hb: " << hb << "\n";
-
             cb_wait_front(cb_c2w_rdy, 1);
             cb_pop_front(cb_c2w_rdy, 1);
 
-            DPRINT << " Past WF \n";
+            const uint32_t source_base_l1_addr = output_base_l1_addr + source_buffer_iter * source_buffer_iter_offset;
 
-            const uint32_t source_base_l1_addr = local_base_addr + source_buffer_iter * source_buffer_iter_offset;
+            tt::data_movement::common::print_bf16_pages(source_base_l1_addr, num_w2_tiles_w * 32 * 32, 1);
+
             while (width_tiles > 0) {
                 const uint32_t width_tile_start = width_tile_base + wb;
                 const uint32_t dest_width_shard = width_tile_start / combine_shard_width_tiles;
@@ -206,24 +214,27 @@ void kernel_main() {
                     const uint32_t shard_row_offset_bytes =
                         shard_row * combine_shard_width_tiles * tile_width_size_bytes;
 
-                    const uint32_t dest_l1_addr =
-                        local_base_addr + expert_offset_bytes + dest_width_offset_bytes + shard_row_offset_bytes;
-
-                    const uint32_t source_l1_addr = source_base_l1_addr + bt * tile_width_size_bytes;
-
                     const auto dest_noc_x =
                         output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard)];
                     const auto dest_noc_y =
                         output_shard_core_map[2 * (dest_height_shard * width_shard_dim + dest_width_shard) + 1];
 
-                    const uint64_t dest_noc_addr = get_noc_addr(dest_noc_x, dest_noc_y, dest_l1_addr, 1);
-                    noc_async_write(source_l1_addr, dest_noc_addr, width_transfer_bytes);
+                    const uint64_t dest_noc_addr_base = get_noc_addr(dest_noc_x, dest_noc_y, output_base_l1_addr);
+                    noc_async_write_one_packet_set_state</*posted=*/true>(
+                        dest_noc_addr_base, width_transfer_bytes, /*noc=*/1, vchannel);
+
+                    const uint32_t dest_l1_addr =
+                        output_base_l1_addr + expert_offset_bytes + dest_width_offset_bytes + shard_row_offset_bytes;
+
+                    const uint32_t source_l1_addr = source_base_l1_addr + bt * num_w2_tiles_w * tile_width_size_bytes;
+
+                    noc_async_write_one_packet_with_state</*posted=*/true>(source_l1_addr, dest_l1_addr);
                 }
                 wb += width_transfer_tiles;
                 width_tiles -= width_transfer_tiles;
             }
 
-            noc_async_write_barrier();
+            noc_async_posted_atomic_barrier();
             source_buffer_iter = !source_buffer_iter;
         }
     }

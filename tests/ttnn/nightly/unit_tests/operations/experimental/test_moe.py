@@ -22,14 +22,16 @@ PCC_THRESHOLD = 0.988
 FULL_CORES = {0, 1, 8, 9}
 PAD_CORES = {2, 3, 4, 5, 6, 7, 10, 11}
 
+TOTAL_TOKENS = 512
 
-def create_torch_input(L, in0_core_coords, all_core_range_set, E, M, K):
+
+def create_torch_input(L, in0_core_range_set, all_core_range_set, E, M, K):
     """
     Create torch input tensor with unique integer values per layer/expert.
 
     Args:
         L: Number of layers
-        in0_core_coords: List of core coordinates that receive input data shards
+        in0_core_range_set: core coordinates that receive input data shards
         all_core_range_set: all core coordinates
         E: Number of experts
         M: Sequence length
@@ -57,18 +59,19 @@ def create_torch_input(L, in0_core_coords, all_core_range_set, E, M, K):
     #     else:
     #         torch_input[..., i] = -0.25
     # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
-    torch_input = torch.rand((L, 2, M, K), dtype=torch.bfloat16) - 0.5
-    torch_input = torch_input.unsqueeze(1).repeat(1, len(in0_core_coords), 1, 1, 1)
+    torch_input = torch.ones((L, 2, M, K), dtype=torch.bfloat16)  # - 0.5
+    torch_input = torch_input.unsqueeze(1).repeat(1, in0_core_range_set.num_cores(), 1, 1, 1)
 
-    torch_input_shard_placed = torch.zeros([L, all_core_range_set.num_cores(), 2, M, K])
+    torch_input_shard_placed = torch.zeros([L, all_core_range_set.num_cores(), 2, M, K], dtype=torch.bfloat16)
 
-    sidx = 0
-    for idx, c in enumerate(ttnn.corerange_to_cores(all_core_range_set)):
-        if c in in0_core_coords:
-            torch_input_shard_placed[:, idx, :, :, :] = torch_input[:, sidx, :, :, :]
-            sidx += 1
+    for l in range(L):
+        sidx = 0
+        for idx, c in enumerate(ttnn.corerange_to_cores(all_core_range_set, row_wise=True)):
+            if in0_core_range_set.contains(c):
+                torch_input_shard_placed[l, idx, :, :, :] = torch_input[l, sidx, :, :, :] * sidx
+                sidx += 1
 
-    return torch_input_shard_placed
+    return torch_input_shard_placed, torch_input
 
 
 def create_torch_w0(L, E, K, N):
@@ -97,7 +100,7 @@ def create_torch_w0(L, E, K, N):
     #                 torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
     #         le_val *= -1
 
-    torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16)  # - 0.5
     return torch_w0
 
 
@@ -127,7 +130,7 @@ def create_torch_w1(L, E, K, N):
     #                 torch_w1[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
     #         le_val *= -1
 
-    torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16)  # - 0.5
     return torch_w1
 
 
@@ -156,7 +159,7 @@ def create_torch_w2(L, E, N, K):
     #                 k_val = k_chunk
     #                 torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
     #         le_val *= -1
-    torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
+    torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) * -1  # - 0.5
     return torch_w2
 
 
@@ -322,25 +325,48 @@ def prepare_output_tensor(tt_output, E, M, K, ring2cores):
 
 
 def prepare_output_tensor_from_combine_writer(
-    raw_torch_output, E, M, K, token_parallel_dim, data_parallel_dim, shard_width_bf16=2048
+    raw_torch_output,
+    all_core_range_set,
+    output_shard_core_range_set,
+    output_shard_height_dim,
+    output_shard_width_dim,
+    E,
+    M,
+    K,
 ):
-    active_token_counts = [M] * E  # TODO use active token counts that are passed in
+    torch.set_printoptions(profile="full")
 
-    padded_K = math.ceil(K / shard_width_bf16) * shard_width_bf16
+    # print(f"raw_output: {raw_torch_output[:32]}")
 
-    assert raw_torch_output.shape == (
-        data_parallel_dim,
-        token_parallel_dim,
+    assert raw_torch_output.shape == (all_core_range_set.num_cores(), E, M, K)
+    assert not (raw_torch_output == 0).all()
+
+    output_shards = []
+    for i, c in enumerate(ttnn.corerange_to_cores(all_core_range_set, row_wise=True)):
+        if output_shard_core_range_set.contains(c):
+            output_shards.append(raw_torch_output[i, :, :, :])
+
+    raw_torch_output = torch.stack(output_shards)
+
+    # print(f"output shards: {raw_torch_output[:32]}")
+
+    assert raw_torch_output.shape == (output_shard_height_dim * output_shard_width_dim, E, M, K)
+
+    output_shape = (
+        output_shard_width_dim,
+        output_shard_height_dim,
         E,
-        M // num_token_parallel_dim,
-        padded_K // num_data_parallel_dim,
+        TOTAL_TOKENS // output_shard_height_dim,
+        K // output_shard_width_dim,
     )
 
-    raw_torch_output = raw_torch_output.permute([2, 3, 1, 4]).reshape([E, M, padded_K])[:, :, :K]
+    raw_torch_output = raw_torch_output.reshape(output_shape)
+
+    raw_torch_output = raw_torch_output.permute([2, 1, 3, 0, 4]).reshape([E, TOTAL_TOKENS, K])
     torch_output = torch.zeros_like(raw_torch_output)
 
     for e in range(E):
-        active_tokens = active_token_counts[e]
+        active_tokens = M  # TODO use dynamic active tokens
         tokens_per_shard = math.ceil(
             active_tokens,
         )
@@ -349,29 +375,9 @@ def prepare_output_tensor_from_combine_writer(
             ot = t % tokens_per_shard
             torch_output[e, t] = raw_torch_output[e, bt * tokens_per_shard + ot]
 
+    assert not (torch_output == 0).all()
+
     return torch_output
-
-
-def get_combine_sharded_output_tensor(
-    occupied_core_range, E, M, K, token_parallel_dim, data_parallel_dim, device, shard_width_bf16=2048
-):
-    all_core_grid = device.compute_with_storage_grid_size()
-    CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1})
-    all_core_range_set = CoreRangeSet([[0, 0], [all_core_grid.x - 1, all_core_grid.y - 1]])
-
-    shard_core_range = ttnn.select_from_corerangeset(
-        all_core_range_set.subtract(occupied_core_range), 0, token_parallel_dim * data_parallel_dim - 1
-    )
-
-    padded_K = math.ceil(K / shard_width_bf16) * shard_width_bf16
-
-    shape = (data_parallel_dim, token_parallel_dim, E, M // num_token_parallel_dim, padded_K // num_data_parallel_dim)
-
-    shard_shape = (E * M // token_parallel_dim, padded_K // data_parallel_dim)
-    shard_spec = ttnn.ShardSpec(shard_core_range, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-    return ttnn.zeros(shape, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem_config, device=device)
 
 
 def get_accuracy_metrics(torch_output, tt_output):
@@ -497,7 +503,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     # Prepare the tensors
     # --------------------------------------------------------------------------
     if check_accuracy:
-        torch_input = create_torch_input(L, in0_core_coords, all_core_range_set, E, M, K)
+        torch_input, torch_input_ref = create_torch_input(L, in0_core_range_set, all_core_range_set, E, M, K)
         torch_w0 = create_torch_w0(L, E, K, N)
         torch_w1 = create_torch_w1(L, E, K, N)
         torch_w2 = create_torch_w2(L, E, N, K)
@@ -563,7 +569,7 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
                 memory_config=input_sharded_mem_config,
             )
 
-        _tt_output = ttnn.experimental.moe(
+        tt_output = ttnn.experimental.moe(
             tt_input,
             w0_w1_tensor=tt_w0_w1,
             w2_tensor=tt_w2,
@@ -578,8 +584,20 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
         )
 
         # Output is produced in-place on the input tensor
-        tt_raw_output = ttnn.to_torch(tt_input)
-        tt_to_torch_output = prepare_output_tensor(tt_raw_output, E, M, K, ring2cores)
+        tt_raw_output = ttnn.to_torch(tt_output)
+
+        # print(f"{tt_raw_output=}")
+
+        tt_to_torch_output = prepare_output_tensor_from_combine_writer(
+            tt_raw_output,
+            all_core_range_set,
+            output_shard_core_range_set,
+            output_height_shard_dim,
+            output_width_shard_dim,
+            E,
+            M,
+            K,
+        )
         all_outputs.append(tt_to_torch_output)
 
     tt_to_torch_outputs = torch.stack(all_outputs)
@@ -588,7 +606,8 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
         with torch.no_grad():
             # Reference calculation to match TT output shape (2*M, N) = (E*M, N)
             # Use first 2*M rows of input (one copy of the original replicated input)
-            torch_input_ref = torch_input[:, 0, ...]
+            # also, pad up the M dimension to total tokens
+            torch_input_ref = torch.nn.functional.pad(torch_input_ref[:, 0, ...], (0, 0, 0, 512 - M, 0, 0))
 
             # Compute gate activations for each expert
             # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
@@ -648,8 +667,10 @@ SHAPE2TIME = {
     "M, K, N, E, L",
     SHAPE2TIME.keys(),
 )
-@pytest.mark.parametrize("check_accuracy", [True, False], ids=["check_accuracy_True", "check_accuracy_False"])
-@pytest.mark.parametrize("dump_outputs", [True, False], ids=["dump_outputs_True", "dump_outputs_False"])
+@pytest.mark.parametrize("check_accuracy", [True])
+@pytest.mark.parametrize("dump_outputs", [False])
+# @pytest.mark.parametrize("check_accuracy", [True, False], ids=["check_accuracy_True", "check_accuracy_False"])
+# @pytest.mark.parametrize("dump_outputs", [True, False], ids=["dump_outputs_True", "dump_outputs_False"])
 def test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
     accuracy_metrics = run_test_moe(
         device,

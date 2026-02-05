@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "moe_ring_common.h"
+#include "api/debug/dprint_pages.h"
 
 // Triple buffering constants
 #define NUM_SLOTS 3  // 3 slots in CB
