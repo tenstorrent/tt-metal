@@ -167,7 +167,6 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def prefill_forward(
         self,
         tokens,
-        images,
         page_table,
         kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
