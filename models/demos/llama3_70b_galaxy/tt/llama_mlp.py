@@ -226,25 +226,21 @@ class TtLlamaMLP(LightweightModule):
                 program_config=short_lens_pc_1_3,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        else:
-            w1_out = ttnn.experimental.minimal_matmul(
-                input_tensor=x,
-                weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
-                config=minimal_pc_1_3,
-                compute_kernel_config=self.args.compute_kernel_config_lofi,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3, batch_size=batch_size
             )
-
-        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
-            w1_out,
-            cluster_axis=1,
-            num_links=3,
-            memory_config=w1_out.memory_config(),
-            buffer_key="FF1",
-            dim=3,
-            batch_size=batch_size,
-        )
-        ttnn.deallocate(w1_out)
+            ttnn.deallocate(w1_out)
+        else:
+            w1_out = self.tt_ccl.minimal_matmul_reduce_scatter(
+                matmul_input=x,
+                matmul_weight=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
+                cluster_axis=1,
+                num_links=3,
+                reduce_dim=3,
+                buffer_key="FF1",
+                matmul_config=minimal_pc_1_3,
+                compute_kernel_config=self.args.compute_kernel_config_lofi,
+            )
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096 or batch_size > 1:

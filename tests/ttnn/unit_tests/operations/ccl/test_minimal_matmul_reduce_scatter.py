@@ -244,7 +244,6 @@ def run_reduce_scatter_impl(
                 num_links=num_links,
                 memory_config_rs=mem_config_rs,
                 topology=rs_topology,
-                subdevice_id=worker_sub_device_id,
                 memory_config_mm=mem_config_mm,
                 program_config=matmul_config,
                 compute_kernel_config=compute_kernel_config,

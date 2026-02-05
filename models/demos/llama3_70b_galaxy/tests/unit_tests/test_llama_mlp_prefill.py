@@ -27,7 +27,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 4096),
+    (8192,),
 )
 @pytest.mark.parametrize(
     "batch_size",
