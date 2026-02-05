@@ -55,7 +55,8 @@ void sub_exp_block_bcast_cols_inplace_row_pair(
 
     // Initialize operation
     sub_bcast_cols_init_short(in0_cb, in1_cb);
-    exp_tile_init<true, true, scale_fp32>();
+    // exp_tile_init<true, true, scale_fp32>();
+    exp_packthread_tile_init<true, true, scale_fp32>();
 
     // Wait for tiles:
     // - in0_cb: need 2*cols tiles (previous pairs already popped their tiles via in-place rotation)
@@ -86,7 +87,7 @@ void sub_exp_block_bcast_cols_inplace_row_pair(
                 // in0_cb: index j (relative to current front, which shifts after each pop)
                 // in1_cb: index global_row (absolute position, since in1_cb is never popped)
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, global_row, j);
-                exp_tile<true, true>(j, vector_mode);
+                // exp_tile<true, true>(j, vector_mode);
             }
             tile_regs_commit();
 
@@ -96,6 +97,11 @@ void sub_exp_block_bcast_cols_inplace_row_pair(
             }
 
             tile_regs_wait();
+
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                exp_packthread_tile<true, true>(j, vector_mode);
+            }
+            PACK(TTI_STALLWAIT(p_stall ::STALL_PACK, p_stall ::WAIT_SFPU));
 
             if constexpr (write_result_inplace) {
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
@@ -311,8 +317,11 @@ void sdpa_inner_loop(
         bool is_first_row_pair = (q_subblock == 0);
         if (!is_first_row_pair) {
             MATH(DPRINT << "SUB_EXP for Q[" << q_subblock - 1 << "]" << ENDL());
-            sub_exp_block_bcast_cols_inplace_row_pair<cb_qkt_im, Sq_chunk_t, scale_fp32, true>(
-                alias_cur_max, alias_cur_sum, Sk_chunk_t, q_subblock - 1 /*row_pair_index*/);
+            {
+                DeviceZoneScopedN("SUB_EXP");
+                sub_exp_block_bcast_cols_inplace_row_pair<cb_qkt_im, Sq_chunk_t, scale_fp32, true>(
+                    alias_cur_max, alias_cur_sum, Sk_chunk_t, q_subblock - 1 /*row_pair_index*/);
+            }
         }
         cb_wait_front(cb_q_in, q_wait_tiles);
         kt_index_offset = 0;
@@ -369,8 +378,7 @@ void sdpa_inner_loop(
 
         // Max reduce
         MATH(DPRINT << "Max reduce for Q[" << q_subblock << ", :]" << ENDL());
-        // reconfig_data_format(cb_qkt_im, cb_identity_scale_in);
-        //  JUST TO ENSURE THE WORST-CASE IS MEASURED, DO THE REDUCE EVEN FOR THE FIRST ROW
+        //  JUST TO ENSURE THE WORST-CASE IS MEASURED, DO THE ELTWISE MAX EVERY TIME
         static_assert(subblock_h == 2, "subblock_h must be 2");
         {
             DeviceZoneScopedN("Reduce max 2x16");
@@ -382,8 +390,11 @@ void sdpa_inner_loop(
         q_wait_tiles += q_subblock_num_tiles;
     }
     MATH(DPRINT << "DRAIN: SUB_EXP for Q[" << 3 << "]" << ENDL());
-    sub_exp_block_bcast_cols_inplace_row_pair<cb_qkt_im, Sq_chunk_t, scale_fp32, true>(
-        alias_cur_max, alias_cur_sum, Sk_chunk_t, 3 /*row_pair_index*/);
+    {
+        DeviceZoneScopedN("SUB_EXP");
+        sub_exp_block_bcast_cols_inplace_row_pair<cb_qkt_im, Sq_chunk_t, scale_fp32, true>(
+            alias_cur_max, alias_cur_sum, Sk_chunk_t, 3 /*row_pair_index*/);
+    }
 
     cb_pop_front(cb_q_in, head_dim_t * Sq_chunk_t);
     cb_pop_front(cb_kt_in, head_dim_t * Sk_chunk_t);
