@@ -176,6 +176,9 @@ public:
     // Method to emit merged cabling descriptor
     void emit_cabling_descriptor(const std::string& output_path) const;
 
+    // Method to emit deployment descriptor (one host per node in host_id order; use for merged output)
+    void emit_deployment_descriptor(const std::string& output_path) const;
+
 private:
     // Track which node_descriptors were explicitly present in source files (not inferred)
     std::unordered_set<std::string> explicit_node_descriptors_;

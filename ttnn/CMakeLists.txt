@@ -12,6 +12,49 @@ add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>")
 add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
 
 ##################################################
+# TTNN-specific precompiled header
+# Extends common PCH with frequently used TTNN headers to speed up compilation
+##################################################
+
+add_library(ttnn_pch STATIC)
+add_library(TTNN::PCH ALIAS ttnn_pch)
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch.cpp CONTENT "/*dummy ttnn pch file*/\n")
+target_sources(ttnn_pch PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch.cpp)
+
+target_precompile_headers(
+    ttnn_pch
+    PUBLIC
+        # Reuse common PCH headers
+        <fmt/core.h>
+        <fmt/format.h>
+        <nlohmann/json.hpp>
+        <algorithm>
+        <cstddef>
+        <cstdint>
+        <functional>
+        <map>
+        <memory>
+        <tuple>
+        <unordered_map>
+        <variant>
+        <vector>
+        # TTNN-specific headers that are included frequently
+        <ttnn/decorators.hpp>
+        <ttnn/device_operation.hpp>
+        <ttnn/operation.hpp>
+)
+
+target_link_libraries(
+    ttnn_pch
+    PUBLIC
+        TT::Metalium
+        nlohmann_json::nlohmann_json
+        fmt::fmt-header-only
+)
+
+target_include_directories(ttnn_pch PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
+
+##################################################
 # Set options
 ##################################################
 
@@ -29,7 +72,8 @@ add_library(TTNN::Core ALIAS ttnn_core)
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
-target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
+target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+target_precompile_headers(ttnn_core REUSE_FROM TTNN::PCH)
 
 set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
@@ -385,6 +429,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_broadcast/deepseek_minimal_broadcast_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_minimal_all_reduce/deepseek_minimal_all_reduce_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/deepseek_b1_reduce_to_one/deepseek_b1_reduce_to_one_nanobind.cpp
 )
 
 set(TTNN_P2P_PYBIND ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/point_to_point/point_to_point_nanobind.cpp)
@@ -455,7 +500,8 @@ add_library(TTNN::CPP ALIAS ttnncpp)
 add_library(TTNN::TTNN ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
 
-target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
+target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+target_precompile_headers(ttnncpp REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnncpp)
 
 set_target_properties(

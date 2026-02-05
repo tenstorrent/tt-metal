@@ -49,6 +49,7 @@ class MatmulSingleCore:
         input_b,
         output_tensor,
         fp32_dest_acc_en=False,
+        transpose=False,
     ):
         """
         Execute single-core matmul operation using generic_op.
@@ -58,7 +59,7 @@ class MatmulSingleCore:
             input_b: Input tensor B [K, N] in L1 (N up to 4 tiles)
             output_tensor: Pre-allocated output tensor [1, N]
             fp32_dest_acc_en: Whether to enable FP32 accumulation
-
+            transpose: Whether to transpose input B
         Returns:
             Output tensor with matmul result
         """
@@ -73,7 +74,10 @@ class MatmulSingleCore:
         assert (
             a_shape[1] % in0_tile.tile_shape[1] == 0
         ), f"K ({a_shape[1]}) must be divisible by tile_width ({in0_tile.tile_shape[1]})"
-        assert a_shape[1] == b_shape[0], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[0]})"
+        if transpose:
+            assert a_shape[1] == b_shape[1], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[1]})"
+        else:
+            assert a_shape[1] == b_shape[0], f"in0 K ({a_shape[1]}) must equal in1 K ({b_shape[0]})"
         num_tiles_k = a_shape[1] // in0_tile.tile_shape[1]
 
         # Some basic shape checks on output
@@ -119,6 +123,7 @@ class MatmulSingleCore:
             ("matmul_out", out_cb),
             ("matmul_k_num_tiles", num_tiles_k),
             ("matmul_out_w", out_w),
+            ("matmul_transpose", transpose),
         ]
 
         # Unified kernel descriptor
@@ -146,7 +151,7 @@ class MatmulSingleCore:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[in0_cb_descriptor, in1_cb_descriptor, out_cb_descriptor],
         )
 

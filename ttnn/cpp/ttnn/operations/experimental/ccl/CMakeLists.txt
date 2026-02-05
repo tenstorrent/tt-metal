@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_ccl ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::CCL ALIAS ttnn_op_experimental_ccl)
 
-target_precompile_headers(ttnn_op_experimental_ccl REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_ccl REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ccl)
 
 set_target_properties(
@@ -30,6 +30,7 @@ file(
     deepseek_minimal_broadcast/device/kernels/*
     deepseek_minimal_all_reduce/device/kernels/*
     deepseek_moe_reduce_scatter/device/kernels/*
+    deepseek_b1_reduce_to_one/device/kernels/*
 )
 
 target_sources(
@@ -126,6 +127,9 @@ target_sources(
         deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.cpp
+        deepseek_b1_reduce_to_one/deepseek_b1_reduce_to_one.cpp
+        deepseek_b1_reduce_to_one/device/deepseek_b1_reduce_to_one_op.cpp
+        deepseek_b1_reduce_to_one/device/deepseek_b1_reduce_to_one_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

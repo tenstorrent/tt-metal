@@ -1,7 +1,7 @@
 add_library(ttnn_op_pool ${LIB_TYPE})
 add_library(TTNN::Ops::Pool ALIAS ttnn_op_pool)
 
-target_precompile_headers(ttnn_op_pool REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_pool REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_pool)
 
 set_target_properties(
@@ -38,6 +38,7 @@ target_sources(
         grid_sample/grid_sample_prepare_grid.cpp
         rotate/device/rotate_device_operation.cpp
         rotate/device/rotate_nearest_program_factory.cpp
+        rotate/device/rotate_bilinear_program_factory.cpp
         rotate/rotate.cpp
         pool_utils.cpp
         upsample/device//upsample_bilinear_program_factory_multicore.cpp

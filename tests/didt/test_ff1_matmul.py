@@ -5,6 +5,7 @@ import os
 from loguru import logger
 import pytest
 import torch
+import random
 
 from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
@@ -234,12 +235,7 @@ def test_specific_board_ff1_matmul(
     determinism_check_interval,
 ):
     test_ff1_matmul(
-        t3k_single_board_mesh_device,
-        gelu,
-        math_fidelity,
-        didt_workload_iterations,
-        determinism_check_interval,
-        False,
+        t3k_single_board_mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval
     )
 
 
@@ -273,7 +269,6 @@ def test_grid_size_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        False,
         grid_size=grid_size,
     )
 
@@ -309,6 +304,89 @@ def test_blackhole_grid_size_ff1_matmul(
         math_fidelity,
         didt_workload_iterations,
         determinism_check_interval,
-        False,
         grid_size=grid_size,
     )
+
+
+@pytest.mark.parametrize(
+    "gelu, math_fidelity",
+    GELU_FIDELITY_PARAMETRIZATION,
+    ids=GELU_FIDELITY_PARAMETRIZATION_IDS,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((MESH_X, MESH_Y), id="all"),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "sub_mesh_shape",
+    [
+        pytest.param((4, 1), id="4x1"),
+        pytest.param((4, 2), id="4x2"),
+        pytest.param((8, 1), id="8x1"),
+        pytest.param((8, 2), id="8x2"),
+        pytest.param((8, 3), id="8x3"),
+        pytest.param((6, 4), id="6x4"),
+        pytest.param((8, 4), id="8x4"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_coordinate",
+    [
+        pytest.param((0, 0), id="0-0"),
+        pytest.param((4, 0), id="4-0"),
+        pytest.param((0, 1), id="0-1"),
+        pytest.param((4, 1), id="4-1"),
+        pytest.param((0, 2), id="0-2"),
+        pytest.param((4, 2), id="4-2"),
+        pytest.param((0, 3), id="0-3"),
+        pytest.param((4, 3), id="4-3"),
+    ],
+)
+def test_mesh_size_ff1_matmul(
+    mesh_device,
+    sub_mesh_shape,
+    mesh_coordinate,
+    gelu,
+    math_fidelity,
+    didt_workload_iterations,
+    determinism_check_interval,
+):
+    # check that sub-mesh with sub_mesh_shape and mesh_coordinate can fit within the parent mesh of MESH_X by MESH_Y
+    if mesh_coordinate[0] + sub_mesh_shape[0] > MESH_X or mesh_coordinate[1] + sub_mesh_shape[1] > MESH_Y:
+        pytest.skip(
+            f"Sub-mesh {sub_mesh_shape} at mesh coordinate {mesh_coordinate} does not fit within parent mesh-device: {MESH_X} by {MESH_Y}"
+        )
+    sub_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(sub_mesh_shape), ttnn.MeshCoordinate(mesh_coordinate))
+    logger.info(f"Running on {sub_mesh_shape} sub-mesh at mesh coordinate {mesh_coordinate}")
+    test_ff1_matmul(sub_mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval)
+
+
+@pytest.mark.parametrize(
+    "gelu, math_fidelity",
+    GELU_FIDELITY_PARAMETRIZATION,
+    ids=GELU_FIDELITY_PARAMETRIZATION_IDS,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((MESH_X, MESH_Y), id="all"),
+    ],
+    indirect=["mesh_device"],
+)
+def test_random_mesh_size_ff1_matmul(
+    mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval
+):
+    # generate random sub-mesh shape and mesh coordinate
+    valid_sub_mesh_shapes = [(x, y) for x in range(1, MESH_X + 1) for y in range(1, MESH_Y + 1)]
+    sub_mesh_shape = random.choice(valid_sub_mesh_shapes)
+    valid_mesh_coordinates = [
+        (x, y) for x in range(0, MESH_X + 1 - sub_mesh_shape[0]) for y in range(0, MESH_Y + 1 - sub_mesh_shape[1])
+    ]
+    mesh_coordinate = random.choice(valid_mesh_coordinates)
+
+    sub_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(sub_mesh_shape), ttnn.MeshCoordinate(mesh_coordinate))
+    logger.info(f"Running on {sub_mesh_shape} sub-mesh at mesh coordinate {mesh_coordinate}")
+    test_ff1_matmul(sub_mesh_device, gelu, math_fidelity, didt_workload_iterations, determinism_check_interval)
