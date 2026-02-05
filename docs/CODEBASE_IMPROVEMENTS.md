@@ -20,16 +20,19 @@ This document catalogs potential improvements identified through a comprehensive
 
 ## 🟠 HIGH PRIORITY - Performance Improvements
 
-### 2. FP32 SFPU Untilize Support
-- **Priority:** HIGH
-- **GitHub Issues:** #30400, #33795
-- **Files (~15 affected):**
+### 2. FP32 SFPU Untilize Support (COMPLEX - FUTURE WORK)
+- **Priority:** HIGH (but complex)
+- **Status:** 🔬 **INVESTIGATED** (2026-02-05) - Requires deep LLK expertise
+- **GitHub Issues:** #30400 (closed), #33795 (open, assigned to ntarafdar)
+- **Files (~11 affected):**
   - `ttnn/cpp/ttnn/operations/data_movement/untilize/device/factories/untilize_*_program_factory.cpp`
   - `ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/factories/*`
-- **Problem:** FP32 operations currently force `UnpackToDestMode::Default` instead of optimized SFPU path
+- **Problem:** FP32 with width > 8 tiles can't use `pack_untilize` (MAX_PACK_UNTILIZE_WIDTH=8). Falls back to slow `untilize.cpp` which explicitly overrides `UnpackToDestFp32` → `Default`, causing TF32 truncation and precision loss.
 - **TODO marker:** `// TODO: We need SFPU untilize for FP32 (#30400, #33795)`
-- **Impact:** Direct FP32 performance improvement across all untilize operations
-- **Complexity:** Medium - requires SFPU kernel work
+- **Why it's hard:** The override to `Default` is intentional - simply using `UnpackToDestFp32` with the slow kernel apparently doesn't work (otherwise they'd have done it). Requires writing a new SFPU-based untilize kernel that preserves FP32 precision.
+- **Impact:** Would fix FP32 precision loss during untilize operations
+- **Complexity:** HIGH - requires LLK/compute kernel expertise, new kernel implementation
+- **Plan:** Coordinate with ntarafdar (issue assignee) for future work
 
 ### ~~3. LayerNorm Circular Buffer Wait Optimization~~ (NO MEASURABLE IMPACT)
 - **Priority:** ~~HIGH~~ → **SKIP**
