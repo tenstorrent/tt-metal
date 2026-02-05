@@ -241,7 +241,7 @@ class DeepseekMoeGateSingleCore:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=kernel_descriptors,
+            kernels=kernel_descriptors.kernels,
             cbs=[
                 in_cb_descriptor,
                 bias_cb_descriptor,

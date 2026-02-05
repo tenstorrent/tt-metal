@@ -250,19 +250,16 @@ struct DRAMStreamingMatmul {
                     for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
                         tile_regs_acquire();
 
+                        // Intermediate subblocks: finalize=false (partial accumulation)
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k - 1; sb_k++) {
                             cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                            custom_mm_block<true>(
-                                CTArgs::cb_in0,
-                                CTArgs::cb_in1,
-                                sb_k * CTArgs::subblock_k,
-                                0,
-                                0,
-                                CTArgs::subblock_k);
+                            custom_mm_block<false>(
+                                CTArgs::cb_in0, CTArgs::cb_in1, sb_k * CTArgs::subblock_k, 0, 0, CTArgs::subblock_k);
                             cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                         }
+                        // Final subblock: finalize=true
                         cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                        custom_mm_block<false>(
+                        custom_mm_block<true>(
                             CTArgs::cb_in0,
                             CTArgs::cb_in1,
                             (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,
@@ -298,19 +295,16 @@ struct DRAMStreamingMatmul {
                     tile_regs_acquire();
 
                     for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
+                        // Intermediate subblocks: finalize=false (partial accumulation)
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k - 1; sb_k++) {
                             cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                            custom_mm_block<true>(
-                                CTArgs::cb_in0,
-                                CTArgs::cb_in1,
-                                sb_k * CTArgs::subblock_k,
-                                0,
-                                w,
-                                CTArgs::subblock_k);
+                            custom_mm_block<false>(
+                                CTArgs::cb_in0, CTArgs::cb_in1, sb_k * CTArgs::subblock_k, 0, w, CTArgs::subblock_k);
                             cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                         }
+                        // Final subblock: finalize=true
                         cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                        custom_mm_block<false>(
+                        custom_mm_block<true>(
                             CTArgs::cb_in0,
                             CTArgs::cb_in1,
                             (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,
