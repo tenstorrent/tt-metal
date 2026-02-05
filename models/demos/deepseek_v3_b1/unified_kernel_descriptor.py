@@ -16,6 +16,43 @@ import ttnn
 
 
 @dataclass
+class KernelGroup:
+    """
+    A group of kernels (NCRISC, BRISC, TRISC) for a specific core range with specific compile-time args.
+
+    This allows callers to identify which kernel indices correspond to which logical group
+    (e.g., sender vs receiver) based on the compile_time_arg_values.
+    """
+
+    core_range_set: ttnn.CoreRangeSet
+    compile_time_arg_values: dict  # e.g., {"is_sender": 1}
+    ncrisc_kernel_index: int
+    brisc_kernel_index: int
+    trisc_kernel_index: int
+
+
+@dataclass
+class UnifiedKernelResult:
+    """
+    Result of get_kernel_descriptors() containing both the kernel list and grouping metadata.
+
+    Args:
+        kernels: List of KernelDescriptor objects to pass to ProgramDescriptor
+        groups: List of KernelGroup objects for identifying kernel indices by role
+    """
+
+    kernels: list
+    groups: list  # List[KernelGroup]
+
+    def get_group_by_arg(self, arg_name: str, arg_value: int) -> Optional["KernelGroup"]:
+        """Find the kernel group where the named compile-time arg has the specified value."""
+        for group in self.groups:
+            if group.compile_time_arg_values.get(arg_name) == arg_value:
+                return group
+        return None
+
+
+@dataclass
 class UnifiedCompileTimeCoreDescriptor:
     """
     Descriptor for a compile-time arg that varies across core ranges.
@@ -67,6 +104,7 @@ class UnifiedKernelDescriptor:
         trisc_common_runtime_args: Common runtime args for compute (shared across all cores)
         trisc_compute_config: Optional compute configuration (math fidelity, fp32 acc, etc.)
         unified_compile_time_core_descriptors: List of per-core-range compile-time arg overrides
+        defines: Preprocessor definitions as list of (name, value) tuples, e.g. [("SKIP_CCL", "1")]
     """
 
     kernel_source: str
@@ -82,6 +120,7 @@ class UnifiedKernelDescriptor:
     trisc_common_runtime_args: list = field(default_factory=list)
     trisc_compute_config: Optional[ttnn.ComputeConfigDescriptor] = None
     unified_compile_time_core_descriptors: list = field(default_factory=list)
+    defines: list = field(default_factory=list)  # List of (name, value) tuples
 
     def _get_core_range_set(
         self, core_range: Union[ttnn.CoreCoord, ttnn.CoreRange, ttnn.CoreRangeSet]
@@ -93,7 +132,7 @@ class UnifiedKernelDescriptor:
             return ttnn.CoreRangeSet([ttnn.CoreRange(core_range, core_range)])
         return ttnn.CoreRangeSet([core_range])
 
-    def get_kernel_descriptors(self) -> list:
+    def get_kernel_descriptors(self) -> UnifiedKernelResult:
         """
         Generate kernel descriptors for all RISC processors.
 
@@ -105,7 +144,9 @@ class UnifiedKernelDescriptor:
         for different core ranges.
 
         Returns:
-            List of KernelDescriptor objects.
+            UnifiedKernelResult containing:
+            - kernels: List of KernelDescriptor objects
+            - groups: List of KernelGroup objects for identifying kernels by role
         """
         if not self.unified_compile_time_core_descriptors:
             # Simple case: no per-core compile-time arg overrides
@@ -114,7 +155,7 @@ class UnifiedKernelDescriptor:
         # Complex case: generate multiple kernels per processor for different core ranges
         return self._get_split_kernel_descriptors()
 
-    def _get_simple_kernel_descriptors(self) -> list:
+    def _get_simple_kernel_descriptors(self) -> UnifiedKernelResult:
         """Generate simple kernel descriptors without per-core overrides."""
         # Reader kernel (NCRISC)
         reader_descriptor = ttnn.KernelDescriptor(
@@ -123,6 +164,7 @@ class UnifiedKernelDescriptor:
             core_ranges=self.core_ranges,
             compile_time_args=self.ncrisc_compile_time_args,
             named_compile_time_args=self.ncrisc_named_compile_time_args,
+            defines=self.defines,
             common_runtime_args=self.ncrisc_common_runtime_args,
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -134,6 +176,7 @@ class UnifiedKernelDescriptor:
             core_ranges=self.core_ranges,
             compile_time_args=self.brisc_compile_time_args,
             named_compile_time_args=self.brisc_named_compile_time_args,
+            defines=self.defines,
             common_runtime_args=self.brisc_common_runtime_args,
             config=ttnn.WriterConfigDescriptor(),
         )
@@ -146,13 +189,23 @@ class UnifiedKernelDescriptor:
             core_ranges=self.core_ranges,
             compile_time_args=self.trisc_compile_time_args,
             named_compile_time_args=self.trisc_named_compile_time_args,
+            defines=self.defines,
             common_runtime_args=self.trisc_common_runtime_args,
             config=compute_config,
         )
 
-        return [reader_descriptor, writer_descriptor, compute_descriptor]
+        kernels = [reader_descriptor, writer_descriptor, compute_descriptor]
+        # Single group with all cores, no special compile-time arg values
+        group = KernelGroup(
+            core_range_set=self.core_ranges,
+            compile_time_arg_values={},
+            ncrisc_kernel_index=0,
+            brisc_kernel_index=1,
+            trisc_kernel_index=2,
+        )
+        return UnifiedKernelResult(kernels=kernels, groups=[group])
 
-    def _get_split_kernel_descriptors(self) -> list:
+    def _get_split_kernel_descriptors(self) -> UnifiedKernelResult:
         """
         Generate split kernel descriptors with per-core compile-time arg overrides.
 
@@ -161,6 +214,9 @@ class UnifiedKernelDescriptor:
         2. Computing each core's complete set of named compile-time args
         3. Grouping cores by their unique arg combinations
         4. Creating one kernel set (NCRISC/BRISC/TRISC) per unique group
+
+        Returns:
+            UnifiedKernelResult with kernels and groups for easy index lookup.
         """
         # Step 1: Enumerate all cores
         all_cores = ttnn.corerange_to_cores(self.core_ranges)
@@ -189,11 +245,13 @@ class UnifiedKernelDescriptor:
 
         # Step 4: Create kernel descriptors for each unique group
         descriptors = []
+        groups = []
         compute_config = self.trisc_compute_config or ttnn.ComputeConfigDescriptor()
 
         for frozen_args, core_tuples in args_to_cores.items():
-            # Convert frozen args to list of tuples
+            # Convert frozen args to list of tuples and dict
             unified_named_args = list(frozen_args)
+            arg_values_dict = dict(frozen_args)
 
             # Combine with common named_compile_time_args for each RISC
             ncrisc_named_compile_time_args_merged = list(self.ncrisc_named_compile_time_args) + unified_named_args
@@ -204,7 +262,8 @@ class UnifiedKernelDescriptor:
             core_coords = [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(core_tuples)]
             core_range_set = ttnn.CoreRangeSet(core_coords)
 
-            # Create NCRISC/BRISC/TRISC kernel descriptors for this group
+            # Track kernel indices for this group
+            ncrisc_idx = len(descriptors)
             descriptors.append(
                 ttnn.KernelDescriptor(
                     kernel_source=self.kernel_source,
@@ -212,10 +271,13 @@ class UnifiedKernelDescriptor:
                     core_ranges=core_range_set,
                     compile_time_args=self.ncrisc_compile_time_args,
                     named_compile_time_args=ncrisc_named_compile_time_args_merged,
+                    defines=self.defines,
                     common_runtime_args=self.ncrisc_common_runtime_args,
                     config=ttnn.ReaderConfigDescriptor(),
                 )
             )
+
+            brisc_idx = len(descriptors)
             descriptors.append(
                 ttnn.KernelDescriptor(
                     kernel_source=self.kernel_source,
@@ -223,10 +285,13 @@ class UnifiedKernelDescriptor:
                     core_ranges=core_range_set,
                     compile_time_args=self.brisc_compile_time_args,
                     named_compile_time_args=brisc_named_compile_time_args_merged,
+                    defines=self.defines,
                     common_runtime_args=self.brisc_common_runtime_args,
                     config=ttnn.WriterConfigDescriptor(),
                 )
             )
+
+            trisc_idx = len(descriptors)
             descriptors.append(
                 ttnn.KernelDescriptor(
                     kernel_source=self.kernel_source,
@@ -234,9 +299,21 @@ class UnifiedKernelDescriptor:
                     core_ranges=core_range_set,
                     compile_time_args=self.trisc_compile_time_args,
                     named_compile_time_args=trisc_named_compile_time_args_merged,
+                    defines=self.defines,
                     common_runtime_args=self.trisc_common_runtime_args,
                     config=compute_config,
                 )
             )
 
-        return descriptors
+            # Create group with indices
+            groups.append(
+                KernelGroup(
+                    core_range_set=core_range_set,
+                    compile_time_arg_values=arg_values_dict,
+                    ncrisc_kernel_index=ncrisc_idx,
+                    brisc_kernel_index=brisc_idx,
+                    trisc_kernel_index=trisc_idx,
+                )
+            )
+
+        return UnifiedKernelResult(kernels=descriptors, groups=groups)

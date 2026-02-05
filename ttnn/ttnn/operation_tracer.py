@@ -9,14 +9,34 @@ to JSON files for debugging and analysis purposes.
 """
 
 import json
-import os
 import pathlib
 import sys
+import os
 from datetime import datetime
 from functools import wraps
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 from loguru import logger
 import ttnn
+
+
+# Global counter for operation numbering in trace files
+_OPERATION_COUNTER = 0
+
+# Flag to enable parameter tracing (set by pytest when --trace-params is used)
+# This is accessed from decorators.py, so we expose it here
+_ENABLE_TRACE = False
+
+# Cached check for --trace-params flag in sys.argv (computed once at module load)
+_TRACE_PARAMS_IN_ARGV = None
+
+# Flag to prevent recursion during serialization
+_IS_SERIALIZING = False
+
+# Flag to control whether tensor values are serialized (default False)
+_SERIALIZE_TENSOR_VALUES = False
+
+# Command-line flag constant
+_TRACE_PARAMS_FLAG = "--trace-params"
 
 
 # Helper function to get serializers from tensor_utils (imported lazily to avoid circular imports)
@@ -44,24 +64,35 @@ def _get_tensor_utils_serializers():
         return None
 
 
-# Global counter for operation numbering in trace files
-_OPERATION_COUNTER = 0
+def enable_tracing(enable: bool = True) -> None:
+    """Enable or disable operation parameter tracing.
 
-# Flag to enable parameter tracing (set by pytest when --trace-params is used)
-# This is accessed from decorators.py, so we expose it here
-_ENABLE_TRACE = False
+    When enabled, all ttnn operations will have their parameters and return values
+    serialized to JSON files for debugging and analysis.
 
-# Cached check for --trace-params flag in sys.argv (computed once at module load)
-_TRACE_PARAMS_IN_ARGV = None
+    Args:
+        enable: If True, tracing is enabled. If False, tracing is disabled.
 
-# Flag to prevent recursion during serialization
-_IS_SERIALIZING = False
+    Example:
+        import ttnn.operation_tracer
 
-# Flag to control whether tensor values are serialized (default False)
-_SERIALIZE_TENSOR_VALUES = False
+        # Enable tracing
+        ttnn.operation_tracer.enable_tracing(True)
 
-# Command-line flag constant
-_TRACE_PARAMS_FLAG = "--trace-params"
+        # Disable tracing
+        ttnn.operation_tracer.enable_tracing(False)
+    """
+    global _ENABLE_TRACE
+    _ENABLE_TRACE = enable
+
+
+def is_tracing_enabled() -> bool:
+    """Check if operation parameter tracing is currently enabled.
+
+    Returns:
+        True if tracing is enabled, False otherwise.
+    """
+    return _is_tracing_enabled()
 
 
 def enable_tensor_value_serialization(enable: bool = True) -> None:
@@ -95,6 +126,191 @@ def _is_tracing_enabled() -> bool:
         _TRACE_PARAMS_IN_ARGV = _TRACE_PARAMS_FLAG in sys.argv
 
     return _ENABLE_TRACE or _TRACE_PARAMS_IN_ARGV
+
+
+def _serialize_ttnn_tensor(value: Any, serialize_values: bool) -> Dict[str, Any]:
+    """Serialize a ttnn.Tensor to a dictionary.
+
+    Args:
+        value: The ttnn.Tensor to serialize
+        serialize_values: If True, include tensor values. If False, only metadata.
+
+    Returns:
+        Dictionary containing tensor metadata and optionally values.
+    """
+    import torch
+
+    tensor_data: Dict[str, Any] = {
+        "type": "ttnn.Tensor",
+        "original_shape": list(value.shape) if hasattr(value, "shape") else None,
+        "original_dtype": str(value.dtype) if hasattr(value, "dtype") else None,
+    }
+
+    # Check if tensor is distributed and get logical shape
+    if hasattr(value, "logical_shape"):
+        try:
+            logical_shape = value.logical_shape()
+            if logical_shape != value.shape:
+                tensor_data["logical_shape"] = list(logical_shape)
+        except:
+            pass
+    # Get tensor topology and placement information for distributed tensors
+    if hasattr(value, "tensor_topology"):
+        try:
+            topology = value.tensor_topology()
+            # Get placements
+            placements = topology.placements()
+            if placements:
+                placement_strs = []
+                for placement in placements:
+                    placement_type = type(placement).__name__
+                    if hasattr(placement, "dim"):
+                        placement_strs.append(f"{placement_type}({placement.dim})")
+                    else:
+                        placement_strs.append(placement_type)
+                if placement_strs:
+                    if "mesh_device" not in tensor_data:
+                        tensor_data["mesh_device"] = {}
+                    tensor_data["mesh_device"]["placements"] = placement_strs
+            # Get distribution shape
+            if hasattr(topology, "distribution_shape"):
+                try:
+                    dist_shape = topology.distribution_shape()
+                    if "mesh_device" not in tensor_data:
+                        tensor_data["mesh_device"] = {}
+                    tensor_data["mesh_device"]["distribution_shape"] = list(dist_shape)
+                except:
+                    pass
+
+        except:
+            pass
+    # Check if tensor is on a mesh device and capture mesh information
+    if hasattr(value, "device") and value.device is not None:
+        try:
+            device = value.device()
+            # Initialize mesh_device dict if it's a mesh device
+            is_mesh_device = type(device).__name__ == "MeshDevice" or hasattr(device, "get_device_ids")
+            if is_mesh_device:
+                if "mesh_device" not in tensor_data:
+                    tensor_data["mesh_device"] = {}
+                # Check if device is a MeshDevice and get shape (it's a property, not a method)
+                if hasattr(device, "shape"):
+                    try:
+                        mesh_shape = device.shape
+                        # MeshShape is indexable, convert to list
+                        tensor_data["mesh_device"]["shape"] = list(mesh_shape)
+                    except:
+                        # Fallback to string representation
+                        try:
+                            tensor_data["mesh_device"]["shape"] = str(mesh_shape)
+                        except:
+                            pass
+
+                # Try to get device IDs if available
+                if hasattr(device, "get_device_ids"):
+                    try:
+                        device_ids = device.get_device_ids()
+                        tensor_data["mesh_device"]["device_ids"] = list(device_ids) if device_ids else None
+                    except:
+                        pass
+        except:
+            pass
+
+    if serialize_values:
+        # Move tensor to CPU and convert to numpy for human-readable format
+        cpu_tensor = value
+        if hasattr(ttnn, "from_device"):
+            cpu_tensor = ttnn.from_device(value)
+        elif hasattr(value, "cpu"):
+            cpu_tensor = value.cpu()
+
+        # Convert to torch then to numpy for readable values
+        torch_tensor = ttnn.to_torch(cpu_tensor)
+        # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
+        if torch_tensor.dtype == torch.bfloat16:
+            torch_tensor = torch_tensor.float()
+        numpy_array = torch_tensor.numpy()
+
+        tensor_data["shape"] = list(numpy_array.shape)
+        tensor_data["dtype"] = str(numpy_array.dtype)
+        tensor_data["values"] = numpy_array.tolist()
+    else:
+        # Only include shape and dtype metadata without values
+        if hasattr(value, "shape"):
+            tensor_data["shape"] = list(value.shape)
+        if hasattr(value, "dtype"):
+            tensor_data["dtype"] = str(value.dtype)
+
+    # Get layout if available (check if it's a property or method)
+    if hasattr(value, "layout"):
+        layout_attr = getattr(value, "layout", None)
+        if callable(layout_attr):
+            layout_value = layout_attr()
+        else:
+            layout_value = layout_attr
+        if layout_value is not None:
+            tensor_data["layout"] = str(layout_value)
+
+    # Get storage type if available (it's a method)
+    if hasattr(value, "storage_type"):
+        storage_type_value = value.storage_type()
+        if storage_type_value is not None:
+            tensor_data["storage_type"] = str(storage_type_value)
+
+    # Get memory config if available (it's a method)
+    if hasattr(value, "memory_config"):
+        try:
+            memory_config_value = value.memory_config()
+            if memory_config_value is not None:
+                # Try to use tensor_utils serializer first
+                serializers = _get_tensor_utils_serializers()
+                if serializers and "memory_config_to_dict" in serializers:
+                    try:
+                        tensor_data["memory_config"] = serializers["memory_config_to_dict"](memory_config_value)
+                    except Exception:
+                        # Fallback to repr if serializer fails
+                        tensor_data["memory_config"] = repr(memory_config_value)
+                else:
+                    # No serializer available, use repr
+                    tensor_data["memory_config"] = repr(memory_config_value)
+        except Exception:
+            pass
+    return tensor_data
+
+
+def _serialize_torch_tensor(value: Any, serialize_values: bool) -> Dict[str, Any]:
+    """Serialize a torch.Tensor to a dictionary.
+
+    Args:
+        value: The torch.Tensor to serialize
+        serialize_values: If True, include tensor values. If False, only metadata.
+
+    Returns:
+        Dictionary containing tensor metadata and optionally values.
+    """
+    import torch
+
+    tensor_data: Dict[str, Any] = {
+        "type": "torch.Tensor",
+    }
+
+    if serialize_values:
+        # Convert torch tensor to numpy for serialization
+        # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
+        if value.dtype == torch.bfloat16:
+            numpy_array = value.detach().cpu().float().numpy()
+        else:
+            numpy_array = value.detach().cpu().numpy()
+
+        tensor_data["shape"] = list(numpy_array.shape)
+        tensor_data["dtype"] = str(numpy_array.dtype)
+        tensor_data["values"] = numpy_array.tolist()
+    else:
+        # Only include shape and dtype metadata without values
+        tensor_data["shape"] = list(value.shape)
+        tensor_data["dtype"] = str(value.dtype)
+
+    return tensor_data
 
 
 def serialize_operation_parameters(
@@ -134,189 +350,19 @@ def serialize_operation_parameters(
 
         # Serialize arguments
         serialized_args = []
-        tensor_counter = 0
 
         def serialize_value(value: Any, name_prefix: str = "") -> Any:
             """Recursively serialize a value, handling tensors specially."""
-            nonlocal tensor_counter
-
             # Lazy import torch to avoid global import validation errors
             import torch
 
             if isinstance(value, ttnn.Tensor):
-                # Store tensor data directly in metadata (not as separate file)
-                tensor_data: Dict[str, Any] = {
-                    "type": "ttnn.Tensor",
-                    "original_shape": list(value.shape) if hasattr(value, "shape") else None,
-                    "original_dtype": str(value.dtype) if hasattr(value, "dtype") else None,
-                }
+                return _serialize_ttnn_tensor(value, serialize_tensor_values)
 
-                # Check if tensor is distributed and get logical shape
-                if hasattr(value, "logical_shape"):
-                    try:
-                        logical_shape = value.logical_shape()
-                        if logical_shape != value.shape:
-                            tensor_data["logical_shape"] = list(logical_shape)
-                    except:
-                        pass
-                # Get tensor topology and placement information for distributed tensors
-                if hasattr(value, "tensor_topology"):
-                    try:
-                        topology = value.tensor_topology()
-                        # Get placements
-                        placements = topology.placements()
-                        if placements:
-                            placement_strs = []
-                            for placement in placements:
-                                placement_type = type(placement).__name__
-                                if hasattr(placement, "dim"):
-                                    placement_strs.append(f"{placement_type}({placement.dim})")
-                                else:
-                                    placement_strs.append(placement_type)
-                            if placement_strs:
-                                if "mesh_device" not in tensor_data:
-                                    tensor_data["mesh_device"] = {}
-                                tensor_data["mesh_device"]["placements"] = placement_strs
-                        # Get distribution shape
-                        if hasattr(topology, "distribution_shape"):
-                            try:
-                                dist_shape = topology.distribution_shape()
-                                if "mesh_device" not in tensor_data:
-                                    tensor_data["mesh_device"] = {}
-                                tensor_data["mesh_device"]["distribution_shape"] = list(dist_shape)
-                            except:
-                                pass
-                    except:
-                        pass
-
-                # Check if tensor is on a mesh device and capture mesh information
-                if hasattr(value, "device") and value.device is not None:
-                    try:
-                        device = value.device()
-                        # Initialize mesh_device dict if it's a mesh device
-                        is_mesh_device = type(device).__name__ == "MeshDevice" or hasattr(device, "get_device_ids")
-                        if is_mesh_device:
-                            if "mesh_device" not in tensor_data:
-                                tensor_data["mesh_device"] = {}
-                            # Check if device is a MeshDevice and get shape (it's a property, not a method)
-                            if hasattr(device, "shape"):
-                                try:
-                                    mesh_shape = device.shape
-                                    # MeshShape is indexable, convert to list
-                                    tensor_data["mesh_device"]["shape"] = list(mesh_shape)
-                                except:
-                                    # Fallback to string representation
-                                    try:
-                                        tensor_data["mesh_device"]["shape"] = str(mesh_shape)
-                                    except:
-                                        pass
-
-                            # Try to get device IDs if available
-                            if hasattr(device, "get_device_ids"):
-                                try:
-                                    device_ids = device.get_device_ids()
-                                    tensor_data["mesh_device"]["device_ids"] = list(device_ids) if device_ids else None
-                                except:
-                                    pass
-                    except:
-                        pass
-
-                # Only serialize tensor values if requested
-                if serialize_tensor_values:
-                    # Move tensor to CPU and convert to numpy for human-readable format
-                    cpu_tensor = value
-                    if hasattr(ttnn, "from_device"):
-                        cpu_tensor = ttnn.from_device(value)
-                    elif hasattr(value, "cpu"):
-                        cpu_tensor = value.cpu()
-
-                    # Convert to torch then to numpy for readable values
-                    torch_tensor = ttnn.to_torch(cpu_tensor)
-                    # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
-                    if torch_tensor.dtype == torch.bfloat16:
-                        torch_tensor = torch_tensor.float()
-                    numpy_array = torch_tensor.numpy()
-
-                    # Convert numpy array to nested lists for JSON serialization
-                    values = numpy_array.tolist()
-
-                    tensor_data["shape"] = list(numpy_array.shape)
-                    tensor_data["dtype"] = str(numpy_array.dtype)
-                    tensor_data["values"] = values
-                else:
-                    # Only include shape and dtype metadata without values
-                    if hasattr(value, "shape"):
-                        tensor_data["shape"] = list(value.shape)
-                    if hasattr(value, "dtype"):
-                        tensor_data["dtype"] = str(value.dtype)
-
-                # Get layout if available (check if it's a property or method)
-                if hasattr(value, "layout"):
-                    layout_attr = getattr(value, "layout", None)
-                    if callable(layout_attr):
-                        layout_value = layout_attr()
-                    else:
-                        layout_value = layout_attr
-                    if layout_value is not None:
-                        tensor_data["layout"] = str(layout_value)
-
-                # Get storage type if available (it's a method)
-                if hasattr(value, "storage_type"):
-                    storage_type_value = value.storage_type()
-                    if storage_type_value is not None:
-                        tensor_data["storage_type"] = str(storage_type_value)
-
-                # Get memory config if available (it's a method)
-                if hasattr(value, "memory_config"):
-                    try:
-                        memory_config_value = value.memory_config()
-                        if memory_config_value is not None:
-                            # Try to use tensor_utils serializer first
-                            serializers = _get_tensor_utils_serializers()
-                            if serializers and "memory_config_to_dict" in serializers:
-                                try:
-                                    tensor_data["memory_config"] = serializers["memory_config_to_dict"](
-                                        memory_config_value
-                                    )
-                                except Exception:
-                                    # Fallback to repr if serializer fails
-                                    tensor_data["memory_config"] = repr(memory_config_value)
-                            else:
-                                # No serializer available, use repr
-                                tensor_data["memory_config"] = repr(memory_config_value)
-                    except Exception:
-                        pass
-
-                tensor_counter += 1
-                return tensor_data
-
-            # Handle torch.Tensor objects (e.g., passed to from_torch)
             if isinstance(value, torch.Tensor):
-                tensor_data: Dict[str, Any] = {
-                    "type": "torch.Tensor",
-                }
+                return _serialize_torch_tensor(value, serialize_tensor_values)
 
-                # Only serialize tensor values if requested
-                if serialize_tensor_values:
-                    # Convert torch tensor to numpy for serialization
-                    # Convert to float32 first to handle bfloat16 and other unsupported numpy dtypes
-                    if value.dtype == torch.bfloat16:
-                        numpy_array = value.detach().cpu().float().numpy()
-                    else:
-                        numpy_array = value.detach().cpu().numpy()
-
-                    tensor_data["shape"] = list(numpy_array.shape)
-                    tensor_data["dtype"] = str(numpy_array.dtype)
-                    tensor_data["values"] = numpy_array.tolist()
-                else:
-                    # Only include shape and dtype metadata without values
-                    tensor_data["shape"] = list(value.shape)
-                    tensor_data["dtype"] = str(value.dtype)
-
-                tensor_counter += 1
-                return tensor_data
-
-            elif isinstance(value, (int, float, bool, str, type(None))):
+            if isinstance(value, (int, float, bool, str, type(None))):
                 # Simple types that can be JSON serialized
                 return value
 
@@ -380,27 +426,11 @@ def serialize_operation_parameters(
                     except Exception as e:
                         logger.debug(f"tensor_utils serializer failed for {type_name}: {e}")
                         # Fall through to use __repr__
-
-                # Try to get attributes from __dict__
+                # For other types, convert to string or get basic info
                 if hasattr(value, "__dict__"):
-                    try:
-                        # Serialize the object's attributes instead of memory address
-                        obj_dict = {"type": type_name}
-                        for attr_name, attr_value in value.__dict__.items():
-                            if not attr_name.startswith("_"):  # Skip private attributes
-                                try:
-                                    # Recursively serialize the attribute
-                                    obj_dict[attr_name] = serialize_value(attr_value, f"{name_prefix}.{attr_name}")
-                                except:
-                                    # Fallback to string if serialization fails
-                                    obj_dict[attr_name] = str(attr_value)
-                        return obj_dict
-                    except:
-                        # Fallback to repr if __dict__ access fails
-                        return {"type": type_name, "repr": repr(value)}
+                    return {"type": type(value).__name__, "repr": str(value)}
                 else:
-                    # No __dict__, try repr
-                    return {"type": type_name, "value": repr(value)}
+                    return {"type": type(value).__name__, "value": str(value)}
 
         # Serialize positional arguments
         for i, arg in enumerate(function_args):
@@ -416,12 +446,10 @@ def serialize_operation_parameters(
 
         # Create complete operation data JSON
         operation_data = {
-            "operation_number": _OPERATION_COUNTER,
+            "operation_id": _OPERATION_COUNTER,
             "operation_name": operation_name,
-            "timestamp": timestamp,
             "args": serialized_args,
             "kwargs": serialized_kwargs,
-            "num_tensors": tensor_counter,
         }
 
         # Add return value if available
@@ -432,7 +460,7 @@ def serialize_operation_parameters(
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(operation_data, f, indent=2, default=str)
-            # logger.debug(f"Serialized operation {operation_name} parameters to {file_path}")
+            logger.debug(f"Serialized operation {operation_name} parameters to {file_path}")
         except (OSError, IOError) as e:
             logger.error(f"Failed to write trace file {file_path}: {e}")
             raise
@@ -451,8 +479,9 @@ def wrap_function_for_tracing(original_function: Any, operation_name: str) -> An
     Returns:
         A wrapped function that checks _ENABLE_TRACE at call time
     """
-    # Check if function is already wrapped or is an Operation instance to avoid recursion
-    if hasattr(original_function, "__wrapped__") or hasattr(original_function, "decorated_function"):
+    # Check if function is an Operation instance to avoid recursion
+    # (Don't check __wrapped__ as that's set by functools.wraps and is too common)
+    if hasattr(original_function, "decorated_function"):
         return original_function
 
     # Store original function in closure to avoid recursion
@@ -464,7 +493,7 @@ def wrap_function_for_tracing(original_function: Any, operation_name: str) -> An
         # Call the original function first (use closure variable)
         return_value = _original_func(*function_args, **function_kwargs)
 
-        # Check if tracing is enabled (uses cached sys.argv check)
+        # Check if tracing is enabled (uses helper with cached sys.argv check)
         if _is_tracing_enabled():
             # Determine log directory - use config if available, otherwise default
             log_dir = None

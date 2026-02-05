@@ -102,7 +102,6 @@ struct Matmul {
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
             cb_wait_front(args.in0, args.k_num_tiles);
             cb_wait_front(args.in1, args.k_num_tiles * out_w);
-
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
