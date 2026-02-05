@@ -64,7 +64,7 @@ cd /path/to/tt-metal
 git submodule update --init --recursive
 
 # Build tt-metal
-./build_metal.sh
+./build_metal.sh --build-tt-train
 ```
 
 For additional build options, see the tt-metal documentation.
@@ -88,23 +88,7 @@ source python_env/bin/activate
 
 ## Step 2: Install tt-train
 
-Once tt-metal is installed and your virtual environment is activated, install tt-train:
-
-**Regular installation:**
-
-```bash
-pip install /path/to/tt-train/
-```
-
-**Editable installation (for development):**
-
-```bash
-pip install -e /path/to/tt-train/
-```
-
-Use the editable installation (`-e`) if you plan to modify the tt-train source code and want changes to be reflected immediately without reinstalling.
-
----
+- See [INSTALLING_TTML.md](./docs/INSTALLING_TTML.md) for TT-Train/TTML installation instructions.
 
 ## Step 3: Set Environment Variables
 
