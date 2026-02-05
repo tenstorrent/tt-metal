@@ -2027,13 +2027,16 @@ inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, u
         // Release upstream pages so prefetch_h can make more available. Ensure to flush the writes just made to prevent
         // data race.
         noc_async_writes_flushed();
-        // wait_for_available_data always returns up to a page boundary, so the rounding only matters on the final chunk and lets us return the final bytes in the page early.
-        uint32_t pages_to_free = (can_read_now + initial_data_to_return + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
+        // wait_for_available_data always returns up to a page boundary, so the rounding only matters on the final chunk
+        // and lets us return the final bytes in the page early.
+        uint32_t pages_to_free =
+            (can_read_now + initial_data_to_return + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
         initial_data_to_return = 0;
         uint32_t watcher_data_ptr = data_ptr;
 #if ASSERT_ENABLED
         if (wlength == 0) {
-            // This normally happens after the end of the loop, but do it early here so we don't hit assertions. Data until the end of the page isn't used.
+            // This normally happens after the end of the loop, but do it early here so we don't hit assertions. Data
+            // until the end of the page isn't used.
             watcher_data_ptr = round_up_pow2(watcher_data_ptr, cmddat_q_page_size);
         }
 #endif
@@ -2156,7 +2159,6 @@ void kernel_main_d() {
     bool done = false;
     uint32_t heartbeat = 0;
     uint32_t l1_cache[l1_cache_elements_rounded];
-
 
     // Cmdbuf allocation is not defined yet for fabric so we can't use stateful APIs on Dispatch D
 #if defined(FABRIC_RELAY)

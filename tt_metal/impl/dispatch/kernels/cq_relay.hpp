@@ -253,9 +253,7 @@ public:
                     }
 
                     // It's possible the cmd_ptr wrapped and the expected pointer is at the very end of the buffer
-                    ASSERT(
-                        (cmd_ptr == expected) ||
-                        ((expected == buffer_end) && (cmd_ptr == buffer_base)));
+                    ASSERT((cmd_ptr == expected) || ((expected == buffer_end) && (cmd_ptr == buffer_base)));
                     watch_released_ptr_ = expected;
                 }
             }
