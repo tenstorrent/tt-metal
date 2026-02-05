@@ -328,19 +328,13 @@ class Attention(LightweightModule):
                 dtype=self.wo_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG
-                if (self.use_fused_all_gather_matmul or self.TG)
-                else wo_mem_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device,
-                    dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
+                    dims=(2, 3),
                     mesh_shape=configuration.cluster_shape,
                 ),
-                cache_file_name=(
-                    cache_name("wo_decode_width_sharded_2d_padded")
-                    if (self.use_fused_all_gather_matmul or self.TG)
-                    else cache_name("wo_decode")
-                ),
+                cache_file_name=(cache_name("wo_decode_width_sharded_2d_padded")),
             )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
@@ -477,7 +471,7 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        self.li_qkv_decode_compute_kernel_cfg.math_fidelity = ttnn.MathFidelity.HiFi2
+
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -637,7 +631,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
 
-        if self.use_fused_all_gather_matmul:
+        if self.use_fused_all_gather_matmul or self.args.needed_padding:
             attn_output_cat = ttnn.to_memory_config(
                 attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
             )

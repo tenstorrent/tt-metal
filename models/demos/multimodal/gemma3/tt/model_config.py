@@ -76,7 +76,6 @@ class ModelArgs(TTModelArgs):
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
 
         if self.needed_padding:
-            self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = True
             attn_allgather_matmul_grid = self.dram_shard_core_grid_for_k(self.padded_dim // self.num_devices)
             self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"] = (
                 ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
