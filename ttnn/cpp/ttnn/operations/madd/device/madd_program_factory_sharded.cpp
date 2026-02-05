@@ -101,7 +101,7 @@ MAddProgramFactorySharded::cached_program_t MAddProgramFactorySharded::create(
 
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/madd/device/kernels/compute/madd_compute.cpp",
+        "ttnn/cpp/ttnn/operations/madd/device/kernels/compute/madd_compute_sharded.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
