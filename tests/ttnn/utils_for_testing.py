@@ -15,11 +15,13 @@ import torch
 import numpy as np
 
 
-# Dictionaries for converting dtypes
+# Dictionaries for converting dtypes.
+# Note: ttnn.uint32 maps to torch.int32 for legacy backward compatibility
+# (the C++ binding flips UINT32 to signed when producing torch/numpy tensors).
 tt_dtype_to_torch_dtype = {
     ttnn.uint8: torch.uint8,
-    ttnn.uint16: torch.int16,
-    ttnn.uint32: torch.int32,
+    ttnn.uint16: torch.uint16,
+    ttnn.uint32: torch.int32,  # legacy: UINT32 is returned as signed INT32
     ttnn.int32: torch.int32,
     ttnn.float32: torch.float,
     ttnn.bfloat16: torch.bfloat16,
@@ -29,8 +31,8 @@ tt_dtype_to_torch_dtype = {
 
 tt_dtype_to_np_dtype = {
     ttnn.uint8: np.ubyte,
-    ttnn.uint16: np.int16,
-    ttnn.uint32: np.int32,
+    ttnn.uint16: np.uint16,
+    ttnn.uint32: np.uint32,
     ttnn.int32: np.int32,
     ttnn.float32: np.float32,
     ttnn.bfloat8_b: np.float32,

@@ -309,9 +309,10 @@ nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(RowMajorHostBuffer&
 
     nb::capsule owner(buffer, [](void* p) noexcept { delete static_cast<HostBuffer*>(p); });
 
-    // Fiddling with sign bit to match previous behavior
+    // Legacy behavior: UINT32 was previously converted to INT32 for torch tensors.
+    // This is preserved for backward compatibility but NOT applied to UINT8/UINT16.
     nb::dlpack::dtype dt = get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type);
-    if (dt.code == static_cast<std::uint8_t>(nb::dlpack::dtype_code::UInt) && dt.bits > 8) {
+    if (dt.code == static_cast<std::uint8_t>(nb::dlpack::dtype_code::UInt) && dt.bits == 32) {
         dt.code = static_cast<std::uint8_t>(nb::dlpack::dtype_code::Int);
     }
 
@@ -479,10 +480,9 @@ Tensor tensor_from_numpy(nb::ndarray<nb::numpy> numpy_data, Layout target_layout
         };
 
     // Map dtype codes to appropriate handlers based on dtype code and bit width
-    switch (numpy_data_type.code) {
-        case static_cast<uint8_t>(nb::dlpack::dtype_code::Int):
-            return impl.operator()<int32_t>(new_type.value_or(DataType::INT32));
-        case static_cast<uint8_t>(nb::dlpack::dtype_code::UInt):
+    switch (static_cast<nb::dlpack::dtype_code>(numpy_data_type.code)) {
+        case nb::dlpack::dtype_code::Int: return impl.operator()<int32_t>(new_type.value_or(DataType::INT32));
+        case nb::dlpack::dtype_code::UInt:
             // Handle different unsigned integer bit widths
             switch (numpy_data_type.bits) {
                 case 8: return impl.operator()<uint8_t>(new_type.value_or(DataType::UINT8));
@@ -490,16 +490,14 @@ Tensor tensor_from_numpy(nb::ndarray<nb::numpy> numpy_data, Layout target_layout
                 case 32: return impl.operator()<uint32_t>(new_type.value_or(DataType::UINT32));
                 default: TT_THROW("Unsupported unsigned integer bit width: {} bits", numpy_data_type.bits);
             }
-        case static_cast<uint8_t>(nb::dlpack::dtype_code::Float):
-            return impl.operator()<float>(new_type.value_or(DataType::FLOAT32));
-        case static_cast<uint8_t>(nb::dlpack::dtype_code::Bfloat):
-            return impl.operator()<bfloat16>(new_type.value_or(DataType::BFLOAT16));
-        case static_cast<uint8_t>(nb::dlpack::dtype_code::Complex): TT_THROW("Unsupported type: Complex");
-        case static_cast<uint8_t>(nb::dlpack::dtype_code::Bool): TT_THROW("Unsupported type: Bool");
+        case nb::dlpack::dtype_code::Float: return impl.operator()<float>(new_type.value_or(DataType::FLOAT32));
+        case nb::dlpack::dtype_code::Bfloat: return impl.operator()<bfloat16>(new_type.value_or(DataType::BFLOAT16));
+        case nb::dlpack::dtype_code::Complex: TT_THROW("Unsupported type: Complex");
+        case nb::dlpack::dtype_code::Bool: TT_THROW("Unsupported type: Bool");
         default:
             TT_THROW(
                 "Unsupported dtype code: {}. For custom dtypes like ml_dtypes.bfloat16, use the nb::object overload.",
-                static_cast<int>(numpy_data_type.code));
+                numpy_data_type.code);
     }
 }
 

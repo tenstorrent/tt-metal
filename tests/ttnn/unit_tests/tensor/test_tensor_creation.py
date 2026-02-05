@@ -46,7 +46,7 @@ def test_tensor_creation(shape, tt_dtype, layout, device):
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-    if dtype in {torch.uint8, torch.int16, torch.int32}:
+    if dtype in {torch.uint8, torch.uint16, torch.int16, torch.int32}:
         py_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, shape, dtype=dtype)
     else:
         py_tensor = torch.rand(shape, dtype=dtype)
@@ -99,7 +99,7 @@ def test_tensor_creation_api_parity(shape, tt_dtype, layout, device):
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-    if dtype in {torch.uint8, torch.int16, torch.int32}:
+    if dtype in {torch.uint8, torch.uint16, torch.int16, torch.int32}:
         py_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, shape, dtype=dtype)
     else:
         py_tensor = torch.rand(shape, dtype=dtype)
@@ -200,7 +200,7 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-    if dtype in {torch.uint8, torch.int16, torch.int32}:
+    if dtype in {torch.uint8, torch.uint16, torch.int16, torch.int32}:
         py_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, shape, dtype=dtype)
     else:
         py_tensor = torch.rand(shape, dtype=dtype)
