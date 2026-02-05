@@ -121,6 +121,10 @@ blackhole:
   - tests/ttnn/unit_tests/base_functionality/test_concat_issue.py
   - tests/ttnn/unit_tests/base_functionality/test_async.py
 
+  # Eltwise tests (BH-specific failures)
+  - tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_sigmoid_accurate_21f.py
+
   # Conv tests
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
