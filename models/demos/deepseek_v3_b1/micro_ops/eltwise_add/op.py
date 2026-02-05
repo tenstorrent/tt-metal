@@ -219,7 +219,7 @@ class EltwiseAdd:
 
         # Create program descriptor
         program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors(),
+            kernels=unified_kernel.get_kernel_descriptors().kernels,
             cbs=[cb0_descriptor, cb1_descriptor, cb2_descriptor],
             semaphores=[],
         )
