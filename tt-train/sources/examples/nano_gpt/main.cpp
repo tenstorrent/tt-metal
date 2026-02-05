@@ -174,7 +174,7 @@ struct DeviceConfig {
     tt::tt_metal::distributed::MeshShape mesh_shape{1, 1};
     std::vector<int> device_ids{};
 
-    bool enable_dp = false;
+    bool enable_ddp = false;
     bool enable_tp = false;
 };
 
@@ -185,12 +185,11 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
         return config;
     }
 
-    // Support both old "enable_dp" and new "enable_dp" naming
-    config.enable_dp = device_node["enable_dp"].as<bool>(device_node["enable_ddp"].as<bool>(false));
+    config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
 
     auto mesh_shape_node = device_node["mesh_shape"];
-    bool multidevice = config.enable_dp || config.enable_tp;
+    bool multidevice = config.enable_ddp || config.enable_tp;
     if (multidevice && !mesh_shape_node) {
         throw std::runtime_error("Mesh shape is required for multidevice training");
     }
@@ -333,10 +332,10 @@ int main(int argc, char **argv) {
         fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx->size(), *distributed_ctx->rank());
     }
 
-    if (device_config.enable_dp || device_config.enable_tp) {
+    if (device_config.enable_ddp || device_config.enable_tp) {
         fmt::println("Device config:");
         fmt::println("  Tensor parallel enabled: {}", device_config.enable_tp);
-        fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_dp);
+        fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_ddp);
         fmt::println("  Mesh shape: {}", device_config.mesh_shape);
         fmt::println("  Device IDs: {}", device_config.device_ids);
     }
@@ -422,7 +421,7 @@ int main(int argc, char **argv) {
 
     auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
     // enable fabric config for 3-tier architecture, tp, ddp
-    if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_dp) {
+    if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp) {
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
 
@@ -717,7 +716,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (device_config.enable_dp && !is_three_tier_training(multihost_config)) {
+                if (device_config.enable_ddp && !is_three_tier_training(multihost_config)) {
                     ttml::core::distributed::synchronize_gradients(parameters);
                 }
 

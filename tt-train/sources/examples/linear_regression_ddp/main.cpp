@@ -128,12 +128,12 @@ int main(int argc, char** argv) {
 
     auto model = ttml::models::linear_regression::create(num_features, num_targets);
 
-    float learning_rate = 0.05F * num_targets * (batch_size / 128.F);
+    float learning_rate = 0.1F * num_targets * (batch_size / 128.F);
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
 
     int training_step = 0;
-    const int num_epochs = 100;
+    const int num_epochs = 10;
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         for (const auto& [data, targets] : train_dataloader) {
             optimizer.zero_grad();
