@@ -36,6 +36,7 @@ You do NOT write kernel code. You design HOW kernels should be implemented.
    - `ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp`
    - `ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp`
    - `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp`
+   - `ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp`
    - `ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp`
    - `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp`
 3. **Reference analyses** (optional) - Patterns from similar operations
@@ -138,6 +139,7 @@ You MUST produce a structured Kernel Design Document saved to:
 - **Implementation Approach**:
   - **USE HELPER**: {No} (dataflow kernels don't use compute helpers)
   - **RAW CALLS**: {describe the pattern}
+    - `TensorAccessor usage`
     - `noc_async_read()` for DRAM reads
     - `cb_reserve_back()` / `cb_push_back()` for CB management
 - **CB Flow**: {describe CB operations}
@@ -163,7 +165,7 @@ When designing compute phases, read the relevant helper in `ttnn/cpp/ttnn/kernel
 - `tilize_helpers.hpp` - tilize() function
 - `untilize_helpers.hpp` - untilize() function
 - `reduce_helpers_compute.hpp` - reduce(), ReduceInputBlockShape, ReduceInputPolicy, Accumulation types
-- `binary_op_helpers.hpp` - add(), sub(), mul(), BinaryTileShape, BroadcastDim, BinaryInputMode types
+- `binary_op_helpers.hpp` - add(), sub(), mul(), BinaryInputBlockShape, BroadcastDim, BinaryInputPolicy, BinaryOutputPolicy
 - `dest_helpers.hpp` - DEST register limits (DEST_AUTO_LIMIT)
 
 The code is self-documenting with Doxygen comments and @example blocks.
@@ -527,6 +529,27 @@ EOF
 
 ---
 
+## Operation Path Determination
+
+**CRITICAL**: Before any logging, you MUST correctly determine the `operation_path`. This is the directory containing the operation files, NOT your agent name.
+
+**How to derive operation_path:**
+- From spec file: `operation_path = dirname(spec_file_path)`
+- Example: If spec is at `ttnn/experimental/centralize_w/centralize_w_spec.md`, then `operation_path = ttnn/experimental/centralize_w`
+
+**Concrete examples:**
+| Spec File Location | operation_path |
+|-------------------|----------------|
+| `ttnn/experimental/my_op/my_op_spec.md` | `ttnn/experimental/my_op` |
+| `ttnn/cpp/ttnn/operations/reduction/my_op/my_op_spec.md` | `ttnn/cpp/ttnn/operations/reduction/my_op` |
+
+**WRONG values (never use these):**
+- ❌ `ttnn-kernel-designer` (your agent name)
+- ❌ `my_op` (just the operation name)
+- ❌ The full file path with filename
+
+---
+
 ## Breadcrumbs (Conditional)
 
 Check if logging is enabled at startup:
@@ -537,3 +560,23 @@ Check if logging is enabled at startup:
 **If DISABLED**: Skip breadcrumb steps. Git commits still required.
 
 **If ENABLED**: Read `.claude/references/logging/common.md` and `.claude/references/logging/kernel-designer.md` for logging protocol.
+
+**Initialize breadcrumbs with correct argument order:**
+```bash
+.claude/scripts/logging/init_breadcrumbs.sh \
+  "{operation_path}" \
+  "ttnn-kernel-designer" \
+  "{operation_name}" \
+  "ttnn-operation-planner" \
+  "{spec_file_path}"
+```
+
+**Example:**
+```bash
+.claude/scripts/logging/init_breadcrumbs.sh \
+  "ttnn/experimental/centralize_w" \
+  "ttnn-kernel-designer" \
+  "centralize_w" \
+  "ttnn-operation-planner" \
+  "ttnn/experimental/centralize_w/centralize_w_spec.md"
+```
