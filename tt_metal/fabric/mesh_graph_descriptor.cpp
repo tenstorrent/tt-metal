@@ -690,6 +690,36 @@ void MeshGraphDescriptor::validate_legacy_requirements(
             }
         }
     }
+
+    // Check that connections in the same graph don't mix STRICT and RELAXED policies
+    for (const auto& graph : proto.graph_descriptors()) {
+        if (graph.connections_size() == 0) {
+            continue;
+        }
+
+        // Determine the policy of the first connection (default to STRICT if not specified)
+        proto::Policy first_policy = proto::Policy::STRICT;
+        if (graph.connections(0).has_channels() && graph.connections(0).channels().has_policy()) {
+            first_policy = graph.connections(0).channels().policy();
+        }
+
+        // Check all other connections have the same policy
+        for (int i = 1; i < graph.connections_size(); ++i) {
+            const auto& connection = graph.connections(i);
+            proto::Policy connection_policy = proto::Policy::STRICT;
+            if (connection.has_channels() && connection.channels().has_policy()) {
+                connection_policy = connection.channels().policy();
+            }
+
+            if (connection_policy != first_policy) {
+                error_messages.push_back(fmt::format(
+                    "MGD 1.0 Compatibility requirement: Cannot mix STRICT and RELAXED policies in the same graph. "
+                    "All connections in a graph must use the same policy (Graph: {})",
+                    graph.name()));
+                break;  // Only report once per graph
+            }
+        }
+    }
 }
 
 void MeshGraphDescriptor::populate_descriptors() {

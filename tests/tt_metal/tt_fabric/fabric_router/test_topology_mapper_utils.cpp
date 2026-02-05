@@ -12,6 +12,7 @@
 #include <iostream>
 #include <map>
 #include <set>
+#include <random>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
@@ -916,14 +917,16 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_StrictModeIntermeshPo
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_MixedStrictAndRelaxedConnections) {
-    // Test build_logical_multi_mesh_adjacency_graph with mixed connections:
-    // - Strict mode connections between mesh 0 and mesh 1 (device-to-device)
-    // - Relaxed mode connections between mesh 1 and mesh 2 (mesh-to-mesh)
+    // Test build_logical_multi_mesh_adjacency_graph with strict mode connections from MGD
+    // This verifies that exit nodes are created correctly for strict mode connections
+    //
+    // The MGD specifies strict connections between mesh 0 and mesh 1:
+    // - M0 D1 <-> M1 D0 with 2 channels
     //
     // This verifies that:
-    // 1. Exit nodes are only tracked for strict mode connections
-    // 2. Mesh-level connectivity includes both types
-    // 3. Both connection types are processed correctly
+    // 1. Exit nodes are tracked for strict mode connections
+    // 2. Exit node details are correct (correct devices, correct connections)
+    // 3. Mesh-level connectivity is correct
 
     // Create MGD textproto string with 3 meshes and strict connections between mesh 0-1
     const std::string mgd_textproto = R"proto(
@@ -954,35 +957,45 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_MixedStrictAndRelaxed
             nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
             channels { count: 2 }
           }
+
+          # Strict mesh-to-mesh connection: Mesh 0 <-> Mesh 2
+          # Mesh-level connection (no device_id) with STRICT policy and 3 channels
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+            channels { count: 3 policy: STRICT }
+          }
         }
 
         # --- Instantiation ----------------------------------------------------------
         top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     )proto";
 
-    // Write MGD to a temporary file
-    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
-    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    // Create MeshGraphDescriptor from string, then create MeshGraph
+    // Since MeshGraph constructor requires a file path, we create a temporary file
+    // with a unique name that gets automatically cleaned up
+    const std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 15);
+    std::string unique_suffix;
+    for (int i = 0; i < 8; ++i) {
+        unique_suffix += "0123456789abcdef"[dis(gen)];
+    }
+    const std::filesystem::path temp_mgd_path = temp_dir / ("test_mixed_connections_" + unique_suffix + ".textproto");
 
-    const std::filesystem::path temp_mgd_path = std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" /
-                                                "tt_fabric" / "custom_mesh_descriptors" /
-                                                "test_mixed_connections_mgd.textproto";
+    // Write the MGD content to temporary file
+    {
+        std::ofstream mgd_file(temp_mgd_path);
+        ASSERT_TRUE(mgd_file.is_open()) << "Failed to create temporary MGD file";
+        mgd_file << mgd_textproto;
+    }  // File is closed here
 
-    // Write the MGD content to file
-    std::ofstream mgd_file(temp_mgd_path);
-    ASSERT_TRUE(mgd_file.is_open()) << "Failed to create temporary MGD file";
-    mgd_file << mgd_textproto;
-    mgd_file.close();
-
-    // Load MeshGraph from the MGD file
+    // Load MeshGraph from the temporary file (with strict connections between mesh 0-1)
     ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
 
-    // Manually add relaxed mode connections between mesh 1 and mesh 2
-    // Since MGD format doesn't support both types simultaneously, we add relaxed connections
-    // after loading the strict connections from MGD
-    // Access private members to add relaxed connections (testing-only workaround)
-    mesh_graph.requested_intermesh_connections_[1][2] = 3u;
-    mesh_graph.requested_intermesh_connections_[2][1] = 3u;
+    // Clean up temporary file immediately after loading
+    std::filesystem::remove(temp_mgd_path);
 
     // Build the logical multi-mesh graph
     const auto multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
@@ -990,29 +1003,68 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_MixedStrictAndRelaxed
     // Verify we have 3 meshes
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u) << "Should have 3 meshes";
 
-    // Verify mesh-level connectivity includes both connection types
+    // Verify mesh-level connectivity
+    // Mesh 0: strict connection to mesh 1 (2 channels, device-level) + strict connection to mesh 2 (3 channels,
+    // mesh-level)
     const auto& mesh0_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
-    EXPECT_EQ(mesh0_neighbors.size(), 2u) << "Mesh 0 should have 2 connections to mesh 1 (strict mode)";
+    EXPECT_EQ(mesh0_neighbors.size(), 5u) << "Mesh 0 should have 5 connections total (2 to mesh 1, 3 to mesh 2)";
 
+    uint32_t mesh0_to_mesh1_count = 0;
+    uint32_t mesh0_to_mesh2_count = 0;
+    for (const auto& neighbor : mesh0_neighbors) {
+        if (neighbor == MeshId{1}) {
+            mesh0_to_mesh1_count++;
+        } else if (neighbor == MeshId{2}) {
+            mesh0_to_mesh2_count++;
+        }
+    }
+    EXPECT_EQ(mesh0_to_mesh1_count, 2u) << "Mesh 0 should connect to mesh 1 with 2 channels (strict, device-level)";
+    EXPECT_EQ(mesh0_to_mesh2_count, 3u) << "Mesh 0 should connect to mesh 2 with 3 channels (strict, mesh-level)";
+
+    // Mesh 1: strict connection to mesh 0 (2 channels) only
     const auto& mesh1_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{1});
-    // Mesh 1 connects to both mesh 0 (strict, 2 channels) and mesh 2 (relaxed, 3 channels)
-    EXPECT_EQ(mesh1_neighbors.size(), 5u) << "Mesh 1 should have 5 connections total (2 to mesh 0, 3 to mesh 2)";
+    EXPECT_EQ(mesh1_neighbors.size(), 2u) << "Mesh 1 should have 2 connections to mesh 0 (strict mode, 2 channels)";
 
+    uint32_t mesh1_to_mesh0_count = 0;
+    uint32_t mesh1_to_mesh2_count = 0;
+    for (const auto& neighbor : mesh1_neighbors) {
+        if (neighbor == MeshId{0}) {
+            mesh1_to_mesh0_count++;
+        } else if (neighbor == MeshId{2}) {
+            mesh1_to_mesh2_count++;
+        }
+    }
+    EXPECT_EQ(mesh1_to_mesh0_count, 2u) << "Mesh 1 should connect to mesh 0 with 2 channels (strict)";
+    EXPECT_EQ(mesh1_to_mesh2_count, 0u) << "Mesh 1 should NOT connect to mesh 2";
+
+    // Mesh 2: strict connection to mesh 0 (3 channels, mesh-level) only
     const auto& mesh2_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{2});
-    EXPECT_EQ(mesh2_neighbors.size(), 3u) << "Mesh 2 should have 3 connections to mesh 1 (relaxed mode)";
+    EXPECT_EQ(mesh2_neighbors.size(), 3u) << "Mesh 2 should have 3 connections to mesh 0 (strict mode, 3 channels)";
 
-    // Verify exit nodes are ONLY tracked for strict mode connections (mesh 0 <-> mesh 1)
-    // Mesh 0 should have exit nodes
+    uint32_t mesh2_to_mesh0_count = 0;
+    uint32_t mesh2_to_mesh1_count = 0;
+    for (const auto& neighbor : mesh2_neighbors) {
+        if (neighbor == MeshId{0}) {
+            mesh2_to_mesh0_count++;
+        } else if (neighbor == MeshId{1}) {
+            mesh2_to_mesh1_count++;
+        }
+    }
+    EXPECT_EQ(mesh2_to_mesh0_count, 3u) << "Mesh 2 should connect to mesh 0 with 3 channels (strict, mesh-level)";
+    EXPECT_EQ(mesh2_to_mesh1_count, 0u) << "Mesh 2 should NOT connect to mesh 1";
+
+    // Verify exit nodes are tracked only for device-level strict connections (mesh 0 <-> mesh 1)
+    // Mesh 0 should have exit nodes (device-level strict connection to mesh 1)
     EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
-        << "Mesh 0 should have exit nodes (strict mode connection)";
+        << "Mesh 0 should have exit nodes (device-level strict connection)";
 
-    // Mesh 1 should have exit nodes (strict mode connection to mesh 0)
+    // Mesh 1 should have exit nodes (device-level strict connection to mesh 0)
     EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
-        << "Mesh 1 should have exit nodes (strict mode connection)";
+        << "Mesh 1 should have exit nodes (device-level strict connection)";
 
-    // Mesh 2 should NOT have exit nodes (only relaxed mode connections)
+    // Mesh 2 should NOT have exit nodes (mesh-level connection, not device-level)
     EXPECT_FALSE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{2}))
-        << "Mesh 2 should NOT have exit nodes (only relaxed mode connections)";
+        << "Mesh 2 should NOT have exit nodes (mesh-level connection, not device-level)";
 
     // Verify exit node details for mesh 0
     const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
@@ -1054,9 +1106,6 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_MixedStrictAndRelaxed
         }
     }
     EXPECT_EQ(exit_node0_1_count, 2u) << "Exit node 1_0 should have 2 connections to mesh 0 device 1";
-
-    // Cleanup: remove temporary MGD file
-    std::filesystem::remove(temp_mgd_path);
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_MultiHostMultiMesh) {
@@ -3213,6 +3262,230 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_InterMeshConnectivity_2x2
         ASSERT_TRUE(has_direct_connection)
             << "ASIC " << asic0.get() << " from mesh 0 must be directly connected to at least one ASIC from mesh 1";
     }
+}
+
+// TODO: Add a test testing relaxed mode connections between certain meshes
+
+// TODO: Add
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MixedStrictAndRelaxedConnections) {
+    // PLACEHOLDER TEST - Currently SKIPPED
+    // This test is a placeholder for future functionality when mixing STRICT and RELAXED
+    // policies in the same graph becomes supported.
+    //
+    // TODO: Remove validation check and update this test when mixed policy support is implemented
+    // See: tt_metal/fabric/mesh_graph_descriptor.cpp validate_legacy_requirements
+    //      tt_metal/fabric/topology_mapper_utils.cpp build_logical_multi_mesh_adjacency_graph
+    //
+    // Expected behavior when implemented:
+    // - Strict mode connections (device-level) should create exit nodes
+    // - Relaxed mode connections (mesh-level) should NOT create exit nodes
+    // - Both connection types should be processed correctly in the mapping
+    //
+    // Test setup for mixed connections:
+    // - Mesh 0 <-> Mesh 1: STRICT mode (device-level, creates exit nodes)
+    // - Mesh 1 <-> Mesh 2: RELAXED mode (mesh-level, no exit nodes)
+    //
+    // This verifies:
+    // 1. Exit nodes are only created for strict mode connections (mesh 0-1)
+    // 2. Mesh-level connectivity includes both connection types
+    // 3. Mapping succeeds with both types present
+
+    GTEST_SKIP() << "Mixed STRICT and RELAXED policies not yet supported - validation prevents this";
+
+    // Create MGD textproto string with mixed STRICT and RELAXED connections
+    // NOTE: This will currently fail validation - that's expected until feature is implemented
+    const std::string mgd_textproto = R"proto(
+        # --- Meshes ---------------------------------------------------------------
+
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 2, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+
+        # --- Graphs ---------------------------------------------------------------
+
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          # Instances: mesh ids 0,1,2 (all 2x2)
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+
+          # STRICT connection: Mesh 0 <-> Mesh 1 (device-level)
+          # M0 D1 <-> M1 D0 with 2 channels
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+            channels { count: 2 policy: STRICT }
+          }
+
+          # RELAXED connection: Mesh 1 <-> Mesh 2 (mesh-level)
+          # Mesh-level connection with 3 channels
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+            channels { count: 3 policy: RELAXED }
+          }
+        }
+
+        # --- Instantiation ----------------------------------------------------------
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Create temporary MGD file
+    const std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 15);
+    std::string unique_suffix;
+    for (int i = 0; i < 8; ++i) {
+        unique_suffix += "0123456789abcdef"[dis(gen)];
+    }
+    const std::filesystem::path temp_mgd_path = temp_dir / ("test_mixed_policies_" + unique_suffix + ".textproto");
+
+    // Write the MGD content to temporary file
+    {
+        std::ofstream mgd_file(temp_mgd_path);
+        ASSERT_TRUE(mgd_file.is_open()) << "Failed to create temporary MGD file";
+        mgd_file << mgd_textproto;
+    }  // File is closed here
+
+    // Load MeshGraph from the MGD file (should succeed when feature is implemented)
+    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+
+    // Build logical multi-mesh graph
+    const auto logical_multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    // Verify we have 3 meshes
+    EXPECT_EQ(logical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u) << "Should have 3 meshes";
+
+    // Verify mesh-level connectivity includes both connection types
+    const auto& mesh0_neighbors = logical_multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_EQ(mesh0_neighbors.size(), 2u) << "Mesh 0 should have 2 connections to mesh 1 (strict)";
+
+    const auto& mesh1_neighbors = logical_multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{1});
+    EXPECT_EQ(mesh1_neighbors.size(), 5u)
+        << "Mesh 1 should have 5 connections total (2 to mesh 0 strict, 3 to mesh 2 relaxed)";
+
+    const auto& mesh2_neighbors = logical_multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{2});
+    EXPECT_EQ(mesh2_neighbors.size(), 3u) << "Mesh 2 should have 3 connections to mesh 1 (relaxed)";
+
+    // Verify exit nodes are ONLY tracked for strict mode connections (mesh 0-1)
+    EXPECT_TRUE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
+        << "Mesh 0 should have exit nodes (strict mode connection)";
+    EXPECT_TRUE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
+        << "Mesh 1 should have exit nodes (strict mode connection)";
+    EXPECT_FALSE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{2}))
+        << "Mesh 2 should NOT have exit nodes (only relaxed mode connections)";
+
+    // Verify exit node details for mesh 0 (strict connection)
+    const auto& exit_graph0 = logical_multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_nodes0 = exit_graph0.get_nodes();
+    EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node (device 1)";
+
+    FabricNodeId exit_node0_1(MeshId{0}, 1);
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_1) != exit_nodes0.end())
+        << "Device 1 should be an exit node in mesh 0";
+
+    // Create physical multi-mesh graph for mapping
+    // Physical topology: 3 meshes, each 2x2, with intermesh connections matching logical
+    using namespace ::tt::tt_fabric;
+
+    // Physical Mesh 0: 2x2 grid
+    std::vector<tt::tt_metal::AsicID> physical_asics_m0;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m0.push_back(tt::tt_metal::AsicID{100 + i});
+    }
+    auto physical_adj_m0 = build_grid_adjacency(physical_asics_m0, 2, 2);
+
+    // Physical Mesh 1: 2x2 grid
+    std::vector<tt::tt_metal::AsicID> physical_asics_m1;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m1.push_back(tt::tt_metal::AsicID{200 + i});
+    }
+    auto physical_adj_m1 = build_grid_adjacency(physical_asics_m1, 2, 2);
+
+    // Physical Mesh 2: 2x2 grid
+    std::vector<tt::tt_metal::AsicID> physical_asics_m2;
+    for (uint64_t i = 0; i < 4; ++i) {
+        physical_asics_m2.push_back(tt::tt_metal::AsicID{300 + i});
+    }
+    auto physical_adj_m2 = build_grid_adjacency(physical_asics_m2, 2, 2);
+
+    // Create physical multi-mesh graph
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[MeshId{0}] = AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m0);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[MeshId{1}] = AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m1);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[MeshId{2}] = AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m2);
+
+    // Create flat physical adjacency map (combining intra-mesh and intermesh connections)
+    AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap flat_physical_adj;
+
+    // Add intra-mesh connections to flat adjacency map
+    for (const auto& [asic, neighbors] : physical_adj_m0) {
+        flat_physical_adj[asic] = neighbors;
+    }
+    for (const auto& [asic, neighbors] : physical_adj_m1) {
+        flat_physical_adj[asic] = neighbors;
+    }
+    for (const auto& [asic, neighbors] : physical_adj_m2) {
+        flat_physical_adj[asic] = neighbors;
+    }
+
+    // Add intermesh connections: M0 <-> M1 (strict, device-level) and M1 <-> M2 (relaxed, mesh-level)
+    // M0 ASIC 101 <-> M1 ASIC 200 (strict connection)
+    flat_physical_adj[tt::tt_metal::AsicID{101}].push_back(tt::tt_metal::AsicID{200});
+    flat_physical_adj[tt::tt_metal::AsicID{200}].push_back(tt::tt_metal::AsicID{101});
+    // M1 ASIC 200 <-> M2 ASIC 300 (relaxed connection - any device can be used)
+    flat_physical_adj[tt::tt_metal::AsicID{200}].push_back(tt::tt_metal::AsicID{300});
+    flat_physical_adj[tt::tt_metal::AsicID{300}].push_back(tt::tt_metal::AsicID{200});
+
+    // Create flat physical graph from adjacency map
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_physical_graph(flat_physical_adj);
+
+    // ASIC to mesh/rank mapping
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& asic : physical_asics_m0) {
+        asic_id_to_mesh_rank[MeshId{0}][asic] = MeshHostRankId{0};
+    }
+    for (const auto& asic : physical_asics_m1) {
+        asic_id_to_mesh_rank[MeshId{1}][asic] = MeshHostRankId{0};
+    }
+    for (const auto& asic : physical_asics_m2) {
+        asic_id_to_mesh_rank[MeshId{2}][asic] = MeshHostRankId{0};
+    }
+
+    // Build physical multi-mesh graph from flat graph
+    physical_multi_mesh_graph = build_hierarchical_from_flat_graph(flat_physical_graph, asic_id_to_mesh_rank);
+
+    // Perform mapping
+    TopologyMappingConfig config;
+    config.strict_mode = false;  // Use relaxed mode for mapping (allows flexibility)
+
+    const auto result =
+        map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank);
+
+    // Verify mapping succeeded
+    EXPECT_TRUE(result.success) << "Mapping should succeed with mixed strict/relaxed connections";
+
+    // Verify all logical nodes are mapped
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 12u) << "All 12 logical nodes (3 meshes * 4 nodes) should be mapped";
+
+    // Verify exit nodes are correctly identified in physical graph
+    // Mesh 0 should have exit nodes (strict connection to mesh 1)
+    EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
+        << "Physical mesh 0 should have exit nodes";
+    EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
+        << "Physical mesh 1 should have exit nodes";
+    // Mesh 2 may or may not have exit nodes depending on implementation
+
+    // Clean up temporary file
+    std::filesystem::remove(temp_mgd_path);
 }
 
 }  // namespace

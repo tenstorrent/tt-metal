@@ -235,6 +235,12 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
 }
 
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
+    // TODO: Add support for mixing STRICT and RELAXED policies in the same graph.
+    // Currently, MGD validation prevents mixing policies, but when this feature is added,
+    // this function will need to handle both requested_intermesh_ports (strict) and
+    // requested_intermesh_connections (relaxed) simultaneously, ensuring exit nodes are
+    // only tracked for strict mode connections.
+
     // Build logical adjacency graphs for each mesh using topology solver's function
     auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
 

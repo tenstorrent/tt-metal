@@ -332,13 +332,22 @@ void MeshGraph::initialize_from_mgd(
         this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
     }
 
-    // Extract graph topology policy from top-level graph instance (for inter-mesh connections)
-    const auto& top_level_instance = mgd.top_level();
-    if (top_level_instance.kind == NodeKind::Graph) {
-        const auto* graph_desc = std::get<const proto::GraphDescriptor*>(top_level_instance.desc);
-        if (graph_desc && graph_desc->has_graph_topology() && graph_desc->graph_topology().has_channels()) {
-            this->inter_mesh_relaxed_policy_ =
-                (graph_desc->graph_topology().channels().policy() == proto::Policy::RELAXED);
+    // Determine inter-mesh policy from connections or graph topology
+    // Priority: 1) Check individual connections (if any), 2) Check graph_topology, 3) Default to STRICT
+    const auto& fabric_connections = mgd.connections_by_type("FABRIC");
+    if (!fabric_connections.empty()) {
+        // Check policy from the first connection (all connections have the same policy due to validation)
+        const auto& first_connection_data = mgd.get_connection(fabric_connections[0]);
+        this->inter_mesh_relaxed_policy_ = (first_connection_data.policy == proto::Policy::RELAXED);
+    } else {
+        // No individual connections, check graph_topology
+        const auto& top_level_instance = mgd.top_level();
+        if (top_level_instance.kind == NodeKind::Graph) {
+            const auto* graph_desc = std::get<const proto::GraphDescriptor*>(top_level_instance.desc);
+            if (graph_desc && graph_desc->has_graph_topology() && graph_desc->graph_topology().has_channels()) {
+                this->inter_mesh_relaxed_policy_ =
+                    (graph_desc->graph_topology().channels().policy() == proto::Policy::RELAXED);
+            }
         }
     }
 
