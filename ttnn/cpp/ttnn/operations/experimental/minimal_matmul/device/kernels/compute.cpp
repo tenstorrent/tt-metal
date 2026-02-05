@@ -78,9 +78,8 @@ void add_bias_and_addcmul_block(
     uint32_t out_cb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles) {
-    // Note: we could also defined addcmul as unary_bcast_tile + addcmul_tile
-    // However, unary_cast_tile updates both Unpacker/Math and *Pack*, which makes its setup
-    // more difficult alongside copy_tile() and add_bcast_tiles
+    // Note: unary_bcast_tile does not work with fp32_acc_to_dest=True.
+    // As a workaround, we perform addcmul through multiple LLKs calls (mul_tiles, mul_unary_tile, add_tiles_bcast).
 
     const uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
@@ -370,9 +369,9 @@ void kernel_main() {
             cb_push_back(intermediate_cb, out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
+            cb_reserve_back(out_cb, out_block_num_tiles);
 #ifndef FUSE_TERNARY
             cb_wait_front(intermediate_cb, out_block_num_tiles);
-            cb_reserve_back(out_cb, out_block_num_tiles);
 #ifndef FUSE_BIAS
             copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
 #else
@@ -383,7 +382,6 @@ void kernel_main() {
             cb_pop_front(intermediate_cb, out_block_num_tiles);
 
 #else   // FUSE_TERNARY is set
-            cb_reserve_back(out_cb, out_block_num_tiles);
             add_bias_and_addcmul_block(
                 intermediate_cb,
                 in2_cb,

@@ -28,7 +28,7 @@ struct MinimalMatmulParams {
     std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     std::optional<tt::tt_metal::DataType> output_dtype;
 
-    // Fused addcmul: ternary_a + scalar * matmul_output * ternary_c
+    // Fused addcmul: ternary_a + scalar * matmul_output * ternary_b
     std::optional<float> fused_ternary_scalar;
 
     DeviceComputeKernelConfig compute_kernel_config;
@@ -42,9 +42,9 @@ struct MinimalMatmulInputs {
     std::optional<Tensor> bias_tensor;
     std::optional<Tensor> optional_input_tensor;  // for StridedAllGatherMinimalMatmul
 
-    // Fused addcmul: ternary_a + scalar * matmul_output * ternary_c
-    std::optional<Tensor> fused_ternary_input_a;
-    std::optional<Tensor> fused_ternary_input_c;
+    // Fused addcmul: ternary_a + scalar * matmul_output * ternary_b
+    std::optional<Tensor> fused_ternary_input_a;  // residual/base (broadcast like bias)
+    std::optional<Tensor> fused_ternary_input_b;  // gate/multiplier (full MxN shape)
 };
 
 }  // namespace ttnn::experimental::prim

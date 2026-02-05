@@ -11,18 +11,6 @@ from models.common.utility_functions import comp_pcc
 
 
 def assert_quality(torch_output, tt_output):
-    import pandas as pd
-
-    def print_with_indices(tensor, name):
-        arr = tensor.to(torch.float32).detach().cpu().numpy()
-        df = pd.DataFrame(arr)
-        # print(f"{name} (rows: 0-{df.shape[0]-1}, cols: 0-{df.shape[1]-1}):")
-        # print(df.to_string(index=True, header=True))
-        df.to_csv(f"debug_outputs_{name.lower().replace(' ', '_').replace('/', '_')}.csv")
-
-    # print_with_indices(torch_output, "TORCH OUTPUT")
-    # print_with_indices(tt_output, "TT OUTPUT")
-
     pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
     relative_rmse_val = torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / torch_output.std().item()
     logger.info(f"PCC: {pcc_val:.7f}, Relative RMSE: {relative_rmse_val:.4f}")
@@ -50,28 +38,15 @@ def run_dit_minimal_matmul_addcmul_fused_test(
     fp32_acc=True,
 ):
     """
-    Test dit_minimal_matmul_addcmul_fused: output = addcmul_input1 + scalar * matmul(in, w) * addcmul_input2.
+    Test dit_minimal_matmul_addcmul_fused: output = addcmul_input1 + (scalar * matmul_output * addcmul_input2).
     """
     torch.manual_seed(0)
 
     # Create torch inputs
-    torch_matmul_input = torch.randint(0, 2, (M, K), dtype=torch.bfloat16)
-    torch_matmul_weight = torch.randint(0, 2, (K, N), dtype=torch.bfloat16)
-    torch_addcmul_a = torch.randint(0, 2, (1, N), dtype=torch.bfloat16)  # base value (broadcast like bias)
-    torch_addcmul_b = torch.randint(0, 2, (M, N), dtype=torch.bfloat16)  # gate
-
-    # torch_matmul_input = torch.full_like(torch_matmul_input, fill_value=1.0)
-    # torch_matmul_weight = torch.eye(K, N, dtype=torch.bfloat16)
-    # torch_matmul_weight = torch.triu(torch.full_like(torch_matmul_weight, fill_value=1.0))
-
-    # torch_addcmul_a = torch.full_like(torch_addcmul_a, fill_value=0.0)  # expected output will be == 1
-    # torch_addcmul_b = torch.full_like(torch_addcmul_b, fill_value=1.0)  # expected output will be == 1
-
-    # torch_addcmul_a = torch.arange(N, dtype=torch.bfloat16).reshape(1, N)
-
-    # addcmul_a_list = [1.0] * 16 + [1.5] * 16
-    # torch_addcmul_a = torch.tensor(addcmul_a_list, dtype=torch.bfloat16)
-
+    torch_matmul_input = torch.randn(M, K, dtype=torch.bfloat16)
+    torch_matmul_weight = torch.randn(K, N, dtype=torch.bfloat16)
+    torch_addcmul_a = torch.randn(1, N, dtype=torch.bfloat16)  # base value (broadcast like bias)
+    torch_addcmul_b = torch.randn(M, N, dtype=torch.bfloat16)  # gate
     torch_bias = torch.randn(1, N, dtype=torch.bfloat16) if use_bias else None
 
     # Compute expected torch output (full fused operation)
