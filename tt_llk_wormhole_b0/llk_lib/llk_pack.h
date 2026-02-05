@@ -184,7 +184,7 @@ inline void _llk_pack_uninit_(const std::uint32_t face_r_dim)
 template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
-    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
+    set_dst_write_addr(tile_index);
 
     program_packer_destination(address);
 

@@ -194,7 +194,7 @@ inline void _llk_pack_untilize_(
 
         for (std::uint32_t row = 0; row < num_rows; row++)
         {
-            TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_ct_offset + tile_dst_rt_offset); // Clear tile counter
+            set_dst_write_addr(tile_dst_ct_offset + tile_dst_rt_offset); // Clear tile counter
             ckernel::ckernel_template::run();
             TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
             if constexpr (block_ct_dim != full_ct_dim)
