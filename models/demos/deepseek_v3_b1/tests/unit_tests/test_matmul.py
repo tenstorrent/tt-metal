@@ -54,6 +54,8 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul.op import MatmulSingleCore
         (1, 7168, 64, ttnn.bfloat16, ttnn.bfloat4_b),  # Dense MLP: W_up (out_w=2)
         (1, 7168, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Gate proj + up proj
         (1, 2048, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Down proj
+        (1, 896, 32, ttnn.bfloat16, ttnn.bfloat4_b),  # Shared Expert / Dense MLP: W_up, W_proj
+        (1, 256, 64, ttnn.bfloat16, ttnn.bfloat4_b),  # Shared Expert / Dense MLP: W_down
     ],
 )
 def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype):
