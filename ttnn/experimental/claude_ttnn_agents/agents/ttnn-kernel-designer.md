@@ -154,7 +154,7 @@ You MUST produce a structured Kernel Design Document saved to:
 - [ ] Template parameters for reduce helper (if applicable):
   - `PoolType`: SUM, AVG, or MAX
   - `ReduceDim`: REDUCE_ROW, REDUCE_COL, or REDUCE_SCALAR
-  - `ReduceInputPolicy`: WaitAndPopPerTile (default), WaitAndPopPerBatch, NoWaitNoPop, or WaitUpfrontNoPop
+  - `ReduceInputPolicy`: WaitAndPopPerTile (default), BulkWaitBulkPop, NoWaitNoPop, or WaitUpfrontNoPop
   - `ReduceDataFormatReconfigMode`: NONE, INPUT, OUTPUT, or INPUT_AND_OUTPUT (default)
 
 **Note**: `REDUCE_OP` and `REDUCE_DIM` macros are **deprecated**. Always specify template parameters explicitly.
