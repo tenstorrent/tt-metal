@@ -13,14 +13,17 @@ namespace dataflow_kernel_lib {
 constexpr uint32_t ROW_SIZE_U32 = 8;
 
 /**
- * @brief Fill row 0 of each face with a scaler value
+ * @brief Fill row 0 of each face with a scaler value using NOC self-copy
+ *
+ * Writes row 0 of face 0, then uses NOC self-reads to efficiently copy
+ * that row to the other faces. This is faster than CPU writes.
  *
  * @tparam half_tile If true, fill faces 0-1 only. If false, fill all 4 faces.
- * @param ptr Pointer to the start of the tile in L1 memory
+ * @param write_addr_base L1 address of the start of the tile
  * @param scaler Packed bf16 value to write (bf16 << 16 | bf16)
  */
 template <bool half_tile>
-FORCE_INLINE void fill_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler);
+FORCE_INLINE void fill_row0_with_noc_copy(uint32_t write_addr_base, uint32_t scaler);
 
 /**
  * @brief Generate a reduce scaler tile
