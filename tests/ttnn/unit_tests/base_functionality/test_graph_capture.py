@@ -224,6 +224,8 @@ def test_graph_capture_without_dtype(device):
 
 
 def test_graph_capture_with_all_parameters_json_output(device):
+    if is_watcher_enabled():
+        pytest.skip("Skipping due to failure with watcher enabled, github issue #37096")
     # Create input tensor
     torch_input = torch.rand((1, 1, 2048, 512), dtype=torch.bfloat16)
 

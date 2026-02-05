@@ -2566,6 +2566,8 @@ def test_matmul_padding(
     input_b_memory_config,
     output_memory_config,
 ):
+    if is_watcher_enabled() and isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig):
+        pytest.skip("Skipping test_matmul_padding dram_sharded with watcher enabled, github issue #36314")
     torch.manual_seed(0)
 
     # Create input tensors with specified shapes and values

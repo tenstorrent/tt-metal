@@ -10,6 +10,7 @@ import math
 
 from models.common.utility_functions import (
     _nearest_y,
+    is_watcher_enabled,
     is_wormhole_b0,
     torch2tt_tensor,
     tt2torch_tensor,
@@ -84,6 +85,8 @@ def fold_torch(input_tensor, stride_h, stride_w, padding=None):
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, padding, input_layout, input_dtype):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test_fold_with_permute_for_dram_tensor with watcher enabled, github issue #37096")
     batch_size, height, width = nhw
     stride_h, stride_w = stride
 

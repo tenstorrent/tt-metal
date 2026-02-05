@@ -74,7 +74,10 @@ def test_transformer_attention_softmax_(
     *,
     device,
 ):
-    if is_watcher_enabled() and sequence_size == 384 and target_sequence_size == 384:
+    if is_watcher_enabled() and (
+        (sequence_size == 384 and target_sequence_size == 384)
+        or (sequence_size == 1024 and target_sequence_size == 384)
+    ):
         pytest.skip("Skipping with watcher enabled due to github issue #37098")
     torch.manual_seed(0)
 
