@@ -243,8 +243,11 @@ Tensor Sigmoid_accurate::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
         input,
-        {UnaryWithParam(
-            UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), fast_and_approximate_mode ? 1.0f : 0.0f})},
+        fast_and_approximate_mode
+            ? std::vector<
+                  EltwiseUnaryWithParam>{UnaryWithParam(UnaryOpType::NEG), UnaryWithParam(UnaryOpType::EXP, 1.0f), UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f), UnaryWithParam(UnaryOpType::RECIP)}
+            : std::vector<EltwiseUnaryWithParam>{UnaryWithParam(
+                  UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), 0.0f})},
         memory_config,
         optional_output_tensor);
 }
@@ -439,10 +442,7 @@ Tensor Clamp::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::CLAMP_TSS;
     return detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam{op_type, {min_val, max_val}}},
-        memory_config,
-        optional_output_tensor);
+        input_tensor, {EltwiseUnaryWithParam{op_type, {min_val, max_val}}}, memory_config, optional_output_tensor);
 }
 
 Tensor Rdiv::invoke(
@@ -566,10 +566,7 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, parameter}},
-        memory_config,
-        optional_output_tensor);
+        input_tensor, {EltwiseUnaryWithParam{unary_op_type, parameter}}, memory_config, optional_output_tensor);
 }
 
 Tensor Swish::invoke(
