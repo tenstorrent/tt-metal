@@ -57,7 +57,6 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: 22.04
 
   # N150 Tests (Wormhole single chip)
   n150-tests:
