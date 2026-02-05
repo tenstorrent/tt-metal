@@ -9,7 +9,6 @@
 #include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {
-
 autograd::TensorPtr matmul_op(
     const autograd::TensorPtr& a, const autograd::TensorPtr& b, bool transpose_a, bool transpose_b) {
     auto out = autograd::create_tensor();

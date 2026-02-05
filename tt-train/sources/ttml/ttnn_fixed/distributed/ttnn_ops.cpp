@@ -13,8 +13,6 @@
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
 
-using tt::tt_metal::distributed::MeshCoordinateRange;
-
 namespace ttml::ttnn_fixed::distributed {
 
 tt::tt_metal::Tensor all_gather(
