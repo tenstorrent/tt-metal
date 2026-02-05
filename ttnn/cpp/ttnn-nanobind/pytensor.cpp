@@ -606,6 +606,7 @@ nb::object get_ml_dtypes_bfloat16_dtype() {
 bool is_supported_datatype_for_to_numpy(DataType dtype) {
     switch (dtype) {
         case DataType::UINT8:
+        case DataType::UINT16:
         case DataType::INT32:
         case DataType::UINT32:
         case DataType::FLOAT32:
@@ -675,6 +676,7 @@ nb::object dispatch_to_numpy_conversion(DataType from_type, DataType to_type, co
         case DataType::UINT8:
             switch (to_type) {
                 case DataType::UINT8: return impl.template operator()<uint8_t, uint8_t>(tensor);
+                case DataType::UINT16: return impl.template operator()<uint8_t, uint16_t>(tensor);
                 case DataType::INT32: return impl.template operator()<uint8_t, int32_t>(tensor);
                 case DataType::UINT32: return impl.template operator()<uint8_t, uint32_t>(tensor);
                 case DataType::FLOAT32: return impl.template operator()<uint8_t, float>(tensor);
@@ -682,9 +684,21 @@ nb::object dispatch_to_numpy_conversion(DataType from_type, DataType to_type, co
                 default: break;
             }
             break;
+        case DataType::UINT16:
+            switch (to_type) {
+                case DataType::UINT8: return impl.template operator()<uint16_t, uint8_t>(tensor);
+                case DataType::UINT16: return impl.template operator()<uint16_t, uint16_t>(tensor);
+                case DataType::INT32: return impl.template operator()<uint16_t, int32_t>(tensor);
+                case DataType::UINT32: return impl.template operator()<uint16_t, uint32_t>(tensor);
+                case DataType::FLOAT32: return impl.template operator()<uint16_t, float>(tensor);
+                case DataType::BFLOAT16: return impl.template operator()<uint16_t, bfloat16>(tensor);
+                default: break;
+            }
+            break;
         case DataType::INT32:
             switch (to_type) {
                 case DataType::UINT8: return impl.template operator()<int32_t, uint8_t>(tensor);
+                case DataType::UINT16: return impl.template operator()<int32_t, uint16_t>(tensor);
                 case DataType::INT32: return impl.template operator()<int32_t, int32_t>(tensor);
                 case DataType::UINT32: return impl.template operator()<int32_t, uint32_t>(tensor);
                 case DataType::FLOAT32: return impl.template operator()<int32_t, float>(tensor);
@@ -695,6 +709,7 @@ nb::object dispatch_to_numpy_conversion(DataType from_type, DataType to_type, co
         case DataType::UINT32:
             switch (to_type) {
                 case DataType::UINT8: return impl.template operator()<uint32_t, uint8_t>(tensor);
+                case DataType::UINT16: return impl.template operator()<uint32_t, uint16_t>(tensor);
                 case DataType::INT32: return impl.template operator()<uint32_t, int32_t>(tensor);
                 case DataType::UINT32: return impl.template operator()<uint32_t, uint32_t>(tensor);
                 case DataType::FLOAT32: return impl.template operator()<uint32_t, float>(tensor);
@@ -705,6 +720,7 @@ nb::object dispatch_to_numpy_conversion(DataType from_type, DataType to_type, co
         case DataType::FLOAT32:
             switch (to_type) {
                 case DataType::UINT8: return impl.template operator()<float, uint8_t>(tensor);
+                case DataType::UINT16: return impl.template operator()<float, uint16_t>(tensor);
                 case DataType::INT32: return impl.template operator()<float, int32_t>(tensor);
                 case DataType::UINT32: return impl.template operator()<float, uint32_t>(tensor);
                 case DataType::FLOAT32: return impl.template operator()<float, float>(tensor);
@@ -715,6 +731,7 @@ nb::object dispatch_to_numpy_conversion(DataType from_type, DataType to_type, co
         case DataType::BFLOAT16:
             switch (to_type) {
                 case DataType::UINT8: return impl.template operator()<bfloat16, uint8_t>(tensor);
+                case DataType::UINT16: return impl.template operator()<bfloat16, uint16_t>(tensor);
                 case DataType::INT32: return impl.template operator()<bfloat16, int32_t>(tensor);
                 case DataType::UINT32: return impl.template operator()<bfloat16, uint32_t>(tensor);
                 case DataType::FLOAT32: return impl.template operator()<bfloat16, float>(tensor);
