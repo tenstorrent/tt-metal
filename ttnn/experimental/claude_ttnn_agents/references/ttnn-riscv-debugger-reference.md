@@ -65,9 +65,8 @@ DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_16()) << ENDL();
 ## Environment Setup
 
 ```bash
-# Reset device before testing (IMPORTANT: use first available device ID)
-tt-smi -ls                # List available device IDs
-tt-smi -r <device_id>     # Reset using first available ID (e.g., tt-smi -r 0)
+# Reset device before testing
+tt-smi -r
 
 # Enable watcher (polls every N ms)
 export TT_METAL_WATCHER=10

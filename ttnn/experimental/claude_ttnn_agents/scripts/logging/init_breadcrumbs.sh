@@ -2,9 +2,14 @@
 # Initialize breadcrumb file for an agent run
 # Usage: init_breadcrumbs.sh <operation_path> <agent_name> <operation_name> [predecessor_agent] [input_files...]
 #
-# Example:
+# Example (standard C++ workflow):
 #   init_breadcrumbs.sh ttnn/cpp/ttnn/operations/reduction/my_op ttnn-operation-scaffolder my_op "" spec.md
 #   init_breadcrumbs.sh ttnn/cpp/ttnn/operations/reduction/my_op ttnn-factory-builder my_op ttnn-operation-scaffolder spec.md
+#   init_breadcrumbs.sh ttnn/cpp/ttnn/operations/reduction/my_op ttnn-some-agent my_op ttnn-factory-builder spec.md input2.txt
+#
+# Example (generic_op workflow - see ttnn-generic-op-workflow.md for canonical path):
+#   init_breadcrumbs.sh ttnn/experimental/my_op ttnn-generic-op-builder my_op "" spec.md
+#   init_breadcrumbs.sh ttnn/experimental/my_op ttnn-kernel-writer my_op ttnn-kernel-designer spec.md
 
 set -e
 
