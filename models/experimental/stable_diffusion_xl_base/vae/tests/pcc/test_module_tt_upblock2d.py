@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
-from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -14,16 +14,17 @@ from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape, block_id, pcc",
+    "image_resolution, input_shape, block_id, pcc",
     [
-        ((1, 512, 128, 128), 0, 0.999),
-        ((1, 512, 256, 256), 1, 0.995),
-        ((1, 512, 512, 512), 2, 0.998),
-        ((1, 256, 1024, 1024), 3, 0.999),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 512, 128, 128), 0, 0.999),
+        ((1024, 1024), (1, 512, 256, 256), 1, 0.995),
+        ((1024, 1024), (1, 512, 512, 512), 2, 0.998),
+        ((1024, 1024), (1, 256, 1024, 1024), 3, 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_upblock(device, input_shape, block_id, pcc, debug_mode, is_ci_env, reset_seeds):
+def test_vae_upblock(device, image_resolution, input_shape, block_id, pcc, debug_mode, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -36,7 +37,7 @@ def test_vae_upblock(device, input_shape, block_id, pcc, debug_mode, is_ci_env, 
 
     torch_upblock = vae.decoder.up_blocks[block_id]
 
-    model_config = VAEModelOptimisations()
+    model_config = load_vae_model_optimisations(image_resolution)
     tt_upblock = TtUpDecoderBlock2D(
         device,
         state_dict,

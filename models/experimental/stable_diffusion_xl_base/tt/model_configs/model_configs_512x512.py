@@ -1,0 +1,1064 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import ttnn
+import re
+
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
+    prepare_gn_mask,
+    prepare_gn_mask_negative_mask,
+    prepare_gn_beta_gamma,
+)
+
+
+class ModelOptimisations512x512:
+    def __init__(
+        self,
+        conv_act_dtype=ttnn.bfloat16,
+        conv_w_dtype=ttnn.bfloat16,
+        attention_weights_dtype=ttnn.bfloat8_b,
+        ff_weights_dtype=ttnn.bfloat8_b,
+        force_full_grid=False,
+    ):
+        self.conv_configs = {}
+        self.conv_output_dtype = conv_act_dtype
+        self.matmul_configs = {}
+        self.compute_configs = {}
+        self.prepared_weights = False
+        self.conv_w_dtype = conv_w_dtype
+        self.conv_ws_dtype = ttnn.bfloat8_b
+        self.attention_weights_dtype = attention_weights_dtype
+        self.ff_weights_dtype = ff_weights_dtype
+
+        # region CONV2D CONFIGS
+        # region HEIGHT SHARDED
+        self.conv_configs["ABH_1024_NO_ADB_HS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=1024,
+        )
+        self.conv_configs["ABH_256_ADB_HS"] = ttnn.Conv2dConfig(
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+        )
+        self.conv_configs["ABH_256_NO_ADB_HS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+        )
+        self.conv_configs["ABH_128_NO_ADB_HS"] = ttnn.Conv2dConfig(
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+        )
+        self.conv_configs["ABH_0_ADB_HS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=0,
+        )
+        self.conv_configs["ABH_0_NO_ADB_HS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=0,
+        )
+
+        self.conv_configs["ABH_64_NO_ADB_HS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=64,
+        )
+
+        self.conv_configs["ABH_32_ADB_HS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=32,
+        )
+        # endregion HEIGHT SHARDED
+
+        # region BLOCK SHARDED
+        override_output_sharding_config = not force_full_grid
+        override_output_core_grid = (
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(4, 7),
+                    ),
+                }
+            )
+            if override_output_sharding_config
+            else None
+        )
+
+        self.conv_configs["ABH_0_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=0,
+            override_output_sharding_config=override_output_sharding_config,
+            core_grid=override_output_core_grid,
+        )
+
+        self.conv_configs["ABH_0_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=0,
+            override_output_sharding_config=override_output_sharding_config,
+            core_grid=override_output_core_grid,
+        )
+        self.conv_configs["ABH_64_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=64,
+            override_output_sharding_config=override_output_sharding_config,
+            core_grid=override_output_core_grid,
+        )
+        self.conv_configs["ABH_128_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+            override_output_sharding_config=override_output_sharding_config,
+            core_grid=override_output_core_grid,
+        )
+        self.conv_configs["ABH_128_ADB_WDB_MOVE_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+            override_output_sharding_config=override_output_sharding_config,
+            core_grid=override_output_core_grid,
+        )
+        self.conv_configs["ABH_256_NO_ADB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+        )
+
+        self.conv_configs["ABH_256_ADB_WDB_BS_NO_MOVE"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+        )
+
+        self.conv_configs["ABH_256_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+            override_output_sharding_config=override_output_sharding_config,
+            core_grid=override_output_core_grid,
+        )
+
+        self.conv_configs["ABH_512_NO_ADB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=512,
+        )
+
+        self.conv_configs["ABH_512_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=512,
+        )
+
+        self.conv_configs["ABH_128_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+            override_output_sharding_config=override_output_sharding_config,
+            core_grid=override_output_core_grid,
+        )
+
+        self.conv_configs["ABH_512_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=512,
+            override_output_sharding_config=override_output_sharding_config,
+            core_grid=override_output_core_grid,
+        )
+
+        self.conv_configs["ABH_1024_NO_ADB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=1024,
+        )
+
+        self.conv_configs["ABH_1024_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=1024,
+            override_output_sharding_config=override_output_sharding_config,
+            core_grid=override_output_core_grid,
+        )
+        # endregion BLOCK SHARDED
+
+        # region DEFAULT
+        self.conv_configs["DEFAULT"] = ttnn.Conv2dConfig(
+            weights_dtype=conv_w_dtype,
+            shard_layout=None,
+            deallocate_activation=True,
+            enable_act_double_buffer=False,
+            reshard_if_not_optimal=False,
+            act_block_w_div=1,
+            act_block_h_override=0,
+        )
+        # endregion DEFAULT
+        # endregion CONV2D CONFIGS
+
+        # region MATMUL CONFIGS
+        self.matmul_versions = {
+            "40_cores": {
+                "2D_FF2_SEQ_LEN_1024": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    per_core_M=1,
+                    per_core_N=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "2D_FF2_SEQ_LEN_4096": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    per_core_M=4,
+                    per_core_N=4,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "1D_RESNET_LINEAR": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=10,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    per_core_M=1,
+                    per_core_N=1,
+                    mcast_in0=True,
+                    fuse_batch=False,
+                    fused_activation=None,
+                ),
+                "2D_GEGLU_LINEAR_640_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    per_core_M=4,
+                    per_core_N=16,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "2D_GEGLU_LINEAR_640_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    per_core_M=4,
+                    per_core_N=16,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    transpose_mcast=False,
+                    fused_activation=[ttnn.UnaryOpType.GELU, True],
+                ),
+                "2D_GEGLU_LINEAR_1280_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    per_core_M=1,
+                    per_core_N=32,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "2D_GEGLU_LINEAR_1280_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    per_core_M=1,
+                    per_core_N=32,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    transpose_mcast=False,
+                    fused_activation=[ttnn.UnaryOpType.GELU, True],
+                ),
+                "2D_TM_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=5,
+                    per_core_M=4,
+                    per_core_N=4,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "2D_TM_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    per_core_M=1,
+                    per_core_N=8,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "2D_ATTN_QKV_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    per_core_M=4,
+                    per_core_N=12,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "2D_ATTN_QKV_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    per_core_M=1,
+                    per_core_N=24,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=True,
+                ),
+                "2D_ATTEN_K_V_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(8, 8),
+                    in0_block_w=4,  # max is 64, 4 seems optimal
+                    per_core_M=1,
+                    per_core_N=3,
+                    out_subblock_h=1,
+                    out_subblock_w=3,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "1D_ATTEN_K_V_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(8, 8),
+                    in0_block_w=16,  # max is 64, 16 seems optimal
+                    out_subblock_h=3,
+                    out_subblock_w=1,
+                    per_core_M=3,
+                    per_core_N=1,
+                    mcast_in0=True,
+                    fuse_batch=True,
+                    fused_activation=None,
+                ),
+                "2D_ATTN_OUT_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    per_core_M=4,
+                    per_core_N=4,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=True,
+                ),
+                "2D_ATTN_OUT_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    per_core_M=1,
+                    per_core_N=8,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=True,
+                ),
+                "2D_RESNET_CONV_320_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=2,
+                    per_core_M=4,
+                    per_core_N=4,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=False,
+                ),
+                "2D_RESNET_CONV_640_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=4,
+                    per_core_M=1,
+                    per_core_N=8,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "2D_RESNET_CONV_2560_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=2,
+                    per_core_M=1,
+                    per_core_N=8,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "2D_RESNET_CONV_1920_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=5,
+                    per_core_M=1,
+                    per_core_N=8,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=False,
+                ),
+                "2D_RESNET_CONV_1920_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=3,
+                    per_core_M=4,
+                    per_core_N=4,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "2D_RESNET_CONV_1280_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=1,
+                    per_core_M=4,
+                    per_core_N=4,
+                    out_subblock_h=2,
+                    out_subblock_w=4,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "2D_RESNET_CONV_960_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=2,
+                    per_core_M=4,
+                    per_core_N=4,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                "1D_RESNET_CONV_960_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(8, 5),
+                    in0_block_w=2,
+                    out_subblock_h=1,
+                    out_subblock_w=5,
+                    per_core_M=13,
+                    per_core_N=10,
+                    mcast_in0=False,
+                    gather_in0=False,
+                    fuse_batch=False,
+                    fused_activation=None,
+                ),
+                "1D_RESNET_CONV_640_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(5, 8),
+                    in0_block_w=1,
+                    out_subblock_h=1,
+                    out_subblock_w=5,
+                    per_core_M=13,
+                    per_core_N=10,
+                    mcast_in0=False,
+                    gather_in0=False,
+                    fuse_batch=False,
+                    fused_activation=None,
+                ),
+            },
+        }
+
+        assert not force_full_grid, "Full grid matmul configs are not defined for 512x512 image resolution."
+        self.matmul_configs = (
+            self.matmul_versions["40_cores"] if not force_full_grid else self.matmul_versions["full_grid"]
+        )
+        # endregion
+
+        # region LAYERNORM CONFIGS
+        self.core_grid_x = 5 if not force_full_grid else 8
+
+        self.layernorm_configs = {}
+        self.layernorm_configs["640_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid_x, 8),
+            subblock_w=640 // 32 // self.core_grid_x,
+            block_h=4,
+            block_w=640 // 32 // self.core_grid_x,
+            inplace=False,
+            legacy_reduction=True,
+            legacy_rsqrt=True,
+        )
+        self.layernorm_configs["1280_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid_x, 8),
+            subblock_w=1280 // 32 // self.core_grid_x,
+            block_h=1,
+            block_w=1280 // 32 // self.core_grid_x,
+            inplace=False,
+            legacy_reduction=True,
+            legacy_rsqrt=True,
+        )
+        # endregion
+
+        # region GROUPNORM CONFIGS
+        self.groupnorm_configs = {}
+        self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=8),
+                "num_out_blocks": None,
+                "inplace": True,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
+        self.groupnorm_configs["SHARDED_GROUPNORM_4X4_INPLACE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=4, x=4),
+                "num_out_blocks": None,
+                "inplace": True,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
+        self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=8),
+                "num_out_blocks": None,
+                "inplace": True,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": True,
+        }
+        self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=8),
+                "num_out_blocks": None,
+                "inplace": False,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
+        self.groupnorm_configs["SHARDED_GROUPNORM_4X8_NON_INPLACE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=4),
+                "num_out_blocks": None,
+                "inplace": False,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
+        self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE_NEGATIVE"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=8),
+                "num_out_blocks": None,
+                "inplace": False,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": True,
+        }
+        self.groupnorm_configs["DRAM_GROUPNORM_4X8"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=4),
+                "num_out_blocks": 2,
+                "inplace": False,
+            },
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
+        # endregion
+
+        # region SDPA CONFIGS
+        self.sdpa_configs = {}
+        self.sdpa_configs["1024_K"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=1024,
+            exp_approx_mode=False,
+        )
+        self.sdpa_configs["512_K"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=512,
+            exp_approx_mode=False,
+        )
+        self.sdpa_configs["256_K"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=256,
+            exp_approx_mode=False,
+        )
+        self.sdpa_configs["128_K"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        # endregion
+
+        # region COMPUTE KERNEL CONFIGS
+        self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.compute_configs["MATH_APPROX_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+        self.compute_configs["CONV_LOFI_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        # endregion
+
+    def get_matmul_config(self, matmul_path):
+        if matmul_path is None:
+            return None
+
+        # # # RESNET CONV MM # # #
+        if "conv_shortcut" in matmul_path:
+            if "down_blocks.1" in matmul_path:
+                return self.matmul_configs["2D_RESNET_CONV_320_640"]
+            if "down_blocks.2" in matmul_path:
+                return self.matmul_configs["2D_RESNET_CONV_640_1280"]
+            if "up_blocks.0.resnets.0" in matmul_path or "up_blocks.0.resnets.1" in matmul_path:
+                return self.matmul_configs["2D_RESNET_CONV_2560_1280"]
+            if "up_blocks.0.resnets.2" in matmul_path:
+                return self.matmul_configs["2D_RESNET_CONV_1920_1280"]
+            if "up_blocks.1.resnets.0" in matmul_path:
+                return self.matmul_configs["2D_RESNET_CONV_1920_640"]
+            if "up_blocks.1.resnets.1" in matmul_path:
+                return self.matmul_configs["2D_RESNET_CONV_1280_640"]
+            if "up_blocks.1.resnets.2" in matmul_path:
+                return self.matmul_configs["2D_RESNET_CONV_960_640"]
+            if "up_blocks.2.resnets.0" in matmul_path:
+                return self.matmul_configs["1D_RESNET_CONV_960_320"]
+            if "up_blocks.2.resnets.1" in matmul_path or "up_blocks.2.resnets.2" in matmul_path:
+                return self.matmul_configs["1D_RESNET_CONV_640_320"]
+            else:
+                return None
+
+        # # # GEGLU # # #
+        if "net.0.proj" in matmul_path:
+            if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                if "gelu" in matmul_path:
+                    return self.matmul_configs["2D_GEGLU_LINEAR_640_SPLIT_GELU"]
+                else:
+                    return self.matmul_configs["2D_GEGLU_LINEAR_640_SPLIT"]
+
+            else:
+                if "gelu" in matmul_path:
+                    return self.matmul_configs["2D_GEGLU_LINEAR_1280_SPLIT_GELU"]
+                else:
+                    return self.matmul_configs["2D_GEGLU_LINEAR_1280_SPLIT"]
+
+        # # # TM LINEAR # # #
+        if "proj_in" in matmul_path or "proj_out" in matmul_path:
+            if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                return self.matmul_configs["2D_TM_LINEAR_640"]
+            else:
+                return self.matmul_configs["2D_TM_LINEAR_1280"]
+
+        # # # ATTN OUT LINEAR # # #
+        if "attn1.to_out" in matmul_path or "attn2.to_out" in matmul_path or "attn2.to_q" in matmul_path:
+            if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                return self.matmul_configs["2D_ATTN_OUT_LINEAR_640"]
+            else:
+                return self.matmul_configs["2D_ATTN_OUT_LINEAR_1280"]
+        if "attn1.to_q" in matmul_path:
+            if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                return self.matmul_configs["2D_ATTN_QKV_LINEAR_640"]
+            else:
+                return self.matmul_configs["2D_ATTN_QKV_LINEAR_1280"]
+        if (
+            "attn1.to_k" in matmul_path
+            or "attn1.to_v" in matmul_path
+            or "attn2.to_k" in matmul_path
+            or "attn2.to_v" in matmul_path
+        ):
+            if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                return self.matmul_configs["2D_ATTEN_K_V_LINEAR_640"]
+            else:
+                return self.matmul_configs["1D_ATTEN_K_V_LINEAR_1280"]
+
+        pattern_down_blocks_1_ff2 = re.compile(
+            r"down_blocks\.1\.attentions\.[01]\.transformer_blocks\.[01]\.ff\.net\.2"
+        )
+
+        # 4 occurrences
+        if pattern_down_blocks_1_ff2.search(matmul_path):
+            return self.matmul_configs["2D_FF2_SEQ_LEN_4096"]
+
+        pattern_down_blockcs_2_ff2 = re.compile(
+            r"down_blocks\.2\.attentions\.[01]\.transformer_blocks\.[0123456789]\.ff\.net\.2"
+        )
+
+        # 20 occurrences
+        if pattern_down_blockcs_2_ff2.search(matmul_path):
+            return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
+
+        # # # Mid block  # # #
+        pattern_mid_block_ff2 = re.compile(r"mid_block\.attentions\.0\.transformer_blocks\.[0123456789]\.ff\.net\.2")
+
+        # 10 occurrences
+        if pattern_mid_block_ff2.search(matmul_path):
+            return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
+
+        pattern_up_blocks_0_ff2 = re.compile(
+            r"up_blocks\.0\.attentions\.[012]\.transformer_blocks\.[0123456789]\.ff\.net\.2"
+        )
+
+        # 30 occurrences
+        if pattern_up_blocks_0_ff2.search(matmul_path):
+            return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
+
+        pattern_up_blocks_1_ff2 = re.compile(r"up_blocks\.1\.attentions\.[012]\.transformer_blocks\.[01]\.ff\.net\.2")
+
+        # 6 occurrences
+        if pattern_up_blocks_1_ff2.search(matmul_path):
+            return self.matmul_configs["2D_FF2_SEQ_LEN_4096"]
+
+        pattern_resnet_linear = re.compile(
+            r"(down_blocks\.[012]\.resnets\.[01]\.linear|up_blocks\.[012]\.resnets\.[012]\.linear|mid_block\.resnets\.[01]\.linear)"
+        )
+
+        if pattern_resnet_linear.search(matmul_path):
+            return self.matmul_configs["1D_RESNET_LINEAR"]
+        return None
+
+    def get_mm_compute_config(self, module_path):
+        # for now, return default config
+        if ".to_q" in module_path:
+            return self.compute_configs["MATH_APPROX_MM_COMPUTE_CONFIG"]
+        return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
+
+    def get_mm_output_memory_config(self, module_path):
+        if "attn1" in module_path or "attn2" in module_path:
+            if not "to_out" in module_path:
+                return ttnn.L1_MEMORY_CONFIG
+            else:
+                if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+                    return ttnn.L1_MEMORY_CONFIG
+                else:
+                    return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+        if "ff.net" in module_path:
+            return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+        if "attentions" in module_path and "proj_in" in module_path:
+            if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+                return ttnn.L1_MEMORY_CONFIG
+            else:
+                return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+        if "resnets" in module_path and "conv_shortcut" in module_path:
+            if "up_blocks.2" not in module_path:
+                return ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            else:
+                return ttnn.L1_MEMORY_CONFIG
+        return None
+
+    def get_conv_config(self, conv_path):
+        if conv_path is None:
+            return None
+
+        # CONV IN
+        if "conv_in" == conv_path:
+            return self.conv_configs["ABH_256_ADB_HS"]
+
+        # DOWN BLOCK 0
+        elif "down_blocks.0.resnets.0" in conv_path:
+            return self.conv_configs["ABH_512_ADB_WDB_BS"]
+        elif "down_blocks.0.resnets.1" in conv_path:
+            return self.conv_configs["ABH_512_ADB_WDB_BS"]
+        elif "down_blocks.0.downsamplers.0" == conv_path:
+            return self.conv_configs["ABH_128_ADB_WDB_NO_DEALLOC_BS"]
+
+        # DOWN BLOCK 1
+        elif "down_blocks.1.resnets.0.conv1" == conv_path:
+            return self.conv_configs["ABH_128_ADB_WDB_BS"]
+        elif ("down_blocks.1.resnets.0.conv2" == conv_path) or ("down_blocks.1.resnets.1" in conv_path):
+            return self.conv_configs["ABH_128_ADB_WDB_BS"]
+        elif "down_blocks.1.downsamplers.0" == conv_path:
+            return self.conv_configs["ABH_0_ADB_WDB_NO_DEALLOC_BS"]
+
+        # DOWN BLOCK 2
+        elif "down_blocks.2.resnets.0.conv1" == conv_path:
+            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+        elif ("down_blocks.2.resnets.0.conv2" == conv_path) or ("down_blocks.2.resnets.1" in conv_path):
+            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+
+        # MID BLOCK
+        elif "mid_block" in conv_path:
+            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+
+        # UP BLOCK 0
+        elif ("up_blocks.0.resnets.0.conv1" == conv_path) or ("up_blocks.0.resnets.1.conv1" == conv_path):
+            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+        elif "up_blocks.0.resnets.2.conv1" == conv_path:
+            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+        elif ("up_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
+            return self.conv_configs["ABH_0_ADB_WDB_BS"]
+        elif "up_blocks.0.upsamplers.0" == conv_path:
+            return self.conv_configs["ABH_128_ADB_WDB_BS"]
+
+        # UP BLOCK 1
+        elif "up_blocks.1.resnets.0.conv1" == conv_path:
+            return self.conv_configs["ABH_128_ADB_WDB_BS"]
+        elif "up_blocks.1.resnets.1.conv1" == conv_path:
+            return self.conv_configs["ABH_128_ADB_WDB_BS"]
+        elif "up_blocks.1.resnets.2.conv1" == conv_path:
+            return self.conv_configs["ABH_128_ADB_WDB_BS"]
+        elif ("up_blocks.1.resnets" in conv_path) and ("conv2" in conv_path):
+            return self.conv_configs["ABH_128_ADB_WDB_BS"]
+        elif "up_blocks.1.upsamplers.0" == conv_path:
+            return self.conv_configs["ABH_512_ADB_WDB_BS"]
+
+        # UP BLOCK 2
+        elif "up_blocks.2.resnets.0.conv1" == conv_path:
+            return self.conv_configs["ABH_128_ADB_WDB_BS"]
+        elif "up_blocks.2.resnets.1.conv1" == conv_path:
+            return self.conv_configs["ABH_512_ADB_WDB_BS"]
+        elif "up_blocks.2.resnets.2.conv1" == conv_path:
+            return self.conv_configs["ABH_512_ADB_WDB_BS"]
+        elif ("up_blocks.2.resnets" in conv_path) and ("conv2" in conv_path):
+            return self.conv_configs["ABH_512_ADB_WDB_BS"]
+
+        # CONV IN
+        elif "conv_out" == conv_path:
+            return self.conv_configs["ABH_0_NO_ADB_HS"]
+
+        # ERROR
+        else:
+            raise ValueError(f"Unknown conv path: {conv_path}")
+
+    def get_conv_compute_config(self, module_path):
+        if "conv_in" in module_path or "conv_out" in module_path:
+            return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
+        if "resnets" in module_path:
+            conv1_no_fp32 = {
+                "down_blocks.2.resnets",
+                "down_blocks.0",
+                "down_blocks.1.resnets.0",
+                "up_blocks.0",
+                "mid_block",
+            }
+            conv2_no_fp32 = {"down_blocks.2.resnets", "down_blocks.0", "up_blocks.0", "mid_block"}
+
+            if "conv1" in module_path and any(s in module_path for s in conv1_no_fp32):
+                return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+            if "conv2" in module_path and any(s in module_path for s in conv2_no_fp32):
+                return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+
+            return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+        if "upsamplers" in module_path:
+            if "up_blocks.0" in module_path:
+                return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+            else:
+                return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+
+        return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+
+    def get_conv_output_dtype(self):
+        return self.conv_output_dtype
+
+    def __generate_groupnorm_params(self, config, weights, bias, groups, device):
+        if config["memory_config"] != ttnn.DRAM_MEMORY_CONFIG:
+            gamma, beta = prepare_gn_beta_gamma(device, weights, bias, config["op_config"]["core_grid"].x)
+            mask = prepare_gn_mask(device, weights.shape[0], groups, config["op_config"]["core_grid"].x)
+            negative_mask = (
+                prepare_gn_mask_negative_mask(device, weights.shape[0], groups, config["op_config"]["core_grid"].x)
+                if config["negative_mask"]
+                else None
+            )
+        else:
+            [gamma, beta], mask = ttnn.dram_group_norm_params_from_torch(
+                [weights, bias],
+                weights.shape[0],
+                groups,
+                device,
+                core_grid=config["op_config"]["core_grid"],
+                return_mask=True,
+            )
+            negative_mask = None
+
+        return mask, negative_mask, gamma, beta
+
+    def _get_groupnorm_config(self, module_path):
+        # GroupNorm configs for Resnets
+        if "resnets" in module_path:
+            if "down_blocks.2" in module_path:
+                if "norm1" in module_path:
+                    return self.groupnorm_configs["SHARDED_GROUPNORM_4X4_INPLACE"]
+            if "up_blocks.0" in module_path:
+                if "norm1" in module_path:
+                    return self.groupnorm_configs["SHARDED_GROUPNORM_4X4_INPLACE"]
+
+        # GroupNorm configs for Attentions
+        if "attentions" in module_path:
+            if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+                return self.groupnorm_configs["SHARDED_GROUPNORM_4X8_NON_INPLACE"]
+
+            # Default config for attentions
+            return self.groupnorm_configs["SHARDED_GROUPNORM_NON_INPLACE"]
+
+        # Default GroupNorm config
+        return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE"]
+
+    def get_groupnorm_params(self, module_path, weights, bias, groups, device):
+        config = self._get_groupnorm_config(module_path)
+
+        mask, negative_mask, gamma, beta = self.__generate_groupnorm_params(config, weights, bias, groups, device)
+        return config["op_config"], config["memory_config"], mask, negative_mask, gamma, beta
+
+    def get_layernorm_config(self, module_path):
+        if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+            return self.layernorm_configs["640_config"]
+        else:
+            return self.layernorm_configs["1280_config"]
+
+    def get_sdpa_config(self, module_path, is_self_attention):
+        if not is_self_attention:
+            return self.sdpa_configs["128_K"]
+        if "down_blocks.1" in module_path or "up_blocks.1" in module_path:
+            return self.sdpa_configs["512_K"]
+        else:
+            return self.sdpa_configs["1024_K"]

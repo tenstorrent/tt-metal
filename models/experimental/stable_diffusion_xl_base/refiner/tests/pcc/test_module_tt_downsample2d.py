@@ -8,7 +8,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDownsample2D
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -20,7 +20,13 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, down_block_id", [((1, 384, 128, 128), 0), ((1, 768, 64, 64), 1), ((1, 1536, 32, 32), 2)]
+    "image_resolution, input_shape, down_block_id",
+    [
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 384, 128, 128), 0),
+        ((1024, 1024), (1, 768, 64, 64), 1),
+        ((1024, 1024), (1, 1536, 32, 32), 2),
+    ],
 )
 @pytest.mark.parametrize("stride", [(2, 2)])
 @pytest.mark.parametrize("padding", [(1, 1)])
@@ -28,6 +34,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_downsample2d(
     device,
+    image_resolution,
     input_shape,
     down_block_id,
     stride,
@@ -50,7 +57,7 @@ def test_downsample2d(
     torch_downsample = unet.down_blocks[down_block_id].downsamplers[0]
     groups = 1
 
-    model_config = RefinerModelOptimisations()
+    model_config = load_refiner_model_optimisations(image_resolution)
     tt_downsample = TtDownsample2D(
         device,
         state_dict,

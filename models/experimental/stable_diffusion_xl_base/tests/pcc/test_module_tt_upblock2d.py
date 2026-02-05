@@ -7,7 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_upblock2d import TtUpBlock2D
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -15,23 +15,37 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape, residuals, block_id",
+    "image_resolution, input_shape, temb_shape, residuals, block_id, pcc",
     [
+        # 1024x1024 image resolution
         (
+            (1024, 1024),
             (1, 640, 128, 128),
             (1, 1280),
             ((1, 320, 128, 128), (1, 320, 128, 128), (1, 320, 128, 128)),
             2,
+            0.996,
+        ),
+        # 512x512 image resolution
+        (
+            (512, 512),
+            (1, 640, 64, 64),
+            (1, 1280),
+            ((1, 320, 64, 64), (1, 320, 64, 64), (1, 320, 64, 64)),
+            2,
+            0.992,
         ),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_upblock(
     device,
+    image_resolution,
     input_shape,
     temb_shape,
     residuals,
     block_id,
+    pcc,
     debug_mode,
     is_ci_env,
     reset_seeds,
@@ -48,7 +62,7 @@ def test_upblock(
 
     torch_crosattn = unet.up_blocks[block_id]
 
-    model_config = ModelOptimisations()
+    model_config = load_model_optimisations(image_resolution)
     tt_crosattn = TtUpBlock2D(
         device, state_dict, f"up_blocks.{block_id}", model_config=model_config, debug_mode=debug_mode
     )
@@ -92,5 +106,5 @@ def test_upblock(
     del unet
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is: {pcc_message}")

@@ -830,6 +830,88 @@ def run_tt_image_gen(
     one_minus_guidance_rescale=1.0,
     return_latents=False,  # If True, skip VAE decoding and return latents
 ):
+    """Run TT (Tenstorrent) image generation pipeline for Stable Diffusion XL.
+
+    This function executes the complete image generation pipeline including the
+    multiple denoising loops with the UNet model and optional VAE decoding at
+    the end. It supports trace capture and reply for performance optimization,
+    classifier-free guidance (CFG) parallel processing, and guidance rescaling.
+
+    Args:
+        ttnn_device: The TTNN device instance to execute operations on.
+        tt_unet: The TT UNet model for denoising predictions.
+        tt_scheduler: The TT scheduler for managing diffusion timesteps.
+        tt_latents: Initial latent tensor with shape [batch_size, 1, H*W, C].
+            It is assumed that C=4.
+        tt_prompt_embeds: Prompt embeddings tensor. Shape depends on
+            use_cfg_parallel mode.
+        tt_time_ids: Time embedding IDs tensor for conditioning.
+        tt_text_embeds: Additional text embeddings from the text encoder.
+        num_steps (int): Number of denoising steps to perform.
+        tt_extra_step_kwargs: Additional keyword arguments for the scheduler
+            step function.
+        guidance_scale (float): Classifier-free guidance scale. Higher values
+            make the model follow the prompt more closely.
+        scaling_factor (float): VAE scaling factor for latent normalization.
+        input_shape (tuple): Input shape tuple (B, C, H, W) where B is batch
+            size, C is channels, H and W are height and width.
+        vae: VAE model for decoding. Can be either TtAutoencoderKL (TT VAE)
+            or host-based VAE (torch model).
+        batch_size (int): Number of images to generate in the batch.
+        output_device (ttnn.Tensor, optional): Pre-allocated output device
+            tensor for VAE decoding. Used when reusing traces.
+        output_shape (list, optional): Pre-computed output shape [B, C, H, W]
+            for VAE decoding. Used when reusing traces.
+        tid (int, optional): Trace ID for the denoising loop. If provided,
+            the captured trace will be replayed instead of capturing a new one.
+            If None and capture_trace is False, operations run normally.
+        tid_vae (int, optional): Trace ID for the VAE decoding step. If
+            provided, the captured VAE trace will be replayed. If None and
+            capture_trace is False, VAE runs normally.
+        capture_trace (bool): If True, capture execution traces for both
+            denoising loop and VAE. Requires num_steps=1. Defaults to False.
+        use_cfg_parallel (bool): If True, use parallel processing for
+            classifier-free guidance. Defaults to False.
+        guidance_rescale (float): Guidance rescale factor for noise prediction.
+            Defaults to 0.0 (disabled).
+        one_minus_guidance_rescale (float): Complement of guidance_rescale
+            (1.0 - guidance_rescale). Defaults to 1.0.
+        return_latents (bool): If True, skip VAE decoding and return latents
+            instead of decoded images. Useful for multi-stage pipelines.
+            Defaults to False.
+
+    Returns:
+        tuple: A tuple containing:
+            - imgs (torch.Tensor or None): Generated images as a torch tensor
+                with shape [batch_size * B, C, H, W], or None if return_latents
+                is True or warmup run. If return_latents is True, this is
+                replaced by tt_latents (ttnn.Tensor).
+            - tid (int or None): Trace ID for the denoising loop. Can be used
+                for subsequent executions to reuse the captured trace.
+            - output_device (ttnn.Tensor or None): Device tensor containing
+                VAE output (if VAE is on device). Used for trace reuse.
+            - output_shape (list or None): Output shape [B, C, H, W] from VAE
+                decoding. Used for trace reuse.
+            - tid_vae (int or None): Trace ID for VAE decoding. Can be used
+                for subsequent executions to reuse the captured VAE trace.
+
+    Raises:
+        AssertionError: If capture_trace is True and num_steps != 1, as trace
+            capture requires exactly one iteration.
+
+    Note:
+        - The function performs guidance rescaling by computing standard
+            deviations of noise predictions and applying rescaling factors.
+        - When use_cfg_parallel is True, the function uses all_gather to
+            combine parallel predictions.
+        - If vae is a TtAutoencoderKL instance, VAE decoding runs on device.
+            Otherwise, latents are transferred to host and decoded using the
+            torch VAE model.
+        - The scheduler is reset to begin_index=0 after the denoising loop.
+        - Memory management is handled throughout with explicit deallocation
+            of intermediate tensors.
+    """
+
     assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
     profiler.start("denoising_loop")

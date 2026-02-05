@@ -8,21 +8,24 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape, block_id, transformer_block_id, pcc, block_type",
+    "image_resolution, input_shape, block_id, transformer_block_id, pcc, block_type",
     [
-        ((256, 1536), -1, 0, 0.999, "mid_block"),
-        ((1024, 1536), 2, 0, 0.999, "down_blocks"),
-        ((4096, 768), 1, 0, 0.999, "down_blocks"),
+        # 1024x1024 image resolution
+        ((1024, 1024), (256, 1536), -1, 0, 0.999, "mid_block"),
+        ((1024, 1024), (1024, 1536), 2, 0, 0.999, "down_blocks"),
+        ((1024, 1024), (4096, 768), 1, 0, 0.999, "down_blocks"),
     ],
 )
-def test_feedforward(device, input_shape, block_id, transformer_block_id, pcc, block_type, is_ci_env, reset_seeds):
+def test_feedforward(
+    device, image_resolution, input_shape, block_id, transformer_block_id, pcc, block_type, is_ci_env, reset_seeds
+):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
@@ -39,7 +42,7 @@ def test_feedforward(device, input_shape, block_id, transformer_block_id, pcc, b
         torch_ff = unet.down_blocks[block_id].attentions[0].transformer_blocks[transformer_block_id].ff
         block_type = f"down_blocks.{block_id}"
 
-    model_config = RefinerModelOptimisations()
+    model_config = load_refiner_model_optimisations(image_resolution)
     tt_ff = TtFeedForward(
         device,
         state_dict,

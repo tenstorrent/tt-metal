@@ -1,12 +1,12 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations512x512
 
 
-class RefinerModelOptimisations(ModelOptimisations):
+class RefinerModelOptimisations512x512(ModelOptimisations512x512):
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,

@@ -7,7 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_attention import TtAttention
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -15,19 +15,21 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape, attn_id, down_block_id, query_dim, num_attn_heads, out_dim, block_type",
+    "image_resolution, input_shape, encoder_shape, attn_id, down_block_id, query_dim, num_attn_heads, out_dim, block_type",
     [
-        ((1, 4096, 768), None, 1, 1, 768, 12, 768, "down_blocks"),
-        ((1, 4096, 768), (1, 77, 1280), 2, 1, 768, 12, 768, "down_blocks"),
-        ((1, 1024, 1536), None, 1, 2, 1536, 24, 1536, "down_blocks"),
-        ((1, 1024, 1536), (1, 77, 1280), 2, 2, 1536, 24, 1536, "down_blocks"),
-        ((1, 256, 1536), None, 1, -1, 1536, 24, 1536, "mid_block"),
-        ((1, 256, 1536), (1, 77, 1280), 2, -1, 1536, 24, 1536, "mid_block"),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 4096, 768), None, 1, 1, 768, 12, 768, "down_blocks"),
+        ((1024, 1024), (1, 4096, 768), (1, 77, 1280), 2, 1, 768, 12, 768, "down_blocks"),
+        ((1024, 1024), (1, 1024, 1536), None, 1, 2, 1536, 24, 1536, "down_blocks"),
+        ((1024, 1024), (1, 1024, 1536), (1, 77, 1280), 2, 2, 1536, 24, 1536, "down_blocks"),
+        ((1024, 1024), (1, 256, 1536), None, 1, -1, 1536, 24, 1536, "mid_block"),
+        ((1024, 1024), (1, 256, 1536), (1, 77, 1280), 2, -1, 1536, 24, 1536, "mid_block"),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_attention(
     device,
+    image_resolution,
     input_shape,
     encoder_shape,
     attn_id,
@@ -64,7 +66,7 @@ def test_attention(
     else:
         raise ValueError(f"Unknown block type: {block_type}")
 
-    model_config = RefinerModelOptimisations()
+    model_config = load_refiner_model_optimisations(image_resolution)
     tt_attention = TtAttention(
         device,
         state_dict,

@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_encoder import TtEncoder
-from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import VAEModelOptimisations
+from models.experimental.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -17,13 +17,14 @@ from loguru import logger
 
 @torch.no_grad()
 @pytest.mark.parametrize(
-    "input_shape, pcc",
+    "image_resolution, input_shape, pcc",
     [
-        ((1, 3, 1024, 1024), 0.97),
+        # 1024x1024 image resolution
+        ((1024, 1024), (1, 3, 1024, 1024), 0.97),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_decoder(device, input_shape, pcc, debug_mode, is_ci_env, reset_seeds):
+def test_vae_decoder(device, image_resolution, input_shape, pcc, debug_mode, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -37,7 +38,7 @@ def test_vae_decoder(device, input_shape, pcc, debug_mode, is_ci_env, reset_seed
     torch_vae = vae.encoder
 
     logger.info("Loading weights to device")
-    model_config = VAEModelOptimisations()
+    model_config = load_vae_model_optimisations(image_resolution)
     tt_vae = TtEncoder(device, state_dict, model_config=model_config, debug_mode=debug_mode)
     logger.info("Loaded weights")
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)

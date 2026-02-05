@@ -28,6 +28,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_combined_pipeline i
 def run_demo_inference(
     ttnn_device,
     is_ci_env,
+    image_resolution,
     prompts,
     negative_prompts,
     num_inference_steps,
@@ -87,6 +88,7 @@ def run_demo_inference(
 
     # 2. Create unified config and combined pipeline
     config = TtSDXLCombinedPipelineConfig(
+        image_resolution=image_resolution,
         num_inference_steps=num_inference_steps,
         guidance_scale=guidance_scale,
         is_galaxy=is_galaxy(),
@@ -189,6 +191,14 @@ def run_demo_inference(
     return images
 
 
+@pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+        (512, 512),
+    ],
+    ids=["1024x1024", "512x512"],
+)
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
 # as the all_gather_async operation used in this mode depends on fabric being set.
 @pytest.mark.parametrize(
@@ -287,6 +297,7 @@ def test_demo_base_and_refiner(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    image_resolution,
     prompt,
     negative_prompt,
     num_inference_steps,
@@ -309,10 +320,14 @@ def test_demo_base_and_refiner(
     timesteps,
     sigmas,
 ):
+    if image_resolution == (512, 512) and use_refiner:
+        pytest.skip("512x512 image resolution is not yet supported for refiner.")
+
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
         is_ci_env,
+        image_resolution,
         prompt,
         negative_prompt,
         num_inference_steps,

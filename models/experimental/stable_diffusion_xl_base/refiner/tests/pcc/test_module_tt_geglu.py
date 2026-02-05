@@ -8,7 +8,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
-from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
@@ -16,14 +16,15 @@ from functools import reduce
 
 
 @pytest.mark.parametrize(
-    "input_shape, module_path, pcc",
+    "image_resolution, input_shape, module_path, pcc",
     [
-        ((256, 1536), "mid_block.attentions.0.transformer_blocks.0.ff.net.0", 0.999),
-        ((1024, 1536), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.999),
-        ((4096, 768), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.999),
+        # 1024x1024 image resolution
+        ((1024, 1024), (256, 1536), "mid_block.attentions.0.transformer_blocks.0.ff.net.0", 0.999),
+        ((1024, 1024), (1024, 1536), "down_blocks.2.attentions.0.transformer_blocks.0.ff.net.0", 0.999),
+        ((1024, 1024), (4096, 768), "down_blocks.1.attentions.0.transformer_blocks.0.ff.net.0", 0.999),
     ],
 )
-def test_geglu(device, input_shape, module_path, pcc, is_ci_env, reset_seeds):
+def test_geglu(device, image_resolution, input_shape, module_path, pcc, is_ci_env, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
@@ -43,7 +44,7 @@ def test_geglu(device, input_shape, module_path, pcc, is_ci_env, reset_seeds):
 
     assert torch_geglu is not None, f"{module_path} is not a valid UNet module"
 
-    model_config = RefinerModelOptimisations()
+    model_config = load_refiner_model_optimisations(image_resolution)
     tt_geglu = TtGEGLU(device, state_dict, module_path, model_config)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
