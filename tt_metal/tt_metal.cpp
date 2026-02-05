@@ -62,7 +62,6 @@
 #include "impl/buffers/circular_buffer.hpp"
 
 namespace tt::tt_metal {
-enum class FabricConfig : uint32_t;
 struct RuntimeArgsData;
 struct TraceDescriptor;
 
