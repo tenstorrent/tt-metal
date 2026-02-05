@@ -2033,6 +2033,7 @@ inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, u
         uint32_t watcher_data_ptr = data_ptr;
 #if ASSERT_ENABLED
         if (wlength == 0) {
+            // This normally happens after the end of the loop, but do it early here so we don't hit assertions. Data until the end of the page isn't used.
             watcher_data_ptr = round_up_pow2(watcher_data_ptr, cmddat_q_page_size);
         }
 #endif
@@ -2043,7 +2044,7 @@ inline void relay_raw_data_to_downstream(uint32_t& data_ptr, uint64_t wlength, u
             upstream_cb_sem_id,
             cmddat_q_base,
             cmddat_q_end,
-            cmddat_q_page_size>(pages_to_free, watcher_data_ptr, /*round_to_page_size=*/true);
+            cmddat_q_page_size>(pages_to_free, watcher_data_ptr);
     }
     local_downstream_data_ptr =
         round_up_pow2(local_downstream_data_ptr, DispatchRelayInlineState::downstream_page_size);
@@ -2224,10 +2225,6 @@ void kernel_main_d() {
     // Set upstream semaphore MSB to signal completion and path teardown
     // in case prefetch_d is connected to a depacketizing stage.
     relay_client.teardown<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>();
-    WATCHER_RING_BUFFER_PUSH(h_cmddat_q_reader.acquired_count());
-    WATCHER_RING_BUFFER_PUSH(relay_client.released_pages());
-
-    ASSERT(h_cmddat_q_reader.acquired_count() == relay_client.released_pages());
 }
 
 void kernel_main_hd() {

@@ -28,7 +28,6 @@ private:
     constexpr static ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
     tt::tt_fabric::WorkerToFabricMuxSender<mux_num_buffers_per_channel> edm;
-    uint32_t released_pages_;
 
 #if ASSERT_ENABLED
     // Pointer to the end of the last released page. Used for assertions to catch cmd_ptr/released_pages desync.
@@ -37,10 +36,6 @@ private:
 
 public:
     CQRelayClient() = default;
-
-    uint32_t released_pages() {
-        return released_pages_;
-    }
 
     // Initialize cmd_ptr tracking for release_pages assertions.
     // Call this after init() and before any release_pages() calls that use cmd_ptr tracking.
@@ -73,7 +68,6 @@ public:
     FORCE_INLINE void init(
         uint64_t downstream_noc_addr, uint32_t my_dev_id, uint32_t to_dev_id, uint32_t router_direction) {
         WAYPOINT("FMCW");
-        released_pages_ = 0;
 #if defined(FABRIC_RELAY)
         edm.template init<fd_core_type>(
             true /*connected_to_persistent_fabric*/,
@@ -231,13 +225,10 @@ public:
 #else
         noc_semaphore_inc(get_noc_addr_helper(dest_noc_xy, get_semaphore<fd_core_type>(dest_sem_id)), n, noc_idx);
 #endif
-
-        released_pages_ += n;
     }
 
     // Version of release_pages with cmd_ptr tracking for synchronization assertions.
     // Template parameters specify the buffer geometry for validation.
-    // If round_to_page_size is true, cmd_ptr may be up to one page ahead of expected (for mid-command releases).
     template <
         uint8_t noc_idx,
         uint32_t dest_noc_xy,
@@ -245,7 +236,7 @@ public:
         uint32_t buffer_base,
         uint32_t buffer_end,
         uint32_t buffer_page_size>
-    FORCE_INLINE void release_pages(uint32_t n, uint32_t cmd_ptr, bool round_to_page_size = false) {
+    FORCE_INLINE void release_pages(uint32_t n, uint32_t cmd_ptr) {
         release_pages<noc_idx, dest_noc_xy, dest_sem_id>(n);
 
 #if ASSERT_ENABLED
@@ -255,43 +246,16 @@ public:
                 if (n != 0) {
                     // In the middle of processing, cmd_ptr may not be aligned to page size, but
                     // must always be past the number of pages released.
-                    uint32_t adjusted_cmd_ptr =
-                        round_to_page_size ? (cmd_ptr - (cmd_ptr - buffer_base) % buffer_page_size) : cmd_ptr;
                     uint64_t bytes = n * buffer_page_size;
                     uint32_t expected = watch_released_ptr_ + bytes;
                     if (expected > buffer_end) {
                         expected -= buffer_size;
                     }
 
-                    // Allow cmd_ptr to be one page ahead if round_to_page_size is true (cmd_ptr has advanced
-                    // into the next page but we round down to the page boundary). This can happen when releasing
-                    // pages mid-stream. The later check at the end with round_to_page_size=false will verify
-                    // that all data is eventually accounted for.
-                    bool one_page_ahead = false;
-                    if (round_to_page_size) {
-                        uint32_t expected_plus_page = expected + buffer_page_size;
-                        if (expected_plus_page > buffer_end) {
-                            expected_plus_page -= buffer_size;
-                        }
-                        one_page_ahead = (adjusted_cmd_ptr == expected_plus_page) ||
-                                         ((expected_plus_page == buffer_end) && (adjusted_cmd_ptr == buffer_base));
-                    }
-                    #if 1
-                    if (!(
-                        (adjusted_cmd_ptr == expected) ||
-                        ((expected == buffer_end) && (adjusted_cmd_ptr == buffer_base)) || one_page_ahead)) {
-                            WATCHER_RING_BUFFER_PUSH(adjusted_cmd_ptr);
-                            WATCHER_RING_BUFFER_PUSH(expected);
-                            WATCHER_RING_BUFFER_PUSH(cmd_ptr);
-                            WATCHER_RING_BUFFER_PUSH(n);
-                            WATCHER_RING_BUFFER_PUSH(round_to_page_size);
-                        }
-
                     // It's possible the cmd_ptr wrapped and the expected pointer is at the very end of the buffer
                     ASSERT(
-                        (adjusted_cmd_ptr == expected) ||
-                        ((expected == buffer_end) && (adjusted_cmd_ptr == buffer_base)) || one_page_ahead);
-                    #endif
+                        (cmd_ptr == expected) ||
+                        ((expected == buffer_end) && (cmd_ptr == buffer_base)));
                     watch_released_ptr_ = expected;
                 }
             }

@@ -299,13 +299,8 @@ public:
         n &= 0x7fffffff;
 
         WAYPOINT("TAPW");
-        uint32_t count = 0;
         do {
             invalidate_l1_cache();
-            count++;
-            if (count == 1000000) {
-                DPRINT << "wait all pages hung: n " << n << " additional_count " << additional_count << " sem_addr " << *sem_addr << " check value " << ((additional_count + *sem_addr) & 0x7fffffff) << ENDL();
-            }
         } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
         WAYPOINT("TAPD");
     }
@@ -404,13 +399,6 @@ public:
     // Return available space (in bytes) after data_ptr. This data will always be contiguous in memory and will never
     // wrap around.
     uint32_t available_bytes(uint32_t data_ptr) const { return cb_fence_ - data_ptr; }
-
-    uint32_t acquired_count() {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
-        return *sem_addr;
-
-    }
 
 protected:
     FORCE_INLINE void init() {
