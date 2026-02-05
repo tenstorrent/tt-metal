@@ -57,6 +57,7 @@ from tracy.process_model_log import (
 
 from .....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from .....layers.normalization import DistributedLayerNorm, DistributedRMSNorm
+from .....layers.linear import ColParallelLinear
 from .....parallel.manager import CCLManager
 from .....utils.test import line_params
 
@@ -164,6 +165,33 @@ def create_distributed_rmsnorm(mesh_device: ttnn.MeshDevice, ccl_manager: CCLMan
     return norm
 
 
+def create_col_parallel_linear(
+    mesh_device: ttnn.MeshDevice,
+    ccl_manager: CCLManager,
+    in_features: int = WAN_DIM,
+    out_features: int = WAN_DIM,
+) -> ColParallelLinear:
+    """Create a ColParallelLinear with standard configuration and dummy weights."""
+    linear = ColParallelLinear(
+        in_features=in_features,
+        out_features=out_features,
+        bias=True,
+        mesh_device=mesh_device,
+        mesh_axis=TP_AXIS,
+        ccl_manager=ccl_manager,
+    )
+    # Load dummy weights
+    torch.manual_seed(0)
+    tp_factor = MESH_SHAPE[TP_AXIS]
+    linear.load_state_dict(
+        {
+            "weight": torch.randn(out_features, in_features),
+            "bias": torch.randn(out_features),
+        }
+    )
+    return linear
+
+
 def run_perf_test(test_name: str, config_name: str, seq_len: int, title: str, ops: list) -> None:
     """
     Run a performance test with Tracy profiler and print results.
@@ -267,7 +295,7 @@ def aggregate_device_time(df: pd.DataFrame, op_name: str) -> float:
 
 def analyze_op_group(
     output_logs_subdir: str,
-    ops: list[tuple[str, str]],
+    ops: list[tuple[str, str] | tuple[str, str, int]],
     num_measurement_iters: int = NUM_MEASUREMENT_ITERS,
 ) -> dict:
     """
@@ -275,7 +303,8 @@ def analyze_op_group(
 
     Args:
         output_logs_subdir: Path to profiler output directory
-        ops: List of (op_code, short_name) tuples defining the op group
+        ops: List of (op_code, short_name) or (op_code, short_name, calls_per_iter) tuples.
+             calls_per_iter defaults to 1 if not specified.
         num_measurement_iters: Number of measurement iterations that were run
 
     Returns:
@@ -287,29 +316,38 @@ def analyze_op_group(
     results = {}
     total_time_us = 0.0
 
-    for op_name, short_name in ops:
+    for op_entry in ops:
+        if len(op_entry) == 3:
+            op_name, short_name, calls_per_iter = op_entry
+        else:
+            op_name, short_name = op_entry
+            calls_per_iter = 1
+
         op_df = df[df["OP CODE"] == op_name]
         if op_df.empty:
             logger.warning(f"  {op_name}: NOT FOUND")
             results[short_name] = 0.0
             continue
 
-        # Get all call counts and take the last N (measurement iterations)
+        # Get all call counts and take the last N * calls_per_iter (measurement iterations)
         # Skip warmup iterations
         call_counts = sorted(op_df["GLOBAL CALL COUNT"].unique())
-        if len(call_counts) > num_measurement_iters:
-            measurement_call_counts = call_counts[-num_measurement_iters:]
+        num_calls_to_analyze = num_measurement_iters * calls_per_iter
+        if len(call_counts) > num_calls_to_analyze:
+            measurement_call_counts = call_counts[-num_calls_to_analyze:]
         else:
             measurement_call_counts = call_counts
 
-        # Aggregate across iterations
+        # Aggregate across all calls (sum times for multiple calls per iter)
         iter_times = []
         for call_count in measurement_call_counts:
             call_df = op_df[op_df["GLOBAL CALL COUNT"] == call_count]
             agg_time = aggregate_device_time(call_df, op_name)
             iter_times.append(agg_time)
 
-        avg_time_us = sum(iter_times) / len(iter_times) if iter_times else 0.0
+        # Sum all call times and divide by number of iterations
+        total_call_time = sum(iter_times) if iter_times else 0.0
+        avg_time_us = total_call_time / num_measurement_iters if iter_times else 0.0
         results[short_name] = avg_time_us
         total_time_us += avg_time_us
 
@@ -321,7 +359,7 @@ def print_perf_table(
     title: str,
     config_name: str,
     seq_len: int,
-    ops: list[tuple[str, str]],
+    ops: list[tuple[str, str] | tuple[str, str, int]],
     results: dict,
 ) -> None:
     """
@@ -331,7 +369,7 @@ def print_perf_table(
         title: Table title (e.g., "SPATIAL LAYERNORM")
         config_name: Configuration name
         seq_len: Sequence length used
-        ops: List of (op_code, short_name) tuples
+        ops: List of (op_code, short_name) or (op_code, short_name, calls_per_iter) tuples
         results: Dictionary with timing results keyed by short_name
     """
     print("\n" + "=" * 80)
@@ -345,9 +383,13 @@ def print_perf_table(
     print(f"  {'Operation':<45} | {'Time (us)':>12} | {'Agg Method':>10}")
     print("-" * 80)
 
-    for op_name, short_name in ops:
+    for op_entry in ops:
+        op_name = op_entry[0]
+        short_name = op_entry[1]
+        calls_per_iter = op_entry[2] if len(op_entry) == 3 else 1
         agg_method = "min" if is_ccl_op(op_name) else "max"
-        print(f"  {op_name:<45} | {results[short_name]:>12.2f} | {agg_method:>10}")
+        display_name = f"{op_name} (x{calls_per_iter})" if calls_per_iter > 1 else op_name
+        print(f"  {display_name:<45} | {results[short_name]:>12.2f} | {agg_method:>10}")
 
     print("-" * 80)
     print(f"  {'TOTAL':<45} | {results['total']:>12.2f} |")
@@ -519,6 +561,62 @@ def test_run_prompt_rmsnorm(
     ttnn.synchronize_device(mesh_device)
 
 
+@MESH_DEVICE_PARAMS
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_run_spatial_qkv(
+    mesh_device: ttnn.MeshDevice,
+    config_name: str,
+    seq_len: int,
+    reset_seeds,
+) -> None:
+    """
+    Run spatial QKV: AllGather on TP axis followed by Q, K, V projections.
+    Profiled via test_spatial_qkv_perf.
+    """
+    tp_factor = MESH_SHAPE[TP_AXIS]
+    sp_factor = MESH_SHAPE[SP_AXIS]
+    seq_len_local = seq_len // sp_factor
+
+    logger.info(f"Running spatial QKV: {config_name}, seq_len={seq_len}")
+
+    ccl_manager = create_ccl_manager(mesh_device)
+
+    # Create Q, K, V projection layers (ColParallelLinear)
+    to_q = create_col_parallel_linear(mesh_device, ccl_manager)
+    to_k = create_col_parallel_linear(mesh_device, ccl_manager)
+    to_v = create_col_parallel_linear(mesh_device, ccl_manager)
+
+    # Input: spatial tensor fractured on SP (dim 2) and TP (dim 3)
+    # Shape: [1, B, N_local, D_local]
+    batch_size = 1
+    local_dim = WAN_DIM // tp_factor
+    input_torch = torch.randn((1, batch_size, seq_len_local, local_dim), dtype=torch.float32)
+    tt_spatial = bf16_tensor(input_torch, device=mesh_device)
+
+    def run_spatial_qkv(spatial):
+        # AllGather on TP axis to get full D dimension
+        if tp_factor > 1:
+            spatial_gathered = ccl_manager.all_gather_persistent_buffer(spatial, dim=3, mesh_axis=TP_AXIS)
+        else:
+            spatial_gathered = spatial
+
+        # Q, K, V projections
+        q = to_q(spatial_gathered)
+        k = to_k(spatial_gathered)
+        v = to_v(spatial_gathered)
+        return q, k, v
+
+    # Warmup
+    for _ in range(NUM_WARMUP_ITERS):
+        _ = run_spatial_qkv(tt_spatial)
+    ttnn.synchronize_device(mesh_device)
+
+    # Measurement
+    for _ in range(NUM_MEASUREMENT_ITERS):
+        _ = run_spatial_qkv(tt_spatial)
+    ttnn.synchronize_device(mesh_device)
+
+
 # =============================================================================
 # Op group definitions
 # =============================================================================
@@ -535,6 +633,12 @@ RMSNORM_OPS = [
     ("FusedRMSNormPreAllGatherDeviceOperation", "pre_allgather"),
     ("AllGatherAsyncDeviceOperation", "all_gather"),
     ("FusedRMSNormPostAllGatherDeviceOperation", "post_allgather"),
+]
+
+# Spatial QKV: AllGather + 3x matmul (Q, K, V projections)
+SPATIAL_QKV_OPS = [
+    ("AllGatherAsyncDeviceOperation", "all_gather"),
+    ("MinimalMatmulDeviceOperation", "matmul", 3),  # Q + K + V matmuls
 ]
 
 
@@ -559,3 +663,9 @@ def test_spatial_rmsnorm_perf(config_name: str, seq_len: int) -> None:
 def test_prompt_rmsnorm_perf(config_name: str) -> None:
     """Measure device performance for prompt RMSNorm without RoPE."""
     run_perf_test("test_run_prompt_rmsnorm", config_name, PROMPT_SEQ_LEN, "PROMPT RMSNORM", RMSNORM_OPS)
+
+
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_spatial_qkv_perf(config_name: str, seq_len: int) -> None:
+    """Measure device performance for spatial QKV (AllGather + Q/K/V projections)."""
+    run_perf_test("test_run_spatial_qkv", config_name, seq_len, "SPATIAL QKV", SPATIAL_QKV_OPS)
