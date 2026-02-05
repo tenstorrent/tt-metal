@@ -13,12 +13,13 @@
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t l1_read_addr = get_arg_val<uint32_t>(1);
+    uint32_t page_offset = get_arg_val<uint32_t>(2);
     // Barrier synchronization args
-    uint32_t barrier_sem_id = get_arg_val<uint32_t>(2);
-    uint32_t barrier_coord_x = get_arg_val<uint32_t>(3);
-    uint32_t barrier_coord_y = get_arg_val<uint32_t>(4);
-    uint32_t num_cores = get_arg_val<uint32_t>(5);
-    uint32_t local_barrier_addr = get_arg_val<uint32_t>(6);  // Local scratch space for polling
+    uint32_t barrier_sem_id = get_arg_val<uint32_t>(3);
+    uint32_t barrier_coord_x = get_arg_val<uint32_t>(4);
+    uint32_t barrier_coord_y = get_arg_val<uint32_t>(5);
+    uint32_t num_cores = get_arg_val<uint32_t>(6);
+    uint32_t local_barrier_addr = get_arg_val<uint32_t>(7);  // Local scratch space for polling
 
     constexpr uint32_t num_of_transactions = get_compile_time_arg_val(0);
     constexpr uint32_t num_pages = get_compile_time_arg_val(1);
@@ -47,7 +48,7 @@ void kernel_main() {
                 if constexpr (sync) {
                     cb_wait_front(cb_id_out0, 1);
                 }
-                uint64_t noc_addr = s.get_noc_addr(p);
+                uint64_t noc_addr = s.get_noc_addr(page_offset + p);
                 noc_async_write(l1_read_addr + p * page_size_bytes, noc_addr, page_size_bytes);
                 if constexpr (sync) {
                     noc_async_write_barrier();

@@ -173,7 +173,7 @@ class StatsCollector:
 
                 # Calculate combined bandwidth metrics for multi-core tests
                 # Combined bandwidth = total_bytes / wall_clock_time
-                # With barrier sync, max(duration) ≈ wall_clock_time (end_of_last - start_of_first)
+                # With barrier sync, max(duration) ~ wall_clock_time (end_of_last - start_of_first)
                 num_cores = len(durations)
                 max_duration = float(np.max(durations))
                 transaction_size = attributes.get("Transaction size in bytes", 0)
