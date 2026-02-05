@@ -292,6 +292,21 @@ echo "  Python version: ${VENV_PYTHON_VERSION}"
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
 uv python install "${VENV_PYTHON_VERSION}"
 uv venv "$PYTHON_ENV_DIR" --python "${VENV_PYTHON_VERSION}"
+
+# Symlink uv into the virtual environment's bin/ directory so that it is
+# available on PATH whenever the venv is activated (i.e. after the user runs
+# `source python_env/bin/activate`).  Without this, uv is only reachable at
+# its install location (~/.local/bin or ~/.cargo/bin), which may not be on
+# PATH in new shells, Docker RUN steps, or CI pipelines.
+# See: https://github.com/tenstorrent/tt-metal/issues/37007
+UV_REAL_PATH="$(command -v uv 2>/dev/null)"
+if [ -n "$UV_REAL_PATH" ] && [ -x "$UV_REAL_PATH" ]; then
+    ln -sf "$UV_REAL_PATH" "$PYTHON_ENV_DIR/bin/uv"
+    echo "Symlinked uv into virtual environment: $PYTHON_ENV_DIR/bin/uv -> $UV_REAL_PATH"
+else
+    echo "Warning: could not locate uv binary to symlink into venv" >&2
+fi
+
 source "$PYTHON_ENV_DIR/bin/activate"
 
 # PyTorch CPU index URL for all uv pip commands
