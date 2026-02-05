@@ -197,6 +197,12 @@ jobs:
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
         test-group: ${{ fromJSON(needs.define-ttsim-ttnn-tests.outputs.ttnn-tests) }}
+        exclude:
+          # Conv tests are all skipped on Blackhole - skip the job entirely
+          - arch:
+              name: blackhole
+            test-group:
+              name: "ttnn conv group"
     container:
       image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
