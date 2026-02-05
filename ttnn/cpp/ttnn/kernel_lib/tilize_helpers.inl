@@ -53,7 +53,7 @@ ALWI void tilize(
     if constexpr (use_dt) {
         // Reconfigure srcA
         if (prev_cbs.prev_cb_srca != tilize_config::INVALID_CB) {
-            reconfig_data_format_srca(prev_cbs.prev_cb_srca);
+            reconfig_data_format_srca(prev_cbs.prev_cb_srca, input_cb);
         } else {
             reconfig_data_format_srca(input_cb);
         }
@@ -61,7 +61,7 @@ ALWI void tilize(
         if constexpr (use_fast) {
             // Reconfigure srcB only in fast mode
             if (prev_cbs.prev_cb_srcb != tilize_config::INVALID_CB) {
-                reconfig_data_format_srcb(prev_cbs.prev_cb_srcb);
+                reconfig_data_format_srcb(prev_cbs.prev_cb_srcb, input_cb);
             } else {
                 reconfig_data_format_srcb(input_cb);
             }
@@ -69,7 +69,7 @@ ALWI void tilize(
 
         // Reconfigure output
         if (prev_cbs.prev_cb_output != tilize_config::INVALID_CB) {
-            pack_reconfig_data_format(prev_cbs.prev_cb_output);
+            pack_reconfig_data_format(prev_cbs.prev_cb_output, output_cb);
         } else {
             pack_reconfig_data_format(output_cb);
         }

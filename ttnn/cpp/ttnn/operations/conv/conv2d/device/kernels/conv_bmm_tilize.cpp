@@ -48,6 +48,7 @@ void tilize_in(
     compute_kernel_lib::tilize<
         in_cb_id,
         out_cb_id,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure,
         init_uninit_mode,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::TilizeSpeedMode::Fast>(in_block_w, in_num_subblocks);

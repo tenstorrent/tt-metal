@@ -32,22 +32,35 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cache_cb, untilized_cache_cb);
 
+    // Track previous CBs for reconfiguration in loop
+    // First iteration uses hw_startup CBs as previous
+    uint32_t prev_cb_srca = cache_cb;
+    uint32_t prev_cb_output = untilized_cache_cb;
+
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-        // Untilize a block from the cache
-        compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(1);
+        // Untilize a block from the cache with reconfiguration
+        compute_kernel_lib::untilize<
+            Wt,
+            cache_cb,
+            untilized_cache_cb,
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::Reconfigure>(
+            1, compute_kernel_lib::untilize_config::PreviousCBs{prev_cb_srca, prev_cb_output});
 
-        reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
-        pack_reconfig_data_format(untilized_cache_cb, out_cb);
-
-        // Wait on writer to update block. Tilize.
+        // Wait on writer to update block. Tilize with reconfiguration
         compute_kernel_lib::tilize<
             untilized_cache2_cb,
             out_cb,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::Reconfigure,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard>(Wt, 1);
+            compute_kernel_lib::tilize_config::TilizeSpeedMode::Standard>(
+            Wt,
+            1,
+            compute_kernel_lib::tilize_config::NonTileAlignedCBWaitConfig::disabled(),
+            compute_kernel_lib::tilize_config::PreviousCBs{cache_cb, untilized_cache_cb});
 
-        reconfig_data_format_srca(untilized_cache2_cb, cache_cb);
-        pack_reconfig_data_format(out_cb, untilized_cache_cb);
+        // Update previous CBs for next iteration
+        prev_cb_srca = untilized_cache2_cb;
+        prev_cb_output = out_cb;
     }
 }

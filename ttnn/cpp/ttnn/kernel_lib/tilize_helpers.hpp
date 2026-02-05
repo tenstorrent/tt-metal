@@ -205,6 +205,11 @@ public:
  * the previous circular buffers whose datatypes should be used for reconfiguration.
  *
  * Usage:
+ *   // With srcA and output only (srcB set to INVALID_CB - for standard mode)
+ *   tilize<cb_in, cb_out, ReconfigureRegisterDatatypeMode::Reconfigure>(
+ *       width, blocks, config, PreviousCBs{cb_srcA_prev, cb_output_prev});
+ *
+ *   // With all three (for fast mode)
  *   tilize<cb_in, cb_out, ReconfigureRegisterDatatypeMode::Reconfigure>(
  *       width, blocks, config, PreviousCBs{cb_srcA_prev, cb_srcB_prev, cb_output_prev});
  */
@@ -213,8 +218,16 @@ struct PreviousCBs {
     uint32_t prev_cb_srcb;
     uint32_t prev_cb_output;
 
-    constexpr PreviousCBs(uint32_t srca = INVALID_CB, uint32_t srcb = INVALID_CB, uint32_t output = INVALID_CB) :
+    // Constructor for srcA and output only (srcB defaults to INVALID_CB)
+    constexpr PreviousCBs(uint32_t srca, uint32_t output) :
+        prev_cb_srca(srca), prev_cb_srcb(INVALID_CB), prev_cb_output(output) {}
+
+    // Constructor for all three CBs (for fast mode)
+    constexpr PreviousCBs(uint32_t srca, uint32_t srcb, uint32_t output) :
         prev_cb_srca(srca), prev_cb_srcb(srcb), prev_cb_output(output) {}
+
+    // Default constructor
+    constexpr PreviousCBs() : prev_cb_srca(INVALID_CB), prev_cb_srcb(INVALID_CB), prev_cb_output(INVALID_CB) {}
 };
 
 }  // namespace tilize_config
@@ -264,17 +277,17 @@ struct PreviousCBs {
  *          TilizeSpeedMode::Fast>(64, 5);
  *
  * @example
- *   // Data type reconfiguration
+ *   // Data type reconfiguration (standard mode - 2 params)
  *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<new_cb, cb_out,
  *          ReconfigureRegisterDatatypeMode::Reconfigure,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
  *          TilizeSpeedMode::Standard>(16, 5, NonTileAlignedCBWaitConfig::disabled(),
- *                                     PreviousCBs{old_cb_srcA, old_cb_srcB, old_cb_out});
+ *                                     PreviousCBs{old_cb_srcA, old_cb_out});
  *
  * @example
- *   // Fast + DT reconfiguration
+ *   // Fast + DT reconfiguration (fast mode - 3 params with srcB)
  *   using namespace compute_kernel_lib::tilize_config;
  *   tilize<new_cb, cb_out,
  *          ReconfigureRegisterDatatypeMode::Reconfigure,

@@ -150,14 +150,14 @@ ALWI void untilize(uint32_t num_blocks, untilize_config::PreviousCBs prev_cbs) {
     if constexpr (use_dt) {
         // Reconfigure srcA
         if (prev_cbs.prev_cb_srca != untilize_config::INVALID_CB) {
-            reconfig_data_format_srca(prev_cbs.prev_cb_srca);
+            reconfig_data_format_srca(prev_cbs.prev_cb_srca, input_cb);
         } else {
             reconfig_data_format_srca(input_cb);
         }
 
         // Reconfigure output
         if (prev_cbs.prev_cb_output != untilize_config::INVALID_CB) {
-            pack_reconfig_data_format(prev_cbs.prev_cb_output);
+            pack_reconfig_data_format(prev_cbs.prev_cb_output, output_cb);
         } else {
             pack_reconfig_data_format(output_cb);
         }
