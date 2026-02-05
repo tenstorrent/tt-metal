@@ -89,7 +89,9 @@ void kernel_main() {
 // No FUSE_AG, same as dm_in1_sender_out
 #ifdef FUSE_BIAS
     constexpr uint32_t ternary_a_args_cta_offset = in2_args.next_compile_time_args_offset();
+
 #else
+
     constexpr uint32_t ternary_a_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
 #endif
