@@ -215,10 +215,20 @@ inline void _llk_pack_fast_tilize_addrmod_config_(const std::uint32_t unit_dim)
 {
     // first two address mods move to the next row, the stride depends on the number of contiguous faces loaded in the single unpacker instruction
     // for unit_dim 1, that is 2 so the stride is 2, and analogously for unit_dims 2 and 3 its 4 and 6
-    addr_mod_pack_t {
-        .y_src = {.incr = (std::uint8_t)(unit_dim == 1 ? 2 : 4)},
+    if (unit_dim == 1)
+    {
+        addr_mod_pack_t {
+            .y_src = {.incr = 2},
+        }
+            .set(ADDR_MOD_0);
     }
-        .set(ADDR_MOD_0);
+    else
+    {
+        addr_mod_pack_t {
+            .y_src = {.incr = 4},
+        }
+            .set(ADDR_MOD_0);
+    }
 
     addr_mod_pack_t {
         .y_src = {.incr = 6},

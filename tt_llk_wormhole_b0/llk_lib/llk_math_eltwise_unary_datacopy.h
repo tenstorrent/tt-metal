@@ -434,18 +434,36 @@ inline void _llk_math_fast_tilize_addrmod_config_(const std::uint32_t unpack_dst
     std::int16_t unit_dim_1_backward_jump = -bottom_face_offset + 8;
     std::int16_t unit_dim_2_backward_jump = -bottom_face_offset + 4;
 
-    // this follows MOVA2D in src and jumps to the offset for the bottom faces (for unit_dim 1 and 2, for unit_dim 3 that is handled the other way)
-    addr_mod_t {
-        .srca = {.incr = 8},
-        .dest = {.incr = unit_dim == 1 ? unit_dim_1_forward_jump : unit_dim_2_forward_jump},
-    }
-        .set(ADDR_MOD_3);
+    if (unit_dim == 1)
+    {
+        // this follows MOVA2D in src and jumps to the offset for the bottom faces (for unit_dim 1 and 2, for unit_dim 3 that is handled the other way)
+        addr_mod_t {
+            .srca = {.incr = 8},
+            .dest = {.incr = unit_dim_1_forward_jump},
+        }
+            .set(ADDR_MOD_3);
 
-    // this jumps back to the offset for the next tile, RWCs for source registers are reset separately when clearing dvalids
-    addr_mod_t {
-        .dest = {.incr = unit_dim == 1 ? unit_dim_1_backward_jump : unit_dim_2_backward_jump},
+        // this jumps back to the offset for the next tile, RWCs for source registers are reset separately when clearing dvalids
+        addr_mod_t {
+            .dest = {.incr = unit_dim_1_backward_jump},
+        }
+            .set(ADDR_MOD_0);
     }
-        .set(ADDR_MOD_0);
+    else
+    {
+        // this follows MOVA2D in src and jumps to the offset for the bottom faces (for unit_dim 1 and 2, for unit_dim 3 that is handled the other way)
+        addr_mod_t {
+            .srca = {.incr = 8},
+            .dest = {.incr = unit_dim_2_forward_jump},
+        }
+            .set(ADDR_MOD_3);
+
+        // this jumps back to the offset for the next tile, RWCs for source registers are reset separately when clearing dvalids
+        addr_mod_t {
+            .dest = {.incr = unit_dim_2_backward_jump},
+        }
+            .set(ADDR_MOD_0);
+    }
 }
 
 inline void _llk_math_fast_tilize_mop_config_()
