@@ -1352,6 +1352,10 @@ class ModelArgs:
         """Round up self.dim to nearest power of 2."""
         return 2 ** math.ceil(math.log2(self.dim))
 
+    @property
+    def needed_padding(self):
+        return any(x in self.base_model_name.lower() for x in ["gemma-3-27b"])
+
     def get_warmup_prefill_supported_seq_lens(self):
         assert (
             self.capped_warmup_seq_len > 0 and (self.capped_warmup_seq_len & (self.capped_warmup_seq_len - 1)) == 0

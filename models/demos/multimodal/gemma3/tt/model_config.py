@@ -128,10 +128,6 @@ class ModelArgs(TTModelArgs):
                 ),
             )
 
-    @property
-    def needed_padding(self):
-        return any(x in self.base_model_name.lower() for x in ["gemma-3-27b"])
-
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
         # This dictionary is used to override the default ceil warmup prefill value
