@@ -82,18 +82,21 @@ class MinimalMatmulWorstCaseTest(OpTestBase):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "dtype, math_fidelity, fp32_acc, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    "in0_dtype, in1_dtype, math_fidelity, fp32_acc, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
-        (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False, 8, 16, 8, 2, 4),
-        (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, 8, 16, 4, 2, 4),
-        (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
-        (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
+        (ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False, 8, 16, 8, 2, 4),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, 8, 16, 4, 2, 4),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
+        (ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
+        (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, 8, 8, 16, 2, 4),
+        (ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.LoFi, False, 8, 4, 16, 2, 4),
     ],
-    ids=["bf16_HiFi2", "bf8b_HiFi2", "bf8b_LoFi", "bf4b_LoFi"],
+    ids=["bf16_HiFi2", "bf8b_HiFi2", "bf8b_LoFi", "bf4b_LoFi", "bf16_bf8b_LoFi", "bf16_LoFi"],
 )
 def test_minimal_matmul(
     mesh_device,
-    dtype,
+    in0_dtype,
+    in1_dtype,
     math_fidelity,
     fp32_acc,
     M_block_size,
@@ -115,9 +118,9 @@ def test_minimal_matmul(
     in0_shape = [M, K]
     in1_shape = [K, N]
 
-    in0_dtype = dtype
-    in1_dtype = dtype
-    out_dtype = dtype
+    in0_dtype = in0_dtype
+    in1_dtype = in1_dtype
+    out_dtype = in0_dtype  # unused
 
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
