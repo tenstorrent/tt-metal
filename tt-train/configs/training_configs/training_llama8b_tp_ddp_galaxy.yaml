@@ -1,0 +1,26 @@
+training_config:
+  project_name: "tt_train_llama8b_tp_dp"
+  seed: 5489
+  model_save_interval: 500
+  batch_size: 8  # Total batch size across all DP groups
+  gradient_accumulation_steps: 1
+  num_epochs: 1
+  max_steps: 10
+  learning_rate: 0.00003
+  weight_decay: 0.01
+  use_moreh_adamw: true
+  use_kahan_summation: false
+  use_clip_grad_norm: false # TODO: fix clip grad norm when TP is enabled
+  clip_grad_norm_max_norm: 1.0
+  model_config: "configs/model_configs/llama8b_galaxy_tp_dp.yaml"
+
+device_config:
+  enable_tp: true
+  enable_ddp: true
+  mesh_shape: [8, 4]  # 4 DP groups x 8 TP devices = 32 devices (Galaxy)
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0
