@@ -11,6 +11,9 @@ set_target_properties(
             Metalium
 )
 
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
+
 include(flatbuffers)
 GENERATE_FBS_HEADER(
     api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
@@ -26,103 +29,6 @@ add_custom_target(
     COMMENT "Generating all FlatBuffer headers"
 )
 
-set(TT_METAL_PUBLIC_API
-    api/tt-metalium/allocator.hpp
-    api/tt-metalium/base_types.hpp
-    api/tt-metalium/bfloat16.hpp
-    api/tt-metalium/bfloat4.hpp
-    api/tt-metalium/bfloat8.hpp
-    api/tt-metalium/buffer.hpp
-    api/tt-metalium/buffer_distribution_spec.hpp
-    api/tt-metalium/buffer_page_mapping.hpp
-    api/tt-metalium/buffer_types.hpp
-    api/tt-metalium/circular_buffer.hpp
-    api/tt-metalium/circular_buffer_config.hpp
-    api/tt-metalium/circular_buffer_constants.h
-    api/tt-metalium/cluster.hpp
-    api/tt-metalium/constants.hpp
-    api/tt-metalium/experimental/fabric/control_plane.hpp
-    api/tt-metalium/core_coord.hpp
-    api/tt-metalium/data_types.hpp
-    api/tt-metalium/device.hpp
-    api/tt-metalium/dispatch_core_common.hpp
-    api/tt-metalium/distributed.hpp
-    api/tt-metalium/distributed_context.hpp
-    api/tt-metalium/distributed_host_buffer.hpp
-    api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
-    api/tt-metalium/event.hpp
-    api/tt-metalium/experimental/inspector.hpp
-    api/tt-metalium/experimental/profiler.hpp
-    api/tt-metalium/experimental/fabric/fabric.hpp
-    api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
-    api/tt-metalium/experimental/fabric/fabric_types.hpp
-    api/tt-metalium/global_circular_buffer.hpp
-    api/tt-metalium/global_semaphore.hpp
-    api/tt-metalium/graph_tracking.hpp
-    api/tt-metalium/hal.hpp
-    api/tt-metalium/hal_types.hpp
-    api/tt-metalium/host_api.hpp
-    api/tt-metalium/host_buffer.hpp
-    api/tt-metalium/kernel_types.hpp
-    api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
-    api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
-    api/tt-metalium/experimental/lightmetal/lightmetal_replay.hpp
-    api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
-    api/tt-metalium/math.hpp
-    api/tt-metalium/maybe_remote.hpp
-    api/tt-metalium/memory_pin.hpp
-    api/tt-metalium/memory_reporter.hpp
-    api/tt-metalium/mesh_buffer.hpp
-    api/tt-metalium/mesh_command_queue.hpp
-    api/tt-metalium/mesh_config.hpp
-    api/tt-metalium/mesh_coord.hpp
-    api/tt-metalium/mesh_device.hpp
-    api/tt-metalium/mesh_device_view.hpp
-    api/tt-metalium/mesh_event.hpp
-    api/tt-metalium/experimental/fabric/mesh_graph.hpp
-    api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp
-    api/tt-metalium/experimental/sockets/mesh_socket.hpp
-    api/tt-metalium/mesh_trace_id.hpp
-    api/tt-metalium/mesh_workload.hpp
-    api/tt-metalium/profiler_optional_metadata.hpp
-    api/tt-metalium/profiler_types.hpp
-    api/tt-metalium/program.hpp
-    api/tt-metalium/program_cache.hpp
-    api/tt-metalium/program_descriptors.hpp
-    api/tt-metalium/queue_id.hpp
-    api/tt-metalium/experimental/fabric/routing_table_generator.hpp
-    api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp
-    api/tt-metalium/runtime_args_data.hpp
-    api/tt-metalium/shape.hpp
-    api/tt-metalium/shape2d.hpp
-    api/tt-metalium/shape_base.hpp
-    api/tt-metalium/sub_device.hpp
-    api/tt-metalium/sub_device_types.hpp
-    api/tt-metalium/system_mesh.hpp
-    api/tt-metalium/tensor_accessor_args.hpp
-    api/tt-metalium/tile.hpp
-    api/tt-metalium/tilize_utils.hpp
-    api/tt-metalium/tt_align.hpp
-    api/tt-metalium/tt_backend_api_types.hpp
-    api/tt-metalium/tt_metal.hpp
-    api/tt-metalium/tt_metal_profiler.hpp
-    api/tt-metalium/vector_aligned.hpp
-    api/tt-metalium/work_split.hpp
-    api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
-    api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
-    api/tt-metalium/experimental/pinned_memory.hpp
-    api/tt-metalium/experimental/tensor/host_tensor.hpp
-    api/tt-metalium/experimental/tensor/device_tensor.hpp
-    api/tt-metalium/experimental/tensor/tensor_types.hpp
-    api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/layout.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/page_config.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp
-    api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
-    api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
-    api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
-)
 target_sources(
     tt_metal
     PUBLIC
@@ -131,9 +37,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_BINARY_DIR}/api
         FILES ${TT_METAL_PUBLIC_API}
     PRIVATE
-        tt_metal.cpp
-        graph/graph_tracking.cpp
-        hal.cpp
+        ${TT_METAL_PRIVATE_SOURCES}
         ${API_GENERATED_HEADERS}
 )
 set_source_files_properties(

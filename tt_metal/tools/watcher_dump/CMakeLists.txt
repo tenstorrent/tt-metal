@@ -1,4 +1,7 @@
-add_executable(watcher_dump ${CMAKE_CURRENT_SOURCE_DIR}/watcher_dump.cpp)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
+
+add_executable(watcher_dump ${WATCHER_DUMP_SOURCES})
 target_link_libraries(
     watcher_dump
     PRIVATE

@@ -2,7 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-add_library(dfb OBJECT dataflow_buffer.cpp)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
+
+add_library(dfb OBJECT ${DFB_SOURCES})
 
 target_link_libraries(
     dfb
