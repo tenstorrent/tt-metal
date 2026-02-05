@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lab Exercises &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/labs/index.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Lab 1: Single Core Matrix Multiplication" href="matmul/lab1/lab1.html" />
+    <link rel="prev" title="Smoothstep using SFPI" href="../examples/custom_sfpi_smoothstep.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Lab Exercises</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="matmul/lab1/lab1.html">Lab 1: Single Core Matrix Multiplication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul/lab2/lab2.html">Lab 2: Multi Core Matrix Multiplication</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../environment_variables/index.html">Environment Variables</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Lab Exercises</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/tt_metal/labs/index.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="lab-exercises">
+<h1>Lab Exercises<a class="headerlink" href="#lab-exercises" title="Permalink to this heading"></a>
+</h1>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1">
+<a class="reference internal" href="matmul/lab1/lab1.html">Lab 1: Single Core Matrix Multiplication</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="matmul/lab1/lab1.html#introduction">Introduction</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab1/lab1.html#basic-algorithm">Basic Algorithm</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="matmul/lab1/lab1.html#row-major-memory-layout">Row-Major Memory Layout</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="matmul/lab1/lab1.html#cache-friendly-access-patterns">Cache-Friendly Access Patterns</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#implications-for-matrix-multiplication">Implications for Matrix Multiplication</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="matmul/lab1/lab1.html#linear-transformation-and-computational-flexibility">Linear Transformation and Computational Flexibility</a></li>
+<li class="toctree-l2">
+<a class="reference internal" href="matmul/lab1/lab1.html#loop-tiling">Loop Tiling</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="matmul/lab1/lab1.html#simple-tiling-example">Simple Tiling Example</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#original-doubly-nested-loop">Original Doubly Nested Loop</a></li>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#tiled-version">Tiled Version</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab1/lab1.html#exercise-1-tiled-matrix-multiplication">Exercise 1: Tiled Matrix Multiplication</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="matmul/lab1/lab1.html#introduction-to-tenstorrent-architecture">Introduction to Tenstorrent Architecture</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="matmul/lab1/lab1.html#tile-based-architecture">Tile-Based Architecture</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#memory-layout-and-tiling">Memory Layout and Tiling</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="matmul/lab1/lab1.html#tt-metalium-programming-model">TT-Metalium Programming Model</a></li>
+<li class="toctree-l2">
+<a class="reference internal" href="matmul/lab1/lab1.html#example-tt-metalium-program">Example TT-Metalium Program</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab1/lab1.html#exercise-2-running-the-example-program">Exercise 2: Running the Example Program</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="matmul/lab1/lab1.html#program-description">Program Description</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#kernel-types-and-data-flow">Kernel Types and Data Flow</a></li>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#kernel-creation-and-configuration">Kernel Creation and Configuration</a></li>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#reader-kernel-code">Reader Kernel Code</a></li>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#compute-kernel-code">Compute Kernel Code</a></li>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#writer-kernel-code">Writer Kernel Code</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab1/lab1.html#example-program-summary">Example Program Summary</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="matmul/lab1/lab1.html#kernel-compilation-and-execution">Kernel Compilation and Execution</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab1/lab1.html#exercise-3-observing-jit-compile-errors">Exercise 3: Observing JIT Compile Errors</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="matmul/lab1/lab1.html#debug-facilities-in-tt-metalium">Debug Facilities in TT-Metalium</a><ul>
+<li class="toctree-l3">
+<a class="reference internal" href="matmul/lab1/lab1.html#debug-print-api">Debug Print API</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#printing-a-tile-in-a-dataflow-kernel">Printing a Tile in a Dataflow Kernel</a></li>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#caveats-and-best-practices">Caveats and Best Practices</a></li>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#exercise-4-using-dprint-to-debug-a-kernel">Exercise 4: Using DPRINT to Debug a Kernel</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="matmul/lab1/lab1.html#debugging-hangs-using-stack-traces">Debugging Hangs using Stack Traces</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#tt-triage-dependencies"><code class="docutils literal notranslate"><span class="pre">tt-triage</span></code> Dependencies</a></li>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#exercise-5-using-tt-triage-to-debug-a-hang">Exercise 5: Using tt-triage to Debug a Hang</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="matmul/lab1/lab1.html#device-performance-profiling">Device Performance Profiling</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab1/lab1.html#exercise-6-using-device-profiling-to-profile-kernels">Exercise 6: Using Device Profiling to Profile Kernels</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="matmul/lab1/lab1.html#matrix-multiplication-in-tt-metalium">Matrix Multiplication in TT-Metalium</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab1/lab1.html#exercise-7-implementing-matrix-multiplication-in-tt-metalium">Exercise 7: Implementing Matrix Multiplication in TT-Metalium</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="matmul/lab1/lab1.html#conclusion">Conclusion</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul/lab1/lab1.html#troubleshooting-and-additional-resources">Troubleshooting and Additional Resources</a></li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="matmul/lab2/lab2.html">Lab 2: Multi Core Matrix Multiplication</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="matmul/lab2/lab2.html#introduction">Introduction</a></li>
+<li class="toctree-l2">
+<a class="reference internal" href="matmul/lab2/lab2.html#from-single-core-to-multi-core-matrix-multiplication">From Single Core to Multi Core Matrix Multiplication</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab2/lab2.html#work-distribution-for-multi-core-programs">Work Distribution for Multi Core Programs</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="matmul/lab2/lab2.html#work-distribution-in-tt-metalium">Work Distribution in TT-Metalium</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab2/lab2.html#determine-number-of-available-tensix-cores">Determine Number of Available Tensix Cores</a></li>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab2/lab2.html#split-work-among-tensix-cores">Split Work Among Tensix Cores</a></li>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab2/lab2.html#create-circular-buffers-and-kernels-on-multiple-cores">Create Circular Buffers and Kernels on Multiple Cores</a></li>
+<li class="toctree-l4"><a class="reference internal" href="matmul/lab2/lab2.html#set-per-core-runtime-arguments">Set Per-Core Runtime Arguments</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab2/lab2.html#inspecting-and-choosing-cores">Inspecting and Choosing Cores</a></li>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab2/lab2.html#exercise-1-multi-core-matrix-multiplication">Exercise 1: Multi Core Matrix Multiplication</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="matmul/lab2/lab2.html#data-reuse-in-multi-core-matrix-multiplication">Data Reuse in Multi Core Matrix Multiplication</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab2/lab2.html#motivation">Motivation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab2/lab2.html#blocked-matrix-multiplication">Blocked Matrix Multiplication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab2/lab2.html#limiting-on-chip-memory-usage">Limiting On-Chip Memory Usage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab2/lab2.html#blocked-matrix-multiplication-with-data-reuse-pseudocode">Blocked Matrix Multiplication with Data Reuse Pseudocode</a></li>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab2/lab2.html#data-reuse-evaluation">Data Reuse Evaluation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab2/lab2.html#blocked-matrix-multiplication-in-tt-metalium">Blocked Matrix Multiplication in TT-Metalium</a></li>
+<li class="toctree-l3"><a class="reference internal" href="matmul/lab2/lab2.html#exercise-2-multi-core-matrix-multiplication-with-data-reuse">Exercise 2: Multi Core Matrix Multiplication with Data Reuse</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="matmul/lab2/lab2.html#potential-additional-optimizations">Potential Additional Optimizations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul/lab2/lab2.html#conclusion">Conclusion</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../examples/custom_sfpi_smoothstep.html" class="btn btn-neutral float-left" title="Smoothstep using SFPI" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="matmul/lab1/lab1.html" class="btn btn-neutral float-right" title="Lab 1: Single Core Matrix Multiplication" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
