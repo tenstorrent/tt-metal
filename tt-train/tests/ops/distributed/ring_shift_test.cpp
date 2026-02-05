@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-=======
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
->>>>>>> origin/main
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,12 +23,9 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
-<<<<<<< HEAD
-=======
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 using ttml::ttnn_fixed::distributed::RingShiftDirection;
->>>>>>> origin/main
 
 auto check_32_chips() {
     auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
@@ -43,19 +36,6 @@ auto check_32_chips() {
 class GalaxyRingShiftTest : public ::testing::Test {
 public:
     static void SetUpTestSuite() {
-<<<<<<< HEAD
-        if (!check_32_chips()) {
-            GTEST_SKIP() << "Skipping Galaxy specific tests";
-        }
-        ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
-        ttml::ttnn_fixed::distributed::enable_fabric(32);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(4, 8));
-        ttml::autograd::ctx().set_seed(42);
-        ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
-    }
-    static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
-=======
         if (check_32_chips()) {
             ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
             ttml::ttnn_fixed::distributed::enable_fabric(32);
@@ -74,7 +54,6 @@ public:
         if (!check_32_chips()) {
             GTEST_SKIP() << "Skipping Galaxy specific tests";
         }
->>>>>>> origin/main
     }
 };
 
@@ -84,11 +63,7 @@ static void TestRingShift(
     const size_t hidden,
     const uint32_t cluster_axis,
     const uint32_t shard_dim,
-<<<<<<< HEAD
-    const bool forward,
-=======
     const RingShiftDirection direction,
->>>>>>> origin/main
     const bool test_backward_grad = false,
     const float rtol = 1e-3F,
     const float atol = 1e-5F) {
@@ -122,11 +97,7 @@ static void TestRingShift(
     const auto original_xtensors = core::to_xtensor<float>(tensor->get_value(), core::IdentityComposer{});
 
     // Perform ring shift
-<<<<<<< HEAD
-    const auto shifted_tensor = ops::distributed::ring_shift(tensor, cluster_axis, forward);
-=======
     const auto shifted_tensor = ops::distributed::ring_shift(tensor, cluster_axis, direction);
->>>>>>> origin/main
 
     // Get output back to xtensor
     const auto shifted_xtensors = core::to_xtensor<float>(shifted_tensor->get_value(), core::IdentityComposer{});
@@ -139,10 +110,7 @@ static void TestRingShift(
     // Verify ring shift correctness:
     // After forward shift, device i should have data from device (i-1+ring_size) % ring_size
     // After backward shift, device i should have data from device (i+1) % ring_size
-<<<<<<< HEAD
-=======
     const bool forward = (direction == ttnn_fixed::distributed::RingShiftDirection::Forward);
->>>>>>> origin/main
     for (uint32_t row = 0; row < mesh_rows; ++row) {
         for (uint32_t col = 0; col < mesh_cols; ++col) {
             const size_t device_idx = row * mesh_cols + col;
@@ -204,42 +172,11 @@ static void TestRingShift(
 
 TEST_F(GalaxyRingShiftTest, ForwardAlongColumns) {
     // hidden=64 sharded across 8 cols -> 8 per device
-<<<<<<< HEAD
-    TestRingShift(1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true);
-=======
     TestRingShift(1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, RingShiftDirection::Forward);
->>>>>>> origin/main
 }
 
 TEST_F(GalaxyRingShiftTest, ForwardAlongRows) {
     // batch=4 sharded across 4 rows -> 1 per device
-<<<<<<< HEAD
-    TestRingShift(4, 32, 64, /*cluster_axis=*/0, /*shard_dim=*/0, /*forward=*/true);
-}
-
-TEST_F(GalaxyRingShiftTest, ForwardBig) {
-    TestRingShift(16, 1024, 8192, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/false, /*test_backward_grad=*/false);
-}
-
-TEST_F(GalaxyRingShiftTest, Llama8bSeqLen8192Tp8Cp8Bs16) {
-    TestRingShift(16, 1024, 512, /*cluster_axis=*/1, /*shard_dim=*/0, /*forward=*/false, /*test_backward_grad=*/false);
-}
-
-TEST_F(GalaxyRingShiftTest, BackwardAlongColumns) {
-    TestRingShift(1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/false);
-}
-
-TEST_F(GalaxyRingShiftTest, ForwardWithGradient) {
-    TestRingShift(1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true, /*test_backward_grad=*/true);
-}
-
-TEST_F(GalaxyRingShiftTest, BackwardWithGradient) {
-    TestRingShift(1, 32, 64, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/false, /*test_backward_grad=*/true);
-}
-
-TEST_F(GalaxyRingShiftTest, BackwardBig) {
-    TestRingShift(16, 1024, 8192, /*cluster_axis=*/1, /*shard_dim=*/3, /*forward=*/true, /*test_backward_grad=*/true);
-=======
     TestRingShift(4, 32, 64, /*cluster_axis=*/0, /*shard_dim=*/0, RingShiftDirection::Forward);
 }
 
@@ -276,5 +213,4 @@ TEST_F(GalaxyRingShiftTest, BackwardWithGradient) {
 TEST_F(GalaxyRingShiftTest, BackwardBig) {
     TestRingShift(
         16, 1024, 8192, /*cluster_axis=*/1, /*shard_dim=*/3, RingShiftDirection::Forward, /*test_backward_grad=*/true);
->>>>>>> origin/main
 }

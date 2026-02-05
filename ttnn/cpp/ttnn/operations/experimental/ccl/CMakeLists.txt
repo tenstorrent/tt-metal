@@ -52,8 +52,6 @@ target_sources(
             reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
             reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
-            send_recv_async/recv_async/recv_async.hpp
-            send_recv_async/send_async/send_async.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

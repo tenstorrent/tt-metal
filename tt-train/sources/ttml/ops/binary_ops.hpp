@@ -10,11 +10,9 @@ namespace ttml::ops {
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::AutocastTensor& b);
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
-autograd::TensorPtr operator+(const autograd::TensorPtr& a, float b);
 autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
 autograd::TensorPtr operator*(const autograd::TensorPtr& a, float b);
 autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
-autograd::TensorPtr operator-(const autograd::TensorPtr& a, float b);
 autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
 
 autograd::TensorPtr add(const autograd::TensorPtr& a, const autograd::AutocastTensor& b);
@@ -32,4 +30,5 @@ using ops::operator*;
 using ops::operator+;
 using ops::operator-;
 using ops::operator/;
+
 }  // namespace ttml::autograd
