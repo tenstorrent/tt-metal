@@ -33,33 +33,6 @@ std::string read_file_to_string(const std::filesystem::path& file_path) {
     return buffer.str();
 }
 
-std::string get_validation_report(const PhysicalGroupingDescriptor::ValidationResult& result) {
-    if (result.is_valid() && result.warnings.empty()) {
-        return "No validation errors or warnings found.\n";
-    }
-
-    std::ostringstream report;
-    report << "=== PhysicalGroupingDescriptor Validation Report ===\n\n";
-
-    if (!result.errors.empty()) {
-        report << "Errors:\n";
-        for (const auto& error : result.errors) {
-            report << "  - " << error << "\n";
-        }
-        report << "\n";
-    }
-
-    if (!result.warnings.empty()) {
-        report << "Warnings:\n";
-        for (const auto& warning : result.warnings) {
-            report << "  - " << warning << "\n";
-        }
-        report << "\n";
-    }
-
-    return report.str();
-}
-
 bool grouping_exists(const proto::PhysicalGroupings& proto, const std::string& grouping_name) {
     for (const auto& grouping : proto.groupings()) {
         if (grouping.name() == grouping_name) {
@@ -88,7 +61,7 @@ PhysicalGroupingDescriptor::PhysicalGroupingDescriptor(const std::string& text_p
     TT_FATAL(
         validation_result_.is_valid(),
         "Failed to validate PhysicalGroupingDescriptor textproto: \n{}",
-        get_validation_report(validation_result_));
+        PhysicalGroupingDescriptor::get_validation_report(validation_result_));
 
     proto_ = std::make_shared<proto::PhysicalGroupings>(temp_proto);
 }
@@ -106,13 +79,44 @@ bool PhysicalGroupingDescriptor::has_grouping(const std::string& grouping_name) 
     return grouping_exists(*proto_, grouping_name);
 }
 
-std::vector<const proto::Grouping*> PhysicalGroupingDescriptor::get_groupings_by_name(
+size_t PhysicalGroupingDescriptor::get_grouping_count() const { return proto_->groupings_size(); }
+
+PhysicalGroupingDescriptor::GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(
+    const proto::Grouping& grouping) const {
+    GroupingInfo info;
+    info.name = grouping.name();
+
+    for (const auto& item : grouping.items()) {
+        GroupingItemInfo item_info;
+        if (item.has_asic_location()) {
+            item_info.type = GroupingItemInfo::ItemType::ASIC_LOCATION;
+            item_info.asic_location = static_cast<uint32_t>(item.asic_location());
+        } else if (item.has_grouping_ref()) {
+            item_info.type = GroupingItemInfo::ItemType::GROUPING_REF;
+            item_info.grouping_name = item.grouping_ref().grouping_name();
+            item_info.count = item.grouping_ref().count();
+        }
+        info.items.push_back(item_info);
+    }
+
+    return info;
+}
+
+std::vector<PhysicalGroupingDescriptor::GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_name(
     const std::string& grouping_name) const {
-    std::vector<const proto::Grouping*> result;
+    std::vector<GroupingInfo> result;
     for (const auto& grouping : proto_->groupings()) {
         if (grouping.name() == grouping_name) {
-            result.push_back(&grouping);
+            result.push_back(convert_grouping_to_info(grouping));
         }
+    }
+    return result;
+}
+
+std::vector<PhysicalGroupingDescriptor::GroupingInfo> PhysicalGroupingDescriptor::get_all_groupings() const {
+    std::vector<GroupingInfo> result;
+    for (const auto& grouping : proto_->groupings()) {
+        result.push_back(convert_grouping_to_info(grouping));
     }
     return result;
 }
@@ -125,7 +129,36 @@ std::vector<std::string> PhysicalGroupingDescriptor::get_all_grouping_names() co
     return names;
 }
 
-std::string PhysicalGroupingDescriptor::ValidationResult::get_report() const { return ::get_validation_report(*this); }
+std::string PhysicalGroupingDescriptor::ValidationResult::get_report() const {
+    return PhysicalGroupingDescriptor::get_validation_report(*this);
+}
+
+std::string PhysicalGroupingDescriptor::get_validation_report(const ValidationResult& result) {
+    if (result.is_valid() && result.warnings.empty()) {
+        return "No validation errors or warnings found.\n";
+    }
+
+    std::ostringstream report;
+    report << "=== PhysicalGroupingDescriptor Validation Report ===\n\n";
+
+    if (!result.errors.empty()) {
+        report << "Errors:\n";
+        for (const auto& error : result.errors) {
+            report << "  - " << error << "\n";
+        }
+        report << "\n";
+    }
+
+    if (!result.warnings.empty()) {
+        report << "Warnings:\n";
+        for (const auto& warning : result.warnings) {
+            report << "  - " << warning << "\n";
+        }
+        report << "\n";
+    }
+
+    return report.str();
+}
 
 PhysicalGroupingDescriptor::ValidationResult PhysicalGroupingDescriptor::validate(
     const proto::PhysicalGroupings& proto) {
