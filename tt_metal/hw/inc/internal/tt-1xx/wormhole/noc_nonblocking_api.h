@@ -217,30 +217,95 @@ inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, state->at_data);
 }
 
-// Returns number of read transactions issued on this noc.
+/**
+ * Returns the number of read transactions issued on this NOC.
+ *
+ * Return value: Number of read transactions issued
+ *
+ * | Argument | Description                | Data type | Valid range | Required |
+ * |----------|----------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                  | uint32_t  | 0 or 1      | True     |
+ */
 inline __attribute__((always_inline)) uint32_t noc_get_reads_issued(uint32_t noc) { return noc_reads_num_issued[noc]; }
-// Returns number of nonposted write transactions issued on this noc.
+
+/**
+ * Returns the number of nonposted write transactions issued on this NOC.
+ *
+ * Return value: Number of nonposted write transactions issued
+ *
+ * | Argument | Description                | Data type | Valid range | Required |
+ * |----------|----------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                  | uint32_t  | 0 or 1      | True     |
+ */
 inline __attribute__((always_inline)) uint32_t noc_get_nonposted_writes_issued(uint32_t noc) {
     return noc_nonposted_writes_num_issued[noc];
 }
-// Returns number of nonposted write acks received on this noc.
+
+/**
+ * Returns the number of nonposted write acknowledgments received on this NOC.
+ *
+ * Return value: Number of nonposted write acks received
+ *
+ * | Argument | Description                | Data type | Valid range | Required |
+ * |----------|----------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                  | uint32_t  | 0 or 1      | True     |
+ */
 inline __attribute__((always_inline)) uint32_t noc_get_nonposted_writes_acked(uint32_t noc) {
     return noc_nonposted_writes_acked[noc];
 }
-// Returns number of nonposted atomic acks received on this noc.
+
+/**
+ * Returns the number of nonposted atomic acknowledgments received on this NOC.
+ *
+ * Return value: Number of nonposted atomic acks received
+ *
+ * | Argument | Description                | Data type | Valid range | Required |
+ * |----------|----------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                  | uint32_t  | 0 or 1      | True     |
+ */
 inline __attribute__((always_inline)) uint32_t noc_get_nonposted_atomics_acked(uint32_t noc) {
     return noc_nonposted_atomics_acked[noc];
 }
-// Returns number of posted write transactions issued on this noc.
+
+/**
+ * Returns the number of posted write transactions issued on this NOC.
+ *
+ * Return value: Number of posted write transactions issued
+ *
+ * | Argument | Description                | Data type | Valid range | Required |
+ * |----------|----------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                  | uint32_t  | 0 or 1      | True     |
+ */
 inline __attribute__((always_inline)) uint32_t noc_get_posted_writes_issued(uint32_t noc) {
     return noc_posted_writes_num_issued[noc];
 }
 
-// Increments nonposted-writes-acked by delta (e.g. for multicast write accounting).
+/**
+ * Increments the nonposted write acknowledgments counter by the specified delta.
+ * Useful for multicast write accounting where multiple destinations receive the same write.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                    | Data type | Valid range | Required |
+ * |----------|------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                      | uint32_t  | 0 or 1      | True     |
+ * | delta    | Amount to increment the counter by             | uint32_t  | 0..2^32-1   | True     |
+ */
 inline __attribute__((always_inline)) void noc_increment_nonposted_writes_acked(uint32_t noc, uint32_t delta) {
     noc_nonposted_writes_acked[noc] += delta;
 }
-// Increments nonposted-writes-issued by delta (e.g. for multicast write accounting).
+
+/**
+ * Increments the nonposted write issued counter by the specified delta.
+ * Useful for multicast write accounting where a single transaction targets multiple destinations.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                    | Data type | Valid range | Required |
+ * |----------|------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                      | uint32_t  | 0 or 1      | True     |
+ * | delta    | Amount to increment the counter by             | uint32_t  | 0..2^32-1   | True     |
+ */
 inline __attribute__((always_inline)) void noc_increment_nonposted_writes_issued(uint32_t noc, uint32_t delta) {
     noc_nonposted_writes_num_issued[noc] += delta;
 }
@@ -251,26 +316,71 @@ inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_at_count(ui
     return (int32_t)(sent - expected_count) >= 0;
 }
 
-// Writes NOC_TARG_ADDR_COORDINATE for cmd_buf. Takes NOC coordinates from NOC_XY_COORD(x, y).
+/**
+ * Sets the target address coordinates for a NOC command buffer.
+ * Writes only the NOC_TARG_ADDR_COORDINATE register (NOC x,y coordinates).
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                          | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf  | Command buffer index                               | uint32_t  | 0 - 3       | True     |
+ * | coord    | Packed NOC coordinates from NOC_XY_COORD(x, y)     | uint32_t  | 0..2^32-1   | True     |
+ */
 inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr_coordinate(
     uint32_t noc, uint32_t cmd_buf, uint32_t coord) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, coord);
 }
 
-// Writes NOC_TARG_ADDR_LO and NOC_TARG_ADDR_COORDINATE from full NOC address from NOC_XY_ADDR(x, y, addr).
+/**
+ * Sets the full target address for a NOC command buffer.
+ * Writes both NOC_TARG_ADDR_LO and NOC_TARG_ADDR_COORDINATE registers.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                                        | Data type | Valid range | Required |
+ * |-----------|----------------------------------------------------|-----------|-------------|----------|
+ * | noc       | NOC index                                          | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf   | Command buffer index                               | uint32_t  | 0 - 3       | True     |
+ * | targ_addr | Full NOC address from NOC_XY_ADDR(x, y, addr)      | uint64_t  | 0..2^64-1   | True     |
+ */
 inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr(
     uint32_t noc, uint32_t cmd_buf, uint64_t targ_addr) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(targ_addr & 0xFFFFFFFF));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(targ_addr >> NOC_ADDR_COORD_SHIFT));
 }
 
-// Writes NOC_RET_ADDR_COORDINATE for cmd_buf. Takes NOC coordinates from NOC_XY_COORD(x, y).
+/**
+ * Sets the return address coordinates for a NOC command buffer.
+ * Writes only the NOC_RET_ADDR_COORDINATE register (NOC x,y coordinates).
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                          | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf  | Command buffer index                               | uint32_t  | 0 - 3       | True     |
+ * | coord    | Packed NOC coordinates from NOC_XY_COORD(x, y)     | uint32_t  | 0..2^32-1   | True     |
+ */
 inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr_coordinate(
     uint32_t noc, uint32_t cmd_buf, uint32_t coord) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, coord);
 }
 
-// Writes NOC_RET_ADDR_LO and NOC_RET_ADDR_COORDINATE from full NOC address from NOC_XY_ADDR(x, y, addr).
+/**
+ * Sets the full return address for a NOC command buffer.
+ * Writes both NOC_RET_ADDR_LO and NOC_RET_ADDR_COORDINATE registers.
+ * Typically used for atomic operations where a return value is expected.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                          | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf  | Command buffer index                               | uint32_t  | 0 - 3       | True     |
+ * | ret_addr | Full NOC address from NOC_XY_ADDR(x, y, addr)      | uint64_t  | 0..2^64-1   | True     |
+ */
 inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr(uint32_t noc, uint32_t cmd_buf, uint64_t ret_addr) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(ret_addr & 0xFFFFFFFF));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(ret_addr >> NOC_ADDR_COORD_SHIFT));
