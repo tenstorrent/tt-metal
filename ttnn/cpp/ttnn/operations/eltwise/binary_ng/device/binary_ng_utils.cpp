@@ -186,7 +186,7 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             }
             break;
         case BinaryOpType::EQ:
-            if (dtype == DataType::FLOAT32) {
+            if (is_sfpu_op() && dtype == DataType::FLOAT32) {
                 binary_op = SfpuBinaryOp::EQ;
             } else {
                 postprocess = unary::UnaryOpType::EQZ;
