@@ -602,7 +602,9 @@ nb::object get_ml_dtypes_bfloat16_dtype() {
     return ml_dtypes_bfloat16_dtype;
 }
 
-// Check if datatype is supported for to_numpy conversion
+// Check if datatype is supported as a TARGET dtype for to_numpy conversion.
+// Block formats (BFLOAT8_B, BFLOAT4_B) are not valid targets since numpy cannot
+// represent them, but they are valid sources (handled in dispatch function).
 bool is_supported_datatype_for_to_numpy(DataType dtype) {
     switch (dtype) {
         case DataType::UINT8:
@@ -736,6 +738,20 @@ nb::object dispatch_to_numpy_conversion(DataType from_type, DataType to_type, co
                 case DataType::UINT32: return impl.template operator()<bfloat16, uint32_t>(tensor);
                 case DataType::FLOAT32: return impl.template operator()<bfloat16, float>(tensor);
                 case DataType::BFLOAT16: return impl.template operator()<bfloat16, bfloat16>(tensor);
+                default: break;
+            }
+            break;
+        // Block floating point formats (BFLOAT8_B, BFLOAT4_B) share exponents across tiles.
+        // On host, they are unpacked to float32, so we use float as the MetalType.
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+            switch (to_type) {
+                case DataType::UINT8: return impl.template operator()<float, uint8_t>(tensor);
+                case DataType::UINT16: return impl.template operator()<float, uint16_t>(tensor);
+                case DataType::INT32: return impl.template operator()<float, int32_t>(tensor);
+                case DataType::UINT32: return impl.template operator()<float, uint32_t>(tensor);
+                case DataType::FLOAT32: return impl.template operator()<float, float>(tensor);
+                case DataType::BFLOAT16: return impl.template operator()<float, bfloat16>(tensor);
                 default: break;
             }
             break;
