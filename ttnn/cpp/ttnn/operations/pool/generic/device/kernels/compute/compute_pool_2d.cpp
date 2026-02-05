@@ -28,9 +28,7 @@
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
@@ -214,7 +212,7 @@ void MAIN {
 
                         // we allow overflow here for negative values as this only occurs in padding regions
                         add_int_tile_init();
-                        add_uint16_tile(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
+                        add_int_tile<DataFormat::UInt16>(index_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
 
                         max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
                     }
@@ -339,5 +337,3 @@ void MAIN {
         }
     }
 }
-
-}  // namespace NAMESPACE

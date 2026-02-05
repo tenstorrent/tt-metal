@@ -124,6 +124,7 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"half_ring", HighLevelTrafficPattern::HalfRing},
     {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
     {"neighbor_exchange", HighLevelTrafficPattern::NeighborExchange},
+    {"sequential_neighbor_exchange", HighLevelTrafficPattern::SequentialNeighborExchange},
     {"sequential_all_to_all", HighLevelTrafficPattern::SequentialAllToAll},
 });
 
@@ -166,6 +167,26 @@ void append_with_separator(std::string& target, std::string_view separator, cons
 
 }  // namespace detail
 
+inline bool high_level_pattern_is_sequential(HighLevelTrafficPattern pattern){
+    switch(pattern){
+    case HighLevelTrafficPattern::SequentialNeighborExchange: [[fallthrough]];
+    case HighLevelTrafficPattern::SequentialAllToAll:
+        return true;
+    case HighLevelTrafficPattern::AllToAll: [[fallthrough]];
+    case HighLevelTrafficPattern::OneToAll: [[fallthrough]];
+    case HighLevelTrafficPattern::AllToOne: [[fallthrough]];
+    case HighLevelTrafficPattern::AllToOneRandom: [[fallthrough]];
+    case HighLevelTrafficPattern::FullDeviceRandomPairing: [[fallthrough]];
+    case HighLevelTrafficPattern::UnidirectionalLinear: [[fallthrough]];
+    case HighLevelTrafficPattern::FullRing: [[fallthrough]];
+    case HighLevelTrafficPattern::HalfRing: [[fallthrough]];
+    case HighLevelTrafficPattern::AllDevicesUniformPattern: [[fallthrough]];
+    case HighLevelTrafficPattern::NeighborExchange: [[fallthrough]];
+    default: return false;
+    }
+}
+
+
 // Helper function to resolve DeviceIdentifier to FabricNodeId
 inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id, const IDeviceInfoProvider& provider) {
     return std::visit(
@@ -184,6 +205,23 @@ inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id,
             }
         },
         device_id);
+}
+
+bool is_core_sweep_config(std::optional<CoreConfig> core);
+
+// Helper to resolve CoreConfig to CoreCoord
+template <typename T, typename U>
+inline void resolve_core_config(const T& parsed_config, U& resolved_config) {
+    // Extract CoreCoord if present
+    if (is_core_sweep_config(parsed_config.core)) {
+        TT_THROW("Unexpected core variant: core sweep expansion was not applied");
+    }
+
+    if (parsed_config.core.has_value()) {
+        if (std::holds_alternative<tt::tt_metal::CoreCoord>(parsed_config.core.value())) {
+            resolved_config.core = std::get<tt::tt_metal::CoreCoord>(parsed_config.core.value());
+        }
+    }
 }
 
 struct ParsedYamlConfig {
@@ -258,7 +296,7 @@ private:
     PhysicalMeshConfig parse_physical_mesh_config(const YAML::Node& physical_mesh_yaml);
 
     // Parsing helpers
-    CoreCoord parse_core_coord(const YAML::Node& node);
+    std::variant<tt::tt_metal::CoreCoord, std::string> parse_core_coord(const YAML::Node& node);
     MeshCoordinate parse_mesh_coord(const YAML::Node& node);
     MeshId parse_mesh_id(const YAML::Node& yaml_node);
     template <typename T>
@@ -402,6 +440,27 @@ private:
     DestinationConfig resolve_destination_config(const ParsedDestinationConfig& parsed_dest);
 
     std::vector<TestConfig> expand_high_level_patterns(ParsedTestConfig& p_config);
+
+    std::vector<ParsedSenderConfig> expand_sender_core_sweep(
+        const ParsedSenderConfig& input_senders,
+        const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+        uint32_t sender_core_idx);
+
+    std::vector<ParsedSenderConfig> expand_dest_core_sweep(
+        const ParsedSenderConfig& input_senders,
+        const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+        uint32_t dest_core_idx);
+
+    std::pair<uint32_t, uint32_t> calculate_core_indices(uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t test_iteration);
+
+    uint32_t calculate_sender_core_sweep_iterations(const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores);
+
+    uint32_t calculate_dest_core_sweep_iterations(const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores);
+
+    uint32_t calculate_core_sweep_iterations(const ParsedTestConfig& p_config, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations);
+
+    void parametrize_core_sweep_test_name(ParsedTestConfig& iteration_test, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t sender_core_idx, uint32_t dest_core_idx, const std::vector<tt::tt_metal::CoreCoord>& all_cores, uint32_t iteration_num);
+
     std::vector<ParsedTestConfig> expand_parametrizations(const ParsedTestConfig& raw_config);
 
     void validate_pattern(const TrafficPatternConfig& pattern, const TestConfig& test) const;
@@ -439,6 +498,9 @@ private:
 
     void expand_neighbor_exchange(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
+    void expand_sequential_neighbor_exchange(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
+
     void expand_full_or_half_ring_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);
 
@@ -457,6 +519,7 @@ private:
     bool expand_link_duplicates(ParsedTestConfig& test);
 
     void resolve_missing_params(ParsedTestConfig& test);
+
 
     IDeviceInfoProvider& device_info_provider_;
     IRouteManager& route_manager_;

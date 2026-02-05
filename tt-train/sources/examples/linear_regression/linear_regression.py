@@ -250,11 +250,13 @@ def main():
 
     # TTML params
     params = model.parameters()
-    print(params.keys())
+    # Find weight and bias keys dynamically (works for both Python and C++ models)
+    weight_key = [k for k in params.keys() if "weight" in k.lower()][0]
+    bias_key = [k for k in params.keys() if "bias" in k.lower()][0]
     ttml_w = (
-        params["linear/weight"].to_numpy(ttnn.DataType.FLOAT32).reshape(-1)
-    )  # shape: [n_features] (no bias)
-    ttml_b = params["linear/bias"].to_numpy(ttnn.DataType.FLOAT32).item()
+        params[weight_key].to_numpy(ttnn.DataType.FLOAT32).reshape(-1)
+    )  # shape: [n_features]
+    ttml_b = params[bias_key].to_numpy(ttnn.DataType.FLOAT32).item()
 
     # sklearn baseline
     sk = fit_sklearn_baseline(split.x_train, split.y_train, split.x_test, split.y_test)

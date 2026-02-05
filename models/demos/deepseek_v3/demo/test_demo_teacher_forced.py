@@ -8,7 +8,9 @@ import pytest
 import torch
 
 from models.demos.deepseek_v3.demo.demo import run_demo
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
+from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 MODEL_PATH = Path(
     os.getenv(
@@ -76,6 +78,13 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path):
     tf_prompt_len = int(payload["tf_prompt_len"])
     saved_max_new_tokens = int(payload.get("max_new_tokens", 32))
 
+    requested_system_name = os.getenv("MESH_DEVICE")
+    if requested_system_name is None:
+        pytest.fail("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, TG, or T3K.")
+    mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
+    num_users = USERS_PER_ROW * mesh_shape[0]
+    prompt_text_for_users = payload.get("prompt", "")
+
     # Print token ID metadata if available
     if "token_ids_meta" in payload:
         meta = payload["token_ids_meta"]
@@ -110,7 +119,7 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path):
 
     # Run the demo with teacher forcing
     results = run_demo(
-        prompts=None,
+        prompts=[prompt_text_for_users] * num_users,
         model_path=MODEL_PATH,
         cache_dir=CACHE_DIR,
         random_weights=False,
@@ -119,11 +128,15 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path):
         token_accuracy=True,
         reference_file=REFERENCE_FILE,
         tf_prompt_len=tf_prompt_len,
+        enable_trace=True,
     )
 
     # Check results
     assert "generations" in results
-    assert len(results["generations"]) > 0
+    assert len(results["generations"]) == num_users, (
+        f"Expected {num_users} generations (USERS_PER_ROW={USERS_PER_ROW}, rows={mesh_shape[0]}), "
+        f"got {len(results['generations'])}"
+    )
 
     first_gen = results["generations"][0]
 
@@ -195,6 +208,20 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path):
         f"First 20 got     : {tt_generated_tokens[:20]}"
     )
 
+    expected_tokens = results["generations"][0]["tokens"]
+    for idx, gen in enumerate(results["generations"][1:], start=1):
+        tokens = gen["tokens"]
+        if tokens != expected_tokens:
+            first_diff = next((i for i, (a, b) in enumerate(zip(expected_tokens, tokens)) if a != b), None)
+            if first_diff is None:
+                detail = f"length mismatch: user0={len(expected_tokens)}, user{idx}={len(tokens)}"
+            else:
+                detail = (
+                    f"first mismatch at token {first_diff}: "
+                    f"user0={expected_tokens[first_diff]}, user{idx}={tokens[first_diff]}"
+                )
+            pytest.xfail(f"User outputs diverged across batch (issue #35509). {detail}")
+
     if "predicted_tokens" in first_gen:
         assert len(first_gen["predicted_tokens"]) == len(
             tt_generated_tokens
@@ -236,17 +263,18 @@ def test_demo_teacher_forcing_accuracy(reference_file: Path):
         print(f"  Top-1: {matches_top1}/{total_compared} = {computed_top1:.4f} ({computed_top1 * 100:.2f}%)")
         print(f"  Top-5: {matches_top5}/{total_compared} = {computed_top5:.4f} ({computed_top5 * 100:.2f}%)")
 
-    min_expected_accuracy = 0.90
-    assert top1_acc >= min_expected_accuracy, (
+    min_expected_top1 = 0.93
+    min_expected_top5 = 1.00
+    assert top1_acc >= min_expected_top1, (
         f"Top-1 accuracy {top1_acc:.4f} is below minimum expected "
-        f"{min_expected_accuracy:.2f}. This may indicate a bug in teacher forcing "
+        f"{min_expected_top1:.2f}. This may indicate a bug in teacher forcing "
         f"or model non-determinism. Generated {len(tt_generated_tokens)} tokens, "
         f"reference has {gen_len} generated tokens."
     )
 
-    assert top5_acc >= min_expected_accuracy, (
+    assert top5_acc >= min_expected_top5, (
         f"Top-5 accuracy {top5_acc:.4f} is below minimum expected "
-        f"{min_expected_accuracy:.2f}. This may indicate a bug in teacher forcing "
+        f"{min_expected_top5:.2f}. This may indicate a bug in teacher forcing "
         f"or model non-determinism. Generated {len(tt_generated_tokens)} tokens, "
         f"reference has {gen_len} generated tokens."
     )

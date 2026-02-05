@@ -36,20 +36,36 @@ runs:
       run: |
         # Get all tags matching exact semver format v{number}.{number}.{number} excluding any with dashes
         tags=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '-' || true)
+
+        # Get all rc tags matching exact semver-rc format v{number}.{number}.{number}-rc{number} excluding any with dashes
+        rc_tags=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$' || true)
+
         if [ -z "$tags" ]; then
           echo "No semver tags found, using v0.0.0"
           latest_semver="v0.0.0"
         else
           latest_semver=$(echo "$tags" | sort -V | tail -1)
         fi
+
+        if [ -z "$rc_tags" ]; then
+          echo "No rc tags found, using v0.0.0"
+          latest_rc="v0.0.0-rc0"
+        else
+          latest_rc=$(echo "$rc_tags" | sort -V | tail -1)
+        fi
+
         echo "Latest semver tag: $latest_semver"
         echo "latest_semver=$latest_semver" >> "$GITHUB_OUTPUT"
+
+        echo "Latest rc tag: $latest_rc"
+        echo "latest_rc=$latest_rc" >> "$GITHUB_OUTPUT"
 
     - name: Analyze commits for version bump
       id: analyze-commits
       shell: bash
       run: |
         latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
+        latest_rc="${{ steps.get-latest-semver.outputs.latest_rc }}"
         force_bump="${{ inputs.force-bump-type }}"
         ignore_commits="${{ inputs.ignore-commits }}"
 
@@ -58,7 +74,7 @@ runs:
           echo "Using forced bump type: $force_bump"
           bump_type="$force_bump"
         else
-          echo "Analyzing commits since $latest_tag"
+          echo "Analyzing commits since $latest_tag and $latest_rc for version bump indicators"
 
           # Get commit messages and SHAs since the latest tag
           if [ "$latest_tag" = "v0.0.0" ]; then
@@ -124,20 +140,46 @@ runs:
       shell: bash
       run: |
         latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
+        latest_rc="${{ steps.get-latest-semver.outputs.latest_rc }}"
         bump_type="${{ steps.analyze-commits.outputs.bump_type }}"
         tag_type="${{ inputs.tag-type }}"
 
         if [ "$tag_type" = "dev" ]; then
           echo "Dev tag type - forcing minor version bump"
-          # Extract version numbers (remove 'v' prefix) for dev minor bump
-          version_no_v=${latest_tag#v}
-          IFS='.' read -r major minor patch <<< "$version_no_v"
+          echo "latest_tag=$latest_tag"
+          echo "latest_rc=$latest_rc"
 
-          # Always increment minor version for dev tags
+          # Parse semver: vX.Y.Z
+          semver_no_v="${latest_tag#v}"
+          IFS='.' read -r s_major s_minor s_patch <<< "$semver_no_v"
+
+          # Parse rc: vX.Y.Z-rcN  (we only care about X.Y.Z for "bigger version" decision)
+          rc_no_v="${latest_rc#v}"
+          rc_core="${rc_no_v%%-*}"   # X.Y.Z
+          IFS='.' read -r r_major r_minor r_patch <<< "$rc_core"
+
+          # Choose the bigger base version by comparing (major, minor, patch)
+          use_rc=0
+          if   [ "$r_major" -gt "$s_major" ]; then use_rc=1
+          elif [ "$r_major" -eq "$s_major" ] && [ "$r_minor" -gt "$s_minor" ]; then use_rc=1
+          elif [ "$r_major" -eq "$s_major" ] && [ "$r_minor" -eq "$s_minor" ] && [ "$r_patch" -gt "$s_patch" ]; then use_rc=1
+          else
+            use_rc=0
+          fi
+
+          if [ "$use_rc" -eq 1 ]; then
+            echo "Using RC base version (bigger core): v${r_major}.${r_minor}.${r_patch}"
+            major="$r_major"; minor="$r_minor"; patch="$r_patch"
+          else
+            echo "Using SemVer base version (>= RC core): v${s_major}.${s_minor}.${s_patch}"
+            major="$s_major"; minor="$s_minor"; patch="$s_patch"
+          fi
+
+          # Always increment minor for dev tags
           minor=$((minor + 1))
           patch=0
 
-          new_version="v$major.$minor.$patch"
+          new_version="v${major}.${minor}.${patch}"
           echo "Dev version calculated: $new_version"
           echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
           exit 0

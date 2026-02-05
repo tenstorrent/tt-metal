@@ -75,6 +75,9 @@ enum class FabricApiType : uint8_t {
     Mesh = 1,
 };
 
+std::vector<eth_chan_directions> get_neighbor_eth_directions(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
+
 // Appends connection manager RT args for one or more routes.
 // next_hop_nodes: vector of next-hop nodes, one per route.
 // connection_link_indices: optional per-route link indices; if empty, a valid link is auto-selected.
@@ -83,6 +86,20 @@ template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
+    ProgramOrDescriptor& worker_program_or_desc,
+    tt::tt_metal::KernelHandle& kernel_id,
+    const CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    FabricApiType api_type = FabricApiType::Linear,
+    CoreType core_type = CoreType::WORKER);
+
+// append runtime parameter for RoutingPlaneConnectionManager
+// convenience function using RoutingDirection's
+template <typename ProgramOrDescriptor>
+uint32_t append_routing_plane_connection_manager_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<eth_chan_directions>& attempted_directions,
     const std::vector<uint32_t>& connection_link_indices,
     ProgramOrDescriptor& worker_program_or_desc,
     tt::tt_metal::KernelHandle& kernel_id,

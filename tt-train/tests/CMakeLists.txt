@@ -34,6 +34,8 @@ set(SOURCES
     datasets/dataloader_test.cpp
     optimizers/adamw_test.cpp
     optimizers/sgd_fused_test.cpp
+    optimizers/adamw_fused_test.cpp
+    optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp
@@ -44,6 +46,7 @@ set(SOURCES
     ops/positional_embedding_test.cpp
     ops/layer_norm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
+    ops/distributed/ring_shift_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
     ops/cross_entropy_bw_op_test.cpp

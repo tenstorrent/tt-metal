@@ -1155,7 +1155,7 @@ Tensor move_config_tensor_to_device(
     const Tensor& config_tensor,
     const ParallelConfig& p_config,
     bool is_block_sharded,
-    distributed::MeshDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     bool store_in_dram) {
     if (store_in_dram) {
         return config_tensor.to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});

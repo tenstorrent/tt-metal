@@ -10,6 +10,13 @@ from models.tt_cnn.tt.builder import TtConv2d
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*_args, **_kwargs):
+        pass
+
 
 class TtASPP(LightweightModule):
     """
@@ -43,6 +50,8 @@ class TtASPP(LightweightModule):
         self.dropout = dropout
         self.model_configs = model_configs
         use_bias = False
+        compute_grid = device.compute_with_storage_grid_size()
+        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
 
         self.device = device
         self.pool_kernel_size = pool_kernel_size
@@ -89,10 +98,28 @@ class TtASPP(LightweightModule):
             final_config = base_config
             logger.debug(f"No model_configs for {conv_path}, using base config")
 
+        # Debug print memory config
+        shard_type = type(final_config.sharding_strategy).__name__ if final_config.sharding_strategy else "None"
+        act_block_h = (
+            final_config.sharding_strategy.act_block_h_override
+            if hasattr(final_config.sharding_strategy, "act_block_h_override")
+            else 0
+        )
+        logger.info(f"[MEMORY_CONFIG] {conv_path}: sharding={shard_type}, act_block_h_override={act_block_h}")
+
         # Create TtConv2d using TT CNN Builder
         return TtConv2d(final_config, self.device)
 
     def forward(self, x):
+        signpost("ASPP_START")
+        if self.is_20_core:
+            ret = self.forward_20_cores(x)
+        else:
+            ret = self.forward_110_cores(x)
+        signpost("ASPP_END")
+        return ret
+
+    def forward_20_cores(self, x):
         input_shape = x.shape
         N = x.shape[0]  # Batch size
         H = x.shape[1]  # Height
@@ -217,3 +244,121 @@ class TtASPP(LightweightModule):
         logger.debug(f"TtASPP forward pass complete - output shape: {res.shape}")
 
         return res
+
+    def forward_110_cores(self, x):
+        input_shape = x.shape
+        N = x.shape[0]  # Batch size
+        H = x.shape[1]  # Height
+        W = x.shape[2]  # Width
+        C = x.shape[3]  # Channels
+
+        logger.debug(f"TtASPP forward pass - input shape: {input_shape}, pool_kernel_size: {self.pool_kernel_size}")
+
+        # We can't shard input unfortunately, it OOMs
+        # Input is 2048x2048 = 64x64 tiles = 4096 tiles
+        # Interleaved: 4096 tiles / 110 cores = 38 tiles per core
+        # Allocator does: 38 tiles * 110 cores * 1088 bytes in tile = 4547840 B
+        # Sharded: 4096 tiles / (8 x 8 core grid) = 64 tiles per core
+        # Allocator does: 64 tiles * 110 cores * 1088 bytes in tile = 7659520 B
+        # So sharded uses more L1 and causes OOM
+        x_l1 = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+
+        if H % self.pool_kernel_size[0] or W % self.pool_kernel_size[1]:
+            raise ValueError(
+                "`pool_kernel_size` must be divisible by the shape of inputs. "
+                "Input size: {} `pool_kernel_size`: {}".format(input_shape, self.pool_kernel_size)
+            )
+
+        # Process conv branches
+        res = []
+        for i, conv in enumerate(self.conv_branches):
+            logger.info(f"🔷 Executing conv: aspp.convs.{i}")
+            logger.info(
+                f"  Input x: shape={x_l1.shape}, dtype={x_l1.dtype}, layout={x_l1.layout}, is_sharded={x_l1.is_sharded()}"
+            )
+
+            # Special handling for branch 3: needs flattened format for bfloat8_b dilated convolutions
+            # Block float dtypes require flattened format (1, 1, nhw, C) for dilated convolutions
+            if i == 3 and x_l1.dtype == ttnn.bfloat8_b:
+                branch_out = conv(x_l1)
+                branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
+                # Sliced conv needs manual ReLU
+                branch_out = ttnn.relu(branch_out)
+            else:
+                branch_out = conv(x_l1)
+
+                # Reshape logic for aspp.convs.0 that now outputs flattened format [1,1,NHW,C] -> [N,H,W,C]
+                if i == 0:
+                    branch_out = reshape_flattened_conv_output(branch_out, batch_size=N, layer_name="aspp.convs.0")
+                elif branch_out.shape[1] == 1 and branch_out.shape[2] == H * W:
+                    branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
+
+            branch_out = ttnn.to_memory_config(branch_out, ttnn.DRAM_MEMORY_CONFIG)
+            res.append(branch_out)
+
+        # Global average pooling branch
+        # If input is bfloat8_b, it needs to be flattened for pooling
+        x_for_pooling = x_l1
+        if x_l1.dtype == ttnn.bfloat8_b and x_l1.shape[1] == H and x_l1.shape[2] == W:
+            logger.info(f"  Flattening input for global pooling: {x_l1.shape} -> (1, 1, {H*W}, {C})")
+            x_for_pooling = ttnn.reshape(x_l1, (1, 1, H * W, C))
+
+        pooled = ttnn.avg_pool2d(
+            input_tensor=x_for_pooling,
+            batch_size=N,
+            input_h=H,
+            input_w=W,
+            channels=C,
+            kernel_size=self.pool_kernel_size,
+            stride=[1, 1],
+            padding=[0, 0],
+            ceil_mode=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        ttnn.deallocate(x_for_pooling)
+
+        # Process pooled branch with conv
+        logger.info(f"🔷 Executing conv: aspp.convs.4")
+        pooled = self.pool_conv(pooled)
+
+        # Upsample pooled branch to match input spatial dimensions
+        current_h, current_w = pooled.shape[1], pooled.shape[2]
+        scale_factor = [H // current_h, W // current_w]
+
+        # Convert to interleaved and ROW_MAJOR for upsample
+        pooled = ttnn.to_layout(pooled, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        # Choose upsample mode: nearest for 1x1, bilinear otherwise
+        # accuracy changes are negligible, so we use nearest for performance reasons
+        upsample_mode = "nearest"
+        pooled = ttnn.upsample(pooled, scale_factor=tuple(scale_factor), mode=upsample_mode)
+
+        # Convert back to TILE_LAYOUT
+        pooled = ttnn.to_layout(pooled, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        res.append(pooled)
+
+        # Ensure all tensors have the same dtype before concatenation
+        target_dtype = ttnn.bfloat8_b
+        for i in range(len(res)):
+            if res[i].dtype != target_dtype:
+                res[i] = ttnn.typecast(res[i], target_dtype)
+
+        # Concatenate all branches
+        res_concat = ttnn.concat(res, dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        logger.debug(f"TtASPP concatenated branches, shape: {res_concat.shape}")
+
+        # Project to final output
+        logger.info(f"🔷 Executing conv: aspp.project")
+        res_concat = self.project_conv(res_concat)
+        # Reshape logic for aspp.project that now outputs flattened format [1,1,NHW,C] -> [N,H,W,C]
+        res_concat = reshape_flattened_conv_output(res_concat, batch_size=N, layer_name="aspp.project")
+        logger.debug(f"TtASPP forward pass complete - output shape: {res_concat.shape}")
+
+        # Deallocate L1 tensors
+        for r in res:
+            ttnn.deallocate(r)
+        ttnn.deallocate(pooled)
+
+        return res_concat

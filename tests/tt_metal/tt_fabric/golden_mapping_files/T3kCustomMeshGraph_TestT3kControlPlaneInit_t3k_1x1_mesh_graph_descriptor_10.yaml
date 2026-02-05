@@ -1,0 +1,84 @@
+asic_to_fabric_node_mapping:
+  hostnames:
+    - hostname: g14glx03
+      mesh:
+        - mesh: 0
+        - chips:
+            - umd_chip_id: 4
+              asic_position:
+                tray_id: 0
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 0
+                chip_id: 0
+              asic_id: 14521741355
+        - mesh: 1
+        - chips:
+            - umd_chip_id: 0
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 1
+                chip_id: 0
+              asic_id: 10226774059
+        - mesh: 2
+        - chips:
+            - umd_chip_id: 2
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 2
+                chip_id: 0
+              asic_id: 10226774183
+        - mesh: 3
+        - chips:
+            - umd_chip_id: 6
+              asic_position:
+                tray_id: 0
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 3
+                chip_id: 0
+              asic_id: 14521741479
+        - mesh: 4
+        - chips:
+            - umd_chip_id: 5
+              asic_position:
+                tray_id: 0
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 4
+                chip_id: 0
+              asic_id: 14521741465
+        - mesh: 5
+        - chips:
+            - umd_chip_id: 1
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 5
+                chip_id: 0
+              asic_id: 10226774169
+        - mesh: 6
+        - chips:
+            - umd_chip_id: 3
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 6
+                chip_id: 0
+              asic_id: 10226774186
+        - mesh: 7
+        - chips:
+            - umd_chip_id: 7
+              asic_position:
+                tray_id: 0
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 7
+                chip_id: 0
+              asic_id: 14521741482

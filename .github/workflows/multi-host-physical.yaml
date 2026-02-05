@@ -12,11 +12,60 @@ on:
         required: false
         default: true
         type: boolean
-      glx_4x_multihost:
-        description: 'Run Galaxy 4x multi-host job (timeshare)'
+      glx_4x_unit_tests:
+        description: 'Run Galaxy 4x unit tests'
         required: false
         default: false
         type: boolean
+      glx_4x_deepseekv3_unit_tests:
+        description: 'Run Galaxy 4x DeepSeek V3 unit tests'
+        required: false
+        default: false
+        type: boolean
+      glx_4x_deepseekv3_module_tests:
+        description: 'Run Galaxy 4x DeepSeek V3 module tests'
+        required: false
+        default: false
+        type: boolean
+      glx_4x_teacher_forced:
+        description: 'Run Galaxy 4x DeepSeekV3 accuracy test'
+        required: false
+        default: false
+        type: boolean
+      glx_4x_dual_demo:
+        description: 'Run Galaxy 4x dual demo test'
+        required: false
+        default: false
+        type: boolean
+      glx_4x_dual_demo_stress:
+        description: 'Run Galaxy 4x dual demo stress test'
+        required: false
+        default: false
+        type: boolean
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC) - 4x6U schedule
     - cron: '0 */3 * * *'  # Every 3 hours - T3K and 2x6U schedule
@@ -35,7 +84,9 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: 22.04
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
 
   multi-host-t3k:
@@ -64,9 +115,6 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Create Python venv
-        run: |
-          ./create_venv.sh
       - name: Capture runner's home directory
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
@@ -79,7 +127,6 @@ jobs:
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
-            -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
@@ -91,6 +138,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
+            # Setup shared venv for multi-host access (handles race conditions)
+            ./tests/scripts/multihost/setup_shared_venv.sh
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
@@ -119,9 +168,6 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Create Python venv
-        run: |
-          ./create_venv.sh
       - name: Capture runner's home directory
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
@@ -134,7 +180,6 @@ jobs:
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
-            -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
@@ -146,10 +191,12 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
+            # Setup shared venv for multi-host access (handles race conditions)
+            ./tests/scripts/multihost/setup_shared_venv.sh
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
-    if: ${{ github.event.inputs.glx_4x_multihost == 'true' || github.event.schedule == '0 4 * * *' }}
+    if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.inputs.glx_4x_deepseekv3_unit_tests == 'true' || github.event.inputs.glx_4x_deepseekv3_module_tests == 'true' || github.event.inputs.glx_4x_teacher_forced == 'true' || github.event.inputs.glx_4x_dual_demo == 'true' || github.event.inputs.glx_4x_dual_demo_stress == 'true' || github.event.schedule == '0 4 * * *' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x
@@ -174,22 +221,19 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Create Python venv
-        run: |
-          ./create_venv.sh
       - name: Capture runner's home directory
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
-      - name: Run tests on multiple hosts
+      - name: Run quad galaxy unit tests
+        if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
         uses: ./.github/actions/docker-run
-        timeout-minutes: 140
+        timeout-minutes: 30
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
-            -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
@@ -201,4 +245,147 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/run_quad_galaxy_tests.sh
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests
+      - name: Run DeepSeek V3 unit tests
+        if: ${{ github.event.inputs.glx_4x_deepseekv3_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 60
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh deepseekv3_unit_tests
+      - name: Run DeepSeek V3 module tests
+        if: ${{ github.event.inputs.glx_4x_deepseekv3_module_tests == 'true' || github.event.schedule == '0 4 * * *' }}
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 150
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh deepseekv3_module_tests
+      - name: Run teacher forced accuracy test
+        if: ${{ github.event.inputs.glx_4x_teacher_forced == 'true' || github.event.schedule == '0 4 * * *' }}
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 60
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh teacher_forced
+      - name: Upload teacher forced accuracy artifacts
+        if: ${{ always() && (github.event.inputs.glx_4x_teacher_forced == 'true' || github.event.schedule == '0 4 * * *') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: teacher-forced-accuracy-${{ github.run_id }}
+          path: |
+            generated/artifacts/teacher_forced_accuracy.txt
+            generated/artifacts/teacher_forced_output.log
+          if-no-files-found: warn
+      - name: Run dual demo test (256 prompts, 1 batch)
+        if: ${{ github.event.inputs.glx_4x_dual_demo == 'true' || github.event.schedule == '0 4 * * *' }}
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 40
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo
+      - name: Upload dual demo output artifacts
+        if: ${{ always() && (github.event.inputs.glx_4x_dual_demo == 'true' || github.event.schedule == '0 4 * * *') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dual-demo-output-${{ github.run_id }}
+          path: |
+            generated/artifacts/dual_demo_output.log
+            generated/artifacts/dual_demo_full_results.json
+          if-no-files-found: warn
+      - name: Run stress dual demo test (56 prompts, 20 batches)
+        if: ${{ github.event.inputs.glx_4x_dual_demo_stress == 'true' || github.event.schedule == '0 4 * * *' }}
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 90
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_stress
+      - name: Upload stress demo output artifacts
+        if: ${{ always() && (github.event.inputs.glx_4x_dual_demo_stress == 'true' || github.event.schedule == '0 4 * * *') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dual-demo-stress-output-${{ github.run_id }}
+          path: |
+            generated/artifacts/dual_demo_stress_output.log
+            generated/artifacts/dual_demo_stress_results.json
+          if-no-files-found: warn

@@ -263,6 +263,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         num_cores,
         true,                  //(std::uint32_t)is_causal,
         false,                 //(std::uint32_t)use_provided_mask,
+        false,                 //(std::uint32_t)broadcast_provided_mask_batch,
         false,                 //(std::uint32_t)broadcast_provided_mask_heads,
         false,                 //(std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,  //(uint32_t)is_chunked,
@@ -277,6 +278,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr)
         .append_to(reader_compile_time_args);                  // page table
     TensorAccessorArgs().append_to(reader_compile_time_args);  // attention sink (not used in ring)
+    TensorAccessorArgs().append_to(reader_compile_time_args);  // chunk_start_idx_tensor (ring has no flexible chunked)
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
@@ -521,7 +523,8 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
              v_addr,
              0,  // mask_addr,
              page_table_addr,
-             0,  // attention sink addr,
+             0,  // attention_sink_addr,
+             0,  // chunk_start_idx_addr (ring has no chunk_start_idx_tensor)
              i,
              local_batch_start,
              local_batch_end,
@@ -547,6 +550,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
              local_q_start,
              local_q_end,
              2,
+             0,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
              chunked_q_chunk_offset_phase_1,
              write_offset_phase_1,
              chunked_q_chunk_offset_phase_2,
@@ -563,6 +567,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
              local_q_start,
              local_q_end,
              2,
+             0,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
              chunked_q_chunk_offset_phase_1,
              chunked_q_chunk_offset_phase_2});
     }
@@ -699,6 +704,7 @@ void RingDistributedSdpaMeshWorkloadFactory::override_runtime_arguments(
             reader_args[1] = k_addr;
             reader_args[2] = v_addr;
             reader_args[4] = page_table_addr;  // Update page_table_addr (index 4 is after mask_addr)
+            reader_args[6] = 0;                // chunk_start_idx_addr (ring has no chunk_start_idx_tensor)
 
             writer_args[0] = out_addr;
         }
