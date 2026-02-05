@@ -1,10 +1,21 @@
-# Physical Groupings File Specification
+# Physical Grouping Descriptor — Quick Use Guide
+
+This guide explains how to define and load a Physical Grouping Descriptor for TT‑Fabric using the schema in [`tt_metal/fabric/protobuf/physical_grouping_descriptor.proto`](protobuf/physical_grouping_descriptor.proto). It focuses on how to write a valid textproto, how grouping references work, and which fields are required.
+
+A Physical Grouping Descriptor specifies the hierarchical structure of physical resources (meshes, pods, superpods, clusters) in a declarative way without requiring explicit ASIC IDs. The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD).
+
+---
+
+### Where to look
+- Schema: [`tt_metal/fabric/protobuf/physical_grouping_descriptor.proto`](protobuf/physical_grouping_descriptor.proto)
+- Example textproto: [`tests/tt_metal/tt_fabric/physical_groupings/3_pod_16x8_bh_galaxy_physical_groupings.textproto`](../../tests/tt_metal/tt_fabric/physical_groupings/3_pod_16x8_bh_galaxy_physical_groupings.textproto)
+- C++ API: [`tt_metal/api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp`](../../api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp)
 
 ## Overview
 
 In replacement of the rankfile and rank_bindings file as needed for running tt-run on multi-host systems, we will be introducing a cluster physical groupings file deployed with each machine cluster specifying the valid physical groupings for each cluster of machines. This file is provided by the cluster administrator and is used by FM to understand which subsets of ASICs can be used as candidate physical meshes for a given logical mesh in the MGD.
 
-The Physical Groupings file defines the hierarchical structure of physical resources (meshes, pods, superpods, clusters) in the cluster. This file uses a **declarative approach** that defines groupings in terms of base units without requiring explicit ASIC IDs. The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD).
+The Physical Grouping Descriptor defines the hierarchical structure of physical resources (meshes, pods, superpods, clusters) in the cluster. This file uses a **declarative approach** that defines groupings in terms of base units without requiring explicit ASIC IDs. The actual ASIC IDs are derived at runtime from the Physical System Descriptor (PSD).
 
 The groupings file is complementary to the Physical System Descriptor (PSD):
 - **PSD**: Flat graph of all ASICs + links
@@ -68,7 +79,7 @@ The actual ASIC IDs are derived at runtime from the PSD, making this file comple
 
 ## Schema and Validation
 
-The physical groupings file uses protobuf text format with schema validation. Key features:
+The physical grouping descriptor uses protobuf text format with schema validation. Key features:
 
 - **ASIC Locations as Constants**: ASIC locations 1-8 are predefined as enum constants (`ASIC_LOCATION_1` through `ASIC_LOCATION_8`)
 - **Base Units**: Base units are predefined in the schema, not defined as a grouping
@@ -76,7 +87,7 @@ The physical groupings file uses protobuf text format with schema validation. Ke
 - **Required Groupings**: The "meshes" grouping must be defined (enforced by validation)
 - **Multiple Definitions**: The same grouping name can be defined multiple times (useful for custom groupings)
 
-See `tt_metal/fabric/protobuf/physical_groupings.proto` for the complete schema definition.
+See [`tt_metal/fabric/protobuf/physical_grouping_descriptor.proto`](protobuf/physical_grouping_descriptor.proto) for the complete schema definition.
 
 ## Groupings Explained
 
@@ -250,7 +261,7 @@ groupings {
 ## Complete Example
 
 ```protobuf
-# Physical Groupings File for 3-Pod 16x8 Blackhole Galaxy Cluster
+# Physical Grouping Descriptor for 3-Pod 16x8 Blackhole Galaxy Cluster
 
 base_units {
   # Base units are predefined constants - ASIC_LOCATION_1 through ASIC_LOCATION_8
@@ -308,266 +319,7 @@ groupings {
 
 ## Examples
 
-### Example 1: Basic 3-Pod Configuration
-
-**File**: `examples/example_basic_3_pod.textproto`
-
-Standard configuration where each pod contains 2 meshes, each superpod contains 3 pods, and the cluster contains 2 superpods.
-
-```protobuf
-groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh = 1 host (meshes can have 1 item)
-  ]
-}
-
-groupings {
-  name: "pods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Pods must have at least 2 items
-  ]
-}
-
-groupings {
-  name: "superpods"
-  items: [
-    { grouping_ref { grouping_name: "pods" count: 3 } }  # Superpods must have at least 2 items
-  ]
-}
-
-groupings {
-  name: "clusters"
-  items: [
-    { grouping_ref { grouping_name: "superpods" count: 2 } }  # Clusters must have at least 2 items
-  ]
-}
-```
-
-### Example 2: Pod with Multiple Meshes
-
-**File**: `examples/example_pod_multiple_meshes.textproto`
-
-Shows pods containing 2 meshes each instead of 1, allowing for larger pod configurations.
-
-```protobuf
-groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh = 1 host (meshes can have 1 item)
-  ]
-}
-
-groupings {
-  name: "pods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Each pod contains 2 meshes (must have at least 2)
-  ]
-}
-```
-
-### Example 3: Superpod Containing Meshes Directly
-
-**File**: `examples/example_superpod_direct_meshes.textproto`
-
-Demonstrates superpods referencing meshes directly while pods are still defined separately.
-
-```protobuf
-groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh = 1 host (meshes can have 1 item)
-  ]
-}
-
-groupings {
-  name: "pods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Pods must have at least 2 items
-  ]
-}
-
-groupings {
-  name: "superpods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 3 } }  # Each superpod contains 3 meshes directly (must have at least 2)
-  ]
-}
-```
-
-### Example 4: Cluster Containing Pods Directly
-
-**File**: `examples/example_cluster_direct_pods.textproto`
-
-Shows clusters referencing pods directly while superpods are still defined separately.
-
-```protobuf
-groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh = 1 host
-  ]
-}
-
-groupings {
-  name: "pods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }
-  ]
-}
-
-groupings {
-  name: "clusters"
-  items: [
-    { grouping_ref { grouping_name: "pods" count: 6 } }  # Cluster contains 6 pods directly
-  ]
-}
-```
-
-### Example 5: Mixed Counts
-
-**File**: `examples/example_mixed_counts.textproto`
-
-Demonstrates mixing different grouping types within a single grouping, such as a superpod containing both pods and meshes.
-
-```protobuf
-groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh = 1 host (meshes can have 1 item)
-  ]
-}
-
-groupings {
-  name: "pods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Pods must have at least 2 items
-  ]
-}
-
-groupings {
-  name: "superpods"
-  items: [
-    { grouping_ref { grouping_name: "pods" count: 2 } },  # Superpods must have at least 2 items
-    { grouping_ref { grouping_name: "meshes" count: 4 } }  # Also contains 4 meshes directly
-  ]
-}
-
-groupings {
-  name: "clusters"
-  items: [
-    { grouping_ref { grouping_name: "superpods" count: 2 } },  # Clusters must have at least 2 items
-    { grouping_ref { grouping_name: "pods" count: 2 } },  # Also contains 2 pods directly
-    { grouping_ref { grouping_name: "meshes" count: 3 } }  # Also contains 3 meshes directly
-  ]
-}
-```
-
-### Example 6: Mesh Defined by Trays
-
-**File**: `examples/example_mesh_by_trays.textproto`
-
-Shows meshes defined using tray count instead of host count, providing more granular control over mesh size.
-
-```protobuf
-groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "trays" count: 16 } }  # Each mesh = 16 trays (instead of hosts)
-  ]
-}
-```
-
-### Example 7: Mesh Defined by ASIC Locations
-
-**File**: `examples/example_mesh_by_asic_locations.textproto`
-
-Shows meshes defined directly at the ASIC location level using enum constants.
-
-```protobuf
-groupings {
-  name: "meshes"
-  items: [
-    { asic_location: ASIC_LOCATION_1 }  # Each mesh uses 1 ASIC location (smaller mesh example)
-  ]
-}
-```
-
-### Example 8: Custom Groupings - Half Tray
-
-**File**: `examples/example_mesh_subdivided_asic_locations.textproto`
-
-Demonstrates defining custom groupings (halftray) to represent subsets of ASIC locations, then using them in meshes.
-
-```protobuf
-# Custom grouping: Half tray - defined twice with different ASIC locations
-# Both represent a "half tray" concept
-groupings {
-  name: "halftray"
-  items: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
-    { asic_location: ASIC_LOCATION_3 },
-    { asic_location: ASIC_LOCATION_4 }
-  ]  # Lower half (locations 1-4)
-}
-
-groupings {
-  name: "halftray"
-  items: [
-    { asic_location: ASIC_LOCATION_5 },
-    { asic_location: ASIC_LOCATION_6 },
-    { asic_location: ASIC_LOCATION_7 },
-    { asic_location: ASIC_LOCATION_8 }
-  ]  # Upper half (locations 5-8)
-}
-
-groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "halftray" count: 1 } }  # Each mesh uses 1 half tray (can be either lower or upper)
-  ]
-}
-```
-
-### Example 9: Complex Multi-Level Mixing
-
-**File**: `examples/example_complex_multi_level.textproto`
-
-Shows complex configurations where groupings contain multiple types of lower-level groupings at different levels.
-
-```protobuf
-groupings {
-  name: "meshes"
-  items: [
-    { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh = 1 host (meshes can have 1 item)
-  ]
-}
-
-groupings {
-  name: "pods"
-  items: [
-    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Must have at least 2 items
-  ]
-}
-
-groupings {
-  name: "superpods"
-  items: [
-    { grouping_ref { grouping_name: "pods" count: 2 } },  # Must have at least 2 items
-    { grouping_ref { grouping_name: "meshes" count: 2 } }  # Also contains 2 meshes directly
-  ]
-}
-
-groupings {
-  name: "clusters"
-  items: [
-    { grouping_ref { grouping_name: "superpods" count: 2 } },  # Must have at least 2 items
-    { grouping_ref { grouping_name: "pods" count: 2 } },  # Also contains 2 pods directly
-    { grouping_ref { grouping_name: "meshes" count: 3 } }  # Also contains 3 meshes directly
-  ]
-}
-```
+See [`tests/tt_metal/tt_fabric/physical_groupings/examples/`](../../tests/tt_metal/tt_fabric/physical_groupings/examples/) for additional example files demonstrating different grouping patterns.
 
 ## Key Benefits
 
@@ -580,7 +332,7 @@ groupings {
 
 ## File Location
 
-Physical groupings files are located in: `tests/tt_metal/tt_fabric/physical_groupings/`
+Physical grouping descriptor files are located in: `tests/tt_metal/tt_fabric/physical_groupings/`
 
 - **`3_pod_16x8_bh_galaxy_physical_groupings.textproto`**: Main configuration file for 3-pod 16x8 Blackhole Galaxy cluster
 - **`triple_16x8_quad_bh_galaxy_blitz_48_stage_physical_groupings.textproto`**: Blitz pipelined 48-stage configuration
@@ -588,7 +340,7 @@ Physical groupings files are located in: `tests/tt_metal/tt_fabric/physical_grou
 
 ## Schema Definition
 
-The protobuf schema is defined in: `tt_metal/fabric/protobuf/physical_groupings.proto`
+The protobuf schema is defined in: [`tt_metal/fabric/protobuf/physical_grouping_descriptor.proto`](protobuf/physical_grouping_descriptor.proto)
 
 This schema provides:
 - Type definitions for all grouping structures
