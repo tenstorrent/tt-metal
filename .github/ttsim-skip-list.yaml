@@ -180,3 +180,4 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_cumprod.py
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
+  - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py
