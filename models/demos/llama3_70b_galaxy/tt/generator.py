@@ -114,6 +114,8 @@ class Generator:
         self._disable_prefill_tracing = True  # Whether to disable prefill traces
         self._disable_decode_tracing = False  # Whether to disable decode traces
         self._trace_debug_seq = 0  # Monotonic seq for hang-debug logs (trace capture/replay ordering)
+        # TEMPORARY: Force simplest prefill path for testing (no tracing, no prefix caching, no ring SDPA)
+        self._force_simple_prefill = True
 
     def warmup_prefill_traces(
         self,
@@ -182,6 +184,18 @@ class Generator:
     ):
         if getattr(self, "_disable_prefill_tracing", False):
             enable_trace = False
+
+        # TEMPORARY: Force simplest prefill path for testing
+        if getattr(self, "_force_simple_prefill", False):
+            enable_trace = False
+            if start_pos is not None and any(x > 0 for x in start_pos):
+                logger.info("[SIMPLE_PREFILL_FORCE] Forcing start_pos=None to disable prefix caching")
+                start_pos = None
+            logger.info(
+                "[SIMPLE_PREFILL_FORCE] Using simplest path: enable_trace=False, start_pos={}, "
+                "will use non-chunked SDPA (ensure seq_len <= 1024 to avoid ring SDPA)",
+                start_pos,
+            )
 
         if self.prefill_traces_warmup is False:
             self.warmup_prefill_traces(
@@ -506,6 +520,18 @@ class Generator:
         )
         seq_len = tokens.shape[-1]
         use_prefix_caching = num_cached_tokens > 0
+
+        # TEMPORARY: Log which path is being taken
+        if getattr(self, "_force_simple_prefill", False):
+            logger.info(
+                "[SIMPLE_PREFILL_PATH] seq_len={}, batch_size={}, num_cached_tokens={}, "
+                "use_prefix_caching={}, chunk_page_table={}",
+                seq_len,
+                batch_size,
+                num_cached_tokens,
+                use_prefix_caching,
+                "None" if not use_prefix_caching else "set",
+            )
 
         # If batch_size is 1, extract the single user's page table row.
         #    Page_table comes from _get_prefill_user_page_table which places user data at row user_id
@@ -926,6 +952,10 @@ class Generator:
             tok0,
             pos0,
         )
+        # Track decode step count for limited debug output
+        if not hasattr(self, "_decode_step_count"):
+            self._decode_step_count = 0
+        self._decode_step_count += 1
         if page_table is not None and isinstance(page_table, torch.Tensor):
             try:
                 row0 = page_table[0, :64].to(torch.int32)
@@ -1296,11 +1326,11 @@ class Generator:
             logger.info("[PREFILL_PAGETABLE_SRC_DEBUG] failed: {}", e)
         page_table = page_table[:, :num_blocks]
         if page_table.shape[1] < num_blocks:
-            # If page table is too short, pad it with -1
-            padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+            # Pad with 0 (read-safe); never use -1 so no code path reads from -1.
+            padding = torch.zeros(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32)
             page_table = torch.cat([page_table, padding], dim=1)
-        # Pad page table to 32 users
-        padded_page_table = torch.ones(32, page_table.shape[1], dtype=torch.int32) * -1
+        # Pad page table to 32 users; use 0 for inactive rows (read-safe).
+        padded_page_table = torch.zeros(32, page_table.shape[1], dtype=torch.int32)
         if use_batched_prefill:
             for i, user in enumerate(user_id):
                 padded_page_table[user, :] = page_table[i, :]

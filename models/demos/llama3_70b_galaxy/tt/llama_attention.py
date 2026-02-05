@@ -769,19 +769,18 @@ class TtLlamaAttention(LightweightModule):
         # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
         ring_distributed_sdpa = should_use_ring_distributed_sdpa(seq_len, batch_size, chunk_start_idx)
         use_chunked_sdpa = chunk_start_idx is not None and chunk_start_idx > 0
-        logger.info(
-            "[PREFILL_SDPA_DEBUG] seq_len={} batch_size={} chunk_start_idx={} ring_sdpa={} chunked_sdpa={}",
-            seq_len,
-            batch_size,
-            chunk_start_idx,
-            ring_distributed_sdpa,
-            use_chunked_sdpa,
-        )
 
         if ring_distributed_sdpa:
             k_tensor = k_heads_1KSD_8b
             v_tensor = v_heads_1VSD_8b
-
+            logger.info(
+                "[PREFILL_SDPA_DEBUG] ring seq_len={} batch_size={} chunk_start_idx={} ring_sdpa={} chunked_sdpa={}",
+                seq_len,
+                batch_size,
+                chunk_start_idx,
+                ring_distributed_sdpa,
+                use_chunked_sdpa,
+            )
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_tensor,
@@ -799,6 +798,14 @@ class TtLlamaAttention(LightweightModule):
             # When using prefix caching (chunk_start_idx provided), use chunked SDPA with KV cache tensors.
             # Flexible path: chunk_start_idx_tensor so one trace works for any chunk_start at replay.
             if use_chunked_sdpa:
+                logger.info(
+                    "[PREFILL_SDPA_DEBUG] flexible seq_len={} batch_size={} chunk_start_idx={} ring_sdpa={} chunked_sdpa={}",
+                    seq_len,
+                    batch_size,
+                    chunk_start_idx,
+                    ring_distributed_sdpa,
+                    use_chunked_sdpa,
+                )
                 assert page_table is not None, "page_table must be provided for prefix caching"
                 assert (
                     chunk_start_idx_tensor is not None
@@ -838,6 +845,14 @@ class TtLlamaAttention(LightweightModule):
                 # Reshape from [1, 1, seq_len, head_dim] to [1, n_local_heads, seq_len, head_dim]
                 attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
             else:
+                logger.info(
+                    "[PREFILL_SDPA_DEBUG] non-chunked seq_len={} batch_size={} chunk_start_idx={} ring_sdpa={} chunked_sdpa={}",
+                    seq_len,
+                    batch_size,
+                    chunk_start_idx,
+                    ring_distributed_sdpa,
+                    use_chunked_sdpa,
+                )
                 attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
                     q_heads_1QSD_8b,
                     k_heads_1KSD_8b,

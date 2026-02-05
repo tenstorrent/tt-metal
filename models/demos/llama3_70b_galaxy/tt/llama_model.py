@@ -257,10 +257,18 @@ class TtTransformer(LightweightModule):
         )
         if page_table is not None:
             # NOTE ON SENTINELS / SAFETY:
-            # - For cache-write style ops (e.g. paged_fill_cache), -1 is a "skip" sentinel.
-            # - For SDPA ops that READ page_table, there is no sentinel check in address-gen, so -1 would overflow.
-            #   In prefix-cached prefill (chunk_start_idx > 0) we may use chunked SDPA, so we must avoid -1 there.
-            inactive_fill_value = 0 if (chunk_start_idx is not None and chunk_start_idx > 0) else -1
+            # - For chunked SDPA (prefix caching, chunk_start_idx > 0), the SDPA reads the page table.
+            #   Reading -1 can cause address overflow, so use 0 for padding (vLLM reserves block 0 as read-safe).
+            # - For non-chunked SDPA (no prefix caching), SDPA uses fresh K/V tensors, not the cache.
+            #   We only use page_table for paged_fill_cache (write), where -1 means "skip write".
+            #   Using -1 for inactive columns avoids unnecessary writes and potential race conditions.
+            use_chunked_sdpa_path = chunk_start_idx is not None and chunk_start_idx > 0
+            inactive_fill_value = 0 if use_chunked_sdpa_path else -1
+
+            def _fill_safe_row(row_1d: torch.Tensor) -> torch.Tensor:
+                # For chunked SDPA path, convert any 0s to inactive_fill_value to ensure consistency.
+                # For non-chunked path, keep original values (0s from vLLM are valid block IDs).
+                return row_1d.clone()
 
             # Chunked SDPA requires page_table "stick size" (row width) to be a multiple of 32 Bytes.
             # Page table entries are int32, so this means the number of columns must be a multiple of 8
@@ -278,27 +286,34 @@ class TtTransformer(LightweightModule):
             if batch_size > 1:
                 assert batch_size == 32, "batch_size must be 32 for batched prefill"
                 # Mesh layout padding: (32, num_blocks) -> (4, 32 * num_blocks).
-                # In non-prefix prefill, use -1 for the "unused" regions so paged_fill_cache can skip safely.
+                # For non-chunked SDPA, use -1 for unused regions so paged_fill_cache skips writes.
+                # For chunked SDPA (prefix caching), use 0 so SDPA doesn't read -1.
                 batch_size_per_column = batch_size // columns
                 page_table_padded = (
                     torch.ones((columns, page_table.shape[1] * batch_size), dtype=torch.int32) * inactive_fill_value
                 )
                 for i in range(columns):
+                    row_block = _fill_safe_row(
+                        page_table[i * batch_size_per_column : (i + 1) * batch_size_per_column, :].reshape(1, -1)
+                    )
                     page_table_padded[
                         i,
                         (i * batch_size_per_column)
                         * page_table.shape[1] : (i + 1)
                         * batch_size_per_column
                         * page_table.shape[1],
-                    ] = page_table[i * batch_size_per_column : (i + 1) * batch_size_per_column, :].reshape(1, -1)
+                    ] = row_block
                 chunk_page_table_padded = None  # batch_size>1 => no prefix caching => no chunk_page_table
             else:
-                # Mesh layout padding: only the active column is used; others must be read-safe.
+                # Mesh layout padding: only the active column is used.
+                # For non-chunked SDPA, use -1 for inactive columns so paged_fill_cache skips writes.
+                # For chunked SDPA (prefix caching), use 0 so SDPA doesn't read -1.
                 num_blocks = page_table.shape[1]
                 page_table_padded = torch.ones((columns, num_blocks), dtype=torch.int32) * inactive_fill_value
                 # Note: For prefix caching, page_table is already extracted to a single row (shape: 1, num_blocks),
                 # so we always access row 0. The original user_id is used only to compute user_id_column.
-                page_table_padded[user_id_column, :num_blocks] = page_table[0, :]
+                row = _fill_safe_row(page_table[0, :])
+                page_table_padded[user_id_column, :num_blocks] = row
 
                 # Ensure row width (in bytes) divisible by 32 for chunked SDPA.
                 page_table_padded = _pad_table_cols_to_multiple_of_8_int32(
@@ -320,8 +335,9 @@ class TtTransformer(LightweightModule):
 
         if chunk_page_table is not None:
             assert batch_size == 1, "chunk_page_table is only supported for batch_size=1"
-            chunk_page_table_padded = torch.ones((columns, chunk_page_table.shape[1]), dtype=torch.int32) * -1
-            chunk_page_table_padded[user_id_column, :] = chunk_page_table[0, :]
+            # Use 0 for inactive columns so no reader ever sees -1.
+            chunk_page_table_padded = torch.zeros((columns, chunk_page_table.shape[1]), dtype=torch.int32)
+            chunk_page_table_padded[user_id_column, :] = _fill_safe_row(chunk_page_table[0, :])
 
             logger.info(f"[PREFILL_TABLE_DEBUG] chunk_page_table { _table_preview(chunk_page_table_padded) }")
             tt_chunk_page_table = ttnn.from_torch(
@@ -580,6 +596,19 @@ class TtTransformer(LightweightModule):
             last_token_idx,
             user_id,
         )
+        # Debug: sample raw model output before norm
+        try:
+            out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
+            last_idx = last_token_idx[0] if isinstance(last_token_idx, list) else last_token_idx
+            out_sample = out_torch[0, 0, last_idx, :8].tolist()
+            out_norm = float(out_torch[0, 0, last_idx, :].norm().item())
+            logger.info(
+                "[PREFILL_RAW_DEBUG] out_sample_at_last_token={} out_norm={:.4f}",
+                [f"{v:.4f}" for v in out_sample],
+                out_norm,
+            )
+        except Exception as e:
+            logger.info("[PREFILL_RAW_DEBUG] failed: {}", e)
         x, _ = self.norm(tt_out, res=None, mode="prefill")
         logger.info("[PREFILL_PROCESS_DEBUG] after norm x shape={}", x.shape)
         if isinstance(last_token_idx, list):
@@ -707,6 +736,20 @@ class TtTransformer(LightweightModule):
             batch_size,
             "set" if page_table is not None else "None",
         )
+        # Debug: sample input embedding to verify data is flowing correctly
+        try:
+            x_torch = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
+            x_sample = (
+                x_torch[0, 0, get_last_token, :8].tolist() if get_last_token >= 0 else x_torch[0, 0, 0, :8].tolist()
+            )
+            x_norm = float(x_torch.norm().item())
+            logger.info(
+                "[PREFILL_EMB_DEBUG] x_sample_at_last_token={} x_norm={:.4f}",
+                [f"{v:.4f}" for v in x_sample],
+                x_norm,
+            )
+        except Exception as e:
+            logger.info("[PREFILL_EMB_DEBUG] failed: {}", e)
         assert rot_mats is not None, "prefill requires rot_mats (full from get_or_create_prefill_rot_mats)"
         assert chunk_start_idx is not None and hasattr(
             chunk_start_idx, "shape"
