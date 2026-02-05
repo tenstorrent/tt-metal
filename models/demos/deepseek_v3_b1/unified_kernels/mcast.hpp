@@ -255,6 +255,8 @@ struct Mcast {
     // IsSenderCore: compile-time flag to distinguish sender vs receiver cores
     // IsReceiverCore: compile-time flag for receiver cores
     // pop_src: whether to pop the source CB after sending
+    // UpdateSemaphoreAddr: if true, update semaphore address from args on each call
+    //                      (useful for back-to-back mcasts with different semaphores)
     //
     // Usage:
     //   Op op;
@@ -265,7 +267,13 @@ struct Mcast {
     // Or use the legacy all-in-one call:
     //   op.init_send_teardown(args);  // Does init + send + teardown
     // ========================================================================
-    template <typename CTArgsT, bool IsSenderCore, bool IsMcastGridCore, bool IsReceiverCore, bool pop_src>
+    template <
+        typename CTArgsT,
+        bool IsSenderCore,
+        bool IsMcastGridCore,
+        bool IsReceiverCore,
+        bool pop_src,
+        bool UpdateSemaphoreAddr = false>
     class Op {
     public:
         // ====================================================================
@@ -328,7 +336,9 @@ struct Mcast {
             if constexpr (IsSenderCore) {
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
+
                 // Compute mcast data NOC address from runtime args
+                // Note: noc_coord_ high bits are already set in command buffer from init
                 uint64_t mcast_data_noc_addr = noc_coord_ | (uint64_t)args.mcast_receiver_data_addr;
 
                 // Send data with state
@@ -341,15 +351,33 @@ struct Mcast {
                     true,
                     true,
                     write_cmd_buf>(args.input_data_addr, mcast_data_noc_addr, args.data_size_bytes);
-                mcast_send_with_state<
-                    CTArgsT::mcast_num_cores,
-                    CTArgsT::loopback,
-                    CTArgsT::is_part_of_receiver_grid,
-                    true,
-                    true,
-                    false,
-                    false,
-                    write_reg_cmd_buf>(0, 0, 0);
+
+                // Send semaphore signal
+                if constexpr (UpdateSemaphoreAddr) {
+                    // Update only the low 32-bit semaphore address (NOC coordinate and size already set from init)
+                    uint32_t data_sender_semaphore_addr = get_semaphore(args.data_sender_semaphore_id);
+                    uint32_t data_receiver_semaphore_addr = get_semaphore(args.data_receiver_semaphore_id);
+                    mcast_send_with_state<
+                        CTArgsT::mcast_num_cores,
+                        CTArgsT::loopback,
+                        CTArgsT::is_part_of_receiver_grid,
+                        true,
+                        true,
+                        true,   // set_addresses = true to update semaphore address
+                        false,  // set_size = false (size already 4 from init)
+                        write_reg_cmd_buf>(data_sender_semaphore_addr, data_receiver_semaphore_addr, 0);
+                } else {
+                    // Use cached semaphore address from init
+                    mcast_send_with_state<
+                        CTArgsT::mcast_num_cores,
+                        CTArgsT::loopback,
+                        CTArgsT::is_part_of_receiver_grid,
+                        true,
+                        true,
+                        false,
+                        false,
+                        write_reg_cmd_buf>(0, 0, 0);
+                }
 
                 // Pop the source CB after sending
                 if constexpr (pop_src) {

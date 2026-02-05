@@ -61,12 +61,16 @@ def setup_eltwise_mul(
     cb_in1_index,
     cb_out_index,
     per_core_n,
+    cb_scalar_index,
+    cb_scalar_src_index,
+    scalar_src_tensor,
 ):
     """
-    Set up parameters and CB descriptors for element-wise multiply with CB aliasing.
+    Set up parameters and CB descriptors for element-wise multiply with CB aliasing and scalar multiply.
 
     The mul operation uses 16x16 tiles while the input tensors use 1x32 tiles.
     This function creates aliased CB descriptors that view the same memory with 16x16 tile format.
+    Always includes scalar multiply: out = in0 * in1 * scalar
 
     Args:
         in0_tensor: First input tensor (e.g., up_proj matmul output)
@@ -77,6 +81,9 @@ def setup_eltwise_mul(
         cb_in1_index: CB index for second input (aliased)
         cb_out_index: CB index for output
         per_core_n: Number of output tiles per core (in 1x32 format)
+        cb_scalar_index: CB index for scalar working buffer (16x16 tile format)
+        cb_scalar_src_index: CB index for scalar source (receives mcasted scalar)
+        scalar_src_tensor: Tensor backing the scalar source CB (for CB descriptor)
 
     Returns:
         Dictionary with mul_num_tiles and CB descriptors
@@ -134,11 +141,32 @@ def setup_eltwise_mul(
     )
     cb_out_descriptor.set_buffer_from_tensor(out_tensor)
 
+    # CB for scalar source: receives mcasted scalar (tensor-backed)
+    cb_scalar_src_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_scalar_src_index, scalar_src_tensor)
+
+    # CB for scalar working buffer: 16x16 tile format for compute
+    # Only needs 1 tile (single scalar value at position [0,0])
+    cb_scalar_format = ttnn.CBFormatDescriptor(
+        buffer_index=cb_scalar_index,
+        data_format=ttnn.bfloat16,
+        page_size=tile_16x16_size,
+        tile=tile_16x16_desc,
+    )
+    cb_scalar_descriptor = ttnn.CBDescriptor(
+        total_size=tile_16x16_size,
+        core_ranges=core_ranges,
+        format_descriptors=[cb_scalar_format],
+    )
+
     return {
         "mul_num_tiles": mul_num_tiles,
         "cb_in0_descriptor": cb_in0_descriptor,
         "cb_in1_descriptor": cb_in1_descriptor,
         "cb_out_descriptor": cb_out_descriptor,
+        "cb_scalar_index": cb_scalar_index,
+        "cb_scalar_src_index": cb_scalar_src_index,
+        "cb_scalar_descriptor": cb_scalar_descriptor,
+        "cb_scalar_src_descriptor": cb_scalar_src_descriptor,
     }
 
 
@@ -613,8 +641,11 @@ class MoeRoutedExpert:
             up_proj_weights = up_proj_weights_dict[selected_expert_idx]
             up_proj_output = input_for_expert @ up_proj_weights.float()
 
-            # Fused output: silu(gate_proj) * up_proj
-            fused_output = gate_proj_output * up_proj_output
+            # Get expert scale (first score for the selected expert)
+            expert_scale = top8_scores[0, 0].float()
+
+            # Fused output: silu(gate_proj) * up_proj * expert_scale
+            fused_output = gate_proj_output * up_proj_output * expert_scale
 
             # down_proj: fused_output @ weights (no activation)
             if down_proj_weights_dict is not None:
@@ -637,7 +668,8 @@ class MoeRoutedExpert:
         gate_indices_tensor,
         gate_output_scores_tensor,
         gate_output_indices_tensor,
-        gate_proj_index_tensor,
+        expert_index_tensor,
+        expert_scale_tensor,
         gate_proj_weights_tensor,
         gate_proj_output_tensor,
         up_proj_weights_tensor,
@@ -651,7 +683,7 @@ class MoeRoutedExpert:
     ):
         """
         Execute the full MoE routed expert fused operation:
-        mcast + matmul + sigmoid + gather + gate + index_mcast + gate_proj + up_proj + mul +
+        mcast + matmul + sigmoid + gather + gate + index_mcast + expert_scale_mcast + gate_proj + up_proj + mul +
         down_proj_gather + down_proj_mcast + down_proj
 
         Args:
@@ -663,14 +695,15 @@ class MoeRoutedExpert:
             gate_input_tensor: Gate input tensor [16, 16] on sender core (receives gathered output)
             gate_bias_tensor: Gate bias tensor [16, 16] on sender core
             gate_indices_tensor: Gate indices tensor [16, 16] on sender core
-            gate_output_scores_tensor: Gate output scores tensor [1, 16] on sender core
-            gate_output_indices_tensor: Gate output indices tensor [1, 16] on sender core
-            gate_proj_index_tensor: DRAM matmul+SiLU index tensor [1, 16] on mcast grid (receives mcasted indices)
+            gate_output_scores_tensor: Gate output scores [1, 16] on sender core (source for expert_scale mcast)
+            gate_output_indices_tensor: Gate output indices [1, 16] on sender core (source for index mcast)
+            expert_index_tensor: Expert index [1, 16] on mcast grid (receives mcasted indices)
+            expert_scale_tensor: Expert scale [1, 16] on mcast grid (receives mcasted scale)
             gate_proj_weights_tensor: Expert gate_proj weights [K, N_expert] width-sharded in DRAM (first expert)
             gate_proj_output_tensor: Expert gate_proj matmul+SiLU output [1, N_expert] width-sharded on DRAM matmul cores
             up_proj_weights_tensor: Expert up_proj weights [K, N_expert] width-sharded in DRAM (first expert)
             up_proj_mm_out_tensor: Expert up_proj matmul output (intermediate) [1, N_expert] width-sharded
-            fused_output_tensor: Fused output silu(gate_proj) * up_proj [1, N_expert] width-sharded
+            fused_output_tensor: Fused output silu(gate_proj) * up_proj * expert_scale [1, N_expert] width-sharded
             down_proj_gather_output_tensor: Gathered fused output [1, N_expert] on sender core
             down_proj_mcast_output_tensor: Mcasted fused output [1, N_expert] on mcast grid
             down_proj_weights_tensor: down_proj weights [N_expert, K] width-sharded in DRAM (first expert)
@@ -737,6 +770,9 @@ class MoeRoutedExpert:
         down_proj_mcast_dst_cb = 18  # mcasted fused output on compute cores (tensor-backed)
         down_proj_cb_in1 = 19  # down_proj weights working buffer
         down_proj_cb_out = 20  # down_proj output (tensor-backed)
+        # Scalar multiply CBs for expert scale
+        mul_cb_scalar_src = 21  # Receives mcasted expert scale (tensor-backed on gate_proj cores)
+        mul_cb_scalar = 22  # Working buffer for scalar multiply (16x16 tile format)
 
         # ========== Input Mcast Setup ==========
         input_mcast_data_size_bytes = num_tiles_k * tile_1x32_size
@@ -817,20 +853,31 @@ class MoeRoutedExpert:
 
         # ========== Index Mcast Setup ==========
         # CB 10: DRAM matmul index (receives mcasted indices from gate)
-        gate_proj_cb_index_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            gate_proj_cb_index, gate_proj_index_tensor
-        )
+        gate_proj_cb_index_descriptor = ttnn.cb_descriptor_from_sharded_tensor(gate_proj_cb_index, expert_index_tensor)
 
         # Get index tile size for compile-time args
-        index_tile = gate_proj_index_tensor.get_tile()
-        index_dtype = gate_proj_index_tensor.dtype
+        index_tile = expert_index_tensor.get_tile()
+        index_dtype = expert_index_tensor.dtype
         index_tile_size = index_tile.get_tile_size(index_dtype)
 
-        # Index mcast parameters - reuse same semaphores as input mcast
+        # Index mcast parameters
         index_mcast_sender_semaphore_id = mcast_data_sender_semaphore_id
         index_mcast_receiver_semaphore_id = mcast_data_receiver_semaphore_id
-        index_mcast_num_pages = 1  # Single index tile
+        index_mcast_num_pages = 1
         index_mcast_data_size_bytes = index_tile_size
+
+        # ========== Expert Scale Mcast Setup ==========
+        # Get expert scale tile size
+        expert_scale_tile = expert_scale_tensor.get_tile()
+        expert_scale_dtype = expert_scale_tensor.dtype
+        expert_scale_tile_size = expert_scale_tile.get_tile_size(expert_scale_dtype)
+
+        # Expert scale mcast parameters (different semaphores to avoid race condition with back-to-back mcasts)
+        # Using UpdateSemaphoreAddr=true in kernel allows using different semaphore addresses
+        expert_scale_mcast_sender_semaphore_id = 4  # Different from index_mcast
+        expert_scale_mcast_receiver_semaphore_id = 5  # Different from index_mcast
+        expert_scale_mcast_num_pages = 1
+        expert_scale_mcast_data_size_bytes = expert_scale_tile_size
 
         # ========== DRAM Streaming Matmul Setup ==========
         gate_proj_params = setup_dram_matmul(
@@ -860,7 +907,7 @@ class MoeRoutedExpert:
         up_proj_cb_in1_descriptor = up_proj_params["cb_in1_descriptor"]
         up_proj_cb_mm_out_descriptor = up_proj_params["cb_out_descriptor"]
 
-        # ========== Mul Setup (up_proj * gate_proj -> fused output) ==========
+        # ========== Mul Setup (up_proj * gate_proj * expert_scale -> fused output) ==========
         mul_params = setup_eltwise_mul(
             in0_tensor=up_proj_mm_out_tensor,
             in1_tensor=gate_proj_output_tensor,
@@ -870,11 +917,16 @@ class MoeRoutedExpert:
             cb_in1_index=mul_cb_in1,
             cb_out_index=mul_cb_out,
             per_core_n=gate_proj_params["per_core_n"],
+            cb_scalar_index=mul_cb_scalar,
+            cb_scalar_src_index=mul_cb_scalar_src,
+            scalar_src_tensor=expert_scale_tensor,
         )
         mul_num_tiles = mul_params["mul_num_tiles"]
         mul_cb_in0_descriptor = mul_params["cb_in0_descriptor"]
         mul_cb_in1_descriptor = mul_params["cb_in1_descriptor"]
         mul_cb_out_descriptor = mul_params["cb_out_descriptor"]
+        mul_cb_scalar_descriptor = mul_params["cb_scalar_descriptor"]
+        mul_cb_scalar_src_descriptor = mul_params["cb_scalar_src_descriptor"]
 
         num_gate_proj_cores = gate_proj_core_ranges.num_cores()
 
@@ -971,6 +1023,10 @@ class MoeRoutedExpert:
             ("index_mcast_receiver_semaphore", index_mcast_receiver_semaphore_id),
             ("gate_proj_cb_index", gate_proj_cb_index),
             ("index_mcast_num_pages", index_mcast_num_pages),
+            # Expert scale mcast receiver args (compute cores)
+            ("expert_scale_mcast_receiver_semaphore", expert_scale_mcast_receiver_semaphore_id),
+            ("mul_cb_scalar_src", mul_cb_scalar_src),
+            ("expert_scale_mcast_num_pages", expert_scale_mcast_num_pages),
             # Mul reader args (setup mul_in1 buffer)
             ("mul_cb_in1", mul_cb_in1),
             ("mul_num_tiles", mul_num_tiles),
@@ -1018,12 +1074,20 @@ class MoeRoutedExpert:
             # Gate writer args (sender core)
             ("gate_output_cb", gate_params["output_cb"]),
             ("gate_output_indices_cb", gate_params["output_indices_cb"]),
-            # Index mcast sender args (sender core broadcasts gate indices to compute cores)
+            # Index mcast sender args (sender core broadcasts indices to compute cores)
             ("index_mcast_sender_semaphore", index_mcast_sender_semaphore_id),
             ("index_mcast_receiver_semaphore", index_mcast_receiver_semaphore_id),
             ("index_mcast_data_size_bytes", index_mcast_data_size_bytes),
             ("index_mcast_num_pages", index_mcast_num_pages),
             ("gate_proj_cb_index", gate_proj_cb_index),
+            # Expert scale mcast sender args (sender core broadcasts scale to compute cores)
+            ("expert_scale_mcast_sender_semaphore", expert_scale_mcast_sender_semaphore_id),
+            ("expert_scale_mcast_receiver_semaphore", expert_scale_mcast_receiver_semaphore_id),
+            ("expert_scale_mcast_data_size_bytes", expert_scale_mcast_data_size_bytes),
+            ("expert_scale_mcast_num_pages", expert_scale_mcast_num_pages),
+            ("mul_cb_scalar_src", mul_cb_scalar_src),
+            ("mul_cb_scalar", mul_cb_scalar),
+            ("mul_scalar_index_offset", 0),  # Index into scalar source tensor (same as gate_proj_index_offset)
             # DRAM streaming matmul writer args (compute cores)
             ("gate_proj_cb_in1", gate_proj_cb_in1),
             ("gate_proj_cb_out", gate_proj_cb_out),
@@ -1122,11 +1186,12 @@ class MoeRoutedExpert:
             ("up_proj_fuse_silu", 0),  # No SiLU for up_proj
             ("up_proj_fp32_dest_acc_en", 1),  # Use FP32 accumulation for up_proj
             ("up_proj_cb_mm_out", up_proj_cb_mm_out),  # Intermediate output for up_proj (before mul)
-            # Mul compute args (up_proj * gate_proj -> fused output)
+            # Mul compute args (up_proj * gate_proj * expert_scale -> fused output)
             ("mul_cb_in0", mul_cb_in0),  # up_proj output aliased as 16x16
             ("mul_cb_in1", mul_cb_in1),  # gate_proj output aliased as 16x16
             ("mul_cb_out", mul_cb_out),  # final fused output
             ("mul_num_tiles", mul_num_tiles),
+            ("mul_cb_scalar", mul_cb_scalar),  # scalar working buffer for expert scale
             ("up_proj_per_core_n", up_proj_params["per_core_n"]),  # tiles in mm_out format for cb_wait
             # down_proj matmul compute args (compute cores)
             ("down_proj_cb_in0", down_proj_mcast_dst_cb),  # Mcasted fused output
@@ -1172,7 +1237,19 @@ class MoeRoutedExpert:
             initial_value=0,
         )
 
-        # Note: index mcast reuses the same semaphores as input mcast (IDs 0 and 1)
+        # Expert scale mcast uses separate semaphores (IDs 4 and 5) to avoid race condition
+        # with back-to-back mcasts. Kernel uses UpdateSemaphoreAddr=true to update addresses.
+        expert_scale_mcast_sender_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=expert_scale_mcast_sender_semaphore_id,
+            core_ranges=full_device_grid,
+            initial_value=1,  # Sender semaphore starts as VALID (1)
+        )
+
+        expert_scale_mcast_receiver_semaphore_descriptor = ttnn.SemaphoreDescriptor(
+            id=expert_scale_mcast_receiver_semaphore_id,
+            core_ranges=full_device_grid,
+            initial_value=0,
+        )
 
         # Per-core compile-time args for DRAM matmul bank_id and vc
         # Each DRAM matmul core gets a unique bank_id based on its optimal DRAM bank assignment
@@ -1296,6 +1373,8 @@ class MoeRoutedExpert:
                 mul_cb_in0_descriptor,
                 mul_cb_in1_descriptor,
                 mul_cb_out_descriptor,
+                mul_cb_scalar_src_descriptor,
+                mul_cb_scalar_descriptor,
                 down_proj_gather_dst_cb_descriptor,
                 down_proj_mcast_dst_cb_descriptor,
                 down_proj_cb_in1_descriptor,
@@ -1306,7 +1385,8 @@ class MoeRoutedExpert:
                 mcast_receiver_semaphore_descriptor,
                 gather_noc0_semaphore_descriptor,
                 gather_noc1_semaphore_descriptor,
-                # Note: index mcast reuses semaphores 0 and 1
+                expert_scale_mcast_sender_semaphore_descriptor,
+                expert_scale_mcast_receiver_semaphore_descriptor,
             ],
         )
 
@@ -1321,12 +1401,13 @@ class MoeRoutedExpert:
             gate_indices_tensor,
             gate_output_scores_tensor,
             gate_output_indices_tensor,
-            gate_proj_index_tensor,
+            expert_index_tensor,
             gate_proj_weights_tensor,
             gate_proj_output_tensor,
             up_proj_weights_tensor,
             up_proj_mm_out_tensor,
             fused_output_tensor,
+            expert_scale_tensor,
             down_proj_gather_output_tensor,
             down_proj_mcast_output_tensor,
             down_proj_weights_tensor,
