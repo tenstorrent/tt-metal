@@ -14,10 +14,10 @@
 
 namespace ttml::core::distributed {
 
-ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, std::optional<uint32_t> dp_dim) {
+ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const std::optional<uint32_t> dp_dim) {
     auto* device = &autograd::ctx().get_device();
     TT_FATAL(!dp_dim.has_value() || dp_dim.value() < device->shape().dims(), "Cluster axis must be within mesh shape");
-    const auto dp_size = dp_dim.has_value() ? device->shape()[dp_dim.value()] : device->get_devices().size();
+    const auto dp_size = autograd::ctx().get_parallelism_context().get_ddp_size();
     assert(dp_size >= 1U);
     // no need to synchronize if there is only one device
     if (dp_size == 1U) {
@@ -29,7 +29,9 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, std::optional<uint32
     return result;
 }
 
-void synchronize_gradients(const serialization::NamedParameters& parameters, std::optional<uint32_t> dp_dim) {
+void synchronize_gradients(const serialization::NamedParameters& parameters) {
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    const auto dp_dim = pctx.get_ddp_axis();
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
             tensor->set_grad(synchronize_tensor(tensor->get_grad(), dp_dim));
