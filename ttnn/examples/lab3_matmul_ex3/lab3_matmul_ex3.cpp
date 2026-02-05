@@ -241,7 +241,20 @@ void matmul_multi_core(
     Tensor dst_tensor = create_device_tensor(dst_spec, prog_state.mesh_device.get());
 
     // Create a set of all cores in the compute grid.
-    CoreRangeSet all_cores{CoreRange(CoreCoord(0, 0), CoreCoord(core_grid.x - 1, core_grid.y - 1))};
+    CoreCoord top_left_core_logical{0, 0};
+    CoreRangeSet all_cores_logical{CoreRange(top_left_core_logical, CoreCoord(core_grid.x - 1, core_grid.y - 1))};
+
+    // All cores except the top row and left column are receiving A and B.
+    CoreRangeSet ab_receiver_cores_logical{CoreRange(
+        {top_left_core_logical.x + 1, top_left_core_logical.y + 1}, CoreCoord(core_grid.x - 1, core_grid.y - 1))};
+
+    // First column, excluding the top left core is sending A and receiving B.
+    CoreRangeSet a_sender_b_receiver_cores_logical{CoreRange(
+        {top_left_core_logical.x, top_left_core_logical.y + 1}, CoreCoord(top_left_core_logical.x, core_grid.y - 1))};
+
+    // First row, excluding the top left core is sending B and receiving A.
+    CoreRangeSet b_sender_a_receiver_cores_logical{CoreRange(
+        {top_left_core_logical.x + 1, top_left_core_logical.y}, CoreCoord(core_grid.x - 1, top_left_core_logical.y))};
 
     // Create circular buffers for the input and output data.
     // Using 2x tiles when double buffering is desired.
@@ -253,16 +266,31 @@ void matmul_multi_core(
     // There are 32 circular buffers (c_0 - c_31) on the device. We can use any of them, as long as they are not already
     // in use. Kernel code is responsible for using the correct circular buffer for the input and output data (e.g.
     // reader kernel reads data into c_0 and c_1, while the compute kernel reads data from these same buffers).
-    create_cb(prog_state.program, all_cores, tiles_cb_in0, CBIndex::c_0);
-    create_cb(prog_state.program, all_cores, tiles_cb_in1, CBIndex::c_1);
+    create_cb(prog_state.program, all_cores_logical, tiles_cb_in0, CBIndex::c_0);
+    create_cb(prog_state.program, all_cores_logical, tiles_cb_in1, CBIndex::c_1);
 
     // Compute kernel will write output data to c_16, which will be consumed by the writer kernel.
     // c_16 chosen arbitrarily (e.g. to leave c_2-c_15 free for other potential inputs when code is extended in the
     // future).
-    create_cb(prog_state.program, all_cores, tiles_cb_out, tt::CBIndex::c_16);
+    create_cb(prog_state.program, all_cores_logical, tiles_cb_out, tt::CBIndex::c_16);
 
     // Use c_24 (arbitrarily chosen) for the intermediate buffer.
-    create_cb(prog_state.program, all_cores, tiles_cb_interm, tt::CBIndex::c_24);
+    create_cb(prog_state.program, all_cores_logical, tiles_cb_interm, tt::CBIndex::c_24);
+
+    ////////// SEMAPHORE SETUP //////////
+    // Semaphores are used for synchronization between the coordinator and receiver cores.
+    // receivers_ready_semaphore: receivers signal when they're ready to receive a tile
+    // tile_sent_semaphore: coordinator signals when a tile has been multicast
+
+    // For simplicity, we create semaphores on all cores, although not all cores
+    // will use all the semaphores.
+    uint32_t a_receivers_ready_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
+    uint32_t a_tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
+    uint32_t a_num_receivers = core_grid.x - 1;
+
+    uint32_t b_receivers_ready_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
+    uint32_t b_tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
+    uint32_t b_num_receivers = core_grid.y - 1;
 
     // Get MeshBuffer pointers from tensors. Mesh buffers hold info about how tensor data is distributed
     // across physical DRAM banks (at least for our case when data is stored in DRAM).
@@ -284,21 +312,48 @@ void matmul_multi_core(
     // We pick one to read data from DRAM into circular buffers and the other to write result
     // from circular buffer to DRAM. Which one is used for reading vs writing doesn't impact
     // functionality or performance.
-    KernelHandle reader_id = tt_metal::CreateKernel(
+    KernelHandle ab_sender_id = tt_metal::CreateKernel(
         prog_state.program,
-        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex3/kernels/dataflow/read_tiles.cpp",
-        all_cores,
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex3/kernels/dataflow/ab_sender.cpp",
+        top_left_core_logical,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = reader_compile_time_args});
 
+    KernelHandle ab_receiver_id = tt_metal::CreateKernel(
+        prog_state.program,
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex3/kernels/dataflow/ab_receiver.cpp",
+        ab_receiver_cores_logical,
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_compile_time_args});
+
+    KernelHandle a_sender_b_receiver_id = tt_metal::CreateKernel(
+        prog_state.program,
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex3/kernels/dataflow/a_sender_b_receiver.cpp",
+        a_sender_b_receiver_cores_logical,
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_compile_time_args});
+
+    KernelHandle b_sender_a_receiver_id = tt_metal::CreateKernel(
+        prog_state.program,
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex3/kernels/dataflow/b_sender_a_receiver.cpp",
+        b_sender_a_receiver_cores_logical,
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_compile_time_args});
     std::vector<uint32_t> writer_compile_time_args;
+
     TensorAccessorArgs(*dst_mesh_buffer).append_to(writer_compile_time_args);
     KernelHandle writer_id = tt_metal::CreateKernel(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex3/kernels/dataflow/write_tiles.cpp",
-        all_cores,
+        all_cores_logical,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
@@ -314,7 +369,7 @@ void matmul_multi_core(
     tt_metal::CreateKernel(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex3/kernels/compute/tiles_matmul.cpp",
-        all_cores,
+        all_cores_logical,
         tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
 
     // Set the runtime arguments for the kernels.
@@ -329,24 +384,142 @@ void matmul_multi_core(
             uint32_t tile_offset_row = row_block * M_block_tiles;
             uint32_t tile_offset_col = col_block * N_block_tiles;
 
-            CoreCoord core = {col_block, row_block};
-            tt_metal::SetRuntimeArgs(
-                prog_state.program,
-                reader_id,
-                core,
-                {src0_addr,
-                 src1_addr,
-                 Nt,
-                 Kt,
-                 M_block_tiles,
-                 N_block_tiles,
-                 K_block_tiles,
-                 tile_offset_row,
-                 tile_offset_col});
+            CoreCoord core_logical = {col_block, row_block};
+
+            // Aliases for easier reading of conditions below.
+            uint32_t x = core_logical.x;
+            uint32_t y = core_logical.y;
+
+            CoreCoord core_to_the_right_device =
+                prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(x + 1, y));
+            CoreCoord core_below_device = prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(x, y + 1));
+            CoreCoord last_core_in_row_device =
+                prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(core_grid.x - 1, y));
+            CoreCoord last_core_in_column_device =
+                prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(x, core_grid.y - 1));
+
+            CoreCoord leftmost_core_device = prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(0, y));
+            CoreCoord topmost_core_device = prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(x, 0));
+
+            // Set runtime arguments for the kernels.
+            if (x == 0 && y == 0) {
+                // Top left core is sending A and B.
+                tt_metal::SetRuntimeArgs(
+                    prog_state.program,
+                    ab_sender_id,
+                    core_logical,
+                    // A receivers are in the current row, but one column to the right.
+                    {core_to_the_right_device.x,
+                     core_to_the_right_device.y,
+                     last_core_in_row_device.x,
+                     last_core_in_row_device.y,
+                     a_receivers_ready_semaphore,
+                     a_tile_sent_semaphore,
+                     a_num_receivers,
+                     // B receivers are in the current column, but one row below.
+                     core_below_device.x,
+                     core_below_device.y,
+                     last_core_in_column_device.x,
+                     last_core_in_column_device.y,
+                     b_receivers_ready_semaphore,
+                     b_tile_sent_semaphore,
+                     b_num_receivers,
+                     // Other parameters, similar to baseline implementation from lab 2.
+                     src0_addr,
+                     src1_addr,
+                     Nt,
+                     Kt,
+                     M_block_tiles,
+                     N_block_tiles,
+                     K_block_tiles,
+                     tile_offset_row,
+                     tile_offset_col});
+            } else if (x == 0 && y > 0) {
+                // First column, excluding the top left core is sending A and receiving B.
+                tt_metal::SetRuntimeArgs(
+                    prog_state.program,
+                    a_sender_b_receiver_id,
+                    core_logical,
+                    // A receivers are in the current row, but starting one column to the right (x + 1).
+                    {core_to_the_right_device.x,
+                     core_to_the_right_device.y,
+                     last_core_in_row_device.x,
+                     last_core_in_row_device.y,
+                     a_receivers_ready_semaphore,
+                     a_tile_sent_semaphore,
+                     a_num_receivers,
+                     // B sender is at the top of the current column.
+                     topmost_core_device.x,
+                     topmost_core_device.y,
+                     b_receivers_ready_semaphore,
+                     b_tile_sent_semaphore,
+                     // Other parameters, similar to baseline implementation from lab 2.
+                     src0_addr,
+                     Nt,
+                     Kt,
+                     M_block_tiles,
+                     N_block_tiles,
+                     K_block_tiles,
+                     tile_offset_row,
+                     tile_offset_col});
+            } else if (x > 0 && y == 0) {
+                // First row, excluding the top left core is sending B and receiving A.
+                tt_metal::SetRuntimeArgs(
+                    prog_state.program,
+                    b_sender_a_receiver_id,
+                    core_logical,
+                    // A sender is in the leftmost column of the current row.
+                    {leftmost_core_device.x,
+                     leftmost_core_device.y,
+                     a_receivers_ready_semaphore,
+                     a_tile_sent_semaphore,
+                     // B receivers are in the current column, but starting one row below.
+                     core_below_device.x,
+                     core_below_device.y,
+                     last_core_in_column_device.x,
+                     last_core_in_column_device.y,
+                     b_receivers_ready_semaphore,
+                     b_tile_sent_semaphore,
+                     b_num_receivers,
+                     // Other parameters, similar to baseline implementation from lab 2.
+                     src1_addr,
+                     Nt,
+                     Kt,
+                     M_block_tiles,
+                     N_block_tiles,
+                     K_block_tiles,
+                     tile_offset_row,
+                     tile_offset_col});
+            } else {
+                // All other cores are receiving A and B.
+                tt_metal::SetRuntimeArgs(
+                    prog_state.program,
+                    ab_receiver_id,
+                    core_logical,
+                    // A sender is in the leftmost column of the current row.
+                    {leftmost_core_device.x,
+                     leftmost_core_device.y,
+                     a_receivers_ready_semaphore,
+                     a_tile_sent_semaphore,
+                     // B sender is in the topmost row of the current column.
+                     topmost_core_device.x,
+                     topmost_core_device.y,
+                     b_receivers_ready_semaphore,
+                     b_tile_sent_semaphore,
+                     // Other parameters, similar to baseline implementation from lab 2.
+                     Nt,
+                     Kt,
+                     M_block_tiles,
+                     N_block_tiles,
+                     K_block_tiles,
+                     tile_offset_row,
+                     tile_offset_col});
+            }
+
             tt_metal::SetRuntimeArgs(
                 prog_state.program,
                 writer_id,
-                core,
+                core_logical,
                 {dst_addr, Nt, M_block_tiles, N_block_tiles, tile_offset_row, tile_offset_col});
         }
     }
