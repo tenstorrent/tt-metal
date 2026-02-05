@@ -8,6 +8,7 @@
 # Each test group can have the following fields:
 #   - name: Display name for the test group (required)
 #   - cmd: The pytest command to run (required)
+#   - timeout: GHA job-level timeout in minutes (required)
 #   - merge_gate: If true, run during merge-gate (default: false)
 #   - ttsim: If true, can run on TTSim simulator (default: true)
 #   - fast_runtime_mode_off: If true, disable fast runtime mode (default: false)
@@ -19,6 +20,7 @@ tests:
   # ---------------------------------------------------------------------------
   - name: "ttnn example tests"
     cmd: "./tests/scripts/run_ttnn_examples.sh"
+    timeout: 10
     merge_gate: true
     ttsim: false  # Examples use features not supported in simulator
 
@@ -27,26 +29,31 @@ tests:
   # ---------------------------------------------------------------------------
   - name: "ttnn eltwise group 1"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 1 -m "not disable_fast_runtime_mode"'
+    timeout: 15
     merge_gate: false
     ttsim: true
 
   - name: "ttnn eltwise group 2"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 2 -m "not disable_fast_runtime_mode"'
+    timeout: 15
     merge_gate: false
     ttsim: true
 
   - name: "ttnn eltwise group 3"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 3 -m "not disable_fast_runtime_mode"'
+    timeout: 15
     merge_gate: false
     ttsim: true
 
   - name: "ttnn eltwise group 4"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 4 -m "not disable_fast_runtime_mode"'
+    timeout: 15
     merge_gate: false
     ttsim: true
 
   - name: "ttnn eltwise group 5"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 5 -m "not disable_fast_runtime_mode"'
+    timeout: 15
     merge_gate: false
     ttsim: true
 
@@ -55,6 +62,7 @@ tests:
   # ---------------------------------------------------------------------------
   - name: "ttnn conv group"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
+    timeout: 20
     merge_gate: false
     ttsim: true
 
@@ -63,6 +71,7 @@ tests:
   # ---------------------------------------------------------------------------
   - name: "ttnn pool group"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
+    timeout: 15
     merge_gate: false
     ttsim: true
 
@@ -71,6 +80,7 @@ tests:
   # ---------------------------------------------------------------------------
   - name: "ttnn matmul group"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
+    timeout: 20
     merge_gate: false
     ttsim: true
 
@@ -79,6 +89,7 @@ tests:
   # ---------------------------------------------------------------------------
   - name: "ttnn fused group"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode"'
+    timeout: 20
     merge_gate: false
     ttsim: true
 
@@ -87,6 +98,7 @@ tests:
   # ---------------------------------------------------------------------------
   - name: "ttnn transformers group"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
+    timeout: 25
     merge_gate: false
     ttsim: true
 
@@ -95,6 +107,7 @@ tests:
   # ---------------------------------------------------------------------------
   - name: "ttnn reduce and misc ops group"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/debug -xv -m "not disable_fast_runtime_mode"'
+    timeout: 20
     merge_gate: false
     ttsim: true
 
@@ -103,6 +116,7 @@ tests:
   # ---------------------------------------------------------------------------
   - name: "core ttnn unit test group"
     cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"'
+    timeout: 20
     merge_gate: false
     ttsim: true
 
