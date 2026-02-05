@@ -274,4 +274,38 @@ struct MinimalMatmulFusedOpSignaler {
         std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
 };
 
+// Used to propagate semaphore information from minimal_matmul to strided_reduce_scatter
+// Matmul signals RS when output chunks are ready
+struct MinimalMatmulToRSSignaler {
+    /* RS cores to signal */
+    uint32_t num_rs_cores_to_signal = 0;
+    std::vector<CoreCoord> rs_receiver_cores_noc;
+    uint32_t rs_signal_semaphore = 0;
+    FusedOpSignalerMode signaler_mode = FusedOpSignalerMode::MULTI;
+
+    /* Matmul worker sync (master-slave pattern) */
+    std::vector<CoreCoord> matmul_worker_cores_noc;
+    std::vector<CoreCoord> matmul_worker_cores;
+    uint32_t matmul_worker_sync_semaphore = 0;
+
+    bool initialized_rs = false;
+    bool initialized_matmul = false;
+
+    MinimalMatmulToRSSignaler() = default;
+
+    // Initialize RS side info from ReduceScatterFusedOpSignaler
+    void init_from_rs_signaler(const ReduceScatterFusedOpSignaler& rs_signaler);
+
+    // Initialize matmul worker cores and create sync semaphore
+    void init_matmul_workers(
+        tt::tt_metal::Program& program,
+        const tt::tt_metal::IDevice* device,
+        const CoreRangeSet& matmul_workers,
+        const std::vector<CoreCoord>& matmul_worker_cores);
+
+    // Push runtime args in OpSignaler format for matmul kernels
+    void push_matmul_rt_args(
+        std::vector<uint32_t>& out_rt_args, uint32_t num_workers_to_sync, uint32_t curr_worker_index);
+};
+
 }  // namespace ttnn::experimental::ccl

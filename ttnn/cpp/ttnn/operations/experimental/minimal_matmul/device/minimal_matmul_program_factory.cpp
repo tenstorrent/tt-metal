@@ -116,10 +116,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const std::vector<Tensor>& output_tensors,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
+    std::optional<ttnn::experimental::ccl::MinimalMatmulToRSSignaler>& rs_signaler,
     uint32_t N_chunks) {
     auto* device = input_tensor.device();
 
     bool fuse_op = fused_op_signaler.has_value();
+    bool fuse_rs = rs_signaler.has_value();
 
     if (!config.has_value()) {
         log_debug(tt::LogOp, "No config provided, using default block sizes and core grid");
@@ -342,6 +344,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in0_injector_defines = defines;
             in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
         }
+    }
+
+    if (fuse_rs) {
+        // Initialize matmul workers for RS signaling (master-slave pattern)
+        auto all_cores = corerange_to_cores(core_grid);
+        rs_signaler->init_matmul_workers(program, device, CoreRangeSet({core_grid}), all_cores);
+        defines["FUSE_RS"] = "1";
     }
 
     uint32_t in0_addr = input_tensor.buffer()->address();
@@ -628,6 +637,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
+        if (fuse_rs) {
+            // Push RS signaler args in OpSignaler format
+            rs_signaler->push_matmul_rt_args(in0_args, num_cores, core_id);
+        }
         if (in1_idx == 0) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
@@ -656,6 +669,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+        }
+        if (fuse_rs) {
+            // Push RS signaler args in OpSignaler format
+            rs_signaler->push_matmul_rt_args(in1_args, num_cores, core_id);
         }
         if (in0_idx == 0) {
             // in1 sender
@@ -695,7 +712,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     const std::optional<const MinimalMatmulConfig>& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
+    std::optional<ttnn::experimental::ccl::MinimalMatmulToRSSignaler>& rs_signaler) {
     // Wrap single output in vector and call shared implementation
     std::vector<Tensor> output_tensors = {output_tensor};
     return minimal_matmul_factory_helper_common(
@@ -708,6 +726,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
         output_tensors,
         compute_kernel_config,
         fused_op_signaler,
+        rs_signaler,
         1  // N_chunks = 1 for regular minimal_matmul
     );
 }
@@ -718,6 +737,7 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
     Tensor& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<ttnn::experimental::ccl::MinimalMatmulToRSSignaler> empty_rs_signaler;
 
     auto shared_vars = minimal_matmul_factory_helper(
         program,
@@ -728,7 +748,8 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
         operation_attributes.config,
         tensor_return_value,
         operation_attributes.compute_kernel_config,
-        empty_fused_op_signaler);
+        empty_fused_op_signaler,
+        empty_rs_signaler);
 
     return {std::move(program), std::move(shared_vars)};
 }

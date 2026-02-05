@@ -6,6 +6,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#ifdef FUSE_RS
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -111,6 +114,19 @@ void kernel_main() {
 #endif
     const auto in3_reader = TensorAccessor(in3_args, in3_addr, in3_tile_size);
 #endif
+#endif
+
+#ifdef FUSE_RS
+    // OpSignaler for matmul->RS synchronization (master-slave pattern)
+    // RS args come after AG args (if present) and output addresses
+    uint32_t rs_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
+#ifdef FUSE_AG
+    // Skip past FUSE_AG runtime args: num_devices(1) + num_k_blocks(1) + start_ring_index(1) + input_tensor_Wt(1)
+    // + k_block_tiles(1) + topology(1) + read_local_slice_from_input(1) + local_k_start(1) + local_k_end(1)
+    // + fused_op_signal_sems(3) = 13 args
+    rs_rt_args_idx += 13;
+#endif
+    OpSignaler rs_signaler(rs_rt_args_idx);
 #endif
 
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
@@ -314,4 +330,12 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+
+#ifdef FUSE_RS
+    // Signal RS that matmul output is ready (Phase 1: signal once per batch element)
+    // Only output writer cores participate in signaling
+    if constexpr (is_output_writer) {
+        rs_signaler.synchronize_workers_and_signal_op(0);  // chip_id=0 for local signaling
+    }
+#endif
 }

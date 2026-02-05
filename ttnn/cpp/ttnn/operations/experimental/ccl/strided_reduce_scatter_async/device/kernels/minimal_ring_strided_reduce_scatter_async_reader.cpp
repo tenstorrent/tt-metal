@@ -104,6 +104,12 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
+
+    // Fused matmul->RS semaphore (pushed by ReduceScatterFusedOpSignaler when fuse_op is true)
+    size_t matmul_ready_sem = 0;
+    if constexpr (fuse_op) {
+        matmul_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    }
     DPRINT << "compile time args:" << ENDL();
     DPRINT << "my_chip_id: " << my_chip_id << ENDL();
     DPRINT << "ring_size: " << ring_size << ENDL();
@@ -146,11 +152,21 @@ void kernel_main() {
     DPRINT << " effective_worker_id: " << effective_worker_id << ENDL();
 
     uint32_t sem_target = 0;
+    uint32_t matmul_sem_target = 0;
 
     for (uint32_t b = 0; b < batch_size; b++) {
         const uint32_t batch_offset = input_batch_num_pages * b;
         DPRINT << "================================================" << ENDL();
         DPRINT << "batch: " << b << " started" << ENDL();
+
+        // Phase 1: Wait for matmul to complete this batch element before processing
+        if constexpr (fuse_op) {
+            DPRINT << "Waiting for matmul signal (fuse_op), matmul_sem_target: " << matmul_sem_target << ENDL();
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_ready_sem), matmul_sem_target + 1);
+            matmul_sem_target++;
+            DPRINT << "Matmul signal received" << ENDL();
+        }
 
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
             DPRINT << "--------------------------------" << ENDL();

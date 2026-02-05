@@ -13,6 +13,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<ttnn::experimental::ccl::MinimalMatmulToRSSignaler> empty_rs_signaler;
 
     // Use the shared implementation from minimal_matmul_program_factory
     auto shared_vars = minimal_matmul_factory_helper_common(
@@ -25,6 +26,7 @@ MinimalMatmulSplitProgramFactory::cached_program_t MinimalMatmulSplitProgramFact
         tensor_return_value,
         operation_attributes.compute_kernel_config,
         empty_fused_op_signaler,
+        empty_rs_signaler,
         static_cast<uint32_t>(operation_attributes.chunks));
 
     return {std::move(program), std::move(shared_vars)};

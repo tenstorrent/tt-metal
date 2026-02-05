@@ -526,4 +526,73 @@ void MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[2]));
 }
 
+// MinimalMatmulToRSSignaler implementation
+void MinimalMatmulToRSSignaler::init_from_rs_signaler(const ReduceScatterFusedOpSignaler& rs_signaler) {
+    TT_FATAL(rs_signaler.initialized_reduce_scatter, "ReduceScatterFusedOpSignaler not initialized.");
+
+    this->rs_receiver_cores_noc = rs_signaler.fused_op_receiver_cores_noc;
+    this->num_rs_cores_to_signal = rs_signaler.num_fused_op_cores_to_signal;
+    this->rs_signal_semaphore = rs_signaler.fused_op_receiver_signal_semaphores[0];
+    this->signaler_mode = rs_signaler.fused_op_signaler_mode;
+
+    initialized_rs = true;
+}
+
+void MinimalMatmulToRSSignaler::init_matmul_workers(
+    Program& program,
+    const IDevice* device,
+    const CoreRangeSet& matmul_workers,
+    const std::vector<CoreCoord>& matmul_worker_cores) {
+    // Create the sync semaphore for the matmul workers
+    if (matmul_worker_cores.size() > 1) {
+        this->matmul_worker_sync_semaphore = CreateSemaphore(program, matmul_workers, 0);
+    }
+
+    // Get the noc coords for the matmul workers
+    this->matmul_worker_cores_noc.clear();
+    this->matmul_worker_cores.clear();
+    for (const auto& core : matmul_worker_cores) {
+        this->matmul_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
+        this->matmul_worker_cores.push_back(core);
+    }
+
+    initialized_matmul = true;
+}
+
+void MinimalMatmulToRSSignaler::push_matmul_rt_args(
+    std::vector<uint32_t>& out_rt_args, uint32_t num_workers_to_sync, uint32_t curr_worker_index) {
+    TT_FATAL(initialized_rs && initialized_matmul, "MinimalMatmulToRSSignaler not initialized fully.");
+
+    // Push args in OpSignaler format (see worker_sync_utils.hpp OpSignaler constructor)
+    // num_workers_to_sync
+    out_rt_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
+
+    // curr_worker_index (0 = master)
+    out_rt_args.push_back(static_cast<uint32_t>(curr_worker_index));
+
+    // worker_sync_sem_addr
+    out_rt_args.push_back(static_cast<uint32_t>(this->matmul_worker_sync_semaphore));
+
+    // workers_noc_coords [x1, y1, x2, y2, ...] - first one is master
+    for (const auto& core : this->matmul_worker_cores_noc) {
+        out_rt_args.push_back(static_cast<uint32_t>(core.x));
+        out_rt_args.push_back(static_cast<uint32_t>(core.y));
+    }
+
+    // num_fused_op_cores_to_signal
+    out_rt_args.push_back(static_cast<uint32_t>(this->num_rs_cores_to_signal));
+
+    // signal_op_cores_noc_coords [x1, y1, x2, y2, ...]
+    for (const auto& core : this->rs_receiver_cores_noc) {
+        out_rt_args.push_back(static_cast<uint32_t>(core.x));
+        out_rt_args.push_back(static_cast<uint32_t>(core.y));
+    }
+
+    // signal_op_sem_addr
+    out_rt_args.push_back(static_cast<uint32_t>(this->rs_signal_semaphore));
+
+    // mcast_signal_op_cores (0 = SINGLE, 1 = MULTI)
+    out_rt_args.push_back(static_cast<uint32_t>(this->signaler_mode == FusedOpSignalerMode::SINGLE ? 0 : 1));
+}
+
 }  // namespace ttnn::experimental::ccl

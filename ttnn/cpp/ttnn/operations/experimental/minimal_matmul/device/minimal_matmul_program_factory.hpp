@@ -44,8 +44,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     const std::optional<const MinimalMatmulConfig>& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler);
-
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
+    std::optional<ttnn::experimental::ccl::MinimalMatmulToRSSignaler>& rs_signaler);
 
 // Shared implementation for variable number of output tensors (used by both minimal_matmul and minimal_matmul_split)
 // Unlike minimal_matmul_factory_helper, this function takes a number of output tensors as an argument (N_chunks) and
@@ -60,6 +60,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const std::vector<Tensor>& output_tensors,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
+    std::optional<ttnn::experimental::ccl::MinimalMatmulToRSSignaler>& rs_signaler,
     uint32_t N_chunks);
 
 // Common helper for override_runtime_arguments - used by both minimal_matmul and minimal_matmul_split
