@@ -4,6 +4,7 @@
 import ttnn
 
 from models.demos.gpt_oss.config import MeshConfig
+from models.tt_transformers.tt.common import get_rot_transformation_mat
 
 from .config import AttentionConfig, ProgramConfig
 from .decode import decode_forward
@@ -100,6 +101,29 @@ class Attention:
             config.head_dim,
         )
 
+        # Pre-create fused transformation matrix for fused QK RoPE (avoids host writes during trace)
+        self.fused_transformation_mat = None
+        if config.max_local_batch_size <= 32:
+            doubled_batch = config.max_local_batch_size * 2
+            grid_size = mesh_device.compute_with_storage_grid_size()
+            doubled_batch_grid = ttnn.num_cores_to_corerangeset(doubled_batch, grid_size, row_wise=True)
+            trans_mat_torch = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(1, 1, doubled_batch, 1)
+            trans_mat_mem_config = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+                core_grid=doubled_batch_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.fused_transformation_mat = ttnn.from_torch(
+                trans_mat_torch,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=trans_mat_mem_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
         # Store references for backward compatibility
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_heads
@@ -149,6 +173,7 @@ class Attention:
                 mesh_device=self.mesh_device,
                 program_config=self.program_config,
                 transformation_mat=transformation_mat,
+                fused_transformation_mat=self.fused_transformation_mat,
                 kv_mem_cfg=self.kv_mem_cfg,
                 position_idx=position_idx,
                 page_table=page_table,
