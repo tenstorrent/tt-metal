@@ -150,12 +150,14 @@ blackhole:
   - tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py
 
-  # Fused tests (same simulator limitations as wormhole)
+  # Fused tests (same simulator limitations as wormhole + BH-specific)
   - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
   - tests/ttnn/unit_tests/operations/fused/test_softmax.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
+  - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
 
   # Transformers tests (same as wormhole + BH-specific)
   - tests/ttnn/unit_tests/operations/transformers/test_transformer.py
