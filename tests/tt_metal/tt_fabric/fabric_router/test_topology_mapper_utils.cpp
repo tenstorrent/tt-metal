@@ -893,6 +893,163 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_MultiHostMultiMesh) 
             }
         }
     }
+
+    // Verify exit node information is tracked
+    // Mesh 0 should have exit nodes that connect to mesh 1
+    ASSERT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0})) << "Mesh 0 should have exit node graph";
+    const auto& exit_graph_m0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_nodes_m0 = exit_graph_m0.get_nodes();
+    EXPECT_GT(exit_nodes_m0.size(), 0u) << "Mesh 0 should have at least one exit node";
+
+    // Mesh 1 should have exit nodes that connect to mesh 0
+    ASSERT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1})) << "Mesh 1 should have exit node graph";
+    const auto& exit_graph_m1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
+    const auto& exit_nodes_m1 = exit_graph_m1.get_nodes();
+    EXPECT_GT(exit_nodes_m1.size(), 0u) << "Mesh 1 should have at least one exit node";
+
+    // Verify that exit nodes have connections (the neighbors are ASICs in other meshes)
+    for (const auto& exit_asic : exit_nodes_m0) {
+        const auto& neighbors = exit_graph_m0.get_neighbors(exit_asic);
+        EXPECT_GT(neighbors.size(), 0u) << "Exit node " << exit_asic.get()
+                                        << " in mesh 0 should have at least one connection";
+        // Verify connection counts are represented by duplicate entries
+        // (multiple channels between same pair appear as multiple entries)
+    }
+
+    for (const auto& exit_asic : exit_nodes_m1) {
+        const auto& neighbors = exit_graph_m1.get_neighbors(exit_asic);
+        EXPECT_GT(neighbors.size(), 0u) << "Exit node " << exit_asic.get()
+                                        << " in mesh 1 should have at least one connection";
+        // Verify connection counts are represented by duplicate entries
+        // (multiple channels between same pair appear as multiple entries)
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_ExitNodeTracking) {
+    // Test that exit node information is correctly tracked in the physical multi-mesh graph
+    // Exit nodes are ASICs that connect to ASICs in other meshes
+    //
+    // Physical Topology (2 meshes):
+    //   Mesh 0: ASICs 100, 101, 102 (3 ASICs)
+    //   Mesh 1: ASICs 200, 201, 202 (3 ASICs)
+    //   Inter-mesh connections:
+    //     - ASIC 100 (mesh 0) <-> ASIC 200 (mesh 1)
+    //     - ASIC 101 (mesh 0) <-> ASIC 201 (mesh 1)
+    //     - ASIC 102 (mesh 0) <-> ASIC 202 (mesh 1)
+    //
+    // Expected exit nodes:
+    //   Mesh 0: ASICs 100, 101, 102 (all connect to mesh 1)
+    //   Mesh 1: ASICs 200, 201, 202 (all connect to mesh 0)
+
+    using namespace ::tt::tt_fabric;
+
+    const MeshId physical_mesh0{0};
+    const MeshId physical_mesh1{1};
+
+    // Create a simple physical system descriptor manually
+    // We'll create adjacency maps directly since we can't easily create a PSD from scratch
+    PhysicalAdjacencyMap physical_adj_m0;
+    PhysicalAdjacencyMap physical_adj_m1;
+
+    // Define ASIC IDs first
+    tt::tt_metal::AsicID asic100{100};
+    tt::tt_metal::AsicID asic101{101};
+    tt::tt_metal::AsicID asic102{102};
+    tt::tt_metal::AsicID asic200{200};
+    tt::tt_metal::AsicID asic201{201};
+    tt::tt_metal::AsicID asic202{202};
+
+    // Mesh 0: ASICs 100, 101, 102 with internal connections
+    physical_adj_m0[asic100] = {asic101, asic200};           // Internal + intermesh
+    physical_adj_m0[asic101] = {asic100, asic102, asic201};  // Internal + intermesh
+    physical_adj_m0[asic102] = {asic101, asic202};           // Internal + intermesh
+
+    // Mesh 1: ASICs 200, 201, 202 with internal connections
+    physical_adj_m1[asic200] = {asic201, asic100};           // Internal + intermesh
+    physical_adj_m1[asic201] = {asic200, asic202, asic101};  // Internal + intermesh
+    physical_adj_m1[asic202] = {asic201, asic102};           // Internal + intermesh
+
+    // Create physical multi-mesh graph manually
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh0] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m0);
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[physical_mesh1] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj_m1);
+
+    // Create mesh-level adjacency map
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj_map;
+    physical_mesh_level_adj_map[physical_mesh0] = {physical_mesh1};
+    physical_mesh_level_adj_map[physical_mesh1] = {physical_mesh0};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj_map);
+
+    // Manually populate exit node information (simulating what build_physical_multi_mesh_adjacency_graph does)
+    // Mesh 0 exit nodes - each connection has 1 channel
+    AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap exit_adj_m0;
+    exit_adj_m0[asic100] = {asic200};  // 1 channel
+    exit_adj_m0[asic101] = {asic201};  // 1 channel
+    exit_adj_m0[asic102] = {asic202};  // 1 channel
+    physical_multi_mesh_graph.mesh_exit_node_graphs_[physical_mesh0] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(exit_adj_m0);
+
+    // Mesh 1 exit nodes - each connection has 1 channel
+    AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap exit_adj_m1;
+    exit_adj_m1[asic200] = {asic100};  // 1 channel
+    exit_adj_m1[asic201] = {asic101};  // 1 channel
+    exit_adj_m1[asic202] = {asic102};  // 1 channel
+    physical_multi_mesh_graph.mesh_exit_node_graphs_[physical_mesh1] =
+        AdjacencyGraph<tt::tt_metal::AsicID>(exit_adj_m1);
+
+    // Verify exit node information for mesh 0
+    ASSERT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(physical_mesh0))
+        << "Mesh 0 should have exit node graph";
+    const auto& exit_graph_0 = physical_multi_mesh_graph.mesh_exit_node_graphs_.at(physical_mesh0);
+    const auto& exit_nodes_0 = exit_graph_0.get_nodes();
+    EXPECT_EQ(exit_nodes_0.size(), 3u) << "Mesh 0 should have 3 exit nodes";
+    EXPECT_TRUE(std::find(exit_nodes_0.begin(), exit_nodes_0.end(), asic100) != exit_nodes_0.end())
+        << "ASIC 100 should be an exit node";
+    EXPECT_TRUE(std::find(exit_nodes_0.begin(), exit_nodes_0.end(), asic101) != exit_nodes_0.end())
+        << "ASIC 101 should be an exit node";
+    EXPECT_TRUE(std::find(exit_nodes_0.begin(), exit_nodes_0.end(), asic102) != exit_nodes_0.end())
+        << "ASIC 102 should be an exit node";
+
+    // Verify each exit node connects to the correct ASIC
+    const auto& neighbors_100 = exit_graph_0.get_neighbors(asic100);
+    EXPECT_EQ(neighbors_100.size(), 1u) << "ASIC 100 should have 1 connection";
+    EXPECT_EQ(neighbors_100[0], asic200) << "ASIC 100 should connect to ASIC 200";
+
+    const auto& neighbors_101 = exit_graph_0.get_neighbors(asic101);
+    EXPECT_EQ(neighbors_101.size(), 1u) << "ASIC 101 should have 1 connection";
+    EXPECT_EQ(neighbors_101[0], asic201) << "ASIC 101 should connect to ASIC 201";
+
+    const auto& neighbors_102 = exit_graph_0.get_neighbors(asic102);
+    EXPECT_EQ(neighbors_102.size(), 1u) << "ASIC 102 should have 1 connection";
+    EXPECT_EQ(neighbors_102[0], asic202) << "ASIC 102 should connect to ASIC 202";
+
+    // Verify exit node information for mesh 1
+    ASSERT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(physical_mesh1))
+        << "Mesh 1 should have exit node graph";
+    const auto& exit_graph_1 = physical_multi_mesh_graph.mesh_exit_node_graphs_.at(physical_mesh1);
+    const auto& exit_nodes_1 = exit_graph_1.get_nodes();
+    EXPECT_EQ(exit_nodes_1.size(), 3u) << "Mesh 1 should have 3 exit nodes";
+    EXPECT_TRUE(std::find(exit_nodes_1.begin(), exit_nodes_1.end(), asic200) != exit_nodes_1.end())
+        << "ASIC 200 should be an exit node";
+    EXPECT_TRUE(std::find(exit_nodes_1.begin(), exit_nodes_1.end(), asic201) != exit_nodes_1.end())
+        << "ASIC 201 should be an exit node";
+    EXPECT_TRUE(std::find(exit_nodes_1.begin(), exit_nodes_1.end(), asic202) != exit_nodes_1.end())
+        << "ASIC 202 should be an exit node";
+
+    // Verify each exit node connects to the correct ASIC
+    const auto& neighbors_200 = exit_graph_1.get_neighbors(asic200);
+    EXPECT_EQ(neighbors_200.size(), 1u) << "ASIC 200 should have 1 connection";
+    EXPECT_EQ(neighbors_200[0], asic100) << "ASIC 200 should connect to ASIC 100";
+
+    const auto& neighbors_201 = exit_graph_1.get_neighbors(asic201);
+    EXPECT_EQ(neighbors_201.size(), 1u) << "ASIC 201 should have 1 connection";
+    EXPECT_EQ(neighbors_201[0], asic101) << "ASIC 201 should connect to ASIC 101";
+
+    const auto& neighbors_202 = exit_graph_1.get_neighbors(asic202);
+    EXPECT_EQ(neighbors_202.size(), 1u) << "ASIC 202 should have 1 connection";
+    EXPECT_EQ(neighbors_202[0], asic102) << "ASIC 202 should connect to ASIC 102";
 }
 
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
@@ -1843,6 +2000,912 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_IncompatibleTopology_4_Fa
                                       result.error_message.find("Failed mesh pairs") != std::string::npos;
     EXPECT_TRUE(mentions_retry_or_attempts)
         << "Error message should indicate multiple mapping attempts were made. Error: " << result.error_message;
+}
+
+TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_SingleMesh) {
+    // Test converting a flat adjacency graph with a single mesh
+    using namespace ::tt::tt_fabric;
+
+    PhysicalAdjacencyMap flat_adj;
+    tt::tt_metal::AsicID asic0{100};
+    tt::tt_metal::AsicID asic1{101};
+    tt::tt_metal::AsicID asic2{102};
+
+    // Create a simple chain: asic0 -> asic1 -> asic2
+    flat_adj[asic0] = {asic1};
+    flat_adj[asic1] = {asic0, asic2};
+    flat_adj[asic2] = {asic1};
+
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+
+    // Assign all ASICs to mesh 0
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}][asic0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic2] = MeshHostRankId{0};
+
+    // Convert to multi-mesh graph
+    const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify we have 1 mesh
+    EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u) << "Should have 1 mesh";
+    EXPECT_TRUE(multi_mesh_graph.mesh_adjacency_graphs_.contains(MeshId{0})) << "Should have mesh 0";
+
+    // Verify mesh adjacency graph
+    const auto& mesh_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{0});
+    const auto& nodes = mesh_graph.get_nodes();
+    EXPECT_EQ(nodes.size(), 3u) << "Mesh 0 should have 3 ASICs";
+
+    // Verify connectivity
+    const auto& neighbors0 = mesh_graph.get_neighbors(asic0);
+    EXPECT_EQ(neighbors0.size(), 1u) << "ASIC 0 should have 1 neighbor";
+    EXPECT_EQ(neighbors0[0], asic1) << "ASIC 0 should connect to ASIC 1";
+
+    const auto& neighbors1 = mesh_graph.get_neighbors(asic1);
+    EXPECT_EQ(neighbors1.size(), 2u) << "ASIC 1 should have 2 neighbors";
+    EXPECT_TRUE(std::find(neighbors1.begin(), neighbors1.end(), asic0) != neighbors1.end())
+        << "ASIC 1 should connect to ASIC 0";
+    EXPECT_TRUE(std::find(neighbors1.begin(), neighbors1.end(), asic2) != neighbors1.end())
+        << "ASIC 1 should connect to ASIC 2";
+
+    // Verify no intermesh connections
+    EXPECT_EQ(multi_mesh_graph.mesh_level_graph_.get_nodes().size(), 1u) << "Should have 1 mesh in mesh-level graph";
+    const auto& mesh_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_TRUE(mesh_neighbors.empty()) << "Mesh 0 should have no intermesh connections";
+
+    // Verify no exit nodes
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
+        << "Should have exit node graph for mesh 0";
+    const auto& exit_nodes = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0}).get_nodes();
+    EXPECT_TRUE(exit_nodes.empty()) << "Mesh 0 should have no exit nodes";
+}
+
+TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_TwoMeshes) {
+    // Test converting a flat adjacency graph with two meshes and intermesh connections
+    using namespace ::tt::tt_fabric;
+
+    PhysicalAdjacencyMap flat_adj;
+
+    // Define all ASICs first
+    // Mesh 0: ASICs 100-103 (4 ASICs in a chain)
+    tt::tt_metal::AsicID asic0_0{100};
+    tt::tt_metal::AsicID asic0_1{101};
+    tt::tt_metal::AsicID asic0_2{102};
+    tt::tt_metal::AsicID asic0_3{103};
+    // Mesh 1: ASICs 200-203 (4 ASICs in a chain)
+    tt::tt_metal::AsicID asic1_0{200};
+    tt::tt_metal::AsicID asic1_1{201};
+    tt::tt_metal::AsicID asic1_2{202};
+    tt::tt_metal::AsicID asic1_3{203};
+
+    // Mesh 0: chain 100-101-102-103, with exit node 100 connecting to mesh 1
+    flat_adj[asic0_0] = {asic0_1, asic1_0};  // Intra-mesh + intermesh
+    flat_adj[asic0_1] = {asic0_0, asic0_2};  // Intra-mesh only
+    flat_adj[asic0_2] = {asic0_1, asic0_3};  // Intra-mesh only
+    flat_adj[asic0_3] = {asic0_2};           // Intra-mesh only
+
+    // Mesh 1: chain 200-201-202-203, with exit node 200 connecting to mesh 0
+    flat_adj[asic1_0] = {asic1_1, asic0_0};  // Intra-mesh + intermesh
+    flat_adj[asic1_1] = {asic1_0, asic1_2};  // Intra-mesh only
+    flat_adj[asic1_2] = {asic1_1, asic1_3};  // Intra-mesh only
+    flat_adj[asic1_3] = {asic1_2};           // Intra-mesh only
+
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+
+    // Assign ASICs to meshes
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}][asic0_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_2] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_3] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_2] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_3] = MeshHostRankId{0};
+
+    // Convert to multi-mesh graph
+    const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify we have 2 meshes
+    EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u) << "Should have 2 meshes";
+    EXPECT_TRUE(multi_mesh_graph.mesh_adjacency_graphs_.contains(MeshId{0})) << "Should have mesh 0";
+    EXPECT_TRUE(multi_mesh_graph.mesh_adjacency_graphs_.contains(MeshId{1})) << "Should have mesh 1";
+
+    // Verify mesh 0 adjacency graph (only intra-mesh connections)
+    const auto& mesh0_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{0});
+    const auto& mesh0_nodes = mesh0_graph.get_nodes();
+    EXPECT_EQ(mesh0_nodes.size(), 4u) << "Mesh 0 should have 4 ASICs";
+    const auto& neighbors0_0 = mesh0_graph.get_neighbors(asic0_0);
+    EXPECT_EQ(neighbors0_0.size(), 1u) << "ASIC 0_0 should have 1 intra-mesh neighbor";
+    EXPECT_EQ(neighbors0_0[0], asic0_1) << "ASIC 0_0 should connect to ASIC 0_1";
+
+    // Verify mesh 1 adjacency graph (only intra-mesh connections)
+    const auto& mesh1_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{1});
+    const auto& mesh1_nodes = mesh1_graph.get_nodes();
+    EXPECT_EQ(mesh1_nodes.size(), 4u) << "Mesh 1 should have 4 ASICs";
+    const auto& neighbors1_0 = mesh1_graph.get_neighbors(asic1_0);
+    EXPECT_EQ(neighbors1_0.size(), 1u) << "ASIC 1_0 should have 1 intra-mesh neighbor";
+    EXPECT_EQ(neighbors1_0[0], asic1_1) << "ASIC 1_0 should connect to ASIC 1_1";
+
+    // Verify intermesh connections
+    const auto& mesh_level_nodes = multi_mesh_graph.mesh_level_graph_.get_nodes();
+    EXPECT_EQ(mesh_level_nodes.size(), 2u) << "Should have 2 meshes in mesh-level graph";
+    const auto& mesh0_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_EQ(mesh0_neighbors.size(), 1u) << "Mesh 0 should have 1 intermesh neighbor";
+    EXPECT_EQ(mesh0_neighbors[0], MeshId{1}) << "Mesh 0 should connect to mesh 1";
+
+    const auto& mesh1_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{1});
+    EXPECT_EQ(mesh1_neighbors.size(), 1u) << "Mesh 1 should have 1 intermesh neighbor";
+    EXPECT_EQ(mesh1_neighbors[0], MeshId{0}) << "Mesh 1 should connect to mesh 0";
+
+    // Verify exit nodes
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
+        << "Should have exit node graph for mesh 0";
+    const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_nodes0 = exit_graph0.get_nodes();
+    EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node";
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_0) != exit_nodes0.end())
+        << "ASIC 0_0 should be an exit node";
+    const auto& exit_neighbors0 = exit_graph0.get_neighbors(asic0_0);
+    EXPECT_EQ(exit_neighbors0.size(), 1u) << "Exit node should have 1 connection";
+    EXPECT_EQ(exit_neighbors0[0], asic1_0) << "Exit node should connect to ASIC 1_0";
+
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
+        << "Should have exit node graph for mesh 1";
+    const auto& exit_graph1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
+    const auto& exit_nodes1 = exit_graph1.get_nodes();
+    EXPECT_EQ(exit_nodes1.size(), 1u) << "Mesh 1 should have 1 exit node";
+    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), asic1_0) != exit_nodes1.end())
+        << "ASIC 1_0 should be an exit node";
+    const auto& exit_neighbors1 = exit_graph1.get_neighbors(asic1_0);
+    EXPECT_EQ(exit_neighbors1.size(), 1u) << "Exit node should have 1 connection";
+    EXPECT_EQ(exit_neighbors1[0], asic0_0) << "Exit node should connect to ASIC 0_0";
+}
+
+TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_MultipleChannels) {
+    // Test that multiple channels between the same pair are preserved
+    using namespace ::tt::tt_fabric;
+
+    PhysicalAdjacencyMap flat_adj;
+
+    // Mesh 0: ASICs 100-102 (3 ASICs in a chain)
+    tt::tt_metal::AsicID asic0_0{100};
+    tt::tt_metal::AsicID asic0_1{101};
+    tt::tt_metal::AsicID asic0_2{102};
+    // Mesh 1: ASICs 200-202 (3 ASICs in a chain)
+    tt::tt_metal::AsicID asic1_0{200};
+    tt::tt_metal::AsicID asic1_1{201};
+    tt::tt_metal::AsicID asic1_2{202};
+
+    // Build adjacency map
+    // Mesh 0: chain 100-101-102, with exit node 100 connecting to mesh 1
+    flat_adj[asic0_0] = {asic0_1, asic1_0, asic1_0, asic1_0};  // Internal + 3 exit channels
+    flat_adj[asic0_1] = {asic0_0, asic0_2};                    // Internal only
+    flat_adj[asic0_2] = {asic0_1};                             // Internal only
+
+    // Mesh 1: chain 200-201-202, with exit node 200 connecting to mesh 0
+    flat_adj[asic1_0] = {asic1_1, asic0_0, asic0_0, asic0_0};  // Internal + 3 exit channels
+    flat_adj[asic1_1] = {asic1_0, asic1_2};                    // Internal only
+    flat_adj[asic1_2] = {asic1_1};                             // Internal only
+
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+
+    // Assign to different meshes
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}][asic0_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_2] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_2] = MeshHostRankId{0};
+
+    // Convert to multi-mesh graph
+    const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify mesh 0 has correct internal structure (3 ASICs)
+    const auto& mesh0_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{0});
+    const auto& mesh0_nodes = mesh0_graph.get_nodes();
+    EXPECT_EQ(mesh0_nodes.size(), 3u) << "Mesh 0 should have 3 ASICs";
+
+    // Verify exit node graph preserves multiple channels
+    const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_nodes0 = exit_graph0.get_nodes();
+    EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node";
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_0) != exit_nodes0.end())
+        << "ASIC 0_0 should be an exit node";
+
+    const auto& exit_neighbors0 = exit_graph0.get_neighbors(asic0_0);
+    EXPECT_EQ(exit_neighbors0.size(), 3u) << "Exit node should have 3 connections (3 channels)";
+    EXPECT_EQ(exit_neighbors0[0], asic1_0) << "All connections should be to ASIC 1_0";
+    EXPECT_EQ(exit_neighbors0[1], asic1_0);
+    EXPECT_EQ(exit_neighbors0[2], asic1_0);
+
+    // Verify mesh 1 has correct internal structure (3 ASICs)
+    const auto& mesh1_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{1});
+    const auto& mesh1_nodes = mesh1_graph.get_nodes();
+    EXPECT_EQ(mesh1_nodes.size(), 3u) << "Mesh 1 should have 3 ASICs";
+
+    const auto& exit_graph1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
+    const auto& exit_nodes1 = exit_graph1.get_nodes();
+    EXPECT_EQ(exit_nodes1.size(), 1u) << "Mesh 1 should have 1 exit node";
+    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), asic1_0) != exit_nodes1.end())
+        << "ASIC 1_0 should be an exit node";
+
+    const auto& exit_neighbors1 = exit_graph1.get_neighbors(asic1_0);
+    EXPECT_EQ(exit_neighbors1.size(), 3u) << "Exit node should have 3 connections (3 channels)";
+    EXPECT_EQ(exit_neighbors1[0], asic0_0) << "All connections should be to ASIC 0_0";
+    EXPECT_EQ(exit_neighbors1[1], asic0_0);
+    EXPECT_EQ(exit_neighbors1[2], asic0_0);
+}
+
+TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_ThreeMeshes) {
+    // Test converting with three meshes in a line topology
+    using namespace ::tt::tt_fabric;
+
+    PhysicalAdjacencyMap flat_adj;
+
+    // Define all ASICs first
+    tt::tt_metal::AsicID asic0{100};
+    tt::tt_metal::AsicID asic1{200};
+    tt::tt_metal::AsicID asic2{300};
+
+    // Mesh 0: ASIC 100
+    flat_adj[asic0] = {asic1};
+
+    // Mesh 1: ASIC 200
+    flat_adj[asic1] = {asic0, asic2};
+
+    // Mesh 2: ASIC 300
+    flat_adj[asic2] = {asic1};
+
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+
+    // Assign to meshes
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}][asic0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{2}][asic2] = MeshHostRankId{0};
+
+    // Convert to multi-mesh graph
+    const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify we have 3 meshes
+    EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u) << "Should have 3 meshes";
+
+    // Verify mesh-level graph: 0-1-2 line
+    const auto& mesh0_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_EQ(mesh0_neighbors.size(), 1u) << "Mesh 0 should have 1 neighbor";
+    EXPECT_EQ(mesh0_neighbors[0], MeshId{1}) << "Mesh 0 should connect to mesh 1";
+
+    const auto& mesh1_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{1});
+    EXPECT_EQ(mesh1_neighbors.size(), 2u) << "Mesh 1 should have 2 neighbors";
+    EXPECT_TRUE(std::find(mesh1_neighbors.begin(), mesh1_neighbors.end(), MeshId{0}) != mesh1_neighbors.end())
+        << "Mesh 1 should connect to mesh 0";
+    EXPECT_TRUE(std::find(mesh1_neighbors.begin(), mesh1_neighbors.end(), MeshId{2}) != mesh1_neighbors.end())
+        << "Mesh 1 should connect to mesh 2";
+
+    const auto& mesh2_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{2});
+    EXPECT_EQ(mesh2_neighbors.size(), 1u) << "Mesh 2 should have 1 neighbor";
+    EXPECT_EQ(mesh2_neighbors[0], MeshId{1}) << "Mesh 2 should connect to mesh 1";
+
+    // Verify exit nodes
+    EXPECT_EQ(multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0}).get_nodes().size(), 1u)
+        << "Mesh 0 should have 1 exit node";
+    EXPECT_EQ(multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1}).get_nodes().size(), 1u)
+        << "Mesh 1 should have 1 exit node";
+    EXPECT_EQ(multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{2}).get_nodes().size(), 1u)
+        << "Mesh 2 should have 1 exit node";
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_DisconnectedMeshes) {
+    // Test with multiple meshes that have no intermesh connections
+    using namespace ::tt::tt_fabric;
+
+    PhysicalAdjacencyMap flat_adj;
+
+    // Mesh 0: ASICs 100-104 (5 ASICs in a chain)
+    tt::tt_metal::AsicID asic0_0{100};
+    tt::tt_metal::AsicID asic0_1{101};
+    tt::tt_metal::AsicID asic0_2{102};
+    tt::tt_metal::AsicID asic0_3{103};
+    tt::tt_metal::AsicID asic0_4{104};
+    flat_adj[asic0_0] = {asic0_1};
+    flat_adj[asic0_1] = {asic0_0, asic0_2};
+    flat_adj[asic0_2] = {asic0_1, asic0_3};
+    flat_adj[asic0_3] = {asic0_2, asic0_4};
+    flat_adj[asic0_4] = {asic0_3};
+
+    // Mesh 1: ASICs 200-203 (4 ASICs in a chain)
+    tt::tt_metal::AsicID asic1_0{200};
+    tt::tt_metal::AsicID asic1_1{201};
+    tt::tt_metal::AsicID asic1_2{202};
+    tt::tt_metal::AsicID asic1_3{203};
+    flat_adj[asic1_0] = {asic1_1};
+    flat_adj[asic1_1] = {asic1_0, asic1_2};
+    flat_adj[asic1_2] = {asic1_1, asic1_3};
+    flat_adj[asic1_3] = {asic1_2};
+
+    // Mesh 2: ASICs 300-301 (2 ASICs connected)
+    tt::tt_metal::AsicID asic2_0{300};
+    tt::tt_metal::AsicID asic2_1{301};
+    flat_adj[asic2_0] = {asic2_1};
+    flat_adj[asic2_1] = {asic2_0};
+
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+
+    // Assign to different meshes
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}][asic0_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_2] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_3] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_4] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_2] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_3] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{2}][asic2_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{2}][asic2_1] = MeshHostRankId{0};
+
+    // Convert to multi-mesh graph
+    const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify we have 3 meshes
+    EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u) << "Should have 3 meshes";
+
+    // Verify mesh 0 has correct internal structure (5 ASICs)
+    const auto& mesh0_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{0});
+    const auto& mesh0_nodes = mesh0_graph.get_nodes();
+    EXPECT_EQ(mesh0_nodes.size(), 5u) << "Mesh 0 should have 5 ASICs";
+
+    // Verify mesh 1 has correct internal structure (4 ASICs)
+    const auto& mesh1_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{1});
+    const auto& mesh1_nodes = mesh1_graph.get_nodes();
+    EXPECT_EQ(mesh1_nodes.size(), 4u) << "Mesh 1 should have 4 ASICs";
+
+    // Verify mesh 2 has correct internal structure (2 ASICs)
+    const auto& mesh2_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{2});
+    const auto& mesh2_nodes = mesh2_graph.get_nodes();
+    EXPECT_EQ(mesh2_nodes.size(), 2u) << "Mesh 2 should have 2 ASICs";
+
+    // Verify no intermesh connections
+    const auto& mesh0_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_TRUE(mesh0_neighbors.empty()) << "Mesh 0 should have no intermesh connections";
+
+    const auto& mesh1_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{1});
+    EXPECT_TRUE(mesh1_neighbors.empty()) << "Mesh 1 should have no intermesh connections";
+
+    const auto& mesh2_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{2});
+    EXPECT_TRUE(mesh2_neighbors.empty()) << "Mesh 2 should have no intermesh connections";
+
+    // Verify no exit nodes (all meshes are disconnected)
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
+        << "Should have exit node graph for mesh 0";
+    const auto& exit_nodes0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0}).get_nodes();
+    EXPECT_TRUE(exit_nodes0.empty()) << "Mesh 0 should have no exit nodes (disconnected)";
+
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
+        << "Should have exit node graph for mesh 1";
+    const auto& exit_nodes1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1}).get_nodes();
+    EXPECT_TRUE(exit_nodes1.empty()) << "Mesh 1 should have no exit nodes (disconnected)";
+
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{2}))
+        << "Should have exit node graph for mesh 2";
+    const auto& exit_nodes2 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{2}).get_nodes();
+    EXPECT_TRUE(exit_nodes2.empty()) << "Mesh 2 should have no exit nodes (disconnected)";
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_MultipleExitNodesPerMesh) {
+    // Test with multiple exit nodes in the same mesh connecting to different meshes
+    using namespace ::tt::tt_fabric;
+
+    PhysicalAdjacencyMap flat_adj;
+
+    // Define all ASICs first
+    // Mesh 0: ASICs 100-104 (5 ASICs in a chain)
+    tt::tt_metal::AsicID asic0_0{100};
+    tt::tt_metal::AsicID asic0_1{101};
+    tt::tt_metal::AsicID asic0_2{102};
+    tt::tt_metal::AsicID asic0_3{103};
+    tt::tt_metal::AsicID asic0_4{104};
+    // Mesh 1: ASICs 200-202 (3 ASICs in a chain)
+    tt::tt_metal::AsicID asic1_0{200};
+    tt::tt_metal::AsicID asic1_1{201};
+    tt::tt_metal::AsicID asic1_2{202};
+    // Mesh 2: ASICs 300-302 (3 ASICs in a chain)
+    tt::tt_metal::AsicID asic2_0{300};
+    tt::tt_metal::AsicID asic2_1{301};
+    tt::tt_metal::AsicID asic2_2{302};
+
+    // Build adjacency map
+    // Mesh 0: chain 100-101-102-103-104, with exit nodes 100 (to mesh 1) and 104 (to mesh 2)
+    flat_adj[asic0_0] = {asic0_1, asic1_0};  // Internal + exit to mesh 1
+    flat_adj[asic0_1] = {asic0_0, asic0_2};  // Internal only
+    flat_adj[asic0_2] = {asic0_1, asic0_3};  // Internal only
+    flat_adj[asic0_3] = {asic0_2, asic0_4};  // Internal only
+    flat_adj[asic0_4] = {asic0_3, asic2_0};  // Internal + exit to mesh 2
+
+    // Mesh 1: chain 200-201-202, with exit node 200 (to mesh 0)
+    flat_adj[asic1_0] = {asic1_1, asic0_0};  // Internal + exit to mesh 0
+    flat_adj[asic1_1] = {asic1_0, asic1_2};  // Internal only
+    flat_adj[asic1_2] = {asic1_1};           // Internal only
+
+    // Mesh 2: chain 300-301-302, with exit node 300 (to mesh 0)
+    flat_adj[asic2_0] = {asic2_1, asic0_4};  // Internal + exit to mesh 0
+    flat_adj[asic2_1] = {asic2_0, asic2_2};  // Internal only
+    flat_adj[asic2_2] = {asic2_1};           // Internal only
+
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+
+    // Assign to meshes
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}][asic0_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_2] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_3] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_4] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_2] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{2}][asic2_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{2}][asic2_1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{2}][asic2_2] = MeshHostRankId{0};
+
+    // Convert to multi-mesh graph
+    const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify mesh 0 has correct internal structure (5 ASICs in chain)
+    const auto& mesh0_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{0});
+    const auto& mesh0_nodes = mesh0_graph.get_nodes();
+    EXPECT_EQ(mesh0_nodes.size(), 5u) << "Mesh 0 should have 5 ASICs";
+
+    // Verify mesh 0 has 2 exit nodes
+    const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_nodes0 = exit_graph0.get_nodes();
+    EXPECT_EQ(exit_nodes0.size(), 2u) << "Mesh 0 should have 2 exit nodes";
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_0) != exit_nodes0.end())
+        << "ASIC 0_0 should be an exit node";
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_4) != exit_nodes0.end())
+        << "ASIC 0_4 should be an exit node";
+
+    // Verify exit node connections
+    const auto& neighbors0_0 = exit_graph0.get_neighbors(asic0_0);
+    EXPECT_EQ(neighbors0_0.size(), 1u) << "ASIC 0_0 should have 1 exit connection";
+    EXPECT_EQ(neighbors0_0[0], asic1_0) << "ASIC 0_0 should connect to ASIC 1_0";
+
+    const auto& neighbors0_4 = exit_graph0.get_neighbors(asic0_4);
+    EXPECT_EQ(neighbors0_4.size(), 1u) << "ASIC 0_4 should have 1 exit connection";
+    EXPECT_EQ(neighbors0_4[0], asic2_0) << "ASIC 0_4 should connect to ASIC 2_0";
+
+    // Verify mesh 1 has correct internal structure (3 ASICs in chain)
+    const auto& mesh1_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{1});
+    const auto& mesh1_nodes = mesh1_graph.get_nodes();
+    EXPECT_EQ(mesh1_nodes.size(), 3u) << "Mesh 1 should have 3 ASICs";
+
+    // Verify mesh 1 has 1 exit node
+    const auto& exit_graph1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
+    const auto& exit_nodes1 = exit_graph1.get_nodes();
+    EXPECT_EQ(exit_nodes1.size(), 1u) << "Mesh 1 should have 1 exit node";
+    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), asic1_0) != exit_nodes1.end())
+        << "ASIC 1_0 should be an exit node";
+
+    // Verify mesh 2 has correct internal structure (3 ASICs in chain)
+    const auto& mesh2_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{2});
+    const auto& mesh2_nodes = mesh2_graph.get_nodes();
+    EXPECT_EQ(mesh2_nodes.size(), 3u) << "Mesh 2 should have 3 ASICs";
+
+    // Verify mesh 2 has 1 exit node
+    const auto& exit_graph2 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{2});
+    const auto& exit_nodes2 = exit_graph2.get_nodes();
+    EXPECT_EQ(exit_nodes2.size(), 1u) << "Mesh 2 should have 1 exit node";
+    EXPECT_TRUE(std::find(exit_nodes2.begin(), exit_nodes2.end(), asic2_0) != exit_nodes2.end())
+        << "ASIC 2_0 should be an exit node";
+
+    // Verify mesh-level connectivity
+    const auto& mesh0_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_EQ(mesh0_neighbors.size(), 2u) << "Mesh 0 should connect to 2 meshes";
+    EXPECT_TRUE(std::find(mesh0_neighbors.begin(), mesh0_neighbors.end(), MeshId{1}) != mesh0_neighbors.end())
+        << "Mesh 0 should connect to mesh 1";
+    EXPECT_TRUE(std::find(mesh0_neighbors.begin(), mesh0_neighbors.end(), MeshId{2}) != mesh0_neighbors.end())
+        << "Mesh 0 should connect to mesh 2";
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_MeshWithOnlyExitNodes) {
+    // Test a mesh where all ASICs are exit nodes (no internal connections)
+    using namespace ::tt::tt_fabric;
+
+    PhysicalAdjacencyMap flat_adj;
+
+    // Define all ASICs first
+    // Mesh 0: ASICs 100-104 (5 ASICs, all are exit nodes, no internal connections)
+    tt::tt_metal::AsicID asic0_0{100};
+    tt::tt_metal::AsicID asic0_1{101};
+    tt::tt_metal::AsicID asic0_2{102};
+    tt::tt_metal::AsicID asic0_3{103};
+    tt::tt_metal::AsicID asic0_4{104};
+    // Mesh 1: ASICs 200-204 (5 ASICs in a chain)
+    tt::tt_metal::AsicID asic1_0{200};
+    tt::tt_metal::AsicID asic1_1{201};
+    tt::tt_metal::AsicID asic1_2{202};
+    tt::tt_metal::AsicID asic1_3{203};
+    tt::tt_metal::AsicID asic1_4{204};
+
+    // Build adjacency map
+    // Mesh 0: all ASICs only have exit connections (no internal connections)
+    flat_adj[asic0_0] = {asic1_0};  // Only exit connection
+    flat_adj[asic0_1] = {asic1_1};  // Only exit connection
+    flat_adj[asic0_2] = {asic1_2};  // Only exit connection
+    flat_adj[asic0_3] = {asic1_3};  // Only exit connection
+    flat_adj[asic0_4] = {asic1_4};  // Only exit connection
+
+    // Mesh 1: chain 200-201-202-203-204, with exit connections to mesh 0
+    flat_adj[asic1_0] = {asic1_1, asic0_0};           // Internal + exit
+    flat_adj[asic1_1] = {asic1_0, asic1_2, asic0_1};  // Internal + exit
+    flat_adj[asic1_2] = {asic1_1, asic1_3, asic0_2};  // Internal + exit
+    flat_adj[asic1_3] = {asic1_2, asic1_4, asic0_3};  // Internal + exit
+    flat_adj[asic1_4] = {asic1_3, asic0_4};           // Internal + exit
+
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+
+    // Assign to meshes
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}][asic0_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_2] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_3] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{0}][asic0_4] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_2] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_3] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1_4] = MeshHostRankId{0};
+
+    // Convert to multi-mesh graph
+    const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify mesh 0 has no internal connections
+    const auto& mesh0_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{0});
+    const auto& mesh0_nodes = mesh0_graph.get_nodes();
+    EXPECT_EQ(mesh0_nodes.size(), 5u) << "Mesh 0 should have 5 ASICs";
+    // All nodes should have no internal neighbors
+    for (const auto& node : mesh0_nodes) {
+        const auto& neighbors = mesh0_graph.get_neighbors(node);
+        EXPECT_TRUE(neighbors.empty()) << "ASIC " << node.get() << " in mesh 0 should have no internal neighbors";
+    }
+
+    // Verify mesh 0 has 5 exit nodes (all ASICs)
+    const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_nodes0 = exit_graph0.get_nodes();
+    EXPECT_EQ(exit_nodes0.size(), 5u) << "Mesh 0 should have 5 exit nodes (all ASICs)";
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_0) != exit_nodes0.end())
+        << "ASIC 0_0 should be an exit node";
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_1) != exit_nodes0.end())
+        << "ASIC 0_1 should be an exit node";
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_2) != exit_nodes0.end())
+        << "ASIC 0_2 should be an exit node";
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_3) != exit_nodes0.end())
+        << "ASIC 0_3 should be an exit node";
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_4) != exit_nodes0.end())
+        << "ASIC 0_4 should be an exit node";
+
+    // Verify exit node connections
+    EXPECT_EQ(exit_graph0.get_neighbors(asic0_0).size(), 1u) << "ASIC 0_0 should have 1 exit connection";
+    EXPECT_EQ(exit_graph0.get_neighbors(asic0_0)[0], asic1_0) << "ASIC 0_0 should connect to ASIC 1_0";
+    EXPECT_EQ(exit_graph0.get_neighbors(asic0_1).size(), 1u) << "ASIC 0_1 should have 1 exit connection";
+    EXPECT_EQ(exit_graph0.get_neighbors(asic0_1)[0], asic1_1) << "ASIC 0_1 should connect to ASIC 1_1";
+
+    // Verify mesh 1 has correct internal structure (5 ASICs in chain)
+    const auto& mesh1_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{1});
+    const auto& mesh1_nodes = mesh1_graph.get_nodes();
+    EXPECT_EQ(mesh1_nodes.size(), 5u) << "Mesh 1 should have 5 ASICs";
+
+    // Verify mesh 1 has 5 exit nodes (all ASICs have exit connections)
+    const auto& exit_graph1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
+    const auto& exit_nodes1 = exit_graph1.get_nodes();
+    EXPECT_EQ(exit_nodes1.size(), 5u) << "Mesh 1 should have 5 exit nodes";
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_EmptyGraph) {
+    // Test with empty graph
+    using namespace ::tt::tt_fabric;
+
+    PhysicalAdjacencyMap flat_adj;
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+
+    // Convert to multi-mesh graph
+    const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify empty result
+    EXPECT_TRUE(multi_mesh_graph.mesh_adjacency_graphs_.empty()) << "Should have no meshes";
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.empty()) << "Should have no exit node graphs";
+    EXPECT_TRUE(multi_mesh_graph.mesh_level_graph_.get_nodes().empty()) << "Should have no mesh-level nodes";
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_UnassignedASICs) {
+    // Test that ASICs not in any mesh assignment are skipped
+    using namespace ::tt::tt_fabric;
+
+    PhysicalAdjacencyMap flat_adj;
+
+    // ASIC 100 assigned to mesh 0
+    tt::tt_metal::AsicID asic0{100};
+    // ASIC 200 assigned to mesh 1
+    tt::tt_metal::AsicID asic1{200};
+    // ASIC 300 NOT assigned to any mesh
+    tt::tt_metal::AsicID unassigned{300};
+
+    flat_adj[asic0] = {asic1, unassigned};  // Connection to assigned + unassigned
+    flat_adj[asic1] = {asic0, unassigned};  // Connection to assigned + unassigned
+    flat_adj[unassigned] = {asic0, asic1};  // Unassigned ASIC with connections
+
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+
+    // Only assign asic0 and asic1, not unassigned
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}][asic0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1] = MeshHostRankId{0};
+
+    // Convert to multi-mesh graph
+    const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify unassigned ASIC is not in any mesh graph
+    const auto& mesh0_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{0});
+    const auto& mesh0_nodes = mesh0_graph.get_nodes();
+    EXPECT_EQ(mesh0_nodes.size(), 1u) << "Mesh 0 should have 1 ASIC";
+    EXPECT_TRUE(std::find(mesh0_nodes.begin(), mesh0_nodes.end(), asic0) != mesh0_nodes.end())
+        << "Mesh 0 should contain ASIC 0";
+    EXPECT_TRUE(std::find(mesh0_nodes.begin(), mesh0_nodes.end(), unassigned) == mesh0_nodes.end())
+        << "Mesh 0 should not contain unassigned ASIC";
+
+    // Verify connections to unassigned ASIC are ignored
+    const auto& neighbors0 = mesh0_graph.get_neighbors(asic0);
+    // Should only have connection to asic1 (intermesh), not to unassigned
+    EXPECT_EQ(neighbors0.size(), 0u) << "ASIC 0 should have no intra-mesh neighbors (asic1 is in different mesh)";
+
+    // Verify exit node graph - asic0 should connect to asic1 (intermesh)
+    const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_neighbors0 = exit_graph0.get_neighbors(asic0);
+    EXPECT_EQ(exit_neighbors0.size(), 1u) << "ASIC 0 should have 1 exit connection";
+    EXPECT_EQ(exit_neighbors0[0], asic1) << "ASIC 0 should connect to ASIC 1 (not unassigned)";
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_RingTopology) {
+    // Test with 4 meshes in a ring topology: 0-1-2-3-0
+    using namespace ::tt::tt_fabric;
+
+    PhysicalAdjacencyMap flat_adj;
+
+    tt::tt_metal::AsicID asic0{100};
+    tt::tt_metal::AsicID asic1{200};
+    tt::tt_metal::AsicID asic2{300};
+    tt::tt_metal::AsicID asic3{400};
+
+    // Ring: 0-1-2-3-0
+    flat_adj[asic0] = {asic3, asic1};  // Connect to mesh 3 and mesh 1
+    flat_adj[asic1] = {asic0, asic2};  // Connect to mesh 0 and mesh 2
+    flat_adj[asic2] = {asic1, asic3};  // Connect to mesh 1 and mesh 3
+    flat_adj[asic3] = {asic2, asic0};  // Connect to mesh 2 and mesh 0
+
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+
+    // Assign to meshes
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}][asic0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{2}][asic2] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{3}][asic3] = MeshHostRankId{0};
+
+    // Convert to multi-mesh graph
+    const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify ring topology in mesh-level graph
+    const auto& mesh0_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_EQ(mesh0_neighbors.size(), 2u) << "Mesh 0 should have 2 neighbors";
+    EXPECT_TRUE(std::find(mesh0_neighbors.begin(), mesh0_neighbors.end(), MeshId{1}) != mesh0_neighbors.end())
+        << "Mesh 0 should connect to mesh 1";
+    EXPECT_TRUE(std::find(mesh0_neighbors.begin(), mesh0_neighbors.end(), MeshId{3}) != mesh0_neighbors.end())
+        << "Mesh 0 should connect to mesh 3";
+
+    const auto& mesh1_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{1});
+    EXPECT_EQ(mesh1_neighbors.size(), 2u) << "Mesh 1 should have 2 neighbors";
+    EXPECT_TRUE(std::find(mesh1_neighbors.begin(), mesh1_neighbors.end(), MeshId{0}) != mesh1_neighbors.end())
+        << "Mesh 1 should connect to mesh 0";
+    EXPECT_TRUE(std::find(mesh1_neighbors.begin(), mesh1_neighbors.end(), MeshId{2}) != mesh1_neighbors.end())
+        << "Mesh 1 should connect to mesh 2";
+
+    const auto& mesh2_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{2});
+    EXPECT_EQ(mesh2_neighbors.size(), 2u) << "Mesh 2 should have 2 neighbors";
+    EXPECT_TRUE(std::find(mesh2_neighbors.begin(), mesh2_neighbors.end(), MeshId{1}) != mesh2_neighbors.end())
+        << "Mesh 2 should connect to mesh 1";
+    EXPECT_TRUE(std::find(mesh2_neighbors.begin(), mesh2_neighbors.end(), MeshId{3}) != mesh2_neighbors.end())
+        << "Mesh 2 should connect to mesh 3";
+
+    const auto& mesh3_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{3});
+    EXPECT_EQ(mesh3_neighbors.size(), 2u) << "Mesh 3 should have 2 neighbors";
+    EXPECT_TRUE(std::find(mesh3_neighbors.begin(), mesh3_neighbors.end(), MeshId{2}) != mesh3_neighbors.end())
+        << "Mesh 3 should connect to mesh 2";
+    EXPECT_TRUE(std::find(mesh3_neighbors.begin(), mesh3_neighbors.end(), MeshId{0}) != mesh3_neighbors.end())
+        << "Mesh 3 should connect to mesh 0";
+
+    // Verify all meshes have exit nodes
+    for (MeshId mesh_id{0}; mesh_id.get() < 4; mesh_id = MeshId{mesh_id.get() + 1}) {
+        const auto& exit_nodes = multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes();
+        EXPECT_EQ(exit_nodes.size(), 1u) << "Mesh " << mesh_id.get() << " should have 1 exit node";
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_StarTopology) {
+    // Test with star topology: mesh 0 in center, meshes 1,2,3 connected to it
+    using namespace ::tt::tt_fabric;
+
+    PhysicalAdjacencyMap flat_adj;
+
+    tt::tt_metal::AsicID asic0{100};  // Center
+    tt::tt_metal::AsicID asic1{200};
+    tt::tt_metal::AsicID asic2{300};
+    tt::tt_metal::AsicID asic3{400};
+
+    // Star: all connect to center (mesh 0)
+    flat_adj[asic0] = {asic1, asic2, asic3};  // Center connects to all
+    flat_adj[asic1] = {asic0};                // Leaf connects to center
+    flat_adj[asic2] = {asic0};                // Leaf connects to center
+    flat_adj[asic3] = {asic0};                // Leaf connects to center
+
+    // Convert to AdjacencyGraph
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+
+    // Assign to meshes
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[MeshId{0}][asic0] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{1}][asic1] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{2}][asic2] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[MeshId{3}][asic3] = MeshHostRankId{0};
+
+    // Convert to multi-mesh graph
+    const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Verify star topology in mesh-level graph
+    const auto& mesh0_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_EQ(mesh0_neighbors.size(), 3u) << "Mesh 0 (center) should have 3 neighbors";
+    EXPECT_TRUE(std::find(mesh0_neighbors.begin(), mesh0_neighbors.end(), MeshId{1}) != mesh0_neighbors.end())
+        << "Mesh 0 should connect to mesh 1";
+    EXPECT_TRUE(std::find(mesh0_neighbors.begin(), mesh0_neighbors.end(), MeshId{2}) != mesh0_neighbors.end())
+        << "Mesh 0 should connect to mesh 2";
+    EXPECT_TRUE(std::find(mesh0_neighbors.begin(), mesh0_neighbors.end(), MeshId{3}) != mesh0_neighbors.end())
+        << "Mesh 0 should connect to mesh 3";
+
+    // Verify leaf meshes only connect to center
+    for (MeshId mesh_id{1}; mesh_id.get() < 4; mesh_id = MeshId{mesh_id.get() + 1}) {
+        const auto& neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(mesh_id);
+        EXPECT_EQ(neighbors.size(), 1u) << "Mesh " << mesh_id.get() << " should have 1 neighbor";
+        EXPECT_EQ(neighbors[0], MeshId{0}) << "Mesh " << mesh_id.get() << " should connect to mesh 0";
+    }
+
+    // Verify mesh 0 has 1 exit node (the center ASIC)
+    const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
+    const auto& exit_nodes0 = exit_graph0.get_nodes();
+    EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node";
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0) != exit_nodes0.end())
+        << "ASIC 0 should be the exit node";
+
+    // Verify exit node has 3 connections
+    const auto& exit_neighbors0 = exit_graph0.get_neighbors(asic0);
+    EXPECT_EQ(exit_neighbors0.size(), 3u) << "Exit node should have 3 connections";
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_InterMeshConnectivity_2x2Subgraph) {
+    // Test that intermesh-connected logical nodes map to directly physically connected ASICs.
+    // This tests the critical scenario where if the intra-mesh mapping does not connect
+    // on the two ends that are connected by the intermesh, there will be a problem.
+    using namespace ::tt::tt_fabric;
+
+    constexpr size_t kFullMeshSize = 9;
+    constexpr size_t kAllocatedSize = 2;
+
+    // Create logical meshes: 2x2 grids
+    std::vector<FabricNodeId> logical_nodes_m0;
+    for (uint32_t i = 0; i < kAllocatedSize * kAllocatedSize; ++i) {
+        logical_nodes_m0.push_back(FabricNodeId(MeshId{0}, i));
+    }
+    auto logical_adj_m0 = build_grid_adjacency(logical_nodes_m0, kAllocatedSize, kAllocatedSize);
+
+    std::vector<FabricNodeId> logical_nodes_m1;
+    for (uint32_t i = 0; i < kAllocatedSize * kAllocatedSize; ++i) {
+        logical_nodes_m1.push_back(FabricNodeId(MeshId{1}, i));
+    }
+    auto logical_adj_m1 = build_grid_adjacency(logical_nodes_m1, kAllocatedSize, kAllocatedSize);
+
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[MeshId{0}] = AdjacencyGraph<FabricNodeId>(logical_adj_m0);
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[MeshId{1}] = AdjacencyGraph<FabricNodeId>(logical_adj_m1);
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj_map;
+    logical_mesh_level_adj_map[MeshId{0}] = {MeshId{1}};
+    logical_mesh_level_adj_map[MeshId{1}] = {MeshId{0}};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj_map);
+
+    // Create flattened physical mesh: two 9x9 grids with intermesh connections
+    PhysicalAdjacencyMap flat_physical_adj;
+    std::vector<tt::tt_metal::AsicID> physical_asics_m0 = make_asics(kFullMeshSize * kFullMeshSize, 100);
+    std::vector<tt::tt_metal::AsicID> physical_asics_m1 = make_asics(kFullMeshSize * kFullMeshSize, 200);
+
+    auto physical_adj_m0 = build_grid_adjacency(physical_asics_m0, kFullMeshSize, kFullMeshSize);
+    auto physical_adj_m1 = build_grid_adjacency(physical_asics_m1, kFullMeshSize, kFullMeshSize);
+
+    // Add intermesh connections: right edge of mesh 0 to left edge of mesh 1
+    for (size_t row = 0; row < kFullMeshSize; ++row) {
+        size_t mesh0_right_idx = row * kFullMeshSize + (kFullMeshSize - 1);
+        size_t mesh1_left_idx = row * kFullMeshSize;
+        physical_adj_m0[physical_asics_m0[mesh0_right_idx]].push_back(physical_asics_m1[mesh1_left_idx]);
+        physical_adj_m1[physical_asics_m1[mesh1_left_idx]].push_back(physical_asics_m0[mesh0_right_idx]);
+    }
+
+    // Combine into flat adjacency map
+    for (const auto& [asic, neighbors] : physical_adj_m0) {
+        flat_physical_adj[asic] = neighbors;
+    }
+    for (const auto& [asic, neighbors] : physical_adj_m1) {
+        flat_physical_adj[asic] = neighbors;
+    }
+
+    // Build hierarchical physical graph from flat graph
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& asic : physical_asics_m0) {
+        asic_id_to_mesh_rank[MeshId{0}][asic] = rank0_;
+    }
+    for (const auto& asic : physical_asics_m1) {
+        asic_id_to_mesh_rank[MeshId{1}][asic] = rank0_;
+    }
+
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
+    PhysicalMultiMeshGraph physical_multi_mesh_graph =
+        build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+
+    // Run mapping
+    TopologyMappingConfig config;
+    config.strict_mode = true;
+    config.disable_rank_bindings = true;
+    const auto result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+
+    ASSERT_TRUE(result.success) << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), kAllocatedSize * kAllocatedSize * 2);
+
+    // Group mappings by mesh
+    std::map<MeshId, std::map<FabricNodeId, tt::tt_metal::AsicID>> mappings_by_mesh;
+    for (const auto& [fabric_node, asic] : result.fabric_node_to_asic) {
+        mappings_by_mesh[fabric_node.mesh_id][fabric_node] = asic;
+    }
+
+    // CRITICAL CHECK: Intermesh-connected logical nodes must map to directly physically connected ASICs
+    for (const auto& [node0, asic0] : mappings_by_mesh.at(MeshId{0})) {
+        bool has_direct_connection = false;
+        for (const auto& [node1, asic1] : mappings_by_mesh.at(MeshId{1})) {
+            // Check if asic0 and asic1 are direct neighbors in the flat graph
+            const auto& neighbors0 = flat_graph.get_neighbors(asic0);
+            if (std::find(neighbors0.begin(), neighbors0.end(), asic1) != neighbors0.end()) {
+                has_direct_connection = true;
+                break;
+            }
+            const auto& neighbors1 = flat_graph.get_neighbors(asic1);
+            if (std::find(neighbors1.begin(), neighbors1.end(), asic0) != neighbors1.end()) {
+                has_direct_connection = true;
+                break;
+            }
+        }
+        ASSERT_TRUE(has_direct_connection)
+            << "ASIC " << asic0.get() << " from mesh 0 must be directly connected to at least one ASIC from mesh 1";
+    }
 }
 
 }  // namespace

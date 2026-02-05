@@ -309,71 +309,147 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     return logical_multi_mesh_graph;
 }
 
+namespace {
+/**
+ * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
+ *
+ * Private helper that builds a complete flat adjacency map including all connections
+ * (both intra-mesh and intermesh), with multiple entries per channel.
+ */
+PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    PhysicalAdjacencyMap flat_adj;
+
+    // Build a set of all ASIC IDs for quick lookup
+    std::unordered_set<tt::tt_metal::AsicID> all_asics;
+    for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
+        for (const auto& [asic_id, _] : asic_map) {
+            all_asics.insert(asic_id);
+        }
+    }
+
+    // Go through all connections in the physical system descriptor
+    for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
+        for (const auto& [src_asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(host_name)) {
+            // Skip ASICs not in any mesh assignment
+            if (!all_asics.contains(src_asic_id)) {
+                continue;
+            }
+
+            for (const auto& asic_connection : asic_connections) {
+                auto dst_asic_id = asic_connection.first;
+                // Skip ASICs not in any mesh assignment
+                if (!all_asics.contains(dst_asic_id)) {
+                    continue;
+                }
+
+                // Skip self-connections
+                if (src_asic_id == dst_asic_id) {
+                    continue;
+                }
+
+                const auto& eth_connections = asic_connection.second;
+                // Add each neighbor multiple times based on number of ethernet connections (channels)
+                for ([[maybe_unused]] const auto& eth_conn : eth_connections) {
+                    flat_adj[src_asic_id].push_back(dst_asic_id);
+                }
+            }
+        }
+    }
+
+    return flat_adj;
+}
+
+}  // namespace
+
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
-    // create a unordered map of mesh ids to asic ids
-    std::unordered_map<AsicID, MeshId> asic_id_to_mesh_id;
+    // Build flat adjacency map from PhysicalSystemDescriptor
+    PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor, asic_id_to_mesh_rank);
+
+    // Convert to AdjacencyGraph and use the common algorithm
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+    return build_hierarchical_from_flat_graph(flat_graph, asic_id_to_mesh_rank);
+}
+
+PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
+    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    // Build a map from AsicID to MeshId for quick lookup
+    std::unordered_map<tt::tt_metal::AsicID, MeshId> asic_id_to_mesh_id;
     for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
         for (const auto& [asic_id, _] : asic_map) {
             asic_id_to_mesh_id[asic_id] = mesh_id;
         }
     }
 
-    // Build physical adjacency graphs for each mesh
-    auto mesh_adjacency_graphs =
-        ::tt::tt_fabric::build_adjacency_graph_physical(physical_system_descriptor, asic_id_to_mesh_rank);
+    // Build per-mesh adjacency maps (only intra-mesh connections)
+    std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap> mesh_adjacency_maps;
+    std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap> exit_node_adjacency_maps;
+    AdjacencyGraph<MeshId>::AdjacencyMap mesh_level_adjacency_map;
 
-    // Build physical multi-mesh adjacency graph
-    PhysicalMultiMeshGraph physical_multi_mesh_graph;
-
-    // Store mesh adjacency graphs once (no duplication)
-    for (const auto& [mesh_id, adjacency_graph] : mesh_adjacency_graphs) {
-        physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] = adjacency_graph;
+    // Initialize adjacency maps for all meshes and ensure all ASICs are included
+    for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
+        mesh_adjacency_maps[mesh_id] = AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap();
+        exit_node_adjacency_maps[mesh_id] = AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap();
+        // Initialize all ASICs in this mesh with empty neighbor lists
+        for (const auto& [asic_id, _] : asic_map) {
+            mesh_adjacency_maps[mesh_id][asic_id] = std::vector<tt::tt_metal::AsicID>();
+        }
     }
 
-    // Build mesh-level adjacency map using MeshIds (lightweight)
-    ::tt::tt_fabric::AdjacencyGraph<MeshId>::AdjacencyMap mesh_level_adjacency_map;
+    // Process each ASIC in the flat adjacency graph
+    for (const auto& src_asic_id : flat_adjacency_graph.get_nodes()) {
+        auto src_mesh_id_it = asic_id_to_mesh_id.find(src_asic_id);
+        if (src_mesh_id_it == asic_id_to_mesh_id.end()) {
+            // ASIC not in any mesh assignment, skip it
+            continue;
+        }
+        MeshId src_mesh_id = src_mesh_id_it->second;
 
-    // NOTE: can't make assumption that all cross mesh connections are cross host yet, since we do implement some
-    // multi-mesh per host
+        // Process each neighbor
+        const auto& neighbors = flat_adjacency_graph.get_neighbors(src_asic_id);
+        for (const auto& dst_asic_id : neighbors) {
+            auto dst_mesh_id_it = asic_id_to_mesh_id.find(dst_asic_id);
+            if (dst_mesh_id_it == asic_id_to_mesh_id.end()) {
+                // Neighbor not in any mesh assignment, skip it
+                continue;
+            }
+            MeshId dst_mesh_id = dst_mesh_id_it->second;
 
-    // NOTE: asic_topology currently includes host to host connections, so
-    // the following host to host connection logic is commented out. Need to check if this is a bug
-    // Go through all host to host connections first
-    // for (const auto& [_, host_connections] : physical_system_descriptor.get_host_topology()) {
-    //    for (const auto& [_, exit_node_connections] : host_connections) {
-    //        for (const auto& connection : exit_node_connections) {
-    //            auto src_mesh_id = asic_id_to_mesh_id[connection.src_exit_node];
-    //            auto dst_mesh_id = asic_id_to_mesh_id[connection.dst_exit_node];
-    //            if (src_mesh_id != dst_mesh_id) {
-    //                mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
-    //            }
-    //        }
-    //    }
-    //}
-
-    // Go through all local connections
-    for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
-        for (const auto& [src_asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(host_name)) {
-            for (const auto& asic_connection : asic_connections) {
-                auto dst_asic_id = asic_connection.first;
-                auto src_mesh_id = asic_id_to_mesh_id[src_asic_id];
-                auto dst_mesh_id = asic_id_to_mesh_id[dst_asic_id];
-                if (src_mesh_id != dst_mesh_id) {
-                    const auto& eth_connections = asic_connection.second;
-                    // Add one entry per channel (EthConnection) in this edge
-                    for ([[maybe_unused]] const auto& eth_conn : eth_connections) {
-                        mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
-                    }
-                }
+            if (src_mesh_id == dst_mesh_id) {
+                // Intra-mesh connection: add to mesh adjacency map
+                mesh_adjacency_maps[src_mesh_id][src_asic_id].push_back(dst_asic_id);
+            } else {
+                // Intermesh connection: add to exit node graph and mesh-level graph
+                exit_node_adjacency_maps[src_mesh_id][src_asic_id].push_back(dst_asic_id);
+                mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
             }
         }
     }
 
-    // Ensure all meshes are represented as nodes in the mesh-level graph, even if they have no connections
-    // This is important for single-mesh scenarios where there are no inter-mesh connections
-    for (const auto& [mesh_id, _] : mesh_adjacency_graphs) {
+    // Build PhysicalMultiMeshGraph
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+
+    // Convert adjacency maps to graphs
+    for (const auto& [mesh_id, adj_map] : mesh_adjacency_maps) {
+        physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh_id] = AdjacencyGraph<tt::tt_metal::AsicID>(adj_map);
+    }
+
+    // Convert exit node adjacency maps to graphs
+    for (const auto& [mesh_id, adj_map] : exit_node_adjacency_maps) {
+        if (!adj_map.empty()) {
+            physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh_id] = AdjacencyGraph<tt::tt_metal::AsicID>(adj_map);
+        } else {
+            // Initialize empty graph for meshes with no exit nodes
+            physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh_id] = AdjacencyGraph<tt::tt_metal::AsicID>();
+        }
+    }
+
+    // Ensure all meshes are represented in mesh-level graph, even if they have no connections
+    for (const auto& [mesh_id, _] : asic_id_to_mesh_rank) {
         if (mesh_level_adjacency_map.find(mesh_id) == mesh_level_adjacency_map.end()) {
             mesh_level_adjacency_map[mesh_id] = std::vector<MeshId>();
         }

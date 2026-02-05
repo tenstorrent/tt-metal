@@ -225,23 +225,36 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
  */
 using PhysicalMeshNode = MeshId;
 
+// Note: Exit node information is now stored as an AdjacencyGraph in PhysicalMultiMeshGraph
+// No separate MeshExitNodeInfo struct needed - the adjacency graph itself represents exit nodes
+
 /**
  * @brief Multi-mesh adjacency graph for physical ASICs where meshes are nodes
  *
  * Efficient representation that avoids duplicating adjacency graphs:
  * - Stores each mesh's internal adjacency graph once in a map
  * - Stores mesh-level connectivity as lightweight AdjacencyGraph<MeshId>
+ * - Tracks exit node information as an adjacency graph (only exit nodes and their intermesh connections)
  *
  * This type represents a hierarchical adjacency graph:
  * - Top layer: adjacency graph of mesh IDs (which meshes connect to which meshes)
  * - Bottom layer: for each mesh, its internal adjacency graph (which ASICs connect within the mesh)
+ * - Exit nodes: adjacency graph containing only exit nodes (ASICs that connect to other meshes)
+ *   and their connections to ASICs in other meshes. Multiple connections are represented by
+ *   duplicate entries in the neighbor vector (matching AdjacencyGraph's channel representation).
  */
 struct PhysicalMultiMeshGraph {
-    // Map from MeshId to its interkj/nal adjacency graph (stored once, no duplication)
+    // Map from MeshId to its internal adjacency graph (stored once, no duplication)
     std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> mesh_adjacency_graphs_;
 
     // Mesh-level adjacency graph using MeshIds (lightweight, no graph duplication)
     AdjacencyGraph<MeshId> mesh_level_graph_;
+
+    // Map from MeshId to exit node adjacency graph for that mesh
+    // Contains only exit nodes (ASICs that connect to ASICs in other meshes) as nodes,
+    // and their connections to ASICs in other meshes as edges.
+    // Multiple channels between the same pair are represented by duplicate entries.
+    std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> mesh_exit_node_graphs_;
 };
 
 /**
@@ -261,6 +274,27 @@ struct PhysicalMultiMeshGraph {
  */
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+
+/**
+ * @brief Build hierarchical multi-mesh graph from a flattened adjacency graph
+ *
+ * Takes a flat adjacency graph (all ASICs and their neighbors) and splits it into a multi-mesh graph
+ * based on mesh assignments. This is useful when you have a pre-built adjacency graph and need to
+ * organize it by mesh.
+ *
+ * The function:
+ * - Splits the flat adjacency graph into per-mesh adjacency graphs (only intra-mesh connections)
+ * - Builds the mesh-level graph based on intermesh connections
+ * - Builds exit node graphs for each mesh
+ *
+ * @param flat_adjacency_graph Flat adjacency graph containing all ASICs and their neighbors
+ * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks.
+ *                              Used to determine which mesh each ASIC belongs to.
+ * @return PhysicalMultiMeshGraph containing mesh-level graph, per-mesh adjacency graphs, and exit node graphs
+ */
+PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
+    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
 /**
