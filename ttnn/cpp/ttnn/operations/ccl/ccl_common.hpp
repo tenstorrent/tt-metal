@@ -12,6 +12,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program.hpp>
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -756,5 +757,26 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     uint32_t num_targets_forward,
     uint32_t num_targets_backward,
     distributed::MeshDevice* mesh_device);
+
+
+void fabric_mux_connection_ct_args(
+    uint32_t num_workers_per_direction,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    std::vector<uint32_t>& worker_ct_args);
+
+void fabric_mux_connection_rt_args(
+    bool mux_connection_valid,
+    bool is_termination_master,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::Program& program,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> = std::nullopt);
+
 
 }  // namespace ttnn::ccl
