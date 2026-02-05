@@ -13,6 +13,12 @@
 
 #include <cstdint>
 
+#ifdef PROFILE_BUILD_MADD
+#define MADD_PROFILE(name) DeviceZoneScopedN(name)
+#else
+#define MADD_PROFILE(name)
+#endif
+
 // --- Sample code for DPRINT debugging ---
 //         DPRINT << "Processing page " << i << " / " << num_pages << ENDL();
 
@@ -35,12 +41,12 @@ void kernel_main() {
     constexpr uint32_t NUM_DST_REGS = 8;
 
     {
-        DeviceZoneScopedN("Long init");
+        MADD_PROFILE("Long init");
         binary_op_init_common(cb_srcA_index, cb_srcB_index, cb_out_index);
     }
 
     {
-        DeviceZoneScopedN("CB Waits");
+        MADD_PROFILE("CB Waits");
         // Wait for zero tile to be available (reader should generate it once)
         cb_wait_front(cb_zero_index, 1);
         cb_wait_front(cb_srcA_index, num_pages);
@@ -48,7 +54,7 @@ void kernel_main() {
         cb_wait_front(cb_srcC_index, num_pages);
     }
     {
-        DeviceZoneScopedN("CB reserve");
+        MADD_PROFILE("CB reserve");
         cb_reserve_back(cb_out_index, num_pages);
     }
 
@@ -58,19 +64,19 @@ void kernel_main() {
         uint32_t pages_this_iter = (outer_idx + NUM_DST_REGS <= num_pages) ? NUM_DST_REGS : (num_pages - outer_idx);
 
         {
-            DeviceZoneScopedN("Math waits");
+            MADD_PROFILE("Math waits");
             tile_regs_acquire();  // math core acquires dst registers
         }
 
         // Initialize mul once for the batch
         {
-            DeviceZoneScopedN("Mul init");
+            MADD_PROFILE("Mul init");
             mul_tiles_init(cb_srcA_index, cb_srcB_index);
         }
 
         // Inner loop for mul: process up to 8 pages into dst0..dst7
         {
-            DeviceZoneScopedN("Mul");
+            MADD_PROFILE("Mul");
             for (uint32_t inner_idx = 0; inner_idx < pages_this_iter; ++inner_idx) {
                 uint32_t page_idx = outer_idx + inner_idx;
                 uint32_t dst_reg = inner_idx;
@@ -80,14 +86,14 @@ void kernel_main() {
 
         // Initialize add once for the batch
         {
-            DeviceZoneScopedN("Add init");
+            MADD_PROFILE("Add init");
             binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                 cb_srcC_index);
         }
 
         // Inner loop for add: add C to each result in dst registers
         {
-            DeviceZoneScopedN("Add");
+            MADD_PROFILE("Add");
             for (uint32_t inner_idx = 0; inner_idx < pages_this_iter; ++inner_idx) {
                 uint32_t page_idx = outer_idx + inner_idx;
                 uint32_t dst_reg = inner_idx;
@@ -97,18 +103,18 @@ void kernel_main() {
         }
 
         {
-            DeviceZoneScopedN("DST Commit");
+            MADD_PROFILE("DST Commit");
             tile_regs_commit();
         }
 
         {
-            DeviceZoneScopedN("Packer waits");
+            MADD_PROFILE("Packer waits");
             tile_regs_wait();  // Called by packer
         }
 
         // Inner loop for packer: pack all dst registers to output
         {
-            DeviceZoneScopedN("Packer Works");
+            MADD_PROFILE("Packer Works");
             for (uint32_t inner_idx = 0; inner_idx < pages_this_iter; ++inner_idx) {
                 uint32_t page_idx = outer_idx + inner_idx;
                 uint32_t dst_reg = inner_idx;
@@ -119,11 +125,11 @@ void kernel_main() {
     }
 
     {
-        DeviceZoneScopedN("CB Push");
+        MADD_PROFILE("CB Push");
         cb_push_back(cb_out_index, num_pages);
     }
     {
-        DeviceZoneScopedN("CB Pop");
+        MADD_PROFILE("CB Pop");
         cb_pop_front(cb_srcA_index, num_pages);
         cb_pop_front(cb_srcB_index, num_pages);
         cb_pop_front(cb_srcC_index, num_pages);
