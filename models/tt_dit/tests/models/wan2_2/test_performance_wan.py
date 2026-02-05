@@ -103,6 +103,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
@@ -110,6 +111,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         "bh_2x4sp1tp0",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
+        "bh_quad_4x32_sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
