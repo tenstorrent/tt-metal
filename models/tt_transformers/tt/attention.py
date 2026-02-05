@@ -7,6 +7,7 @@ import math
 import torch
 
 import ttnn
+from models.common.auto_compose import to_torch_auto_compose
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import nearest_32
@@ -160,12 +161,6 @@ class Attention(LightweightModule):
             self.rotary_embedding_decode = self._mllama_rope_fused_qk_decode
         else:
             self.rotary_embedding_decode = self._mllama_rope_decode
-
-        # Select rotary embedding implementation for prefill
-        if self.use_hf_rope:
-            self.rotary_embedding_prefill = self._hf_rope_prefill
-        else:
-            self.rotary_embedding_prefill = self._mllama_rope_prefill
 
         wq_str = f"{layer_name}.wq"
         wk_str = f"{layer_name}.wk"
