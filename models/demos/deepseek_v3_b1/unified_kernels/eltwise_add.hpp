@@ -13,6 +13,7 @@
 #include <cstdint>
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api.h"
 using namespace ckernel;
 #endif
@@ -78,6 +79,7 @@ struct EltwiseAdd {
     // cb_in1_wait_tiles: number of tiles to wait for on cb_in1 (before offset update)
     // sender_index: per-core index (0-7) to compute offset into fused_add
     // slice_size_bytes: size of slice (896 * 2 = 1792 bytes for bfloat16)
+    // use_short_init: if true, skip binary_op_init_common and use add_tiles_init_short
     template <
         uint32_t cb_in0_,
         uint32_t cb_in1_,
@@ -87,7 +89,8 @@ struct EltwiseAdd {
         uint32_t cb_in0_wait_tiles_,
         uint32_t cb_in1_wait_tiles_,
         uint32_t sender_index_,
-        uint32_t slice_size_bytes_>
+        uint32_t slice_size_bytes_,
+        bool use_short_init_ = false>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -98,6 +101,7 @@ struct EltwiseAdd {
         static constexpr uint32_t cb_in1_wait_tiles = cb_in1_wait_tiles_;
         static constexpr uint32_t sender_index = sender_index_;
         static constexpr uint32_t slice_size_bytes = slice_size_bytes_;
+        static constexpr bool use_short_init = use_short_init_;
     };
 
     // ========================================================================
@@ -131,8 +135,15 @@ struct EltwiseAdd {
             // ================================================================
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
 
-            binary_op_init_common(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
-
+            if constexpr (CTArgs::use_short_init) {
+                // Short init - minimal set needed for CB reconfiguration
+                UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1)));
+                MATH((llk_math_hw_configure<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1)));
+                PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(CTArgs::cb_out)));
+                PACK((llk_pack_init(CTArgs::cb_out)));
+            } else {
+                binary_op_init_common(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+            }
             // Initialize eltwise binary for addition
             add_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
 
