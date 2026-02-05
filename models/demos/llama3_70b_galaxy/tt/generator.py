@@ -5,25 +5,95 @@
 import ttnn
 import torch
 from loguru import logger
-from typing import List
+from enum import Enum
+from typing import Dict, List, Literal, Optional, Union
+from pydantic import BaseModel, Field, validator
 from collections import defaultdict
-
-from llama_models.llama3.api.datatypes import (
-    InterleavedTextMedia,
-    StopReason,
-)
-
-from llama_models.llama3.reference_impl.generation import (
-    ChatPrediction,
-    CompletionPrediction,
-)
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     num_blocks_in_seq,
     get_block_size,
+    ImageMedia,
 )
+
+
 from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.generator import SamplingParams
+
+
+class Role(Enum):
+    system = "system"
+    user = "user"
+    assistant = "assistant"
+    ipython = "ipython"
+
+
+class StopReason(Enum):
+    end_of_turn = "end_of_turn"
+    end_of_message = "end_of_message"
+    out_of_tokens = "out_of_tokens"
+
+
+InterleavedTextMedia = Union[
+    str,
+    # Specific modalities can be placed here, but not generic attachments
+    # since models don't consume them in a generic way
+    ImageMedia,
+    List[Union[str, ImageMedia]],
+]
+
+
+class BuiltinTool(Enum):
+    brave_search = "brave_search"
+    wolfram_alpha = "wolfram_alpha"
+    photogen = "photogen"
+    code_interpreter = "code_interpreter"
+
+
+Primitive = Union[str, int, float, bool, None]
+RecursiveType = Union[Primitive, List[Primitive], Dict[str, Primitive]]
+
+
+class ToolCall(BaseModel):
+    call_id: str
+    tool_name: Union[BuiltinTool, str]
+    arguments: Dict[str, RecursiveType]
+
+    @validator("tool_name", pre=True)
+    @classmethod
+    def validate_field(cls, v):
+        if isinstance(v, str):
+            try:
+                return BuiltinTool(v)
+            except ValueError:
+                return v
+        return v
+
+
+class CompletionMessage(BaseModel):
+    role: Literal[Role.assistant.value] = Role.assistant.value
+    content: InterleavedTextMedia
+    stop_reason: StopReason
+    tool_calls: List[ToolCall] = Field(default_factory=list)
+
+
+class ChatPrediction:
+    generation: CompletionMessage
+    decoded_tokens: Optional[List[str]] = None
+    logprobs: Optional[List[List[float]]] = None
+
+
+class CompletionPrediction:
+    generation: str
+    decoded_tokens: Optional[List[str]] = None
+    logprobs: Optional[List[List[float]]] = None
+
+
+class CompletionMessage(BaseModel):
+    role: Literal[Role.assistant.value] = Role.assistant.value
+    content: InterleavedTextMedia
+    stop_reason: StopReason
+    tool_calls: List[ToolCall] = Field(default_factory=list)
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
