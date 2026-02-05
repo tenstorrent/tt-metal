@@ -9,11 +9,16 @@ from loguru import logger
 
 import ttnn
 from models.demos.multimodal.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
-from models.tt_transformers.tt.common import calculate_prefill_warmup_seq_lens, cap_seq_lens_to_max_prefill_chunk_size
+from models.tt_transformers.tt.common import (
+    calculate_prefill_warmup_seq_lens,
+    cap_seq_lens_to_max_prefill_chunk_size,
+    get_out_subblock_w,
+    num_to_core_range_set,
+)
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
-from models.tt_transformers.tt.common import get_out_subblock_w
+
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
@@ -108,10 +113,24 @@ class ModelArgs(TTModelArgs):
                 mcast_in0=True,
             )
 
+            # All gather matmuls currently only supported on T3K
+            # We need it sharded on num_cores = num_devices
+            self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    num_to_core_range_set(self.num_devices),
+                    [
+                        self.tile_padded_batch_rows,
+                        4096 // self.num_devices,
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
 
     @property
     def needed_padding(self):
-        return any(x in self.base_model_name.lower() for x in ["gemma-3-27b"]) 
+        return any(x in self.base_model_name.lower() for x in ["gemma-3-27b"])
 
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
