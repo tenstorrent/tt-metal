@@ -71,7 +71,7 @@ jobs:
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
-              "name": "[BH-LB] Llama-3.1-8B-Instruct v0 single-step",
+              "name": "[BH-LB] Llama-3.1-8B-Instruct v0 single-step sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -101,7 +101,7 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct v0 single-step",
+              "name": "[WH-GLX] Llama-3.3-70B-Instruct v0 single-step, sampling-tests",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -179,7 +179,7 @@ jobs:
               "co-owner-2-id": "U06F3ER8X9A"
             },
             {
-              "name": "[WH-T3K][v1] Llama-3.1-8B-Instruct",
+              "name": "[WH-T3K][v1] Llama-3.1-8B-Instruct sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 5,
@@ -228,7 +228,7 @@ jobs:
               "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
-              "name": "[BH-DB][v1] Llama-3.1-8B-Instruct",
+              "name": "[BH-DB][v1] Llama-3.1-8B-Instruct sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 5,
@@ -273,7 +273,7 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[WH-GLX][v1] Llama-3.3-70B-Instruct device sampling",
+              "name": "[WH-GLX][v1] Llama-3.3-70B-Instruct device sampling-tests",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
