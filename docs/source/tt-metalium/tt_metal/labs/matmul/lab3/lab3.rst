@@ -709,7 +709,7 @@ Recall the blocked pseudocode from Lab 2 for a single compute core:
 In Lab 3, this pseudocode remains valid for each **compute core**. The only change is how ``Ensure that A_slab(b) is in CB0`` and ``Ensure that B_slab(b) is in CB1`` are implemented across cores.
 
 Core roles and slabs on a 5x5 grid
-==================================
+----------------------------------
 
 We assume a rectangular grid of logical cores of size ``core_grid.x`` by ``core_grid.y``. For concreteness, we will discuss a ``5x5`` grid, but the same ideas apply to other grid sizes.
 
