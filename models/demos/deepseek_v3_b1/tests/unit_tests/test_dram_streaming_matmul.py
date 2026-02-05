@@ -463,10 +463,11 @@ def test_dram_streaming_matmul_indexed(device, k, n, m, num_experts, fused_activ
 @pytest.mark.parametrize("k, n", [(7168, 2048)])
 @pytest.mark.parametrize("m", [1])
 @pytest.mark.parametrize("fused_activation", [None])
-def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
-    """Test DRAM streaming matmul with fused element-wise multiply.
+@pytest.mark.parametrize("enable_scalar_mul", [True, False])
+def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation, enable_scalar_mul):
+    """Test DRAM streaming matmul with fused element-wise multiply and optional scalar multiply.
 
-    Tests: silu(input @ weights) * mul_tensor
+    Tests: silu(input @ weights) * mul_tensor [* scalar_tensor]
 
     All tensors use 1x32 tiles (to mimic matmul outputs).
     The kernel uses CB aliasing to view them as 16x16 tiles for the mul operation:
@@ -474,6 +475,7 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
     - mm_out viewed as 16x16: CB 7 (mul reads from here, aliased to CB 8)
     - mul_tensor: 1x256 per core = 8 tiles of 1x32, CB 6 views as 16x16
     - output_tensor: 1x256 per core = 8 tiles of 1x32, CB 4 views as 16x16
+    - scalar_tensor (optional): 1x16 tensor, CB 9 views as 16x16 tile
     """
     tile_h = m
     tile_w = 32
@@ -510,6 +512,14 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
     in0 = torch.randn(in0_shape).bfloat16().float()
     in1 = torch.randn(in1_shape).bfloat16().float()
     mul_tensor_torch = torch.randn([1, 1, m, n_padded]).bfloat16().float()
+
+    # Create scalar tensor if enabled (1x16 to match gate op output)
+    # BRISC will read index 0 and replicate to a 16x16 CB for the mul operation
+    if enable_scalar_mul:
+        scalar_value = 0.3  # Use a known scalar value for testing
+        scalar_tensor_torch = torch.full([1, 16], scalar_value, dtype=torch.bfloat16).float()
+    else:
+        scalar_tensor_torch = None
 
     # ========== Input A - REPLICATED on compute cores ==========
     in0_replicated = in0.repeat(1, 1, num_cores, 1)
@@ -582,14 +592,38 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
         tile=mm_out_tile,  # 1x32 tiles
     )
 
+    # ========== Scalar tensor - 1x16 tensor (matches gate op output) ==========
+    # BRISC will read scalar from this tensor and replicate to a 16x16 CB
+    if enable_scalar_mul:
+        # Replicate scalar tensor for each core (HEIGHT_SHARDED)
+        scalar_replicated = (
+            scalar_tensor_torch.unsqueeze(0).unsqueeze(0).repeat(1, 1, num_cores, 1)
+        )  # [1, 1, num_cores, 16]
+        scalar_shard_spec = ttnn.ShardSpec(compute_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
+        scalar_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, scalar_shard_spec
+        )
+        scalar_tile = ttnn.Tile([1, 16])
+        scalar_t = ttnn.from_torch(
+            scalar_replicated,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=scalar_memory_config,
+            tile=scalar_tile,
+        )
+    else:
+        scalar_t = None
+
     if k == 7168:
         subblock_k = k // tile_w // 4
     else:
         subblock_k = k // tile_w // 2
 
     # Run DRAM streaming matmul with mul
+    scalar_str = " + scalar" if enable_scalar_mul else ""
     logger.info(
-        f"Running DRAM streaming matmul + {fused_activation} + mul: m={m}, k={k}, n={n_padded}, num_cores={num_cores}"
+        f"Running DRAM streaming matmul + {fused_activation} + mul{scalar_str}: m={m}, k={k}, n={n_padded}, num_cores={num_cores}"
     )
     try:
         ttnn_result = DRAMStreamingMatmul.op(
@@ -603,13 +637,14 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
             fused_activation=fused_activation,
             mul_tensor=mul_t,
             mm_out_tensor=mm_out_t,
+            scalar_tensor=scalar_t,
         )
     except Exception as e:
-        logger.error(f"DRAM streaming matmul + {fused_activation} + mul failed: {e}")
+        logger.error(f"DRAM streaming matmul + {fused_activation} + mul{scalar_str} failed: {e}")
         pytest.skip(f"Operation failed (may need API adjustments): {e}")
 
     # Compute PyTorch reference
-    pt_out = DRAMStreamingMatmul.golden(in0, in1, fused_activation, mul_tensor_torch)
+    pt_out = DRAMStreamingMatmul.golden(in0, in1, fused_activation, mul_tensor_torch, scalar_tensor_torch)
 
     # Convert to torch for comparison
     tt_out = ttnn.to_torch(ttnn_result)
@@ -619,4 +654,4 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
     passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
     logger.info(output)
     assert passing, f"PCC check failed: {output}"
-    logger.info(f"DRAM streaming matmul + {fused_activation} + mul test passed!")
+    logger.info(f"DRAM streaming matmul + {fused_activation} + mul{scalar_str} test passed!")
