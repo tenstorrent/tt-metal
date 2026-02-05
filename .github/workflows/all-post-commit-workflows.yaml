@@ -28,6 +28,31 @@ on:
         type: boolean
         default: true
         description: "Force test everything regardless of file changes"
+      tests-to-run:
+        required: false
+        type: string
+        default: "ttnn-unit-tests,models-unit-tests,tt-train-cpp-unit-tests,run-profiler-regression,t3000-apc-fast-tests,ops-unit-tests"
+        description: "Comma-separated list of tests to run (default: all tests)"
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable watcher for long-running tests"
+      enable-lightweight-kernel-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable lightweight kernel asserts"
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
   workflow_dispatch:
     inputs:
       with-retries:
@@ -61,6 +86,31 @@ on:
         default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
+      tests-to-run:
+        required: false
+        type: string
+        default: "ttnn-unit-tests,models-unit-tests,tt-train-cpp-unit-tests,run-profiler-regression,t3000-apc-fast-tests,ops-unit-tests"
+        description: "Comma-separated list of tests to run (default: all tests)"
+      enable-watcher:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable watcher for long-running tests"
+      enable-lightweight-kernel-asserts:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable lightweight kernel asserts"
+      enable-llk-asserts:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable LLK asserts"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
   push:
     branches: ["main"]
 
@@ -89,6 +139,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
       enable-lto: ${{ inputs.enable-lto || false }}
+      ref: ${{ inputs.ref || github.sha }}
 
   find-changed-files:
     runs-on: ubuntu-latest
@@ -147,7 +198,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 }
         ]
-    if: ${{ needs.find-changed-files.outputs.test-ttnn == 'true' }}
+    if: ${{ contains(inputs.tests-to-run, 'ttnn-unit-tests') || needs.find-changed-files.outputs.test-ttnn == 'true' }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -165,7 +216,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+    if: ${{ contains(inputs.tests-to-run, 'models-unit-tests') || needs.find-changed-files.outputs.test-everything == 'true' }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -182,7 +233,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.find-changed-files.outputs.test-tt-train == 'true' }}
+    if: ${{ contains(inputs.tests-to-run, 'tt-train-cpp-unit-tests') || needs.find-changed-files.outputs.test-tt-train == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -200,7 +251,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+    if: ${{ contains(inputs.tests-to-run, 'run-profiler-regression') || needs.find-changed-files.outputs.test-everything == 'true' }}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     with:
@@ -211,7 +262,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   t3000-apc-fast-tests:
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+    if: ${{ contains(inputs.tests-to-run, 't3000-apc-fast-tests') || needs.find-changed-files.outputs.test-everything == 'true' }}
     needs: [build-artifact, find-changed-files]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
@@ -229,7 +280,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+    if: ${{ contains(inputs.tests-to-run, 'ops-unit-tests') || needs.find-changed-files.outputs.test-everything == 'true' }}
     uses: ./.github/workflows/ops-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}

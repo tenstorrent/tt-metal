@@ -68,247 +68,25 @@ jobs:
           TESTS=$(echo "$TESTS_JSON" | jq -r 'to_entries | map(select(.value == true) | .key) | join(",")')
           echo "tests_to_run=$TESTS" >> $GITHUB_OUTPUT
 
-  # NOTE: build-artifact.yaml handles platform parsing internally.
-  # Just pass platform and enable-lto inputs directly.
-  build-artifact:
+  run-all-post-commit-tests:
     needs: [parse-tests-json]
-    if: ${{ always() }}
-    uses: ./.github/workflows/build-artifact.yaml
+    uses: ./.github/workflows/all-post-commit-workflows.yaml
     permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+      pages: write
+      id-token: write
       packages: write
+      checks: write
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
-      tracy: true
-      platform: ${{ inputs.platform }}
-      skip-tt-train: false
-      ref: ${{ inputs.commit || github.sha }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-
-  sd-unit-tests:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'sd-unit-tests') }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/build-and-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      tests-to-run: ${{ needs.parse-tests-json.outputs.tests-to-run }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  fast-dispatch-unit-tests:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'fast-dispatch-unit-tests') }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  fabric-unit-tests:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'fabric-unit-tests') }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  ttnn-unit-tests:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'ttnn-unit-tests') }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/ttnn-post-commit.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  models-unit-tests:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'models-unit-tests') }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/models-post-commit.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      timeout: ${{ inputs.enable-watcher && 120 || 35 }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  cpp-unit-tests:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'cpp-unit-tests') }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/cpp-post-commit.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  tt-train-cpp-unit-tests:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'tt-train-cpp-unit-tests') }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/tt-train-post-commit.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  run-profiler-regression:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'run-profiler-regression') && !inputs.enable-watcher && !inputs.enable-lightweight-kernel-asserts }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/run-profiler-regression.yaml
-    with:
-      arch: ${{ matrix.test-group.arch}}
-      runner-label: ${{ matrix.test-group.runner-label}}
-      post_commit_only: true
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  t3000-apc-fast-tests:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 't3000-apc-fast-tests') }}
-    secrets: inherit
-    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  test-ttnn-tutorials:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'test-ttnn-tutorials') }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-        ]
-    uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  triage-tests:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'triage-tests') && !inputs.enable-watcher && !inputs.enable-lightweight-kernel-asserts }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { runner-label: N150 },
-          { runner-label: N300 },
-        ]
-    uses: ./.github/workflows/triage.yaml
-    with:
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      force-test-everything: false
+      ref: ${{ inputs.commit || github.sha }}
