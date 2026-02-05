@@ -679,13 +679,23 @@ class MasterConfigLoader:
         for config_args, source, machine_info, config_id, config_hash in configs:
             try:
                 config_dict = {}
-                tensors = []
+                positional_tensors = []
 
-                # Loop through all positional arguments (arg0, arg1, arg2, ...)
+                # Separate positional args (arg0, arg1, ...) from named kwargs
+                positional_args = {}
+                named_kwargs = {}
+
+                for key, value in config_args.items():
+                    if key.startswith("arg") and key[3:].isdigit():
+                        positional_args[key] = value
+                    else:
+                        named_kwargs[key] = value
+
+                # Process positional tensor arguments (arg0, arg1, arg2, ...)
+                # These become input_a_*, input_b_*, input_c_*, ...
                 arg_idx = 0
-                while f"arg{arg_idx}" in config_args:
-                    arg_name = f"arg{arg_idx}"
-                    arg_value = config_args[arg_name]
+                while f"arg{arg_idx}" in positional_args:
+                    arg_value = positional_args[f"arg{arg_idx}"]
 
                     # Try to extract as tensor
                     tensor_config = self._extract_tensor_config(arg_value)
@@ -702,7 +712,7 @@ class MasterConfigLoader:
                                 f"Memory config parsing returned None (likely mesh-sharded tensor without grid)"
                             )
 
-                        tensors.append(
+                        positional_tensors.append(
                             {
                                 "shape": tuple(tensor_config.shape),
                                 "dtype": parsed_dtype,
@@ -711,41 +721,53 @@ class MasterConfigLoader:
                             }
                         )
                     else:
-                        # Not a tensor - pass through as-is (parse special floats)
-                        config_dict[arg_name] = self.parse_special_float(arg_value)
+                        # Positional arg that's not a tensor (rare) - store with arg name
+                        config_dict[f"arg{arg_idx}"] = self.parse_special_float(arg_value)
 
                     arg_idx += 1
+
             except Exception as e:
                 # Add config_id context to error
                 print(f"⚠️ Skipping config_id={config_id} due to error: {e}")
                 continue
 
             # Skip if no tensors found
-            if not tensors:
+            if not positional_tensors:
                 continue
 
-            # Add tensor parameters with unified naming for all cases
-            # Always use input_shape for first tensor
-            config_dict["input_shape"] = tensors[0]["shape"]
-
-            # Add dtype, layout, and memory_config for all tensors using input_a_*, input_b_*, etc.
-            for i, tensor in enumerate(tensors):
+            # Add positional tensor parameters with consistent naming
+            # Always use input_a_, input_b_, input_c_ pattern (even for unary)
+            for i, tensor in enumerate(positional_tensors):
                 suffix = chr(97 + i)  # a, b, c, ...
+                config_dict[f"input_{suffix}_shape"] = tensor["shape"]
                 config_dict[f"input_{suffix}_dtype"] = tensor["dtype"]
                 config_dict[f"input_{suffix}_layout"] = tensor["layout"]
                 config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
 
-                # For additional tensors with different shapes, add shape_b, shape_c, etc.
-                # (Only when shape actually differs from the first tensor's shape)
-                if i > 0 and tensor["shape"] != tensors[0]["shape"]:
-                    config_dict[f"shape_{suffix}"] = tensor["shape"]
+            config_dict["output_memory_config"] = positional_tensors[0]["memory_config"]
 
-            config_dict["output_memory_config"] = tensors[0]["memory_config"]
+            # Process named keyword arguments
+            # Named tensor kwargs preserve their semantic names (e.g., weight, bias_tensor)
+            # Scalar/bool kwargs are passed as-is
+            for key, value in named_kwargs.items():
+                # Check if it's a tensor kwarg
+                tensor_config = self._extract_tensor_config(value)
+                if tensor_config:
+                    # Named tensor kwarg - use its name (e.g., weight_shape, bias_shape)
+                    parsed_dtype = self.parse_dtype(tensor_config.dtype)
+                    parsed_layout = self.parse_layout(tensor_config.layout)
+                    parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
 
-            # Add all keyword arguments (anything not arg0, arg1, arg2, ...)
-            # Parse special float values and enum types in keyword arguments
-            for key, value in config_args.items():
-                if not (key.startswith("arg") and key[3:].isdigit()):
+                    if parsed_mem_config is None:
+                        print(f"⚠️ Skipping named tensor kwarg '{key}' due to unparseable memory_config")
+                        continue
+
+                    config_dict[f"{key}_shape"] = tuple(tensor_config.shape)
+                    config_dict[f"{key}_dtype"] = parsed_dtype
+                    config_dict[f"{key}_layout"] = parsed_layout
+                    config_dict[f"{key}_memory_config"] = parsed_mem_config
+                else:
+                    # Scalar/bool kwarg - pass as-is (preserve name)
                     # Try enum parsing first, then float parsing
                     parsed_value = self.parse_enum_value(value)
                     if parsed_value == value:  # If enum parsing didn't change it, try float
