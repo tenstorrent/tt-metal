@@ -31,15 +31,16 @@ This document catalogs potential improvements identified through a comprehensive
 - **Impact:** Direct FP32 performance improvement across all untilize operations
 - **Complexity:** Medium - requires SFPU kernel work
 
-### 3. LayerNorm Circular Buffer Wait Optimization
-- **Priority:** HIGH
+### ~~3. LayerNorm Circular Buffer Wait Optimization~~ (NO MEASURABLE IMPACT)
+- **Priority:** ~~HIGH~~ → **SKIP**
+- **Status:** ⚠️ **TESTED - NO PERF GAIN** (2026-02-05)
 - **Files:**
   - `ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp` (line 265)
   - `ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp` (line 297)
 - **Problem:** Currently waits for full block size on beta CB when only first height token is needed
 - **TODO marker:** `// TODO: optimization - only wait on first ht`
-- **Impact:** Reduces unnecessary stalls in LayerNorm compute kernels
-- **Complexity:** LOW - potentially single-line fix per file
+- **Finding:** `cb_wait_front()` when data is already present returns immediately (just a counter check). The redundant calls add ~10-50ns overhead each, which is unmeasurable in ms-scale operations. Tested with NCHt up to 512 - baseline and "optimized" versions showed identical performance within noise.
+- **Recommendation:** Not worth a PR. The TODO comment is technically correct but the optimization is negligible on current hardware.
 
 ### 4. Untilize Block Size Tuning
 - **Priority:** HIGH
