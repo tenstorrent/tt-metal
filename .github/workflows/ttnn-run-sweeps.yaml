@@ -739,7 +739,7 @@ jobs:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
           # Reconstruct from ttnn_ops schema (V1 format for backward compatibility)
-          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct \
+          python tests/sweep_framework/load_ttnn_ops_data.py reconstruct \
             model_tracer/traced_operations/ttnn_operations_master_reconstructed.json \
             ttnn_ops
 
