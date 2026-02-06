@@ -55,6 +55,7 @@ using namespace tt::tt_metal;
 void sdpa_single_core(
     const uint32_t Sq_chunk_t,
     const uint32_t Sk_chunk_t,
+    const uint32_t Sv_chunk_t,
     const uint32_t head_dim_t,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up mesh command queue, workload, device range, and program. This is a single-core example using core {0,0}.
@@ -71,6 +72,7 @@ void sdpa_single_core(
 
     const uint32_t q_buffer_size = 2 * Sq_chunk_t * head_dim_t * single_tile_size;
     const uint32_t kt_buffer_size = 2 * Sk_chunk_t * head_dim_t * single_tile_size;
+    const uint32_t v_buffer_size = 2 * Sv_chunk_t * head_dim_t * single_tile_size;
     const uint32_t out_buffer_size = 2 * Sq_chunk_t * head_dim_t * single_tile_size;
 
     const uint32_t num_iter = 16;
@@ -81,10 +83,12 @@ void sdpa_single_core(
 
     distributed::ReplicatedBufferConfig buffer_config_Q{.size = q_buffer_size};
     distributed::ReplicatedBufferConfig buffer_config_KT{.size = kt_buffer_size};
+    distributed::ReplicatedBufferConfig buffer_config_V{.size = v_buffer_size};
     distributed::ReplicatedBufferConfig buffer_config_out{.size = out_buffer_size};
 
     auto q_dram_buffer = distributed::MeshBuffer::create(buffer_config_Q, dram_config, mesh_device.get());
     auto kt_dram_buffer = distributed::MeshBuffer::create(buffer_config_KT, dram_config, mesh_device.get());
+    auto v_dram_buffer = distributed::MeshBuffer::create(buffer_config_V, dram_config, mesh_device.get());
     auto out_dram_buffer = distributed::MeshBuffer::create(buffer_config_out, dram_config, mesh_device.get());
 
     const uint32_t q_cb_index = CBIndex::c_0;
@@ -104,6 +108,16 @@ void sdpa_single_core(
     auto cb_qkt_config = CircularBufferConfig(qkt_tiles * single_tile_size, {{qkt_cb_index, cb_data_format}})
                              .set_page_size(qkt_cb_index, single_tile_size);
     CreateCircularBuffer(program, core, cb_qkt_config);
+
+    const uint32_t v_cb_index = CBIndex::c_3;
+    CircularBufferConfig cb_v_config =
+        CircularBufferConfig(v_buffer_size, {{v_cb_index, cb_data_format}}).set_page_size(v_cb_index, single_tile_size);
+    tt_metal::CreateCircularBuffer(program, core, cb_v_config);
+
+    const uint32_t out_cb_index = CBIndex::c_4;
+    CircularBufferConfig cb_out_config = CircularBufferConfig(out_buffer_size, {{out_cb_index, cb_data_format}})
+                                             .set_page_size(out_cb_index, single_tile_size);
+    tt_metal::CreateCircularBuffer(program, core, cb_out_config);
 
     const uint32_t identity_scalar_cb_index = CBIndex::c_5;
     auto c_identity_scalar_config = CircularBufferConfig(single_tile_size, {{identity_scalar_cb_index, cb_data_format}})
@@ -146,11 +160,13 @@ void sdpa_single_core(
     std::vector<uint32_t> reader_compile_time_args = {
         Sq_chunk_t,
         Sk_chunk_t,
+        Sv_chunk_t,
         head_dim_t,
         num_iter,
     };
     TensorAccessorArgs(*q_dram_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*kt_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*v_dram_buffer).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "sdpa_single_core/kernels/dataflow/reader.cpp",
@@ -171,7 +187,7 @@ void sdpa_single_core(
     scale_union.f = 1.0f / std::sqrt(static_cast<float>(head_dim_t * TILE_WIDTH));
 
     std::vector<uint32_t> writer_compile_time_args = {
-        Sq_chunk_t, Sk_chunk_t, head_dim_t, num_iter, packed_identity_scalar};
+        Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, num_iter, packed_identity_scalar};
     TensorAccessorArgs(*out_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
@@ -183,7 +199,8 @@ void sdpa_single_core(
             .compile_args = writer_compile_time_args,
             .defines = defines});
 
-    std::vector<uint32_t> compute_compile_time_args = {Sq_chunk_t, Sk_chunk_t, head_dim_t, num_iter, scale_union.u};
+    std::vector<uint32_t> compute_compile_time_args = {
+        Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, num_iter, scale_union.u};
     tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "sdpa_single_core/kernels/compute/sdpa.cpp",
@@ -194,8 +211,9 @@ void sdpa_single_core(
     // Set kernel arguments
     uint32_t q_addr = q_dram_buffer->address();
     uint32_t kt_addr = kt_dram_buffer->address();
+    uint32_t v_addr = v_dram_buffer->address();
     uint32_t out_addr = out_dram_buffer->address();
-    tt_metal::SetRuntimeArgs(program, reader_id, core, {q_addr, kt_addr});
+    tt_metal::SetRuntimeArgs(program, reader_id, core, {q_addr, kt_addr, v_addr});
 
     tt_metal::SetRuntimeArgs(program, writer_id, core, {out_addr});
     // NOTE: Note that we never set the runtime arguments for the compute kernel. This is because everything needed has
@@ -223,6 +241,7 @@ int main() {
 
         constexpr uint32_t Sq_chunk_t = 8;
         constexpr uint32_t Sk_chunk_t = 16;
+        constexpr uint32_t Sv_chunk_t = 16;
         constexpr uint32_t head_dim_t = 128 / TILE_WIDTH;
 
         // // input vectors with various ranges of values
@@ -255,7 +274,7 @@ int main() {
         //std::vector<bfloat16> result_vec(M * N, 0);
 
         //sdpa_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, mesh_device);
-        sdpa_single_core(Sq_chunk_t, Sk_chunk_t, head_dim_t, mesh_device);
+        sdpa_single_core(Sq_chunk_t, Sk_chunk_t, Sv_chunk_t, head_dim_t, mesh_device);
 
         // // Reverse the tilization to get the result in the row-major format that the CPU expects
         // result_vec = untilize_nfaces(result_vec, M, N);
