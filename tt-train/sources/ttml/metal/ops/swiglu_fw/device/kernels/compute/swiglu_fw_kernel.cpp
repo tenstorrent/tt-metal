@@ -93,7 +93,7 @@ inline void compute_M_for_k() {
     }
     // Copy xw1_accum_reg to silu_xw1_reg
     copy_dest_values_init();
-    copy_dest_values(silu_xw1_reg, xw1_accum_reg);
+    copy_dest_values(xw1_accum_reg, silu_xw1_reg);
     // Apply sigmoid activation to compute sigmoid(XW1)
     sigmoid_tile_init();
     sigmoid_tile(silu_xw1_reg);

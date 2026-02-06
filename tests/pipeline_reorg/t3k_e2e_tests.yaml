@@ -11,14 +11,14 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: t3k_ccl_tests
-  cmd: pytest -n auto tests/nightly/t3000/ccl
+  cmd: pytest tests/nightly/t3000/ccl
   sku: wh_llmbox
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   timeout: 90
 
 - name: t3k_ccl_2d_tests
-  cmd: TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto pytest -n auto tests/nightly/t3000/2d_ccl
+  cmd: TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto pytest tests/nightly/t3000/2d_ccl
   sku: wh_llmbox
   owner_id: U013121KDH9 # Austin Ho
   team: scaleout
@@ -58,3 +58,10 @@
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
   timeout: 35
+
+- name: models_tttv2_llama31_8B_tests
+  cmd: MESH_DEVICE=T3K HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama--Llama-3.1-8B-Instruct pytest --tb=short models/common/demos/llama31_8B_demo.py
+  sku: wh_llmbox
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  timeout: 15

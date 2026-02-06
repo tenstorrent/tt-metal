@@ -5,13 +5,25 @@
 // Single kernel file, compiles correctly for all RISC cores
 // Each RISC has its own CTArgs struct with different compile-time arg layout
 //
-// Implements: RMSNorm + Mcast + Matmul + Gather + RMSNorm2 + Mcast2 + Matmul2
-// - NCRISC: RMSNorm reader + Mcast receiver (on matmul cores), Matmul reader + Gather sender (on matmul cores),
-//           RMSNorm2 reader + Mcast2 receiver (on matmul2 cores), Matmul2 reader (on matmul2 cores)
-// - BRISC: RMSNorm writer + Mcast sender (on input core), Matmul writer (on matmul cores), Gather receiver (on
-//          input core), Mcast2 sender (on input core), Matmul2 writer (on matmul2 cores)
+// Implements: CCL Broadcast + RMSNorm + Mcast + Matmul + Gather + RMSNorm2 + Mcast2 + Matmul2 + Matmul3 + RoPE +
+// GatherHeads
+// - NCRISC: CCL Broadcast Reader + RMSNorm reader + Mcast receiver (on matmul cores), Matmul reader + Gather sender (on
+// matmul cores),
+//           RMSNorm2 reader + Mcast2 receiver (on matmul2 cores), Matmul2 reader (on matmul2 cores),
+//           Matmul3 reader (on qnope cores), RoPE reader (on qrope cores), GatherHeads sender (on qnope/qrope cores)
+// - BRISC: CCL Broadcast Writer + RMSNorm writer + Mcast sender (on input core), Matmul writer (on matmul cores),
+// Gather receiver (on
+//          input core), Mcast2 sender (on input core), Matmul2 writer (on matmul2 cores),
+//          GatherHeads receiver (on sdpa input cores)
 // - TRISC: RMSNorm compute (on input core), Matmul compute (on matmul cores), RMSNorm2 compute (on input core),
-//          Matmul2 compute (on matmul2 cores)
+//          Matmul2 compute (on matmul2 cores), Matmul3 compute (on qnope cores), RoPE compute (on qrope cores)
+//
+// Matmul2 output uses interleaved Qnope/Qrope layout (with shuffled weights):
+// - Grid: 12 cols × 8 rows = 96 cores (P150)
+// - Qnope cores (cols 0-7): 64 cores, 1 head × 128 elements per core
+// - Qrope cores (cols 8-11): 32 cores, 2 heads × 64 elements per core
+// - Each row: [Qnope heads 0-7 (1024)] [Qrope heads 0-7 (512)] = 1536 elements
+// - Total: 8 rows × 1536 = 12288 elements
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
@@ -19,6 +31,9 @@
 #include "../../../unified_kernels/mcast.hpp"
 #include "../../../unified_kernels/matmul.hpp"
 #include "../../../unified_kernels/gather.hpp"
+#include "../../../unified_kernels/gather_heads.hpp"
+#include "../../../unified_kernels/rope.hpp"
+#include "../../../unified_kernels/broadcast.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
@@ -26,25 +41,57 @@ struct Core {
     static constexpr bool is_input_core = get_named_compile_time_arg_val("is_input_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
     static constexpr bool is_matmul2_core = get_named_compile_time_arg_val("is_matmul2_core") == 1;
+    // Qnope/Qrope core differentiation for interleaved Q head layout after matmul2
+    // Qnope cores: 64 cores (8x8 grid), each handles 1 head of 128 elements
+    // Qrope cores: 32 cores (4x8 grid), each handles 2 heads of 64 elements
+    static constexpr bool is_qnope_core = get_named_compile_time_arg_val("is_qnope_core") == 1;
+    static constexpr bool is_qrope_core = get_named_compile_time_arg_val("is_qrope_core") == 1;
+    // SDPA Input core: receives interleaved QNOPE/QROPE gather heads (4×2 grid = 8 cores)
+    static constexpr bool is_sdpa_input_core = get_named_compile_time_arg_val("is_sdpa_input_core") == 1;
+
+    // DKV Matmul core: 9x2 grid, each core handles 1 head of 32 dim
+    static constexpr bool is_dkv_matmul_core = get_named_compile_time_arg_val("is_dkv_matmul_core") == 1;
+    static constexpr bool is_kv_rmsnorm_core = get_named_compile_time_arg_val("is_kv_rmsnorm_core") == 1;
+    static constexpr bool is_knope_core = get_named_compile_time_arg_val("is_knope_core") == 1;
+    static constexpr bool is_krope_core = get_named_compile_time_arg_val("is_krope_core") == 1;
+    static constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
 };
 
 void kernel_main() {
 // ============================================================================
 // NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
 // Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
-// Runtime args: [scalar, scalar2]
+// Runtime args: []
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type aliases (required for Op templates)
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm_num_faces")>;
-    using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm2_num_faces")>;
+    // CCL Broadcast CTArgs type alias
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_core_noc_x"),
+        get_named_compile_time_arg_val("bcast_core_noc_y"),
+        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+        get_named_compile_time_arg_val("bcast_is_active_broadcaster")>;
+
+    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+    if constexpr (!Core::skip_ccl) {
+        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
+            get_common_arg_val<uint32_t>(0),  // tensor_address0
+            get_common_arg_val<uint32_t>(1),  // tile_id_start
+            get_common_arg_val<uint32_t>(2),  // tile_id_end
+        };
+    }
+
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
+    using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
 
     // RMSNorm reader runtime args
-    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{
-        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
-        get_arg_val<uint32_t>(0),  // scalar (1/sqrt(7168))
-    };
+    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
 
     // Mcast receiver args (from compile-time args, passed to op as runtime args)
     deepseek_b1_ops::Mcast::ReceiverArgs mcast_args{
@@ -56,6 +103,7 @@ void kernel_main() {
     // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
     using Matmul2CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+    using Matmul3CTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
 
     // Matmul reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
@@ -77,11 +125,8 @@ void kernel_main() {
             "rmsnorm2_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
     };
 
-    // RMSNorm2 reader args (uses same scalars_cb, different scalar value)
-    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm2_args{
-        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
-        get_arg_val<uint32_t>(1),  // scalar2 (1/sqrt(1536))
-    };
+    // RMSNorm2 reader args
+    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm2_args{};
 
     // Matmul2 reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs matmul2_args{};
@@ -94,11 +139,104 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast2_dst_num_pages"),
     };
 
+    // Matmul3 reader args (NCRISC is no-op)
+    deepseek_b1_ops::Matmul::ReaderArgs matmul3_args{};
+
+    // Qrope CTArgs type alias (NCRISC uses ReaderCTArgs)
+    using QRopeCTArgs =
+        deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
+
+    // Qrope reader args (NCRISC is no-op)
+    deepseek_b1_ops::Rope::ReaderArgs qrope_args{};
+
+    // Matmul CTArgs type alias (NCRISC uses ReaderCTArgs)
+    using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::ReaderCTArgs;
+
+    // Matmul reader args (NCRISC is no-op)
+    deepseek_b1_ops::Matmul::ReaderArgs dkv_matmul_args{};
+
+    // Gather sender args (from compile-time args, passed to op as runtime args)
+    deepseek_b1_ops::Gather::SenderArgs dkv_gather_args{
+        get_named_compile_time_arg_val("dkv_gather_dest_noc_x"),
+        get_named_compile_time_arg_val("dkv_gather_dest_noc_y"),
+        get_named_compile_time_arg_val("dkv_gather_data_size_bytes"),
+        get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("dkv_gather_src_cb"),
+        get_named_compile_time_arg_val("dkv_gather_src_num_pages"),
+        get_named_compile_time_arg_val("dkv_gather_sender_grid_start_x"),
+        get_named_compile_time_arg_val("dkv_gather_sender_grid_start_y"),
+        get_named_compile_time_arg_val("dkv_gather_sender_grid_end_x"),
+        get_named_compile_time_arg_val("dkv_gather_sender_grid_end_y"),
+        get_named_compile_time_arg_val("dkv_gather_row_major"),
+        get_write_ptr(get_named_compile_time_arg_val(
+            "kv_rmsnorm_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
+    };
+
+    using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
+    // kv cache rmsnorm reader args
+    deepseek_b1_ops::RMSNorm::ReaderArgs kv_rmsnorm_args{};
+
+    using K_RopeCTArgs = deepseek_b1_ops::Rope::
+        ReaderCTArgs<get_named_compile_time_arg_val("krope_Wt"), get_named_compile_time_arg_val("krope_Ht")>;
+    constexpr uint32_t krope_input_cb = get_named_compile_time_arg_val("krope_in_cb");
+    constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
+    constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
+    constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
+
+    // Reader args: CB indices for sharded input signaling
+    deepseek_b1_ops::Rope::ReaderArgs krope_args{
+        .in_cb = krope_input_cb,
+        .cos_cb = krope_cos_cb,
+        .sin_cb = krope_sin_cb,
+        .trans_mat_cb = krope_trans_mat_cb,
+    };
+
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
-// Named compile-time args: rmsnorm writer, mcast sender, matmul writer, gather receiver
+// Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
+
+    // CCL Broadcast CTArgs type alias
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
+        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
+        get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
+        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_core_noc_x"),
+        get_named_compile_time_arg_val("bcast_core_noc_y"),
+        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+        get_named_compile_time_arg_val("bcast_has_secondary_target"),
+        get_named_compile_time_arg_val("bcast_has_reverse_secondary_connection"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
+        get_named_compile_time_arg_val("bcast_range_hops_forward"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
+        get_named_compile_time_arg_val("bcast_range_hops_backward"),
+        get_named_compile_time_arg_val("bcast_using_persistent_buffers")>;
+
+    // CCL Broadcast writer runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+    if constexpr (!Core::skip_ccl) {
+        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
+            get_common_arg_val<uint32_t>(0),   // tensor_address0
+            get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
+            get_common_arg_val<uint32_t>(2),   // tile_id_start
+            get_common_arg_val<uint32_t>(3),   // tile_id_end
+            get_common_arg_val<uint32_t>(4),   // wait_output_semaphore
+            get_common_arg_val<uint32_t>(5),   // reset_global_semaphore
+            get_common_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
+            get_common_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
+            get_common_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
+            get_common_arg_val<uint32_t>(9),   // barrier_sem
+            get_common_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
+            get_common_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
+            get_common_arg_val<uint32_t>(12),  // ring_index
+            get_common_arg_val<uint32_t>(13),  // secondary_sync_sem
+            get_common_arg_val<uint32_t>(14),  // num_connections (computed from len(dst_nodes))
+        };
+    }
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
@@ -135,6 +273,7 @@ void kernel_main() {
     // Matmul CTArgs type alias (BRISC uses WriterCTArgs)
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     using Matmul2CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+    using Matmul3CTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
 
     // Matmul writer args (BRISC is no-op)
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
@@ -155,6 +294,15 @@ void kernel_main() {
     // Matmul2 CB indices and parameters from named compile-time args
     constexpr uint32_t matmul2_in0 = get_named_compile_time_arg_val("matmul2_in0");
 
+    // Matmul3 writer args (BRISC is no-op)
+    deepseek_b1_ops::Matmul::WriterArgs matmul3_args{};
+
+    // Qrope CTArgs type alias (BRISC uses WriterCTArgs, no-op)
+    using QRopeCTArgs = deepseek_b1_ops::Rope::WriterCTArgs;
+
+    // Qrope writer args (BRISC is no-op)
+    deepseek_b1_ops::Rope::WriterArgs qrope_args{};
+
     // Mcast2 sender args (for input core to mcast rmsnorm2 output to all matmul2 cores)
     // Uses same grid and semaphores as first mcast
     // Reads from rmsnorm2_output_cb, writes to matmul2_in0 with loopback
@@ -173,12 +321,66 @@ void kernel_main() {
         get_write_ptr(matmul2_in0),   // Write to matmul2_in0 (loopback)
     };
 
+    // BRISC: Sender args for QNOPE/QROPE cores
+    // Senders write directly to output CB (allocated on sender+receiver cores)
+    constexpr uint32_t receive_cb = get_named_compile_time_arg_val("receive_cb");
+    deepseek_b1_ops::GatherHeads::SenderArgs gather_heads_args{
+        0,  // sender_grid_start_x (logical 0)
+        0,  // sender_grid_start_y (logical 0)
+        get_named_compile_time_arg_val("qnope_data_size_bytes"),
+        get_named_compile_time_arg_val("qrope_data_size_bytes"),
+        get_named_compile_time_arg_val("head_stride_bytes"),
+        get_named_compile_time_arg_val("qnope_grid_cols"),
+        get_named_compile_time_arg_val("qnope_src_cb"),
+        get_named_compile_time_arg_val("qrope_src_cb"),
+        Core::is_qnope_core ? get_named_compile_time_arg_val("qnope_src_num_pages")
+                            : get_named_compile_time_arg_val("qrope_src_num_pages"),
+        get_named_compile_time_arg_val("receiver_semaphore_id"),
+        {
+            get_named_compile_time_arg_val("target_noc_coords_row0"),
+            get_named_compile_time_arg_val("target_noc_coords_row1"),
+            get_named_compile_time_arg_val("target_noc_coords_row2"),
+            get_named_compile_time_arg_val("target_noc_coords_row3"),
+            get_named_compile_time_arg_val("target_noc_coords_row4"),
+            get_named_compile_time_arg_val("target_noc_coords_row5"),
+            get_named_compile_time_arg_val("target_noc_coords_row6"),
+            get_named_compile_time_arg_val("target_noc_coords_row7"),
+        },
+        get_write_ptr(receive_cb),  // Write directly to output CB
+    };
+
+    // Matmul writer args (BRISC is no-op)
+    using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
+    deepseek_b1_ops::Matmul::WriterArgs dkv_matmul_args{};
+
+    // Gather receiver args (from compile-time args, passed to op as runtime args)
+    deepseek_b1_ops::Gather::ReceiverArgs dkv_gather_args{
+        get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
+        get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
+        get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_id"),
+        get_named_compile_time_arg_val("dkv_gather_dst_cb"),
+        get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
+    };
+
+    using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
+    deepseek_b1_ops::RMSNorm::WriterArgs kv_rmsnorm_args{};
+
+    using K_RopeCTArgs = deepseek_b1_ops::Rope::WriterCTArgs;
+
+    // Writer args (empty - no-op)
+    deepseek_b1_ops::Rope::WriterArgs krope_args{};
 // ============================================================================
 // TRISC (Compute) - ComputeConfigDescriptor compiles as TRISC
 // Named compile-time args: rmsnorm compute, matmul compute
 // ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
     // CTArgs type aliases (required for Op templates)
+
+    // CCL Broadcast CTArgs (no-op for TRISC)
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
+    deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
+
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm_num_tiles"),
@@ -192,11 +394,10 @@ void kernel_main() {
     // RMSNorm compute runtime args
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
-        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),
-        get_named_compile_time_arg_val("rmsnorm_interm_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
         get_named_compile_time_arg_val("rmsnorm_output_cb"),
-        get_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(1),     // scalar (1/sqrt(7168))
     };
 
     // Mcast compute args (no-op for TRISC)
@@ -220,11 +421,10 @@ void kernel_main() {
     // RMSNorm2 compute args (separate CBs with exact sizes for testing)
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm2_args{
         get_named_compile_time_arg_val("rmsnorm2_input_cb"),   // separate input CB (3 tiles of 16x32)
-        get_named_compile_time_arg_val("rmsnorm_scalars_cb"),  // reuse scalars cb
-        get_named_compile_time_arg_val("rmsnorm2_interm_cb"),  // separate interm CB (3 tiles)
         get_named_compile_time_arg_val("rmsnorm2_gamma_cb"),   // new gamma for 1536 elements
         get_named_compile_time_arg_val("rmsnorm2_output_cb"),  // separate output CB (3 tiles of 16x32)
-        get_arg_val<uint32_t>(0),                              // epsilon (same as rmsnorm1)
+        get_common_arg_val<uint32_t>(0),                       // epsilon (same as rmsnorm1)
+        get_common_arg_val<float>(2),                          // scalar (1/sqrt(1536))
     };
 
     // Matmul2 CTArgs type alias (out_w is compile-time for TRISC)
@@ -241,16 +441,102 @@ void kernel_main() {
 
     // Mcast2 compute args (no-op for TRISC)
     deepseek_b1_ops::Mcast::ComputeArgs mcast2_args{};
+
+    // Matmul3 CTArgs type alias (out_w is compile-time for TRISC)
+    using Matmul3CTArgs =
+        deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("matmul3_out_w_per_core")>;
+
+    // Matmul3 compute args (from compile-time args)
+    deepseek_b1_ops::Matmul::ComputeArgs matmul3_args{
+        get_named_compile_time_arg_val("matmul3_in0"),
+        get_named_compile_time_arg_val("matmul3_in1"),
+        get_named_compile_time_arg_val("matmul3_out"),
+        get_named_compile_time_arg_val("matmul3_k_num_tiles"),
+    };
+
+    // Qrope CTArgs type alias
+    using QRopeCTArgs = deepseek_b1_ops::Rope::
+        ComputeCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
+
+    // Qrope compute args (from compile-time args)
+    deepseek_b1_ops::Rope::ComputeArgs qrope_args{
+        get_named_compile_time_arg_val("in_cb"),  // Input from matmul2 output
+        get_named_compile_time_arg_val("cos_cb"),
+        get_named_compile_time_arg_val("sin_cb"),
+        get_named_compile_time_arg_val("trans_mat_cb"),
+        get_named_compile_time_arg_val("rotated_in_interm_cb"),
+        get_named_compile_time_arg_val("cos_interm_cb"),
+        get_named_compile_time_arg_val("sin_interm_cb"),
+        get_named_compile_time_arg_val("out_cb"),
+    };
+
+    // Gather heads compute args (no-op for TRISC)
+    deepseek_b1_ops::GatherHeads::ComputeArgs gather_heads_args{};
+
+    // DKV Matmul compute args
+    using DKV_MatmulCTArgs =
+        deepseek_b1_ops::Matmul::ComputeCTArgs<get_named_compile_time_arg_val("dkv_matmul_out_w_per_core")>;
+
+    // Matmul compute args (from compile-time args, passed to op as runtime args)
+    deepseek_b1_ops::Matmul::ComputeArgs dkv_matmul_args{
+        get_named_compile_time_arg_val("dkv_matmul_in0"),
+        get_named_compile_time_arg_val("dkv_matmul_in1"),
+        get_named_compile_time_arg_val("dkv_matmul_out"),
+        get_named_compile_time_arg_val("dkv_matmul_k_num_tiles"),
+    };
+
+    // Gather compute args (no-op for TRISC)
+    deepseek_b1_ops::Gather::ComputeArgs dkv_gather_args{};
+
+    // CTArgs type aliases (required for Op templates)
+    using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
+        get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
+        get_named_compile_time_arg_val("kv_rmsnorm_num_tiles"),
+        get_named_compile_time_arg_val("rmsnorm_rsqrt_fast_approx") == 1>;
+
+    // RMSNorm compute runtime args
+    deepseek_b1_ops::RMSNorm::ComputeArgs kv_rmsnorm_args{
+        get_named_compile_time_arg_val("kv_rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb"),
+        get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
+        get_common_arg_val<uint32_t>(0),  // epsilon
+        get_common_arg_val<float>(3),     // kv_scalar (1/sqrt(512))
+    };
+
+    using K_RopeCTArgs = deepseek_b1_ops::Rope::
+        ComputeCTArgs<get_named_compile_time_arg_val("krope_Wt"), get_named_compile_time_arg_val("krope_Ht")>;
+
+    // CB indices (passed as runtime args to ComputeArgs)
+    constexpr uint32_t krope_input_cb = get_named_compile_time_arg_val("krope_in_cb");
+    constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
+    constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
+    constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
+    constexpr uint32_t krope_rotated_in_interm_cb = get_named_compile_time_arg_val("krope_rotated_in_interm_cb");
+    constexpr uint32_t krope_cos_interm_cb = get_named_compile_time_arg_val("krope_cos_interm_cb");
+    constexpr uint32_t krope_sin_interm_cb = get_named_compile_time_arg_val("krope_sin_interm_cb");
+    constexpr uint32_t krope_output_cb = get_named_compile_time_arg_val("krope_output_cb");
+
+    // Compute args: all CB indices
+    deepseek_b1_ops::Rope::ComputeArgs krope_args{
+        .in_cb = krope_input_cb,
+        .cos_cb = krope_cos_cb,
+        .sin_cb = krope_sin_cb,
+        .trans_mat_cb = trans_mat_cb,
+        .rotated_in_interm_cb = krope_rotated_in_interm_cb,
+        .cos_interm_cb = krope_cos_interm_cb,
+        .sin_interm_cb = krope_sin_interm_cb,
+        .out_cb = krope_output_cb,
+    };
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers
-    if constexpr (Core::is_input_core) {
-        // RMSNorm input and gamma buffers
+    if constexpr (Core::is_input_core && !Core::skip_ccl) {
+        // Multi-device mode: NCRISC sets up gamma buffers while BRISC handles CCL
+        // RMSNorm gamma buffer
         constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
         constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
         unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
 
         // RMSNorm2 gamma buffer (3 tiles of 16x32)
@@ -274,6 +560,103 @@ void kernel_main() {
         // Matmul2 weights (on all cores in main grid, 4 tiles per core)
         unified_kernels::setup_sharded_buffer(matmul2_in1, matmul2_k_num_tiles * matmul2_out_w_per_core);
     }
+    if constexpr (Core::is_qnope_core) {
+        // Matmul3 CB indices and parameters from named compile-time args
+        constexpr uint32_t matmul3_in1 = get_named_compile_time_arg_val("matmul3_in1");
+        constexpr uint32_t matmul3_k_num_tiles = get_named_compile_time_arg_val("matmul3_k_num_tiles");
+        constexpr uint32_t matmul3_out_w_per_core = get_named_compile_time_arg_val("matmul3_out_w_per_core");
+
+        // Matmul3 weights (on Qnope cores, [128, 512] = 4 * 16 = 64 tiles per core)
+        unified_kernels::setup_sharded_buffer(matmul3_in1, matmul3_k_num_tiles * matmul3_out_w_per_core);
+    }
+
+    if constexpr (Core::is_qrope_core) {
+        // Qrope CB indices and parameters from named compile-time args
+        constexpr uint32_t qrope_cos_cb = get_named_compile_time_arg_val("cos_cb");
+        constexpr uint32_t qrope_sin_cb = get_named_compile_time_arg_val("sin_cb");
+        constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
+        constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+
+        // NOTE: Do NOT setup qrope input CB (matmul2_output_cb) as sharded buffer!
+        // The input to RoPE comes from matmul2 compute output, NOT from a sharded tensor.
+        // Calling setup_sharded_buffer on it would fill the CB and block matmul2's cb_reserve_back.
+        // Only setup the actual sharded tensor CBs (cos, sin, trans_mat).
+        unified_kernels::setup_sharded_buffer(qrope_cos_cb, Wt);
+        unified_kernels::setup_sharded_buffer(qrope_sin_cb, Wt);
+        unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);  // trans_mat is 1 tile (32x32)
+    }
+
+    // NCRISC: Receiver args for SDPA input cores
+    deepseek_b1_ops::GatherHeads::ReceiverArgs gather_heads_args{
+        get_named_compile_time_arg_val("receiver_semaphore_id"),
+        get_named_compile_time_arg_val("num_senders"),
+        get_named_compile_time_arg_val("receive_cb"),  // Output CB
+        get_named_compile_time_arg_val("dst_num_pages"),
+    };
+
+    if constexpr (Core::is_dkv_matmul_core) {
+        // Matmul weights (in1)
+        constexpr uint32_t dkv_matmul_in1 = get_named_compile_time_arg_val("dkv_matmul_in1");
+        constexpr uint32_t dkv_matmul_out_w_per_core = get_named_compile_time_arg_val("dkv_matmul_out_w_per_core");
+        constexpr uint32_t dkv_matmul_k_num_tiles = get_named_compile_time_arg_val("dkv_matmul_k_num_tiles");
+        unified_kernels::setup_sharded_buffer(dkv_matmul_in1, dkv_matmul_k_num_tiles * dkv_matmul_out_w_per_core);
+    }
+
+    if constexpr (Core::is_kv_rmsnorm_core) {
+        // RMSNorm gamma (sharded weights)
+        constexpr uint32_t kv_rmsnorm_gamma_cb = get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb");
+        constexpr uint32_t kv_rmsnorm_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
+        unified_kernels::setup_sharded_buffer(kv_rmsnorm_gamma_cb, kv_rmsnorm_num_tiles);
+    }
+
+    if constexpr (Core::is_krope_core) {
+        constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
+        constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
+        constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
+        constexpr uint32_t krope_Wt = get_named_compile_time_arg_val("krope_Wt");
+        unified_kernels::setup_sharded_buffer(krope_cos_cb, krope_Wt);
+        unified_kernels::setup_sharded_buffer(krope_sin_cb, krope_Wt);
+        unified_kernels::setup_sharded_buffer(krope_trans_mat_cb, 1);
+    }
+#endif
+
+    // ========================================================================
+    // CCL Broadcast (optional, skip if single-device mode)
+    // ========================================================================
+    if constexpr (!Core::skip_ccl) {
+        {
+            DeviceZoneScopedN("CCL_BROADCAST");
+            deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
+            bcast(bcast_args);
+        }
+    }
+
+#if defined(COMPILE_FOR_NCRISC)
+    if constexpr (Core::is_input_core && Core::skip_ccl) {
+        // Single-device mode: NCRISC sets up ALL sharded buffers (input + gamma + gamma2)
+        // This matches the reference kernel behavior
+        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
+        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+        constexpr uint32_t rmsnorm2_gamma_cb = get_named_compile_time_arg_val("rmsnorm2_gamma_cb");
+        constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
+
+        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
+        unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
+    }
+#endif
+
+#if defined(COMPILE_FOR_BRISC)
+    if constexpr (Core::is_input_core && !Core::skip_ccl) {
+        // Multi-device mode only: BRISC sets up intermediate (broadcast output) buffer
+        // Gamma CBs are already set up by NCRISC via setup_sharded_buffer
+        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+
+        cb_reserve_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+        cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+    }
 #endif
 
     // ========================================================================
@@ -287,7 +670,12 @@ void kernel_main() {
     }
 
     // pop_src = true (rmsnorm output is consumed after mcast)
-    deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul_core, true>
+    deepseek_b1_ops::Mcast::Op<
+        McastCTArgs,
+        Core::is_input_core,
+        Core::is_matmul2_core,
+        Core::is_matmul_core || Core::is_dkv_matmul_core,
+        true>
         mcast;
     mcast.init(mcast_args);
     {
@@ -303,7 +691,7 @@ void kernel_main() {
     {
         DeviceZoneScopedN("MATMUL");
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-        deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, true, false> matmul;
+        deepseek_b1_ops::Matmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
         matmul(matmul_args);
     }
 
@@ -323,10 +711,8 @@ void kernel_main() {
     // Gather writes directly to rmsnorm2_input_cb (3 tiles of 16x32)
     // Uses SEPARATE CBs with exact sizes:
     //   - Input: rmsnorm2_input_cb (3 tiles from gather)
-    //   - Interm: rmsnorm2_interm_cb (3 tiles)
     //   - Output: rmsnorm2_output_cb (3 tiles)
     //   - Gamma: rmsnorm2_gamma_cb (3 tiles)
-    //   - Scalars: reuses scalars_cb (same epsilon, different scalar)
     // ========================================================================
     // pop_input = true (gathered data is consumed after RMSNorm2)
     {
@@ -358,7 +744,94 @@ void kernel_main() {
     {
         DeviceZoneScopedN("MATMUL2");
         // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+        // On Qnope cores: output stays in matmul2_output_cb for matmul3 input
+        // On Qrope cores: output goes to matmul2_output_cb for RoPE input
         deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
         matmul2(matmul2_args);
+    }
+
+    {
+        DeviceZoneScopedN("Q_HEADS") static_assert(
+            !(Core::is_qnope_core && Core::is_qrope_core), "Core cannot be both QNOPE and QROPE");
+
+        // ========================================================================
+        // Matmul3 (QNoPE): matmul3_input[64, 1, 128] @ matmul3_weights[64, 128, 512] -> matmul3_output[64, 1, 512]
+        // 64 cores (8x8 grid) each compute 1x16 output tiles (16 1x32 tiles)
+        // ========================================================================
+        {
+            DeviceZoneScopedN("QNOPE/MATMUL3");
+            // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+            deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
+            matmul3(matmul3_args);
+        }
+
+        // ========================================================================
+        // RoPE (Qrope): Applies rotary position embedding to Qrope heads
+        // Reads from matmul2_output_cb, writes to qrope_output_cb
+        // ========================================================================
+        {
+            DeviceZoneScopedN("QROPE");
+            deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
+            rope(qrope_args);
+        }
+
+        // ========================================================================
+        // GatherHeads: QNOPE/QROPE -> SDPA interleaved transfer
+        // QNOPE cores (cols 0-7): send [1, 512] to SDPA at offset = head_idx * 576
+        // QROPE cores (cols 8-11): send 2x [1, 64] to SDPA at offsets:
+        //   - head_idx * 576 + 512
+        //   - (head_idx + 1) * 576 + 512
+        // ========================================================================
+        {
+            DeviceZoneScopedN("GATHER_HEADS");
+            // GatherHeads Op configuration:
+            // - IsSenderCore: is_qnope_core || is_qrope_core
+            // - IsReceiverCore: is_sdpa_input_core
+            // - setup_sharded_input: false (data already in CB from previous compute)
+            // - pop_src: true (pop source CB after sending)
+            // - use_cb_output: true (receiver uses cb_reserve_back/cb_push_back, writes directly to output tensor)
+            constexpr bool is_gather_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
+            deepseek_b1_ops::GatherHeads::Op<is_gather_heads_sender, Core::is_sdpa_input_core, false, true, true>
+                gather_heads;
+            gather_heads(gather_heads_args);
+        }
+    }
+    {
+        // ========================================================================o
+        // KV Cache Branch - Matmul
+        // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
+        // ========================================================================
+        {
+            DeviceZoneScopedN("DKV_MATMUL");
+            // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)o
+            deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, false, false> dkv_matmul;
+            dkv_matmul(dkv_matmul_args);
+        }
+
+        // ========================================================================
+        // KV Cache Branch: Gather: dkv matmul cores (senders) -> rmsnorm core (receiver)
+        // NCRISC sends from knope grid of dkv matmul cores, BRISC receives on rmsnorm grid, TRISC no-op
+        // ========================================================================
+        {
+            DeviceZoneScopedN("DKV_GATHER");
+            deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true> dkv_gather;
+            dkv_gather(dkv_gather_args);
+        }
+
+        // ========================================================================
+        // RMSNorm: Apply RMSNorm to the gathered data
+        {
+            DeviceZoneScopedN("KV_RMSNORM");
+            deepseek_b1_ops::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
+            kv_rmsnorm(kv_rmsnorm_args);
+        }
+        // ========================================================================
+        // KV Cache Branch: RoPE
+        // ========================================================================
+        {
+            DeviceZoneScopedN("K_ROPE");
+            deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
+            krope(krope_args);
+        }
     }
 }

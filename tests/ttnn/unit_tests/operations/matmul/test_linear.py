@@ -9,7 +9,7 @@ from ttnn.operations.activations import get_golden_function_for_activation
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.common.utility_functions import torch_random, is_wormhole_b0
+from models.common.utility_functions import torch_random
 
 pytestmark = pytest.mark.use_module_device
 
@@ -244,20 +244,13 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    if is_wormhole_b0():
-        compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-    else:
-        # Grayskull doesn't support fp32 but test passing a GS config is ok
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-        )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
 
     output_tensor = ttnn.linear(
         input_tensor_a,

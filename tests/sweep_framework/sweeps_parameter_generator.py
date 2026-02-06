@@ -134,6 +134,10 @@ def invalidate_vectors(test_module, vectors) -> None:
 def _serialize_vectors(vectors):
     """Serialize vectors and compute their hashes.
 
+    If a vector has a config_hash from the database, use that as the input_hash
+    for direct correlation with ttnn_ops.ttnn_configuration. Otherwise, compute
+    a hash from the serialized vector content.
+
     Args:
         vectors: List of vector dictionaries to serialize
 
@@ -148,7 +152,15 @@ def _serialize_vectors(vectors):
         vector = dict()
         for elem in vectors[i].keys():
             vector[elem] = serialize_structured(vectors[i][elem], warnings)
-        input_hash = _compute_vector_hash(vector)
+
+        # Use config_hash from database if available, otherwise compute from content
+        # This enables direct correlation with ttnn_ops.ttnn_configuration.config_hash
+        config_hash = vectors[i].get("config_hash")
+        if config_hash:
+            input_hash = config_hash
+        else:
+            input_hash = _compute_vector_hash(vector)
+
         vector["timestamp"] = current_time
         vector["input_hash"] = input_hash
         vector["tag"] = SWEEPS_TAG
@@ -481,6 +493,17 @@ if __name__ == "__main__":
         type=str,
         help="Generate vectors for a specific suite only (e.g., 'nightly', 'model_traced'). Omit to generate all suites.",
     )
+    parser.add_argument(
+        "--use-db",
+        action="store_true",
+        help="Load configurations from PostgreSQL database instead of JSON file. Requires TTNN_OPS_DATABASE_URL or POSTGRES_* environment variables.",
+    )
+    parser.add_argument(
+        "--mesh-shape",
+        required=False,
+        type=str,
+        help="Filter configurations to specific mesh shape (e.g., '2x4', '1x1').",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -498,5 +521,20 @@ if __name__ == "__main__":
     else:
         DO_RANDOMIZE = False
         SHUFFLE_SEED = None
+
+    # Configure database mode if --use-db flag is provided
+    if args.use_db:
+        MasterConfigLoader.set_database_mode(True)
+        logger.info("Database mode enabled: Loading configurations from PostgreSQL")
+
+    # Configure mesh filter if --mesh-shape is provided
+    if args.mesh_shape:
+        try:
+            rows, cols = map(int, args.mesh_shape.lower().split("x"))
+            MasterConfigLoader.set_mesh_filter((rows, cols))
+            logger.info(f"Mesh filter enabled: {rows}x{cols}")
+        except ValueError:
+            logger.error(f"Invalid mesh shape format: {args.mesh_shape}. Use format like '2x4' or '1x1'.")
+            sys.exit(1)
 
     generate_tests(args.module_name, args.skip_modules, args.model_traced, args.suite_name)

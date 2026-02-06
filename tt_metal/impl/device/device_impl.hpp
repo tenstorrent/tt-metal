@@ -11,7 +11,7 @@
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "impl/dispatch/command_queue.hpp"
+#include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include "trace/trace_buffer.hpp"
@@ -22,6 +22,10 @@
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 class AllocatorImpl;
+
+namespace experimental {
+class DispatchContext;
+}  // namespace experimental
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
@@ -60,6 +64,7 @@ public:
     int num_dram_channels() const override;
     uint32_t l1_size_per_core() const override;
     uint32_t dram_size_per_channel() const override;
+    int get_clock_rate_mhz() const override;
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
@@ -110,7 +115,7 @@ public:
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
     SystemMemoryManager& sysmem_manager() override;
-    CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
+    HWCommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt);
 
     // Metal trace device capture mode
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
@@ -215,12 +220,11 @@ private:
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
 
-    uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;
 
     // SystemMemoryManager is the interface to the hardware command queue
-    std::vector<std::unique_ptr<CommandQueue>> command_queues_;
+    std::vector<std::unique_ptr<HWCommandQueue>> command_queues_;
 
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
@@ -241,6 +245,8 @@ private:
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
         IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
+
+    friend class experimental::DispatchContext;
 };
 
 }  // namespace tt::tt_metal

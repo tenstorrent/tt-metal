@@ -23,25 +23,21 @@ void kernel_main() {
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type alias (required for Op template)
-    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs<get_named_compile_time_arg_val("rmsnorm_num_faces")>;
+    using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
 
     // Named compile-time args
     constexpr uint32_t input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-    constexpr uint32_t scalars_cb = get_named_compile_time_arg_val("rmsnorm_scalars_cb");
     constexpr uint32_t gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
     constexpr uint32_t num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
 
     // Setup sharded persistent buffers (input and gamma are backed by L1 shards)
     if constexpr (Core::is_active_core) {
-        unified_kernels::setup_sharded_buffer(input_cb, num_tiles);
         unified_kernels::setup_sharded_buffer(gamma_cb, num_tiles);
+        unified_kernels::setup_sharded_buffer(input_cb, num_tiles);
     }
 
-    // Reader args: scalars_cb and scalar (1/sqrt(num_elements))
-    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{
-        scalars_cb,
-        get_arg_val<uint32_t>(0),  // scalar (1/sqrt(num_elements))
-    };
+    // Reader args: none needed
+    deepseek_b1_ops::RMSNorm::ReaderArgs rmsnorm_args{};
 
 #elif defined(COMPILE_FOR_BRISC)
     // CTArgs type alias (required for Op template)
@@ -59,19 +55,16 @@ void kernel_main() {
 
     // Named compile-time args
     constexpr uint32_t input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-    constexpr uint32_t scalars_cb = get_named_compile_time_arg_val("rmsnorm_scalars_cb");
-    constexpr uint32_t interm_cb = get_named_compile_time_arg_val("rmsnorm_interm_cb");
     constexpr uint32_t gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
     constexpr uint32_t output_cb = get_named_compile_time_arg_val("rmsnorm_output_cb");
 
     // Compute args
     deepseek_b1_ops::RMSNorm::ComputeArgs rmsnorm_args{
         .input_cb = input_cb,
-        .scalars_cb = scalars_cb,
-        .interm_cb = interm_cb,
         .gamma_cb = gamma_cb,
         .output_cb = output_cb,
-        .epsilon = get_arg_val<uint32_t>(0),  // epsilon
+        .epsilon = get_common_arg_val<uint32_t>(0),  // epsilon
+        .scalar = get_common_arg_val<float>(1),      // scalar (1/sqrt(num_elements))
     };
 #endif
 

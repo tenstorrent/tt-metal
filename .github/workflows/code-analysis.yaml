@@ -38,17 +38,6 @@ on:
         required: false
         type: string
         default: ""
-      enable-copilot-fix:
-        description: >-
-          Enable Copilot to automatically fix ClangSA issues and create a PR
-        required: false
-        type: boolean
-        default: false
-      copilot-max-fixes:
-        description: "Maximum number of issues for Copilot to fix (default: 1)"
-        required: false
-        type: string
-        default: ""
       build-type:
         required: false
         type: string
@@ -74,17 +63,6 @@ on:
         description: >-
           Analyze only specific file(s) for fast debugging
           (e.g., 'tests/tt_metal/**/*.hpp' or 'path/to/file.cpp')
-        required: false
-        type: string
-        default: ""
-      enable-copilot-fix:
-        description: >-
-          Enable Copilot to automatically fix ClangSA issues and create a PR
-        required: false
-        type: boolean
-        default: false
-      copilot-max-fixes:
-        description: "Maximum number of issues for Copilot to fix (default: 1)"
         required: false
         type: string
         default: ""
@@ -122,7 +100,17 @@ jobs:
     outputs:
       do-full-scan: ${{ steps.compute-outputs.outputs.do-full-scan }}
       do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
+      merge-base: ${{ steps.compute-outputs.outputs.merge-base }}
     steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory ${{ github.workspace }}
+
       - id: find-changes
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
@@ -144,10 +132,17 @@ jobs:
             do_scan="false"
           fi
 
+          merge_base=""
+          if [[ "$do_full_scan" != "true" ]]; then
+            merge_base=$(git merge-base ${{ github.ref_name }} origin/main)
+            echo "Merge base between ${{ github.ref_name }} and main: $merge_base"
+          fi
+
           echo "Do a scan: $do_scan"
           echo "Do a full scan: $do_full_scan"
           echo "do-full-scan=$do_full_scan" >> "$GITHUB_OUTPUT"
           echo "do-scan=$do_scan" >> "$GITHUB_OUTPUT"
+          echo "merge-base=$merge_base" >> "$GITHUB_OUTPUT"
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
@@ -160,162 +155,91 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
 
-  clang-tidy:
-    name: 🤖 Clang Tidy
+  # Full scan: single job that analyzes everything
+  clang-tidy-full:
+    name: 🤖 Clang Tidy (Full)
     needs: [ build-docker-image, determine-scan-type ]
-    # Use always() so this job runs even when build-docker-image is skipped
-    # (pre-built tags provided)
     if: >-
       ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' }}
-    timeout-minutes: 240
-    runs-on: tt-ubuntu-2204-xlarge-stable
-    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
-    container:
-      image: >-
-        harbor.ci.tenstorrent.net/${{
-          inputs.ci-build-docker-image ||
-          needs.build-docker-image.outputs.ci-build-tag ||
-          'docker-image-unresolved!'}}
-      env:
-        CCACHE_REMOTE_ONLY: "true"
-        CCACHE_TEMPDIR: /tmp/ccache
-      volumes:
-        - ${{ github.workspace }}:/work
-        # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache
-      # Group 1457 is for the shared ccache drive
-      # tmpfs is for efficiency
-      options: >
-        --group-add 1457
-        --tmpfs /tmp
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: Check Redis credentials
-        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
-        # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
-        run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
-            exit 1
-          fi
-          # Conditionally set this here so that it remains unset on forks,
-          # otherwise it resolves an invalid URL and the job fails
-          REDIS_USER="${{ vars.REDIS_USER }}"
-          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
-          REDIS_HOST="${{ vars.REDIS_HOST }}"
-          REDIS_PORT="${{ vars.REDIS_PORT }}"
-          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
-          CCACHE_PARTS=(
-            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
-            "@${REDIS_HOST}:${REDIS_PORT}"
-            "|read-only=${REDIS_READONLY}"
-          )
-          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
-          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+          needs.determine-scan-type.outputs.do-scan == 'true' &&
+          needs.determine-scan-type.outputs.do-full-scan == 'true' }}
+    uses: ./.github/workflows/clang-tidy-reusable.yaml
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
+      ci-build-docker-image: >-
+        ${{ inputs.ci-build-docker-image ||
+            needs.build-docker-image.outputs.ci-build-tag ||
+            'docker-image-unresolved!' }}
+      do-full-scan: 'true'
+      merge-base: ''
+      prereq-targets: ''
+      scan-targets: ''
 
-      - name: Create ccache tmpdir
-        run: |
-          mkdir -p /tmp/ccache
+  # Incremental scan: parallel jobs for different targets
+  clang-tidy-incremental-tt-metal:
+    name: 🤖 Clang Tidy (Metalium)
+    needs: [ build-docker-image, determine-scan-type ]
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          needs.determine-scan-type.outputs.do-scan == 'true' &&
+          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    uses: ./.github/workflows/clang-tidy-reusable.yaml
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
+      ci-build-docker-image: >-
+        ${{ inputs.ci-build-docker-image ||
+            needs.build-docker-image.outputs.ci-build-tag ||
+            'docker-image-unresolved!' }}
+      do-full-scan: 'false'
+      merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
+      prereq-targets: ''
+      scan-targets: 'tt_metal'
 
-      - name: Check out repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          clean: true
+  clang-tidy-incremental-ttnn:
+    name: 🤖 Clang Tidy (TTNN)
+    needs: [ build-docker-image, determine-scan-type ]
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          needs.determine-scan-type.outputs.do-scan == 'true' &&
+          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    uses: ./.github/workflows/clang-tidy-reusable.yaml
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
+      ci-build-docker-image: >-
+        ${{ inputs.ci-build-docker-image ||
+            needs.build-docker-image.outputs.ci-build-tag ||
+            'docker-image-unresolved!' }}
+      do-full-scan: 'false'
+      merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
+      prereq-targets: 'tt_metal'
+      scan-targets: 'ttnn'
 
-      - name: Configure git safe.directory
-        run: git config --global --add safe.directory /work
-
-      - name: Determine merge base
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        run: |
-          echo "Current branch: ${{ github.ref_name }}"
-          MERGE_BASE=$(git merge-base ${{ github.ref_name }} origin/main)
-          echo "Merge base between ${{ github.ref_name }} and main: $MERGE_BASE"
-          echo "MERGE_BASE=$MERGE_BASE" >> $GITHUB_ENV
-
-      - name: Check out baseline
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.MERGE_BASE }}
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          clean: true
-
-      - name: Create shim
-        run: |
-          # Suppress clang-tidy to first get an up-to-date build tree
-          ln -sf /usr/bin/true ./clang-tidy-shim
-
-      - name: 🔧 CMake configure
-        run: |
-          CLANG_TIDY_CMD="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
-          cmake --preset clang-tidy \
-            -DCMAKE_CXX_CLANG_TIDY="$CLANG_TIDY_CMD" \
-            -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
-
-      - name: Prepare baseline ccache summary
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        run: |
-          # Zero out the stats so we can see how we did this build
-          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-          ccache -z
-
-      - name: 🛠️ Baseline Build
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        timeout-minutes: 60
-        run: |
-          cmake --build --preset clang-tidy
-
-      - name: Publish Ccache summary
-        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
-        run: |
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          clean: false
-
-      - name: Restore shim
-        run: |
-          # Restore shim to legit clang-tidy
-          # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
-          ln -sf $(which clang-tidy-20) ./clang-tidy-shim
-
-      - name: Prepare ccache summary
-        run: |
-          # Zero out the stats so we can see how we did this build
-          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-          ccache -z
-
-      - name: 🔍 Analyze code with clang-tidy
-        timeout-minutes: 120
-        run: |
-          cmake --build --preset clang-tidy
-
-      - name: Publish Ccache summary
-        run: |
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+  clang-tidy-incremental-catchall:
+    name: 🤖 Clang Tidy (catchall)
+    needs: [ build-docker-image, determine-scan-type ]
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          needs.determine-scan-type.outputs.do-scan == 'true' &&
+          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    uses: ./.github/workflows/clang-tidy-reusable.yaml
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
+      ci-build-docker-image: >-
+        ${{ inputs.ci-build-docker-image ||
+            needs.build-docker-image.outputs.ci-build-tag ||
+            'docker-image-unresolved!' }}
+      do-full-scan: 'false'
+      merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
+      prereq-targets: 'tt_metal ttnn'
+      scan-targets: ''
 
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
@@ -446,134 +370,6 @@ jobs:
           name: CodeChecker-HTML-Report
           path: /work/.build/codechecker_html
 
-  copilot-fix-clangsa-issue:
-    name: 🤖 Copilot Fix ClangSA Issue
-    needs: [ clang-static-analyzer ]
-    if: |
-      always() &&
-      (inputs.enable-copilot-fix == true || github.event_name == 'schedule') &&
-      needs.clang-static-analyzer.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    outputs:
-      pr-url: ${{ steps.copilot-fix.outputs.pr-url }}
-      pr-created: ${{ steps.copilot-fix.outputs.pr-created }}
-    steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download CodeChecker JSON report
-        uses: actions/download-artifact@v4
-        with:
-          name: CodeChecker-JSON-Report
-          path: /tmp
-
-      - name: Check for issues and run Copilot fix
-        id: copilot-fix
-        timeout-minutes: 30
-        env:
-          COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          # Authenticate first (required for all gh commands)
-          if [ -z "$COPILOT_OAUTH_TOKEN" ]; then
-            echo "::error::COPILOT_OAUTH_TOKEN secret not set."
-            echo "Run 'gh auth login' locally, then 'gh auth token' and add as secret."
-            exit 1
-          fi
-          echo "$COPILOT_OAUTH_TOKEN" | gh auth login --with-token
-
-          # Check for issues
-          if [ ! -f "/tmp/codechecker_issues.json" ]; then
-            echo "No issues found"
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          ISSUE_COUNT=$(jq '.reports | length' /tmp/codechecker_issues.json 2>/dev/null || echo "0")
-          if [ "$ISSUE_COUNT" = "0" ]; then
-            echo "No issues found"
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "Found $ISSUE_COUNT issues"
-          echo "has-issues=true" >> "$GITHUB_OUTPUT"
-
-          # Check for existing open Copilot PRs to avoid duplicates
-          OPEN_COPILOT_PRS=$(gh pr list --repo "${{ github.repository }}" \
-            --state open --label "copilot-autofix" \
-            --json number --jq 'length' 2>/dev/null || echo "0")
-          if [ "$OPEN_COPILOT_PRS" -gt 0 ]; then
-            echo "⏭️ Skipping: $OPEN_COPILOT_PRS open Copilot PR(s) already exist"
-            echo "Review and merge existing PRs before creating new ones."
-            echo "has-issues=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Build prompt - default to 1 issue for focused, quality fixes
-          LIMIT="${{ inputs.copilot-max-fixes }}"
-          LIMIT="${LIMIT:-1}"  # Default: 1 issue per run
-
-          {
-            echo "Fix these Clang Static Analyzer issues:"
-            echo ""
-            jq -r --argjson limit "$LIMIT" \
-              '.reports[:$limit][] |
-               "- \(.checker_name) in \(.file.path | sub("^/work/"; "")):\(.line) — \(.message)"' \
-              /tmp/codechecker_issues.json
-            echo ""
-            echo "For each: verify it's real, apply minimal fix, follow coding standards."
-          } > /tmp/prompt.txt
-
-          cat /tmp/prompt.txt
-
-          # Run Copilot
-          BASE_BRANCH="${{ github.event_name == 'schedule' && 'main' || github.ref_name }}"
-
-          gh agent-task create -F /tmp/prompt.txt \
-            --base "$BASE_BRANCH" \
-            --repo "${{ github.repository }}" \
-            --follow
-
-          # Get the PR that was created
-          PR_NUMBER=$(gh agent-task list --limit 1 | grep -oE '#[0-9]+' | tr -d '#' || true)
-
-          if [ -n "$PR_NUMBER" ]; then
-            PR_URL="https://github.com/${{ github.repository }}/pull/${PR_NUMBER}"
-            echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
-            echo "pr-created=true" >> "$GITHUB_OUTPUT"
-            # Add label to track Copilot PRs and prevent duplicates
-            gh pr edit "$PR_NUMBER" -R "${{ github.repository }}" \
-              --add-label "copilot-autofix" || true
-            # Mark PR as ready for review (not draft) so CI runs automatically
-            gh pr ready "$PR_NUMBER" -R "${{ github.repository }}" || true
-            gh pr comment "$PR_NUMBER" -R "${{ github.repository }}" \
-              --body "/codeowners ping" || true
-          else
-            echo "pr-created=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Output job summary
-        if: always()
-        run: |
-          echo "## 🤖 Copilot Auto-Fix" >> "$GITHUB_STEP_SUMMARY"
-          if [ "${{ steps.copilot-fix.outputs.has-issues }}" != "true" ]; then
-            echo "No issues found." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "${{ steps.copilot-fix.outputs.pr-created }}" = "true" ]; then
-            PR_URL="${{ steps.copilot-fix.outputs.pr-url }}"
-            echo "✅ **PR Created:** $PR_URL" >> "$GITHUB_STEP_SUMMARY"
-          else
-            REPO="${{ github.repository }}"
-            DASHBOARD_URL="https://github.com/${REPO}/copilot"
-            echo "⚠️ No PR created. Check [Copilot dashboard](${DASHBOARD_URL})." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
   publish-clangsa-pages:
     name: 📄 Publish CSA HTML to GitHub Pages
     needs: [ clang-static-analyzer ]
@@ -588,6 +384,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: CodeChecker-HTML-Report
+          path: site
+
+      - name: Download CodeChecker JSON report
+        uses: actions/download-artifact@v4
+        with:
+          name: CodeChecker-JSON-Report
           path: site
 
       - name: Add .nojekyll
