@@ -69,6 +69,7 @@ class MLP(AbstractModule):
         state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
+        is_mlp_tensor_parallel: bool = True,
     ) -> WeightConfig:
         return {
             models_name: {
@@ -82,6 +83,7 @@ class MLP(AbstractModule):
                     ),
                     mesh_device,
                     is_w2,
+                    is_mlp_tensor_parallel,
                 ),
             }
             for hf_name, models_name, is_w2 in [
@@ -100,6 +102,7 @@ class MLP(AbstractModule):
         torch_metaweight_tensor: torch.Tensor,
         mesh_device: ttnn.Device,
         is_w2: bool,
+        is_mlp_tensor_parallel: bool = True,
     ) -> SavedWeight:
         """
         Convert a normal (non-quantized) weight tensor to a format suitable for TTNN.
@@ -120,6 +123,9 @@ class MLP(AbstractModule):
         mp, tp = mesh_device.shape
         assert num_shards == mp, "Number of mesh rows does not match weight shards"
 
+        # Always shard weights across TP dimension
+        # When is_mlp_tensor_parallel=False, each device still needs its weight shard
+        # The difference is in tensor handling, not weight sharding
         if is_w2:
             per_device_in_features = even_int_div(per_device_in_features, tp)
             mesh_sharded_dim = 1
@@ -128,6 +134,7 @@ class MLP(AbstractModule):
             mesh_sharded_dim = 2
 
         # Convert the torch tensor to a TTNN tensor
+        # Always shard weights across both MP and TP dimensions
         return shard_and_save(
             path,
             torch_metaweight_tensor,
@@ -154,7 +161,9 @@ class MLP(AbstractModule):
             return dim, hidden_dim
 
     @classmethod
-    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
+    def prefill_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, is_mlp_tensor_parallel: bool = True
+    ) -> ModelPrefillConfig:
         """Generate prefill configuration for this module.
 
         Args:
@@ -210,6 +219,7 @@ class MLP(AbstractModule):
             ),
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "is_mlp_tensor_parallel": is_mlp_tensor_parallel,
         }
 
     @classmethod
@@ -219,6 +229,7 @@ class MLP(AbstractModule):
         mesh_device: ttnn.Device,
         input_num_cores: int | None = None,
         output_num_cores: int | None = None,
+        is_mlp_tensor_parallel: bool = True,
     ) -> ModelDecodeConfig:
         """Generate decode configuration for this module.
 
@@ -239,14 +250,28 @@ class MLP(AbstractModule):
         # Calculate device metrics
         _, mesh_width = mesh_device.shape
         max_num_cores = mesh_device.core_grid.x * mesh_device.core_grid.y
+
+        # Dimensions for weight operations
+        # Weights are always sharded across TP dimension
+        input_dim = dim
+        w1_w3_output_dim = even_int_div(hidden_dim, mesh_width)
+        w2_input_dim = even_int_div(hidden_dim, mesh_width)
+        w2_output_dim = dim
+
+        # Output dimension depends on whether RS is done in module or decoder block
+        if is_mlp_tensor_parallel:
+            # RS done in module, output is sharded
+            final_output_dim = even_int_div(dim, mesh_width)
+        else:
+            # RS done in decoder block, output is full dimension
+            final_output_dim = dim
+
         input_num_cores = input_num_cores or max(
-            get_activation_sharding_core_counts_for_dram_matmul(dim, max_num_cores)
+            get_activation_sharding_core_counts_for_dram_matmul(input_dim, max_num_cores)
         )
-        inner_num_cores = max(
-            get_activation_sharding_core_counts_for_dram_matmul(even_int_div(hidden_dim, mesh_width), max_num_cores)
-        )
+        inner_num_cores = max(get_activation_sharding_core_counts_for_dram_matmul(w1_w3_output_dim, max_num_cores))
         output_num_cores = output_num_cores or max(
-            get_activation_sharding_core_counts_for_dram_matmul(even_int_div(dim, mesh_width), max_num_cores)
+            get_activation_sharding_core_counts_for_dram_matmul(final_output_dim, max_num_cores)
         )
         assert (
             input_num_cores <= max_num_cores
@@ -254,17 +279,13 @@ class MLP(AbstractModule):
         assert (
             output_num_cores <= max_num_cores
         ), "output_num_cores must be less than or equal to the maximum number of cores"
-        assert dim % input_num_cores == 0, "input_num_cores must divide the input tensor width evenly"
-        assert (
-            even_int_div(dim, mesh_width) % output_num_cores == 0
-        ), "output_num_cores must divide the output tensor width evenly"
+        assert input_dim % input_num_cores == 0, "input_num_cores must divide the input tensor width evenly"
+        assert final_output_dim % output_num_cores == 0, "output_num_cores must divide the output tensor width evenly"
 
         # Calculate input and output memory configurations
 
-        input_memory_config = cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
-        output_memory_config = cls._get_decode_activation_memory_config(
-            even_int_div(dim, mesh_width), output_num_cores, mesh_device
-        )
+        input_memory_config = cls._get_decode_activation_memory_config(input_dim, input_num_cores, mesh_device)
+        output_memory_config = cls._get_decode_activation_memory_config(final_output_dim, output_num_cores, mesh_device)
 
         # Construct the config
         return {
@@ -279,7 +300,7 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
+                    USERS_PER_ROW, input_dim, w1_w3_output_dim, input_num_cores, inner_num_cores
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
@@ -288,8 +309,8 @@ class MLP(AbstractModule):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
                     USERS_PER_ROW,
-                    even_int_div(hidden_dim, mesh_width),
-                    dim,
+                    w2_input_dim,
+                    w2_output_dim,
                     inner_num_cores,
                     output_num_cores,
                 ),
@@ -299,7 +320,7 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
+                    USERS_PER_ROW, input_dim, w1_w3_output_dim, input_num_cores, inner_num_cores
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
@@ -315,6 +336,7 @@ class MLP(AbstractModule):
             ),
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
             "input_memory_config": input_memory_config,
+            "is_mlp_tensor_parallel": is_mlp_tensor_parallel,
         }
 
     @classmethod
@@ -429,15 +451,16 @@ class MLP(AbstractModule):
         return x6
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, is_mlp_tensor_parallel: bool = True) -> ttnn.Tensor:
         num_layers, _, seq_len, _ = x.shape
         original_seq_len = seq_len
 
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
-        # All gather for efficient matmuls
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        # All gather for efficient matmuls (only if tensor parallelism is at MLP level - default behavior)
+        if is_mlp_tensor_parallel:
+            x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # Chunk the input if needed
         pad_rows = 0
@@ -477,10 +500,11 @@ class MLP(AbstractModule):
         )
         ttnn.deallocate(activated)
 
-        # Reduce-scatter across devices to sum partial results
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
-        )
+        # Reduce-scatter across devices to sum partial results (only if tensor parallelism is at MLP level)
+        if is_mlp_tensor_parallel:
+            output = ttnn.experimental.reduce_scatter_minimal_async(
+                output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+            )
 
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
@@ -493,12 +517,13 @@ class MLP(AbstractModule):
         return output
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, is_mlp_tensor_parallel: bool = True) -> ttnn.Tensor:
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
-        # All gather
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        # All gather (only if tensor parallelism is at MLP level - default behavior)
+        if is_mlp_tensor_parallel:
+            x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])
@@ -517,11 +542,14 @@ class MLP(AbstractModule):
         w2_out = ttnn.linear(activated, **cfg["w2"])
         ttnn.deallocate(activated)
 
-        # Add reduce-scatter
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
-        )
-        ttnn.deallocate(w2_out)
+        # Add reduce-scatter (only if tensor parallelism is at MLP level)
+        if is_mlp_tensor_parallel:
+            output = ttnn.experimental.reduce_scatter_minimal_async(
+                w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+            )
+            ttnn.deallocate(w2_out)
+        else:
+            output = w2_out
 
         assert output.memory_config() == cfg["output_memory_config"]
         return output

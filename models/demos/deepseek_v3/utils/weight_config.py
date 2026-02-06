@@ -115,6 +115,7 @@ def get_weight_config(
     random_weights: bool = False,
     model_path: str | None = None,
     single_layer: str | None = None,
+    **kwargs,
 ):
     """
     Get weight configuration, either from cache or by converting weights.
@@ -138,10 +139,15 @@ def get_weight_config(
     if mesh_device is None:
         raise ValueError("mesh_device must be provided")
 
+    # Include kwargs in cache path for different configurations
+    cache_suffix = ""
+    if "is_mlp_tensor_parallel" in kwargs:
+        cache_suffix = f"_mlp_tp_{kwargs['is_mlp_tensor_parallel']}"
+
     weight_cache_path = (
         weight_cache_path
         / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}{cache_suffix}"
     )
     config_path = weight_cache_path / "config.json"
 
@@ -167,7 +173,7 @@ def get_weight_config(
     # Convert weights to TT tensors-on-disk and build weight_config
     logger.info("Converting weights to TTNN SavedWeight format...")
 
-    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
+    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device, **kwargs)
 
     # Validate the converted weight config
     validate_weight_config_paths(weight_cache_path, weight_config)

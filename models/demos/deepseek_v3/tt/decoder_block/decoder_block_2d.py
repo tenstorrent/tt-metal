@@ -28,24 +28,29 @@ class DecoderBlock2D(DecoderBlock2DBase):
         state_dict: dict[str, torch.Tensor],
         output_path: Path,
         mesh_device: ttnn.MeshDevice,
+        is_mlp_tensor_parallel: bool = True,
     ) -> WeightConfig:
-        return NonExpert.convert_weights(hf_config, (state_dict,) * mesh_device.shape[0], output_path, mesh_device)
+        return NonExpert.convert_weights(
+            hf_config, (state_dict,) * mesh_device.shape[0], output_path, mesh_device, is_mlp_tensor_parallel
+        )
 
     @classmethod
     def prefill_mlp_config(
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_mlp_tensor_parallel: bool = False,
     ) -> ModelPrefillConfig:
-        return NonExpert.prefill_model_config(hf_config, mesh_device)
+        return NonExpert.prefill_model_config(hf_config, mesh_device, is_mlp_tensor_parallel=is_mlp_tensor_parallel)
 
     @classmethod
     def decode_mlp_config(
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_mlp_tensor_parallel: bool = False,
     ) -> ModelDecodeConfig:
-        return NonExpert.decode_model_config(hf_config, mesh_device)
+        return NonExpert.decode_model_config(hf_config, mesh_device, is_mlp_tensor_parallel=is_mlp_tensor_parallel)
 
     @classmethod
     def create_mlp_state(

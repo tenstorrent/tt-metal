@@ -33,6 +33,7 @@ class DecoderBlock2DBase(DecoderBlockBase):
         state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.MeshDevice,
+        **kwargs,
     ) -> WeightConfig:
         (state_dict,) = state_dicts
         assert state_dict is not None, "Expected a state dict for DecoderBlock."
@@ -57,6 +58,7 @@ class DecoderBlock2DBase(DecoderBlockBase):
                 sub_state_dict(state_dict, "mlp."),
                 output_path / "mlp",
                 mesh_device,
+                **kwargs,
             ),
         }
 
@@ -192,6 +194,7 @@ class DecoderBlock2DBase(DecoderBlockBase):
         state_dict: dict[str, torch.Tensor],
         output_path: Path,
         mesh_device: ttnn.MeshDevice,
+        is_mlp_tensor_parallel: bool = True,
     ) -> WeightConfig:
         """
         Convert weights for the MLP component of the decoder layer.

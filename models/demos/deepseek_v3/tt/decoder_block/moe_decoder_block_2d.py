@@ -32,6 +32,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         state_dict: dict[str, torch.Tensor],
         output_path: Path,
         mesh_device: ttnn.MeshDevice,
+        is_mlp_tensor_parallel: bool = True,
     ) -> WeightConfig:
         return {
             "shared_expert": SharedExpert.convert_weights(
@@ -39,6 +40,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 (sub_state_dict(state_dict, "shared_experts."),) * mesh_device.shape[0],
                 output_path / "shared_experts",
                 mesh_device,
+                is_mlp_tensor_parallel,
             ),
             "moe": MoE.convert_weights(hf_config, (state_dict,), output_path / "moe", mesh_device),
         }
@@ -49,10 +51,13 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_mlp_tensor_parallel: bool = True,
     ) -> ModelPrefillConfig:
         return {
-            "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device),
-            "moe": MoE.prefill_model_config(hf_config, mesh_device),
+            "shared_expert": SharedExpert.prefill_model_config(
+                hf_config, mesh_device, is_mlp_tensor_parallel=is_mlp_tensor_parallel
+            ),
+            "moe": MoE.prefill_model_config(hf_config, mesh_device, is_mlp_tensor_parallel=is_mlp_tensor_parallel),
         }
 
     @classmethod
@@ -61,10 +66,13 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_mlp_tensor_parallel: bool = True,
     ) -> ModelDecodeConfig:
         return {
-            "shared_expert": SharedExpert.decode_model_config(hf_config, mesh_device),
-            "moe": MoE.decode_model_config(hf_config, mesh_device),
+            "shared_expert": SharedExpert.decode_model_config(
+                hf_config, mesh_device, is_mlp_tensor_parallel=is_mlp_tensor_parallel
+            ),
+            "moe": MoE.decode_model_config(hf_config, mesh_device, is_mlp_tensor_parallel=is_mlp_tensor_parallel),
         }
 
     @classmethod
@@ -95,13 +103,65 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
     @classmethod
     @abstractmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        mlp_out = MoE.forward_prefill(x, cfg["moe"])
-        mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"])
+        # Check if tensor parallelism should be handled at module level (default) or decoder block level
+        is_mlp_tensor_parallel = cfg["shared_expert"].get("is_mlp_tensor_parallel", True)
+
+        if not is_mlp_tensor_parallel:
+            # When is_mlp_tensor_parallel=False, handle AG/RS at decoder block level
+            # Perform All-Gather at decoder block level
+            ccl = cfg["shared_expert"]["ccl"]
+            x = ttnn.experimental.all_gather_async(
+                x, **ccl.populate_all_gather_runtime_args(cfg["shared_expert"]["all_gather"])
+            )
+
+            # After All-Gather, ensure tensor has the memory configuration expected by MoE gate
+            if "moe_gate" in cfg["moe"] and "input_memory_config" in cfg["moe"]["moe_gate"]:
+                x = ttnn.to_memory_config(x, cfg["moe"]["moe_gate"]["input_memory_config"])
+
+            # Forward through MoE and SharedExpert - pass is_mlp_tensor_parallel=False directly
+            mlp_out = MoE.forward_prefill(x, cfg["moe"], is_mlp_tensor_parallel=False)
+            mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"], is_mlp_tensor_parallel=False)
+
+            # Perform Reduce-Scatter at decoder block level
+            mlp_out = ttnn.experimental.reduce_scatter_minimal_async(
+                mlp_out, **ccl.populate_reduce_scatter_runtime_args(cfg["shared_expert"]["reduce_scatter_async"])
+            )
+        else:
+            # Default behavior: each module handles its own AG/RS - pass is_mlp_tensor_parallel=True directly
+            mlp_out = MoE.forward_prefill(x, cfg["moe"], is_mlp_tensor_parallel=True)
+            mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"], is_mlp_tensor_parallel=True)
+
         return mlp_out
 
     @classmethod
     @abstractmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        mlp_out = MoE.forward_decode(x, cfg["moe"])
-        mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"])
+        # Check if tensor parallelism should be handled at module level (default) or decoder block level
+        is_mlp_tensor_parallel = cfg["shared_expert"].get("is_mlp_tensor_parallel", True)
+
+        if not is_mlp_tensor_parallel:
+            # When is_mlp_tensor_parallel=False, handle AG/RS at decoder block level
+            # Perform All-Gather at decoder block level
+            ccl = cfg["shared_expert"]["ccl"]
+            x = ttnn.experimental.all_gather_async(
+                x, **ccl.populate_all_gather_runtime_args(cfg["shared_expert"]["all_gather"])
+            )
+
+            # After All-Gather, ensure tensor has the memory configuration expected by MoE gate
+            if "moe_gate" in cfg["moe"] and "input_memory_config" in cfg["moe"]["moe_gate"]:
+                x = ttnn.to_memory_config(x, cfg["moe"]["moe_gate"]["input_memory_config"])
+
+            # Forward through MoE and SharedExpert - pass is_mlp_tensor_parallel=False directly
+            mlp_out = MoE.forward_decode(x, cfg["moe"], is_mlp_tensor_parallel=False)
+            mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"], is_mlp_tensor_parallel=False)
+
+            # Perform Reduce-Scatter at decoder block level
+            mlp_out = ttnn.experimental.reduce_scatter_minimal_async(
+                mlp_out, **ccl.populate_reduce_scatter_runtime_args(cfg["shared_expert"]["reduce_scatter_async"])
+            )
+        else:
+            # Default behavior: each module handles its own AG/RS - pass is_mlp_tensor_parallel=True directly
+            mlp_out = MoE.forward_decode(x, cfg["moe"], is_mlp_tensor_parallel=True)
+            mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"], is_mlp_tensor_parallel=True)
+
         return mlp_out

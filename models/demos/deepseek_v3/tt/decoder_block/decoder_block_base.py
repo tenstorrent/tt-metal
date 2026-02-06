@@ -28,6 +28,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_mlp_tensor_parallel: bool = False,
     ) -> ModelPrefillConfig:
         mla_norm_config = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
         mlp_norm_config = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
@@ -42,7 +43,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
             "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
             "mlp_norm": mlp_norm_config,
             "mlp_reshard": ReshardConfig(memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            "mlp": cls.prefill_mlp_config(hf_config, mesh_device),
+            "mlp": cls.prefill_mlp_config(hf_config, mesh_device, is_mlp_tensor_parallel=is_mlp_tensor_parallel),
         }
 
     @classmethod
@@ -50,12 +51,13 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_mlp_tensor_parallel: bool = False,
     ) -> ModelDecodeConfig:
         mla_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
         mlp_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
 
         mla_config = cls.decode_mla_config(hf_config, mesh_device)
-        mlp_config = cls.decode_mlp_config(hf_config, mesh_device)
+        mlp_config = cls.decode_mlp_config(hf_config, mesh_device, is_mlp_tensor_parallel=is_mlp_tensor_parallel)
 
         # Get the input_memory_config for the mlp_reshard
         # For MoE blocks, input_memory_config is nested inside shared_expert
@@ -108,6 +110,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_mlp_tensor_parallel: bool = False,
     ) -> ModelPrefillConfig:
         """
         Prefill configuration for the MLP component of the decoder layer.
@@ -134,6 +137,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_mlp_tensor_parallel: bool = False,
     ) -> ModelDecodeConfig:
         """
         Decode configuration for the MLP component of the decoder layer.

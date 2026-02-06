@@ -102,6 +102,7 @@ def run_test_forward_pass_decoder2d(
     force_recalculate_weight_config,
     state_dict,
     decode_position_ids: int | None = None,
+    is_mlp_tensor_parallel: bool = False,
 ):
     # Check params
     if mode == "prefill":
@@ -132,6 +133,9 @@ def run_test_forward_pass_decoder2d(
     )
 
     # Set up model config
+    if hasattr(DecoderBlockClass, "decode_mlp_config") and DecoderBlockClass == MoEDecoderBlock2D:
+        logger.info(f"Testing MoEDecoderBlock2D with is_mlp_tensor_parallel={is_mlp_tensor_parallel}")
+
     weight_config = get_test_weight_config(
         DecoderBlockClass,
         hf_config_short,
@@ -140,7 +144,9 @@ def run_test_forward_pass_decoder2d(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(
+        DecoderBlockClass, mode, hf_config_short, mesh_device, is_mlp_tensor_parallel=is_mlp_tensor_parallel
+    )
     model_state = DecoderBlockClass.create_state(
         hf_config_short,
         paged_config,
@@ -302,6 +308,130 @@ def test_forward_pass(
         state_dict,
         decode_position_ids,
     )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "is_mlp_tensor_parallel",
+    [True, False],
+    ids=["mlp_tp_true", "mlp_tp_false"],
+)
+def test_moe_decoder_mlp_tensor_parallel(
+    is_mlp_tensor_parallel,
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    model_path,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    """Test MoEDecoderBlock2D with is_mlp_tensor_parallel flag."""
+
+    # Test configuration
+    DecoderBlockClass = MoEDecoderBlock2D
+    module_path = None
+    reference_layer_idx = 3
+    mode = "decode"
+    seq_len = 1
+    batch_size_per_row = USERS_PER_ROW
+    decode_position_ids = None
+
+    batch_size = batch_size_per_row * mesh_device.shape[0]
+
+    logger.info(f"Testing MoEDecoderBlock2D with is_mlp_tensor_parallel={is_mlp_tensor_parallel}")
+
+    # Generate reference IO
+    state_dict, position_ids, torch_input, reference_output, input_cache, _ = generate_reference_io(
+        model_path,
+        module_path,
+        hf_config_short,
+        reference_layer_idx,
+        seq_len,
+        batch_size,
+        mode,
+        state_dict,
+        decode_position_ids,
+    )
+
+    # Set up page config
+    user_id = None
+    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
+    paged_input_cache, torch_page_table = paged_cache_from_torch(
+        input_cache, tuple(mesh_device.shape), paged_config, user_id
+    )
+
+    # Set up model config with is_mlp_tensor_parallel parameter
+    weight_config = get_test_weight_config(
+        DecoderBlockClass,
+        hf_config_short,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+        is_mlp_tensor_parallel=is_mlp_tensor_parallel,
+    )
+
+    # Pass is_mlp_tensor_parallel to the model config
+    model_config = get_model_config(
+        DecoderBlockClass, mode, hf_config_short, mesh_device, is_mlp_tensor_parallel=is_mlp_tensor_parallel
+    )
+
+    model_state = DecoderBlockClass.create_state(
+        hf_config_short,
+        paged_config,
+        mesh_device,
+        ccl,
+        mla_cache=paged_input_cache,
+    )
+    model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device)
+    run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
+
+    # Set up ttnn inputs
+    tt_input = ttnn.from_torch(
+        torch_input.unsqueeze(0),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    position_ids_tensor = ttnn.from_torch(
+        position_ids,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        dtype=ttnn.int32,
+    )
+
+    tt_page_table = MLA2D.create_page_table(
+        page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
+    )
+    rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
+    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
+
+    # Forward pass
+    logger.info(f"Running TTNN forward pass with is_mlp_tensor_parallel={is_mlp_tensor_parallel}")
+    tt_output = DecoderBlockClass.forward_decode(tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_table)
+
+    tt_output_torch = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
+    )
+
+    # Check output PCC - both paths should produce same results
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
+    logger.info(f"Test passed with is_mlp_tensor_parallel={is_mlp_tensor_parallel}")
+
+    # Cleanup
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_output)
 
 
 if __name__ == "__main__":

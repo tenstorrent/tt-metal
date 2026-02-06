@@ -29,6 +29,7 @@ class MLPDequant(MLP):
         state_dict: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
+        is_mlp_tensor_parallel: bool = True,
     ) -> WeightConfig:
         weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
 
@@ -54,6 +55,7 @@ class MLPDequant(MLP):
                     mesh_device,
                     is_w2=is_w2,
                     metaweight_block_size=(1, weight_block_height, weight_block_width),
+                    is_mlp_tensor_parallel=is_mlp_tensor_parallel,
                 ),
             }
             for hf_name, models_name, is_w2 in [
@@ -74,6 +76,7 @@ class MLPDequant(MLP):
         mesh_device: ttnn.Device,
         is_w2: bool,
         metaweight_block_size: tuple[int, ...],
+        is_mlp_tensor_parallel: bool = True,
     ) -> SavedWeight:
         """
         Convert the quantized weight tensor to a format suitable for TTNN.
@@ -92,4 +95,5 @@ class MLPDequant(MLP):
             torch_metaweight_tensor=dequantize(quantized_weight_tensor, scale_inv_tensor, metaweight_block_size),
             mesh_device=mesh_device,
             is_w2=is_w2,
+            is_mlp_tensor_parallel=is_mlp_tensor_parallel,
         )

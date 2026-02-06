@@ -643,11 +643,12 @@ def get_test_weight_config(
     cache_path: Path,
     mesh_device: ttnn.Device,
     force_recalculate: bool,
+    **kwargs,
 ) -> Any:
     """Get the weight config, either by loading from cache or recalculating."""
     per_test_weight_cache_path = cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST")
     return get_weight_config(
-        ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
+        ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate, **kwargs
     )
 
 
