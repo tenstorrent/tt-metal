@@ -7,6 +7,7 @@
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
@@ -80,8 +81,9 @@ struct DRAMStreamingMatmul {
         // Expert indexing support
         static constexpr bool enable_indexing = enable_indexing_ == 1;
         static constexpr uint32_t cb_index = cb_index_;
-        static constexpr uint32_t index_offset = index_offset_;  // offset into index tensor
-        static constexpr bool use_hardcoded_expert_index = use_hardcoded_expert_index_ == 1;  // For testing
+        static constexpr uint32_t index_offset =
+            index_offset_;  // offset into index tensor (or expert index when hardcoded)
+        static constexpr bool use_hardcoded_expert_index = use_hardcoded_expert_index_ == 1;  // For testing/mesh mode
     };
 
     // Compute CTArgs (TRISC)
@@ -149,7 +151,7 @@ struct DRAMStreamingMatmul {
                 // Read expert index from index tensor at specified offset (uint16)
                 uint32_t expert_idx;
                 if constexpr (CTArgs::use_hardcoded_expert_index) {
-                    expert_idx = 0;  // For testing: always use expert 0
+                    expert_idx = CTArgs::index_offset;  // Use index_offset directly as expert index
                 } else {
                     volatile tt_l1_ptr uint16_t* index_ptr =
                         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::cb_index));
