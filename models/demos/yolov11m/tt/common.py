@@ -43,18 +43,6 @@ class Yolov11Conv2D:
         self.deallocate_activation = deallocate_activation
         self.core_count = core_count
 
-        # Normalize padding to 4-tuple (pad_h_top, pad_h_bot, pad_w_left, pad_w_right) for ttnn.conv2d
-        if hasattr(conv.padding, "__len__"):
-            if len(conv.padding) == 2:
-                self.padding = (conv.padding[0], conv.padding[0], conv.padding[1], conv.padding[1])
-            elif len(conv.padding) == 4:
-                self.padding = (conv.padding[0], conv.padding[1], conv.padding[2], conv.padding[3])
-            else:
-                raise ValueError("Padding should be a scalar or a list of 2 or 4 elements")
-        else:
-            p = conv.padding
-            self.padding = (p, p, p, p)
-
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -162,7 +150,6 @@ def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
     return output
 
 
-# for input tensor's whose shape is different from each other
 def sharded_concat_2(
     input_tensor_1, input_tensor_2, num_cores=64, shard_grid_coord_min=0, shard_grid_coord_max=7, dim=-1
 ):
