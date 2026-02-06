@@ -1,4 +1,4 @@
-name: Grouping CI Failures
+name: (triage) Grouping CI Failures
 
 on:
   schedule:
