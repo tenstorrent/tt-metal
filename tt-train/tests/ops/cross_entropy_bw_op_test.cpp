@@ -273,7 +273,7 @@ TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
-    // Skip with watcher enabled (#xxx)
+    // Skip with watcher enabled due to failure github issue #37193
     SKIP_FOR_WATCHER();
     using namespace ttml;
 

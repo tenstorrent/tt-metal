@@ -200,12 +200,6 @@ static std::string CaseName(const ::testing::TestParamInfo<ParityCase>& info) {
 TEST_P(SGDFusedParityTest, UpdateParity) {
     const auto& pc = GetParam();
 
-    // Skip specific Nesterov test case with watcher enabled
-    if (pc.nesterov && pc.name == "Nesterov" && pc.shape[0] == 1 && pc.shape[1] == 2 && pc.shape[2] == 32 &&
-        pc.shape[3] == 64) {
-        SKIP_FOR_WATCHER();
-    }
-
     // Run 2 steps if momentum is enabled, 1 step otherwise
     const uint32_t steps = (pc.momentum != 0.0f) ? 2 : 1;
     run_steps_and_compare(pc, steps);
