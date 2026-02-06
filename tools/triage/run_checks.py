@@ -30,6 +30,8 @@ import threading
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
+from triage import log_warning
+
 from inspector_data import run as get_inspector_data, InspectorData
 from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_check, create_progress
 from ttexalens.context import Context
@@ -186,6 +188,35 @@ def get_devices(
     return [context.devices[id] for id in device_ids]
 
 
+@dataclass(frozen=True)
+class BrokenDevice:
+    device: Device
+    error: Exception | None = None
+
+    def __hash__(self):
+        return hash(self.device)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BrokenDevice):
+            return False
+        return self.device == other.device
+
+
+@dataclass(frozen=True)
+class BrokenCore:
+    location: OnChipCoordinate
+    risc_name: str
+    error: Exception | None = None
+
+    def __hash__(self):
+        return hash((self.location, self.risc_name))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BrokenCore):
+            return False
+        return self.location == other.location and self.risc_name == other.risc_name
+
+
 class RunChecks:
     def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping):
         self.devices = devices
@@ -202,12 +233,20 @@ class RunChecks:
         }
         # Pre-compute unique_id to device mapping for fast lookup
         self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
-        self._broken_devices: set[Device] = set()
-        self._broken_cores: set[tuple[OnChipCoordinate, str]] = set()
+        self._broken_devices: set[BrokenDevice] = set()
+        self._broken_cores: set[BrokenCore] = set()
         self._skip_lock = threading.Lock()
 
     def get_device_by_unique_id(self, unique_id: int) -> Device | None:
         return self._unique_id_to_device.get(unique_id)
+
+    def get_broken_devices(self) -> list[BrokenDevice]:
+        with self._skip_lock:
+            return list(self._broken_devices)
+
+    def get_broken_cores(self) -> list[BrokenCore]:
+        with self._skip_lock:
+            return list(self._broken_cores)
 
     def _collect_results(
         self, result: list[CheckResult], check_result: object, result_type: type[CheckResult], **kwargs
@@ -239,16 +278,23 @@ class RunChecks:
                 for device in self.devices:
                     # Skipping broken devices
                     with self._skip_lock:
-                        if device in self._broken_devices:
+                        key = BrokenDevice(device)
+                        if key in self._broken_devices:
+                            # Find broken device to get the error
+                            broken_device = next(bd for bd in self._broken_devices if bd == key)
+                            # log_warning(f"Skipping device {device.id} with: {broken_device.error}")
                             continue
                     try:
                         check_result = check(device)
-                    except TimeoutDeviceRegisterError:
+                    except TimeoutDeviceRegisterError as e:
                         with self._skip_lock:
-                            self._broken_devices.add(device)
+                            self._broken_devices.add(BrokenDevice(device, e))
                             if device.is_local:
+                                # We are classifying remote devices as broken since we cannot access them if their local device is broken
                                 for remote_device in device.remote_devices:
-                                    self._broken_devices.add(remote_device)
+                                    # Broken remote devices will inherit the error from the local device
+                                    self._broken_devices.add(BrokenDevice(remote_device, e))
+                        # log_warning(f"Skipping device {device.id} with: {e}")
                         continue
                     # Use the common result collection helper
                     self._collect_results(
@@ -335,15 +381,21 @@ class RunChecks:
                     continue
 
                 # Skipping broken cores (optional, can be disabled per script)
+                # If script writer wants to disable this, they should handle RiscHaltError inside script.
                 if skip_broken_cores:
                     with self._skip_lock:
-                        if (location, risc_name) in self._broken_cores:
+                        key = BrokenCore(location, risc_name)
+                        if key in self._broken_cores:
+                            # Find broken core to get the error
+                            broken_core = next(bc for bc in self._broken_cores if bc == key)
+                            # log_warning(f"Skipping broken core {risc_name} at {location.to_user_str()} at device {location.device_id} with: {broken_core.error}")
                             continue
                 try:
                     check_result = check(location, risc_name)
                 except RiscHaltError as e:
                     with self._skip_lock:
-                        self._broken_cores.add((location, risc_name))
+                        self._broken_cores.add(BrokenCore(location, risc_name, e))
+                    # log_warning(f"Skipping broken core {risc_name} at {location.to_user_str()} at device {location.device_id} with: {e}")
                     continue
 
                 # Use the common result collection helper
