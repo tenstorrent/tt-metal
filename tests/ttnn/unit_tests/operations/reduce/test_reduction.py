@@ -9,7 +9,7 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_blackhole, is_blackhole, torch_random
+from models.common.utility_functions import skip_for_blackhole, is_blackhole, is_watcher_enabled, torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -581,6 +581,8 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     ],
 )
 def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
+    if is_watcher_enabled():
+        pytest.skip("Skipping due to failure with watcher enabled, github issue #37097")
     run_maxpool(device, input_shape, kernel_size, kernel_size, (0, 0), (1, 1))
     run_reduce_sum_h(device, 1, 32, 32, -2)
 

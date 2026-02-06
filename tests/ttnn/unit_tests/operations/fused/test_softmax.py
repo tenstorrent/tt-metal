@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_watcher_enabled
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -23,6 +23,9 @@ from models.common.utility_functions import torch_random
     ],
 )
 def test_large_softmax(device, batch_size, h, w, dim):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test with watcher enabled, see #37269")
+
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
@@ -484,6 +487,9 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
 
 
 def test_softmax_4096x4096_fp32(device):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test with watcher enabled, see #37269")
+
     torch.manual_seed(0)
     torch_input_tensor = torch.rand((1, 1, 4096, 4096), dtype=torch.float32)
     torch_output = torch.ops.aten._softmax.default(torch_input_tensor, dim=3, half_to_float=False)
