@@ -678,14 +678,21 @@ class SequentialChainBuilder:
         2. A single fused compute kernel (chains all phase computations)
         3. A single writer kernel (from last phase, with remapped CBs)
         """
+        # Validate fp32_dest_acc_en consistency across phases before fusion.
+        _validate_fp32_consistency([phase.op_descriptor for phase in self.phases])
+
         remapper = CBRemapper()
 
-        # CB indices that are unique per phase (chained input/output).
-        # All other CBs can be shared with phase 0's physical indices.
+        # Only reader-filled constant CBs are shared across phases.  All other
+        # CBs (input, output, scratch/intermediate) get unique per-phase
+        # allocations because they may differ in page_size (e.g. Float32 vs
+        # Float16_b when fp32_dest_acc_en differs) or blk-dependent tile counts.
+        READER_FILLED_CB_INDICES = {2, 3, 5, 6}  # cb_scaler, cb_eps, cb_gamma, cb_beta
         per_phase_original_indices: Set[int] = set()
         for phase in self.phases:
-            per_phase_original_indices.update(phase.input_cb_indices)
-            per_phase_original_indices.update(phase.output_cb_indices)
+            for cb_idx in phase.cb_info.keys():
+                if cb_idx not in READER_FILLED_CB_INDICES:
+                    per_phase_original_indices.add(cb_idx)
 
         # First pass: allocate CB indices for all phases
         phase0_remapping: Dict[int, int] = {}
@@ -703,9 +710,8 @@ class SequentialChainBuilder:
                     target_input_cb = conn.target_input_cb
                     break
 
-            # For phases 1+, build shared CB mapping from phase 0.
-            # All CBs except input/output are shared (reader-filled constants
-            # and intermediate scratch buffers that are done before next phase).
+            # For phases 1+, only reader-filled constant CBs are shared.
+            # All others get unique per-phase allocations.
             shared_cb_mapping: Optional[Dict[int, int]] = None
             if i > 0 and phase0_remapping:
                 shared_cb_mapping = {}
@@ -745,7 +751,9 @@ class SequentialChainBuilder:
         for i, phase in enumerate(self.phases):
             orig_desc = phase.op_descriptor.descriptor
 
-            # Remap CB descriptors, skipping duplicates from chaining
+            # Remap CB descriptors.  For shared CBs (e.g. gamma/beta) that appear
+            # in multiple phases, keep the descriptor with the larger total_size so
+            # the CB is big enough for the phase with the largest blk.
             remapped_cbs = remap_cb_descriptors(list(orig_desc.cbs), phase.cb_remapping)
             for cb_desc in remapped_cbs:
                 if cb_desc.format_descriptors:
@@ -753,6 +761,16 @@ class SequentialChainBuilder:
                     if cb_idx not in added_cb_indices:
                         all_cbs.append(cb_desc)
                         added_cb_indices.add(cb_idx)
+                    else:
+                        # Shared CB: use the larger total_size across phases
+                        for j, existing_cb in enumerate(all_cbs):
+                            if (
+                                existing_cb.format_descriptors
+                                and existing_cb.format_descriptors[0].buffer_index == cb_idx
+                            ):
+                                if cb_desc.total_size > existing_cb.total_size:
+                                    all_cbs[j] = cb_desc
+                                break
                 else:
                     all_cbs.append(cb_desc)
 
@@ -1150,9 +1168,9 @@ def _generate_fused_writer(
     Generate a fused writer kernel.
 
     Only the last phase's output needs to be written to DRAM.
-    The writer's blk (compile-time arg [0]) must match Phase 0's blk
-    so that cb_wait_front in the writer matches the number of tiles
-    pushed by the fused compute kernel (which uses Phase 0's blk for all phases).
+    The writer's blk naturally matches the last phase's compute blk since
+    both come from the same factory. No normalization needed — each phase
+    uses its own independent blk, and the writer matches the last phase.
     """
     if not phase_kernels:
         return None
@@ -1161,21 +1179,7 @@ def _generate_fused_writer(
     if phase_kernels[last_phase_idx]["writer"] is None:
         return None
 
-    writer = phase_kernels[last_phase_idx]["writer"]
-
-    # Normalize writer's blk (compile-time arg [0]) to match Phase 0's blk.
-    # The fused compute kernel uses Phase 0's blk for ALL phases, so the writer
-    # must use the same blk so cb_wait_front(cb_out, block.full_block_size())
-    # matches the number of tiles pushed by the last phase's compute.
-    if phase_kernels[0]["compute"] is not None:
-        phase0_args = list(phase_kernels[0]["compute"].compile_time_args)
-        if len(phase0_args) > 1:
-            phase0_blk = phase0_args[1]  # blk is compile-time arg index 1 for compute
-            writer_args = list(writer.compile_time_args)
-            if writer_args and writer_args[0] != phase0_blk:
-                writer.compile_time_args = tuple([phase0_blk] + writer_args[1:])
-
-    return writer
+    return phase_kernels[last_phase_idx]["writer"]
 
 
 def _generate_fused_compute(
@@ -1242,9 +1246,52 @@ def _generate_fused_compute(
     # For compute kernels, all phases typically have the same runtime args (NCHt)
     # since they operate on the same data. Use phase 0's args.
     fused_compute.runtime_args = base_compute.runtime_args
-    fused_compute.config = base_compute.config
+
+    # Merge compute config from all phases.
+    fused_compute.config = _merge_compute_configs(phase_kernels)
 
     return fused_compute
+
+
+def _merge_compute_configs(
+    phase_kernels: List[Dict[str, Any]],
+) -> "ttnn.ComputeConfigDescriptor":
+    """
+    Merge compute configs from all phases.
+
+    Key constraint: fp32_dest_acc_en is a kernel-level hardware setting that
+    controls whether dest registers use 32-bit (fp32) or 16-bit (fp16_b)
+    format.  On Wormhole, dest can hold 8 fp32 tiles or 16 fp16_b tiles.
+
+    If ANY phase requires fp32_dest_acc_en=True (for FLOAT32_REDUCTION), the
+    fused kernel must use True.  Phases with blk>4 still work because the 8
+    fp32 dest registers accommodate up to blk=8.
+
+    For math_approx_mode: use True if ANY phase uses it (safe superset).
+    """
+    base = phase_kernels[0]["compute"].config
+
+    # fp32_dest_acc_en: True if ANY phase needs it
+    need_fp32 = False
+    need_approx = False
+    for pk in phase_kernels:
+        if pk["compute"] is not None:
+            if pk["compute"].config.fp32_dest_acc_en:
+                need_fp32 = True
+            if pk["compute"].config.math_approx_mode:
+                need_approx = True
+
+    if need_fp32 == base.fp32_dest_acc_en and need_approx == base.math_approx_mode:
+        return base
+
+    # Need a modified config
+    merged = ttnn.ComputeConfigDescriptor()
+    merged.math_fidelity = base.math_fidelity
+    merged.fp32_dest_acc_en = need_fp32
+    merged.math_approx_mode = need_approx
+    merged.dst_full_sync_en = base.dst_full_sync_en
+    merged.bfp8_pack_precise = base.bfp8_pack_precise
+    return merged
 
 
 def _merge_compile_time_args(
@@ -1309,6 +1356,35 @@ def _merge_defines(
 
 # Defines that are resolved per-phase in source code (not passed to compiler)
 _SOURCE_LEVEL_DEFINES = {"RMSNORM", "FUSE_PRE_ADD", "FUSED_PRE_ADD"}
+
+# Positional compile-time arg names for LayerNorm/RMSNorm compute kernels.
+# Index 0=Wt, 1=blk, 2=do_gamma, 3=do_beta, 4=FLOAT32_DTYPE,
+# 5=FLOAT32_REDUCTION, 6=LEGACY_RSQRT, 7=W
+_COMPUTE_ARG_NAMES = [
+    "Wt",
+    "blk",
+    "do_gamma",
+    "do_beta",
+    "FLOAT32_DTYPE",
+    "FLOAT32_REDUCTION",
+    "LEGACY_RSQRT",
+    "W",
+]
+
+
+def _total_with_remainder(Wt: int, blk: int) -> int:
+    """Python mirror of C++ blocks(Wt, blk).total_with_remainder().
+
+    Returns the total number of tiles including padding for the last block.
+    """
+    if Wt == 0:
+        return 0
+    if blk >= Wt:
+        return blk  # Single partial block, padded to full block size
+    remainder = Wt % blk
+    if remainder == 0:
+        return Wt  # All full blocks, no padding
+    return Wt + (blk - remainder)  # Pad last block to full block size
 
 
 def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
@@ -1511,19 +1587,11 @@ def _generate_multi_phase_compute_source(
     lines.extend(other_pre_main)
     lines.append("")
 
-    # Determine Phase 0's blk value (compile-time arg index 1).
-    # When fusing, all phases must use the same blk to ensure consistent
-    # CB push/wait patterns. The reader pushes full_block_size tiles (including
-    # padding for partial blocks), but Phase 0's output only pushes actual tiles
-    # using its own blk. Phase 1+ must match Phase 0's blk so their
-    # cb_wait_front(cb, block.full_block_size()) matches what's available.
-    phase0_blk = None
-    if phase_kernels[0]["compute"] is not None:
-        phase0_args = list(phase_kernels[0]["compute"].compile_time_args)
-        if len(phase0_args) > 1:
-            phase0_blk = phase0_args[1]  # blk is arg index 1 for LayerNorm/RMSNorm
-
-    # Generate a phase function for each phase
+    # Generate a phase function for each phase.
+    # Each phase resolves its own compile-time args independently via
+    # phase-prefixed named args (e.g., "phase1_blk" instead of normalizing to
+    # Phase 0's blk). The intermediate CB tile count mismatch between phases
+    # with different blk values is handled by transition padding in kernel_main().
     source_idx = 0
     for i, (pk, phase) in enumerate(zip(phase_kernels, phases)):
         if pk["compute"] is None:
@@ -1534,20 +1602,11 @@ def _generate_multi_phase_compute_source(
         source_idx += 1
         body = _extract_kernel_body_for_fusion(resolved_source)
 
-        # Get this phase's compile-time args for substitution
-        phase_compile_args = list(pk["compute"].compile_time_args) if pk["compute"] else []
-
-        # For phases 1+, override blk (arg index 1) to match Phase 0's blk.
-        # This is critical: Phase 0 pushes tiles to the intermediate CB using its
-        # blk-sized blocks. Phase 1+ must use the same blk so cb_wait_front with
-        # block.full_block_size() matches the number of tiles actually available.
-        if i > 0 and phase0_blk is not None and len(phase_compile_args) > 1:
-            phase_compile_args[1] = phase0_blk
-
-        # Apply CB remapping with phase prefix, and substitute compile-time args
-        remapped_body = _apply_cb_remapping_to_source(
-            body, phase.cb_remapping, phase_idx=i, compile_time_args=phase_compile_args
-        )
+        # Substitute all get_compile_time_arg_val(N) with literal values.
+        # Every phase needs this because the phase bodies are FORCE_INLINE
+        # functions and positional arg resolution must happen at source level.
+        ct_args = list(pk["compute"].compile_time_args)
+        remapped_body = _apply_cb_remapping_to_source(body, phase.cb_remapping, phase_idx=i, compile_time_args=ct_args)
 
         lines.append(f"// Phase {i} compute function")
         lines.append(f"FORCE_INLINE void phase{i}_compute() {{")
@@ -1559,10 +1618,61 @@ def _generate_multi_phase_compute_source(
         lines.append("}")
         lines.append("")
 
-    # Generate kernel_main that calls all phase functions
+    # Generate kernel_main that calls all phase functions, with transition
+    # padding between phases when the consumer expects more tiles than the
+    # producer pushed (due to different blk values).
     lines.append("void kernel_main() {")
     for i in range(len(phase_sources)):
         lines.append(f"    phase{i}_compute();")
+
+        # Add transition padding between consecutive phases if needed
+        if i < len(phase_sources) - 1:
+            pk_i = phase_kernels[i]
+            pk_next = phase_kernels[i + 1]
+
+            if pk_i["compute"] is not None and pk_next["compute"] is not None:
+                args_i = list(pk_i["compute"].compile_time_args)
+                args_next = list(pk_next["compute"].compile_time_args)
+
+                Wt_i = args_i[0] if args_i else 0
+                blk_i = args_i[1] if len(args_i) > 1 else Wt_i
+                blk_next = args_next[1] if len(args_next) > 1 else (args_next[0] if args_next else 0)
+
+                tiles_produced = _total_with_remainder(Wt_i, blk_i)
+                tiles_needed = _total_with_remainder(Wt_i, blk_next)
+
+                if tiles_needed > tiles_produced:
+                    pad_count = tiles_needed - tiles_produced
+                    # Get intermediate CB: Phase i's remapped output CB
+                    intermediate_cb = phases[i].cb_remapping.get(16, 16)
+                    lines.append(f"    // Transition: phase {i} (blk={blk_i}) pushed {tiles_produced} tiles,")
+                    lines.append(f"    // phase {i + 1} (blk={blk_next}) needs {tiles_needed} tiles")
+                    lines.append(f"    cb_reserve_back({intermediate_cb}, {pad_count});")
+                    lines.append(f"    cb_push_back({intermediate_cb}, {pad_count});")
+
+                    # Gamma/beta are loaded by the reader with Phase 0's blk but
+                    # never popped.  If Phase i+1 has a larger blk, its
+                    # cb_wait_front expects more tiles than the reader loaded.
+                    # Pad these CBs too (reader loaded with blk_0, we need blk_next).
+                    do_gamma_next = args_next[2] if len(args_next) > 2 else 0
+                    do_beta_next = args_next[3] if len(args_next) > 3 else 0
+                    # Reader loaded gamma/beta with Phase 0's blk
+                    args_0 = list(phase_kernels[0]["compute"].compile_time_args)
+                    blk_0 = args_0[1] if len(args_0) > 1 else (args_0[0] if args_0 else 0)
+                    gamma_loaded = _total_with_remainder(Wt_i, blk_0)
+                    gamma_needed = _total_with_remainder(Wt_i, blk_next)
+                    gamma_pad = gamma_needed - gamma_loaded
+                    if gamma_pad > 0 and do_gamma_next:
+                        gamma_cb = phases[i + 1].cb_remapping.get(5, 5)
+                        lines.append(f"    // Pad gamma CB for phase {i + 1} ({gamma_loaded} -> {gamma_needed} tiles)")
+                        lines.append(f"    cb_reserve_back({gamma_cb}, {gamma_pad});")
+                        lines.append(f"    cb_push_back({gamma_cb}, {gamma_pad});")
+                    if gamma_pad > 0 and do_beta_next:
+                        beta_cb = phases[i + 1].cb_remapping.get(6, 6)
+                        lines.append(f"    // Pad beta CB for phase {i + 1} ({gamma_loaded} -> {gamma_needed} tiles)")
+                        lines.append(f"    cb_reserve_back({beta_cb}, {gamma_pad});")
+                        lines.append(f"    cb_push_back({beta_cb}, {gamma_pad});")
+
     lines.append("}")
     lines.append("")
 
@@ -1583,20 +1693,14 @@ def _merge_named_compile_time_args(
     - READER-FILLED CBs (cb_eps, cb_scaler, cb_gamma, cb_beta): These are filled
       by the reader kernel once and never popped. Phase 1+ reuses Phase 0's
       physical CBs since the data persists.
-    - INTERMEDIATE SCRATCH CBs (cb_fusion, cb_xmm, cb_ex, cb_ex2, cb_xmm2,
-      cb_ex2pe, cb_x, cb_inb): These are pushed/popped within each NCHt iteration.
-      Phase 1+ can reuse Phase 0's physical CBs since Phase 0 completes before
-      Phase 1 starts in the fused kernel.
-    - PER-PHASE CBs (cb_in, cb_out): These differ per phase due to chaining
-      (Phase 1's input = Phase 0's output). These get unique remapped indices.
+    - ALL OTHER CBs (input, output, scratch/intermediate): Get unique per-phase
+      physical CB indices because they may differ in page_size (e.g. Float32
+      vs Float16_b when fp32_dest_acc_en differs) or blk-dependent tile counts.
     """
-    # CBs filled by reader once, never popped - safe to share
-    READER_FILLED_CBS = {"cb_eps", "cb_scaler", "cb_gamma", "cb_beta"}
-
-    # Intermediate scratch CBs - pushed/popped within each iteration, safe to reuse
-    SCRATCH_CBS = {"cb_fusion", "cb_xmm", "cb_ex", "cb_ex2", "cb_xmm2", "cb_ex2pe", "cb_x", "cb_inb"}
-
-    SHARED_CBS = READER_FILLED_CBS | SCRATCH_CBS
+    # Only reader-filled constant CBs are shared across phases.  Scratch CBs
+    # get per-phase physical indices because they may have different page_sizes
+    # (e.g. Float32 vs Float16_b) or blk-dependent tile counts.
+    SHARED_CBS = {"cb_eps", "cb_scaler", "cb_gamma", "cb_beta"}
 
     merged = []
     phase0_values = {}  # Cache phase 0's CB values
@@ -1616,6 +1720,7 @@ def _merge_named_compile_time_args(
                         merged.append((prefixed_name, phase0_values[name]))
                     else:
                         merged.append((prefixed_name, value))
+
     return merged
 
 
@@ -1698,27 +1803,25 @@ def _apply_cb_remapping_to_source(
     Apply CB remapping and compile-time arg substitution to kernel source code.
 
     This modifies:
-    1. get_named_compile_time_arg_val("cb_xxx") calls to use phase-prefixed names (phase 1+ only)
-    2. Direct CB references like tt::CBIndex::c_N
-    3. For phase 1+: get_compile_time_arg_val(N) calls are replaced with the actual values
-       from this phase's compile-time args (to avoid reading Phase 0's values)
-
-    Phase 0's named args are NOT prefixed because the original kernel body expects
-    the original names (cb_in, cb_out, etc.).
+    1. get_compile_time_arg_val(N) → get_named_compile_time_arg_val("phaseI_ARG_NAME")
+       for ALL phases, so each phase resolves its own Wt, blk, do_gamma, etc.
+       independently via phase-prefixed named args.
+    2. get_named_compile_time_arg_val("cb_xxx") → phase-prefixed for phase 1+
+    3. Direct CB references like tt::CBIndex::c_N
     """
     result = source
     import re
 
-    # For phase 1+, replace positional compile-time arg calls with actual values
-    # This is critical because the merged kernel uses Phase 0's compile-time args,
-    # but each phase has its own do_gamma/do_beta values
-    if phase_idx > 0 and compile_time_args:
+    # For Phase 1+, replace positional compile-time arg calls with the
+    # phase's actual values (substituted as literals).  Phase 0 keeps the
+    # original get_compile_time_arg_val(N) calls which resolve correctly
+    # against the fused kernel's positional args.
+    if phase_idx > 0 and compile_time_args is not None:
 
         def replace_compile_time_arg(match):
             arg_idx = int(match.group(1))
             if arg_idx < len(compile_time_args):
                 return str(compile_time_args[arg_idx])
-            # If index is out of range, keep original (shouldn't happen)
             return match.group(0)
 
         result = re.sub(
@@ -2090,6 +2193,54 @@ def chain_descriptors(
             builder.connect_phases(src_phase, src_cb, tgt_phase, tgt_cb)
 
     return builder.build()
+
+
+def _validate_fp32_consistency(op_descriptors: List[OpDescriptor]) -> None:
+    """
+    Validate that all phases have consistent fp32_dest_acc_en settings.
+
+    DST_ACCUM_MODE is a compile-time constexpr bool that controls the entire
+    kernel's dest register format (fp32 vs fp16_b).  It cannot be changed
+    mid-kernel, so all fused phases MUST be built with the same
+    fp32_dest_acc_en setting.
+
+    When fp32_dest_acc_en differs, the factory produces incompatible blk
+    values (4 for fp32, 8 for fp16_b) and CB page sizes (4096 vs 2048).
+    Forcing the hardware setting at fusion time is insufficient — the
+    compile-time args and CB sizes embedded in each phase's descriptor
+    must match the global DST_ACCUM_MODE.
+
+    Raises ValueError with guidance on how to fix the mismatch.
+    """
+    fp32_settings = []
+    for i, desc in enumerate(op_descriptors):
+        for kernel_desc in desc.descriptor.kernels:
+            config = kernel_desc.config
+            if hasattr(config, "fp32_dest_acc_en"):
+                fp32_settings.append((i, config.fp32_dest_acc_en))
+                break
+
+    if not fp32_settings:
+        return
+
+    fp32_values = {v for _, v in fp32_settings}
+    if len(fp32_values) <= 1:
+        return  # All consistent
+
+    phases_with_fp32 = [i for i, v in fp32_settings if v]
+    phases_without = [i for i, v in fp32_settings if not v]
+
+    raise ValueError(
+        f"fp32_dest_acc_en mismatch: phases {phases_with_fp32} use fp32=True, "
+        f"phases {phases_without} use fp32=False. "
+        f"DST_ACCUM_MODE is a kernel-level hardware setting that cannot be "
+        f"changed mid-kernel. All phases must use the same fp32_dest_acc_en "
+        f"setting. To fix: create all descriptors with the same "
+        f"compute_kernel_config. For example:\n"
+        f"  config = ttnn.layernorm_default_compute_config(device.arch())\n"
+        f"  rms = rms_norm.rms_norm(input, ..., compute_kernel_config=config)\n"
+        f"  ln  = layer_norm.layer_norm(input, ..., compute_kernel_config=config)"
+    )
 
 
 def fuse_layernorm_chain(
