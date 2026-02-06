@@ -32,10 +32,10 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
 #else
     UNPACK((llk_unpack_hw_configure(icb)));
-    UNPACK((llk_unpack_A_init<p_unpacr::UNP_A, false /*transpose*/, DST_ACCUM_MODE>(icb)));
+    UNPACK((llk_unpack_A_init<false /*transpose*/, DST_ACCUM_MODE>(icb)));
 
-    PACK((llk_pack_hw_configure<p_pacr::PACK0>(ocb)));
-    PACK((llk_pack_init<p_pacr::PACK0>(ocb)));
+    PACK((llk_pack_hw_configure(ocb)));
+    PACK((llk_pack_init(ocb)));
 
     MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
     MATH((llk_math_hw_configure<true /*math_implied_fmts*/, DST_ACCUM_MODE>(icb, icb)));

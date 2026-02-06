@@ -22,17 +22,15 @@
 /**
  * @brief Initialize packer to pack out a single tile
  *
- * @tparam PACK_SEL: Selects which unpacker resource to use, values = p_pacr::PACK0/PACK1
  * @param pack_output The output circular buffer
  *
- * This function initializes the selected packer to pack a single tile from the destination register to the output
+ * This function initializes packer0 to pack a single tile from the destination register to the output
  * circular buffer.
  */
-template <std::uint8_t PACK_SEL>
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
-    _llk_pack_init_<PACK_SEL>(output_id, 1 /*num_tiles_per_pack*/);
+    _llk_pack_init_<p_pacr::PACK0>(output_id, 1 /*num_tiles_per_pack*/);
 }
 
 /**
@@ -75,20 +73,19 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
  * @tparam out_of_order_output: Set true to write the output tile to the tile index specified by
  * the user in `output_tile_index`, set false for pack to operqate sequentially: write to the next tile index
  * starting from index 0, and ignore the `output_tile_index` parameter
- * @tparam PACK_SEL: Selects which packer resource to use, values = p_pacr::PACK0/PACK1
  * @param tile_idx: The tile index into the math destination register from where the packer can start packing from
  * @param pack_output The output circular buffer
  * @param output_tile_index: The index in the output CB to write to
  *
- * This function packs tiles from the destination register to the output circular buffer.
+ * This function packs tiles from the destination register to the output circular buffer, packer0 is used.
  */
-template <bool out_of_order_output = false, std::uint8_t PACK_SEL>
+template <bool out_of_order_output = false>
 inline void llk_pack(
     const std::uint32_t tile_index, const std::uint32_t pack_output, const std::uint32_t output_tile_index = 0) {
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t l1_tile_index = get_output_tile_index<out_of_order_output, false>(output_id, output_tile_index);
 
-    _llk_pack_<PACK_SEL>(tile_index, l1_tile_index);
+    _llk_pack_<p_pacr::PACK0>(tile_index, l1_tile_index);
 }
 
 /*************************************************************************
@@ -96,12 +93,10 @@ inline void llk_pack(
  *************************************************************************/
 
 /**
- * @brief Programs selected packer l1 info & math destination register format
+ * @brief Programs packer0 l1 info & math destination register format
  *
- * @tparam PACK_SEL: Sets which packer to configure, values = p_pacr::PACK0/PACK1
  * @param pack_output The output circular buffer
  */
-template <std::uint32_t PACK_SEL>
 inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
@@ -128,7 +123,7 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
 
     // TODO: Expand programmability in order to support the dest dvalid scheme with different clients
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-    _llk_pack_hw_configure_<PACK_SEL>(td_val);
+    _llk_pack_hw_configure_<p_pacr::PACK0>(td_val);
 }
 
 /**

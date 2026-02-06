@@ -93,7 +93,7 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
     MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 #else
-    UNPACK((llk_unpack_A<p_unpacr::UNP_A>(in_cb_id, in_tile_index)));
+    UNPACK((llk_unpack_A(in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy(dst_tile_index, in_cb_id)));
 #endif
 }
