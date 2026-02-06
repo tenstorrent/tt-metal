@@ -12,10 +12,12 @@ matching the configuration from test_deepseek_b1_reduce_to_one.py.
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import skip_for_wormhole_b0
-from models.demos.deepseek_v3_b1.micro_ops.reduce_to_root_b1 import ReduceToRootB1
+from models.demos.deepseek_v3_b1.micro_ops.reduce_to_root_b1.op import ReduceToRootB1
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 # CoreRangeSet for CCL operations (subset of compute grid)
 CCL_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7))])
@@ -148,7 +150,7 @@ def setup_reduce_to_root_test(mesh_device):
     )
 
     # Compute reference output
-    ref_output = compute_reference_reduce_to_one(data_per_device)
+    ref_output = ReduceToRootB1.golden(data_per_device)
 
     # Create 4 semaphores for reduce_to_root (round1, round2, round3, exit)
     semaphores = [ttnn.create_global_semaphore(submesh_device, CCL_CRS, 0) for _ in range(4)]
@@ -180,8 +182,8 @@ def verify_output(output_tensor, submesh_device, root_coord, ref_output):
     print(f"DEBUG: output_root.shape = {output_root.shape}")
 
     # Squeeze extra dimensions if needed
-    output_root_squeezed = output_root.squeeze()
-    ref_output_squeezed = ref_output.squeeze()
+    output_root_squeezed = output_root  # .squeeze()
+    ref_output_squeezed = ref_output  # .squeeze()
     print(f"DEBUG: output_root_squeezed.shape = {output_root_squeezed.shape}")
     print(f"DEBUG: ref_output_squeezed.shape = {ref_output_squeezed.shape}")
 
@@ -272,6 +274,8 @@ def run_reduce_to_root_with_trace(mesh_device):
     ttnn.synchronize_device(submesh_device)
 
     # Helper to run reduce_to_root multiple iterations
+    profiler = BenchmarkProfiler()
+
     def run_iterations(num_iters):
         for _ in range(num_iters):
             output_tensor = ReduceToRootB1.op(
@@ -293,34 +297,28 @@ def run_reduce_to_root_with_trace(mesh_device):
     # Capture main trace
     logger.info("Capturing main trace")
     trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    run_iterations(20)
+    run_iterations(30)
     ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(submesh_device)
-
-    # Capture tail trace
-    logger.info("Capturing tail trace")
-    trace_id_tail = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    run_iterations(20)
-    ttnn.end_trace_capture(submesh_device, trace_id_tail, cq_id=0)
     ttnn.synchronize_device(submesh_device)
 
     # Execute warmup trace
     logger.info("Execute trace warmup")
+    profiler.start("warmup-trace")
     ttnn.execute_trace(submesh_device, trace_id_warmup, blocking=False)
     ttnn.release_trace(submesh_device, trace_id_warmup)
     ttnn.synchronize_device(submesh_device)
+    profiler.end("warmup-trace")
 
     # Execute main trace
     logger.info("Execute main trace")
+    signpost("start")
+    profiler.start("main-trace")
     ttnn.execute_trace(submesh_device, trace_id, blocking=False)
     ttnn.release_trace(submesh_device, trace_id)
     ttnn.synchronize_device(submesh_device)
 
-    # Execute tail trace
-    logger.info("Execute tail trace")
-    ttnn.execute_trace(submesh_device, trace_id_tail, blocking=False)
-    ttnn.release_trace(submesh_device, trace_id_tail)
-    ttnn.synchronize_device(submesh_device)
+    profiler.end("main-trace")
+    signpost("stop")
 
     # Verify output
     print("\nVerifying trace output...")

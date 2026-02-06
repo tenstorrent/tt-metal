@@ -30,6 +30,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreRuntimeArgsDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
@@ -131,15 +132,10 @@ class ReduceToRootB1:
         intermediate_r3_per_device = ttnn.get_device_tensors(intermediate_tensors[2])
 
         # Get semaphore addresses
-        sem_round1 = semaphores[0]
-        sem_round2 = semaphores[1]
-        sem_round3 = semaphores[2]
-        sem_exit = semaphores[3]
-
-        sem_round1_addr = ttnn.get_global_semaphore_address(sem_round1)
-        sem_round2_addr = ttnn.get_global_semaphore_address(sem_round2)
-        sem_round3_addr = ttnn.get_global_semaphore_address(sem_round3)
-        sem_exit_addr = ttnn.get_global_semaphore_address(sem_exit)
+        sem_round1_addr = ttnn.get_global_semaphore_address(semaphores[0])
+        sem_round2_addr = ttnn.get_global_semaphore_address(semaphores[1])
+        sem_round3_addr = ttnn.get_global_semaphore_address(semaphores[2])
+        sem_exit_addr = ttnn.get_global_semaphore_address(semaphores[3])
 
         # Get tensor properties from sample
         input_sample = input_tensors_per_device[0]
@@ -203,12 +199,6 @@ class ReduceToRootB1:
 
                 # Get tensors for this device
                 input_tensor_device = input_tensors_per_device[device_idx]
-
-                # Debug: print device mapping
-                physical_device_id = input_tensor_device.device().id()
-                print(
-                    f"DEBUG: coord=({row},{col}) device_idx={device_idx} physical_id={physical_device_id} role={role}"
-                )
                 output_tensor_device = output_tensors_per_device[device_idx]
                 intermediate_r1_device = intermediate_r1_per_device[device_idx]
                 intermediate_r2_device = intermediate_r2_per_device[device_idx]
@@ -219,7 +209,6 @@ class ReduceToRootB1:
                 # Worker cores from input shard grid
                 input_shard_grid = input_tensor_device.memory_config().shard_spec.grid
                 input_cores_list = ttnn.corerange_to_cores(input_shard_grid, row_wise=True)
-                num_shard_cores = len(input_cores_list)
 
                 # Build core -> column index mapping
                 column_to_cores = {}
@@ -246,13 +235,6 @@ class ReduceToRootB1:
                     fabric_cores.append(fabric_core)
                     column_to_fabric_core[x] = fabric_core
 
-                # Debug: print fabric core logical and physical coordinates
-                for fc in fabric_cores:
-                    fc_phys = device.worker_core_from_logical_core(fc)
-                    print(
-                        f"DEBUG: coord=({row},{col}) fabric_core logical=({fc.x},{fc.y}) physical=({fc_phys.x},{fc_phys.y})"
-                    )
-
                 # Core to slot index within column
                 core_to_slot_idx = {}
                 for x in sorted_columns:
@@ -271,19 +253,15 @@ class ReduceToRootB1:
 
                 # Determine destination coordinate based on role
                 if is_leaf:
-                    # Row 0 sends to row 1, row 3 sends to row 2
                     if row == 0:
                         dest_coord = ttnn.MeshCoordinate(row + 1, col)
                     else:  # row == 3
                         dest_coord = ttnn.MeshCoordinate(row - 1, col)
                 elif is_root3:
-                    # ROOT3 sends to root_coord row (but same column)
                     dest_coord = ttnn.MeshCoordinate(root_coord[0], col)
                 elif is_root2:
-                    # ROOT2 sends to ROOT1
                     dest_coord = root_coord
                 else:
-                    # ROOT1 uses exit_coord
                     dest_coord = exit_coord
 
                 # Get fabric node IDs
@@ -333,7 +311,6 @@ class ReduceToRootB1:
                     ("output_core_noc_y", output_core_phys.y),
                     ("num_workers", num_workers_per_column),
                     ("slot_size_bytes", slot_size_bytes),
-                    # packet_header_size_bytes is no longer passed - kernel uses sizeof(PACKET_HEADER_TYPE)
                 ]
 
                 # Compute (TRISC) compile-time args
@@ -348,21 +325,44 @@ class ReduceToRootB1:
                     ("scratch_cb", scratch_cb),
                 ]
 
-                # Merge compile-time args
-                all_ct_args = []
-                seen = set()
-                for name, val in reader_ct_args + writer_ct_args + compute_ct_args:
-                    if name not in seen:
-                        seen.add(name)
-                        all_ct_args.append((name, val))
+                # === Common Runtime Args ===
+                # Reader common args: semaphore addresses (same for all worker cores)
+                reader_common_rt_args = [
+                    sem_round1_addr,
+                    sem_round2_addr,
+                    sem_round3_addr,
+                ]
+
+                # === Per-Core Runtime Args ===
+                # Build per-core BRISC args for worker cores
+                brisc_per_core_args = []
+                for core in input_cores_list:
+                    fabric_core = column_to_fabric_core[core.x]
+                    fabric_core_phys = device.worker_core_from_logical_core(fabric_core)
+                    slot_idx = core_to_slot_idx[(core.x, core.y)]
+                    shard_idx = core_to_shard_idx[(core.x, core.y)]
+
+                    worker_args = [
+                        fabric_core_phys.x,  # fabric_core_noc_x
+                        fabric_core_phys.y,  # fabric_core_noc_y
+                        slot_idx,  # my_slot_idx
+                        slot_idx,  # worker_sem_id (same as slot_idx for simplicity)
+                        dst_l1_addr,  # dst_l1_addr
+                        dst_sem_addr,  # dst_sem_addr
+                        output_tensor_device.buffer_address(),  # output_base_addr
+                        shard_idx,  # shard_idx
+                    ]
+                    brisc_per_core_args.append((core, worker_args))
+
+                # Fabric cores BRISC args: worker semaphore IDs (fabric args appended later)
+                for fc in fabric_cores:
+                    fabric_args = list(range(num_workers_per_column))  # Worker sem IDs
+                    brisc_per_core_args.append((fc, fabric_args))
 
                 # === CB Descriptors ===
-                # Match C++ implementation: use payload_size_bytes as page_size for tensor-backed CBs
-                # and 32x32 compute tiles for compute operations
                 compute_tile_desc = ttnn.TileDescriptor(compute_tile_height, compute_tile_width)
 
                 # local_cb: backed by input tensor
-                # Use cb_descriptor_from_sharded_tensor to link to tensor buffer, then override format
                 cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(local_cb, input_tensor_device)
                 cb0_desc.core_ranges = all_cores_set
                 cb0_desc.total_size = payload_size_bytes
@@ -376,7 +376,6 @@ class ReduceToRootB1:
                 ]
 
                 # received_cb_r1: backed by intermediate tensor r1
-                # Use compute tiles for binary_dest_reuse_tiles operations
                 cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(received_cb_r1, intermediate_r1_device)
                 cb1_desc.core_ranges = all_cores_set
                 cb1_desc.total_size = payload_size_bytes
@@ -402,7 +401,7 @@ class ReduceToRootB1:
                     )
                 ]
 
-                # packet_cb: staging buffer for workers to assemble packets (not tensor-backed)
+                # packet_cb: staging buffer for workers to assemble packets
                 cb3_desc = ttnn.CBDescriptor(
                     total_size=num_workers_per_column * slot_size_bytes,
                     core_ranges=all_cores_set,
@@ -442,7 +441,6 @@ class ReduceToRootB1:
                 ]
 
                 # scratch_cb: compute scratch (not tensor-backed)
-                # cb_size_bytes = num_compute_tiles * tile_size_bytes (32x32 tiles)
                 cb_size_bytes = num_compute_tiles * compute_tile_size_bytes
                 cb7_desc = ttnn.CBDescriptor(
                     total_size=cb_size_bytes,
@@ -460,13 +458,13 @@ class ReduceToRootB1:
                 cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb5_desc, cb6_desc, cb7_desc]
 
                 # === Unified Kernel Descriptor ===
-                # Use unified compile-time core descriptors to differentiate fabric cores vs worker cores
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=kernel_path,
                     core_ranges=all_cores_set,
                     ncrisc_named_compile_time_args=reader_ct_args,
                     brisc_named_compile_time_args=writer_ct_args,
                     trisc_named_compile_time_args=compute_ct_args,
+                    ncrisc_common_runtime_args=reader_common_rt_args,
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4,
                         fp32_dest_acc_en=False,
@@ -480,47 +478,16 @@ class ReduceToRootB1:
                             other_value=0,
                         ),
                     ],
+                    per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                        brisc_args=brisc_per_core_args,
+                    ),
                 )
 
                 kernel_result = unified_kernel.get_kernel_descriptors()
-                worker_group = kernel_result.get_group_by_arg("is_fabric_core", 0)
                 fabric_group = kernel_result.get_group_by_arg("is_fabric_core", 1)
 
-                # === Runtime Args ===
-                # Reader runtime args
-                reader_rt_args = ttnn.RuntimeArgs()
-                for core in input_cores_list:
-                    reader_rt_args[core.x][core.y] = [
-                        sem_round1_addr,
-                        sem_round2_addr,
-                        sem_round3_addr,
-                    ]
-
-                # Writer runtime args for worker cores
-                worker_writer_rt_args = ttnn.RuntimeArgs()
-                for core in input_cores_list:
-                    fabric_core = column_to_fabric_core[core.x]
-                    fabric_core_phys = device.worker_core_from_logical_core(fabric_core)
-                    slot_idx = core_to_slot_idx[(core.x, core.y)]
-                    shard_idx = core_to_shard_idx[(core.x, core.y)]
-
-                    worker_writer_rt_args[core.x][core.y] = [
-                        fabric_core_phys.x,  # fabric_core_noc_x
-                        fabric_core_phys.y,  # fabric_core_noc_y
-                        slot_idx,  # my_slot_idx
-                        slot_idx,  # worker_sem_id (same as slot_idx for simplicity)
-                        dst_l1_addr,  # dst_l1_addr
-                        dst_sem_addr,  # dst_sem_addr
-                        output_tensor_device.buffer_address(),  # output_base_addr
-                        shard_idx,  # shard_idx
-                    ]
-
-                # Writer runtime args for fabric cores
-                # Fabric cores need worker semaphore IDs as runtime args, then fabric connection args
-                # Create local semaphores for worker→fabric synchronization (one per worker per fabric core)
-                # These match the C++ CreateSemaphore(program, fabric_cores_set, 0) calls
+                # Create semaphores for worker→fabric synchronization
                 semaphore_descriptors = []
-                worker_sem_ids = list(range(num_workers_per_column))
                 for worker_idx in range(num_workers_per_column):
                     sem_desc = ttnn.SemaphoreDescriptor(
                         id=worker_idx,
@@ -530,12 +497,6 @@ class ReduceToRootB1:
                     )
                     semaphore_descriptors.append(sem_desc)
 
-                fabric_writer_rt_args = ttnn.RuntimeArgs()
-                for fc in fabric_cores:
-                    # Start with worker semaphore IDs (fabric kernel will convert to addresses via get_semaphore())
-                    # The fabric kernel reads these and waits on each worker's semaphore
-                    fabric_writer_rt_args[fc.x][fc.y] = list(range(num_workers_per_column))
-
                 # === Program Descriptor ===
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
@@ -543,21 +504,14 @@ class ReduceToRootB1:
                     cbs=cb_list,
                 )
 
-                # Set runtime args
-                program.kernels[worker_group.ncrisc_kernel_index].runtime_args = reader_rt_args
-                program.kernels[worker_group.brisc_kernel_index].runtime_args = worker_writer_rt_args
-                program.kernels[fabric_group.brisc_kernel_index].runtime_args = fabric_writer_rt_args
-
                 # Add fabric connection args for fabric cores (must be done after program creation)
                 # ROOT1 doesn't send via fabric, so skip fabric setup
                 if not is_root1:
                     fabric_kernel_idx = fabric_group.brisc_kernel_index
                     for fc_idx, fc in enumerate(fabric_cores):
-                        # Use link 0 for all fabric cores (matches ccl_broadcast pattern)
                         col_idx = fc_idx
                         link_idx = 0 if col_idx < num_columns // 2 else 1
                         fabric_rt_args_ref = program.kernels[fabric_kernel_idx].runtime_args[fc.x][fc.y]
-                        # Use setup_fabric_connection for WorkerToFabricEdmSender::build_from_args
                         fabric_conn_args = ttnn.setup_fabric_connection(
                             fabric_node_id,
                             dest_fabric_node_id,

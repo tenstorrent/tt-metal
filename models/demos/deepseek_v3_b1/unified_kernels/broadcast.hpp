@@ -174,7 +174,9 @@ struct Broadcast {
                     CTArgs::has_reverse_secondary_connection ? PacketHeaderPool::allocate_header_n(1) : 0;
                 tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 
-                open_connections(fabric_connection, args.num_connections, arg_for_fab);
+                if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
+                    open_connections(fabric_connection, args.num_connections, arg_for_fab);
+                }
 
                 uint8_t starts[] = {
                     static_cast<uint8_t>(CTArgs::start_distance_in_hops_forward),
@@ -375,7 +377,9 @@ struct Broadcast {
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr), 0);
                     }
                 }
-                close_connections(fabric_connection);
+                if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
+                    close_connections(fabric_connection);
+                }
 
                 noc_async_write_barrier();
             }
