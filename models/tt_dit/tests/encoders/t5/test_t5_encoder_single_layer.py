@@ -27,8 +27,9 @@ from models.tt_dit.utils.substate import substate
         "large",
     ],
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
-@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2)], ids=["1x4", "2x2"])
+@pytest.mark.parametrize(
+    "mesh_device,submesh_shape", [[(2, 4), (1, 4)], [(4, 8), (1, 8)]], ids=["t3k", "glx"], indirect=["mesh_device"]
+)
 @pytest.mark.parametrize(
     "device_params, topology",
     [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
