@@ -2195,7 +2195,8 @@ void FabricUnicastCommon(
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
-         noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC)
+         noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+         noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
             ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
             : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
@@ -2233,7 +2234,8 @@ void FabricUnicastCommon(
         auto receiver_kernel = tt_metal::CreateKernel(
             receiver_programs[recv_dev],
             (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
-             noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC)
+             noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+             noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
                 ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
                 : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
             {receiver_logical_core},
@@ -3305,7 +3307,8 @@ void Fabric2DMulticastCommon(
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
-         noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC)
+         noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+         noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
             ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
             : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
@@ -3338,7 +3341,8 @@ void Fabric2DMulticastCommon(
         auto receiver_kernel = tt_metal::CreateKernel(
             receiver_program,
             (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
-             noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC)
+             noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+             noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
                 ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
                 : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
             {receiver_logical_core},
@@ -3487,7 +3491,8 @@ void FabricMulticastCommon(
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
-         noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC)
+         noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+         noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
             ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
             : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
@@ -3517,7 +3522,8 @@ void FabricMulticastCommon(
             auto receiver_kernel = tt_metal::CreateKernel(
                 receiver_program,
                 (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
-                 noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC)
+                 noc_packet_type == NocPacketType::NOC_UNICAST_ATOMIC_INC ||
+                 noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC)
                     ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
                     : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
                 {receiver_logical_core},
@@ -3655,6 +3661,17 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicIncWithState
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
         FabricApiType::Linear,
         true);
+}
+
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedScatterWriteAtomicInc) {
+    FabricUnicastCommon(
+        this, NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1)});
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedScatterWriteAtomicIncMultiDir) {
+    FabricUnicastCommon(
+        this,
+        NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
+        {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)});
 }
 
 void FabricSparseMulticastCommon(
@@ -3913,6 +3930,17 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicIncWithSta
         NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
         true);
+}
+
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedScatterWriteAtomicInc) {
+    FabricMulticastCommon(
+        this, NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
+}
+TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedScatterWriteAtomicIncMultiDir) {
+    FabricMulticastCommon(
+        this,
+        NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC,
+        {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)});
 }
 
 // Test cases using the new Fabric1DTensixFixture to test tensix config with mux

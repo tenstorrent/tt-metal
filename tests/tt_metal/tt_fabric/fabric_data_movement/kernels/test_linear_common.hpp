@@ -84,11 +84,12 @@ void set_state(
     HopInfo<num_send_dir>& hop_info,
     uint16_t packet_size) {
 #ifdef API_TYPE_Linear
-    if constexpr (fabric_packet_type == FabricPacketType::CHIP_SPARSE_MULTICAST) {
-        ASSERT(false);  // Stateful sparse multicast has not been tested yet
-    } else if constexpr (fabric_packet_type == FabricPacketType::CHIP_MULTICAST) {
+    static_assert(
+        fabric_packet_type != FabricPacketType::CHIP_SPARSE_MULTICAST,
+        "Stateful sparse multicast has not been tested yet");
+    if constexpr (fabric_packet_type == FabricPacketType::CHIP_MULTICAST) {
         switch (noc_packet_type) {
-            case NOC_UNICAST_WRITE: {
+            case NocPacketType::NOC_UNICAST_WRITE: {
                 fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
                     connection_manager,
                     route_id,
@@ -97,13 +98,13 @@ void set_state(
                     nullptr,
                     packet_size);
             } break;
-            case NOC_UNICAST_INLINE_WRITE: {
+            case NocPacketType::NOC_UNICAST_INLINE_WRITE: {
                 tt::tt_fabric::NocUnicastInlineWriteCommandHeader hdr;
                 hdr.value = 0xDEADBEEF;
                 fabric_multicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::Value>(
                     connection_manager, route_id, hop_info.mcast.start_distance, hop_info.mcast.range, hdr);
             } break;
-            case NOC_UNICAST_SCATTER_WRITE: {
+            case NocPacketType::NOC_UNICAST_SCATTER_WRITE: {
                 const auto shdr =
                     tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_multicast_noc_scatter_write_set_state<
@@ -115,7 +116,7 @@ void set_state(
                     shdr,
                     packet_size);
             } break;
-            case NOC_UNICAST_ATOMIC_INC: {
+            case NocPacketType::NOC_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader ah(
                     0,    // dummy noc_address
                     1,    // val
@@ -125,7 +126,7 @@ void set_state(
                     UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
                     connection_manager, route_id, hop_info.mcast.start_distance, hop_info.mcast.range, ah);
             } break;
-            case NOC_FUSED_UNICAST_ATOMIC_INC: {
+            case NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fh(
                     0,    // dummy noc_address
                     0,    // dummy semaphore_noc_address
@@ -137,30 +138,34 @@ void set_state(
                     UnicastFusedAtomicIncUpdateMask::Flush>(
                     connection_manager, route_id, hop_info.mcast.start_distance, hop_info.mcast.range, fh, packet_size);
             } break;
+            case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
+                // with_state not implemented yet for this packet type
+                break;
+            }
             default: {
                 ASSERT(false);
             } break;
         }
     } else {
         switch (noc_packet_type) {
-            case NOC_UNICAST_WRITE: {
+            case NocPacketType::NOC_UNICAST_WRITE: {
                 fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
                     connection_manager, route_id, hop_info.ucast.num_hops, nullptr, packet_size);
             } break;
-            case NOC_UNICAST_INLINE_WRITE: {
+            case NocPacketType::NOC_UNICAST_INLINE_WRITE: {
                 tt::tt_fabric::NocUnicastInlineWriteCommandHeader hdr;
                 hdr.value = 0xDEADBEEF;
                 fabric_unicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::Value>(
                     connection_manager, route_id, hop_info.ucast.num_hops, hdr);
             } break;
-            case NOC_UNICAST_SCATTER_WRITE: {
+            case NocPacketType::NOC_UNICAST_SCATTER_WRITE: {
                 const auto shdr =
                     tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_unicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     connection_manager, route_id, hop_info.ucast.num_hops, shdr, packet_size);
             } break;
-            case NOC_UNICAST_ATOMIC_INC: {
+            case NocPacketType::NOC_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader ah(
                     0,    // dummy noc_address
                     1,    // val
@@ -170,7 +175,7 @@ void set_state(
                     UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
                     connection_manager, route_id, hop_info.ucast.num_hops, ah);
             } break;
-            case NOC_FUSED_UNICAST_ATOMIC_INC: {
+            case NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fh(
                     0,    // dummy noc_address
                     0,    // dummy semaphore_noc_address
@@ -182,15 +187,20 @@ void set_state(
                     UnicastFusedAtomicIncUpdateMask::Flush>(
                     connection_manager, route_id, hop_info.ucast.num_hops, fh, packet_size);
             } break;
+            case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
+                // with_state not implemented yet for this packet type
+                break;
+            }
             default: {
                 ASSERT(false);
             } break;
         }
     }
 #elif defined(API_TYPE_Mesh)
-    if constexpr (fabric_packet_type == FabricPacketType::CHIP_SPARSE_MULTICAST) {
-        ASSERT(false);  // Sparse multicast is not currently supported for Mesh
-    } else if constexpr (fabric_packet_type == FabricPacketType::CHIP_MULTICAST) {
+    static_assert(
+        fabric_packet_type != FabricPacketType::CHIP_SPARSE_MULTICAST,
+        "Sparse multicast is not currently supported for Mesh");
+    if constexpr (fabric_packet_type == FabricPacketType::CHIP_MULTICAST) {
         // Build MeshMcastRange array from hop_info
         MeshMcastRange ranges[num_send_dir];
         for (uint32_t i = 0; i < num_send_dir; i++) {
@@ -201,24 +211,24 @@ void set_state(
         }
 
         switch (noc_packet_type) {
-            case NOC_UNICAST_WRITE: {
+            case NocPacketType::NOC_UNICAST_WRITE: {
                 fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
                     connection_manager, route_id, ranges, nullptr, packet_size);
             } break;
-            case NOC_UNICAST_INLINE_WRITE: {
+            case NocPacketType::NOC_UNICAST_INLINE_WRITE: {
                 tt::tt_fabric::NocUnicastInlineWriteCommandHeader hdr;
                 hdr.value = 0xDEADBEEF;
                 fabric_multicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::Value>(
                     connection_manager, route_id, ranges, hdr);
             } break;
-            case NOC_UNICAST_SCATTER_WRITE: {
+            case NocPacketType::NOC_UNICAST_SCATTER_WRITE: {
                 const auto shdr =
                     tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_multicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     connection_manager, route_id, ranges, shdr, packet_size);
             } break;
-            case NOC_UNICAST_ATOMIC_INC: {
+            case NocPacketType::NOC_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader ah(
                     0,    // dummy noc_address
                     1,    // val
@@ -228,7 +238,7 @@ void set_state(
                     UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
                     connection_manager, route_id, ranges, ah);
             } break;
-            case NOC_FUSED_UNICAST_ATOMIC_INC: {
+            case NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fh(
                     0,    // dummy noc_address
                     0,    // dummy semaphore_noc_address
@@ -239,30 +249,34 @@ void set_state(
                     UnicastFusedAtomicIncUpdateMask::PayloadSize | UnicastFusedAtomicIncUpdateMask::Val |
                     UnicastFusedAtomicIncUpdateMask::Flush>(connection_manager, route_id, ranges, fh, packet_size);
             } break;
+            case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
+                // with_state not implemented yet for this packet type
+                break;
+            }
             default: {
                 ASSERT(false);
             } break;
         }
     } else {
         switch (noc_packet_type) {
-            case NOC_UNICAST_WRITE: {
+            case NocPacketType::NOC_UNICAST_WRITE: {
                 fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
                     connection_manager, route_id, nullptr, packet_size);
             } break;
-            case NOC_UNICAST_INLINE_WRITE: {
+            case NocPacketType::NOC_UNICAST_INLINE_WRITE: {
                 tt::tt_fabric::NocUnicastInlineWriteCommandHeader hdr;
                 hdr.value = 0xDEADBEEF;
                 fabric_unicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::Value>(
                     connection_manager, route_id, hdr);
             } break;
-            case NOC_UNICAST_SCATTER_WRITE: {
+            case NocPacketType::NOC_UNICAST_SCATTER_WRITE: {
                 const auto shdr =
                     tt::tt_fabric::NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(packet_size / 2)});
                 fabric_unicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     connection_manager, route_id, shdr, packet_size);
             } break;
-            case NOC_UNICAST_ATOMIC_INC: {
+            case NocPacketType::NOC_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader ah(
                     0,    // dummy noc_address
                     1,    // val
@@ -272,7 +286,7 @@ void set_state(
                     UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
                     connection_manager, route_id, ah);
             } break;
-            case NOC_FUSED_UNICAST_ATOMIC_INC: {
+            case NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC: {
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fh(
                     0,    // dummy noc_address
                     0,    // dummy semaphore_noc_address
@@ -283,6 +297,10 @@ void set_state(
                     UnicastFusedAtomicIncUpdateMask::PayloadSize | UnicastFusedAtomicIncUpdateMask::Val |
                     UnicastFusedAtomicIncUpdateMask::Flush>(connection_manager, route_id, fh, packet_size);
             } break;
+            case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
+                // with_state not implemented yet for this packet type
+                break;
+            }
             default: {
                 ASSERT(false);
             } break;
