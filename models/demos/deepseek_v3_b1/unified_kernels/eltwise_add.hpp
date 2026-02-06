@@ -154,10 +154,12 @@ struct EltwiseAdd {
 
             // Update cb_in1 read pointer to indexed offset (must be in UNPACK context)
             // CB read pointer is in L1_ALIGNMENT (16 byte) units
+            // Save base pointer so we can restore it after compute (tensor-backed CB)
             constexpr uint32_t offset_aligned = CTArgs::sender_index * CTArgs::slice_size_bytes / L1_ALIGNMENT;
+            uint32_t cb_in1_base_rd_ptr = 0;
             UNPACK(({
-                uint32_t base_rd_ptr = get_local_cb_rd_ptr(CTArgs::cb_in1);
-                update_local_cb_rd_ptr(CTArgs::cb_in1, base_rd_ptr + offset_aligned);
+                cb_in1_base_rd_ptr = get_local_cb_rd_ptr(CTArgs::cb_in1);
+                update_local_cb_rd_ptr(CTArgs::cb_in1, cb_in1_base_rd_ptr + offset_aligned);
             }));
 
             // Reserve output space
@@ -176,10 +178,12 @@ struct EltwiseAdd {
             tile_regs_release();
             cb_push_back(CTArgs::cb_out, num_tiles);
 
-            // Pop inputs if requested
+            // Restore cb_in1 read pointer (tensor-backed CB, no pop needed)
+            UNPACK(({ update_local_cb_rd_ptr(CTArgs::cb_in1, cb_in1_base_rd_ptr); }));
+
+            // Pop cb_in0 if requested (cb_in1 is tensor-backed, just restore pointer)
             if constexpr (PopInputs) {
                 cb_pop_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
-                cb_pop_front(CTArgs::cb_in1, CTArgs::cb_in1_wait_tiles);
             }
 #endif
         }
