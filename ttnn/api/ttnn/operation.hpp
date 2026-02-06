@@ -11,13 +11,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/mesh_workload.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/config.hpp"
 #include "ttnn/distributed/types.hpp"
-
-#include <tracy/Tracy.hpp>
 
 namespace tt::tt_metal::operation {
 
@@ -104,77 +101,14 @@ struct OpPerformanceModelGeneral {
     std::vector<int> inputs_bytes;
     std::vector<int> outputs_bytes;
 
-    OpPerformanceModelGeneral(Tensors input_tensors, const OutputTensors& output_tensors, int ideal_compute_cycles) :
-        ideal_compute_cycles(ideal_compute_cycles) {
-        const auto& t = input_tensors.at(0);
-        const auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : ARCH::WORMHOLE_B0;
-
-        float clock_rate_ghz = (arch == ARCH::WORMHOLE_B0) ? 1.0 : 1.2;
-        this->ideal_compute_ns = std::ceil(ideal_compute_cycles / clock_rate_ghz);
-
-        // GS L1 Bisection bandwidth
-        // 655 B/cycle = sqrt(108) * 32 B/cycle * 2
-        // 655 * 1.2Ghz = 786 GB/s
-        // GS DRAM bandwidth
-        // 96 GB/s = 12 GB/s * 8 channels
-
-        // WH L1 Bisection bandwidth
-        // 512 B/cycle = sqrt(64) * 32 B/cycle * 2
-        // 512 * 1ghz clk
-        // WH DRAM bandwidth
-        // 258 GB/s = 21.5 GB/s * 6 channels * 2 banks
-
-        float peak_dram_bw = (arch == ARCH::WORMHOLE_B0) ? 6 * 2 * 21.5 : 96.0;
-
-        auto tensor_ns = [peak_dram_bw](const Tensor& t) {
-            int size_bytes = t.physical_volume() * t.element_size();
-            if (t.memory_config().is_dram()) {
-                return size_bytes / peak_dram_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
-            }
-            if (t.memory_config().is_l1()) {
-                return 1.0f;  // TODO: figure out better modelling scheme for L1->L1 Transfers
-                              // return size_bytes / noc_l1_bisection_bw / 1024 / 1024 / 1024 * 1000 * 1000 *
-                              // 1000;
-            }
-            return 0.0f;
-        };
-
-        for (const auto& t : input_tensors) {
-            this->inputs_bytes.push_back(t.physical_volume() * t.element_size());
-            if (tensor_ns(t) > this->ideal_bandwidth_ns) {
-                this->ideal_bandwidth_ns = tensor_ns(t);
-            }
-        }
-        if constexpr (std::is_same_v<OutputTensors, Tensors>) {
-            for (const auto& t : output_tensors) {
-                this->outputs_bytes.push_back(t.physical_volume() * t.element_size());
-                if (tensor_ns(t) > this->ideal_bandwidth_ns) {
-                    this->ideal_bandwidth_ns = tensor_ns(t);
-                }
-            }
-        } else if constexpr (std::is_same_v<OutputTensors, Tensor>) {
-            this->outputs_bytes.push_back(output_tensors.physical_volume() * output_tensors.element_size());
-        } else {
-            for (const auto& ot : output_tensors) {
-                if (!ot.has_value()) {
-                    continue;
-                }
-                auto& t = ot.value();
-                this->outputs_bytes.push_back(t.physical_volume() * t.element_size());
-                if (tensor_ns(t) > this->ideal_bandwidth_ns) {
-                    this->ideal_bandwidth_ns = tensor_ns(t);
-                }
-            }
-        }
-
-        this->ideal_ns = std::max(this->ideal_compute_ns, this->ideal_bandwidth_ns);
-    }
+    OpPerformanceModelGeneral(Tensors input_tensors, const OutputTensors& output_tensors, int ideal_compute_cycles);
     OpPerformanceModelGeneral() = default;
     ~OpPerformanceModelGeneral() = default;
 
     int get_compute_ns() const { return this->ideal_compute_ns; }
     int get_ideal_ns() const { return this->ideal_ns; }
     int get_bandwidth_ns() const { return this->ideal_bandwidth_ns; }
+
     std::vector<float> get_input_bws() const {
         std::vector<float> input_bws(inputs_bytes.size());
         TT_ASSERT(this->ideal_ns > 0);
@@ -183,6 +117,7 @@ struct OpPerformanceModelGeneral {
         });
         return input_bws;
     }
+
     std::vector<float> get_output_bws() const {
         std::vector<float> output_bws(outputs_bytes.size());
         TT_ASSERT(this->ideal_ns > 0);
