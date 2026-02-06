@@ -37,18 +37,48 @@ ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::comp
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input;
     auto mem_config = operation_attributes.output_mem_config;
-    std::cout << "input tensor: " << input_tensor_a.shard_spec().value() << std::endl;
-    if (operation_attributes.output_mem_config.is_sharded()) {
+
+    // Legacy logic for test_reshape_width_shard and test_reshape_block_shard
+    if (operation_attributes.output_mem_config.is_sharded() &&
+        (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+         mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED)) {
+        std::cout << "input tensor: " << input_tensor_a.shard_spec().value() << std::endl;
         auto shard_spec = operation_attributes.output_mem_config.shard_spec().value();
         std::cout << "before change: " << shard_spec << std::endl;
         if (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             shard_spec.shape[-2] = operation_attributes.logical_output_shape[-2];
         } else if (mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+            // this case not working correctly
             shard_spec.shape[-1] = operation_attributes.logical_output_shape[-1];
         }
         std::cout << "atfer change: " << shard_spec << std::endl;
         mem_config = mem_config.with_shard_spec(shard_spec);
+    } else if (
+        operation_attributes.output_mem_config.is_sharded() &&
+        mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        // For HEIGHT_SHARDED, the shard width must match the physical width of the output
+        // Compute physical width by creating a temporary TensorSpec
+        auto temp_spec = TensorSpec(
+            operation_attributes.logical_output_shape,
+            tt::tt_metal::TensorLayout::fromPaddedShape(
+                input_tensor_a.dtype(),
+                tt::tt_metal::PageConfig(input_tensor_a.layout()),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, mem_config.buffer_type()},
+                operation_attributes.logical_output_shape,
+                operation_attributes.padded_output_shape));
+
+        auto physical_width = temp_spec.physical_shape().width();
+        auto shard_spec = operation_attributes.output_mem_config.shard_spec().value();
+        shard_spec.shape[-1] = physical_width;
+        mem_config = mem_config.with_shard_spec(shard_spec);
+    } else if (!operation_attributes.output_mem_config.is_sharded()) {
+        if (input_tensor_a.memory_config().is_sharded()) {
+            auto shard_spec = input_tensor_a.shard_spec().value();
+            shard_spec.shape[0] = operation_attributes.logical_output_shape[0];
+            mem_config = mem_config.with_shard_spec(shard_spec);
+        }
     }
+
     return TensorSpec(
         operation_attributes.logical_output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
