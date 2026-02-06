@@ -13,8 +13,10 @@ void kernel_main() {
     // Setup sharded buffers - signal that input data is ready
     constexpr uint32_t cb_in0 = get_named_compile_time_arg_val("add_cb_in0");
     constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("add_cb_in1");
-    constexpr uint32_t cb_in0_num_tiles = get_named_compile_time_arg_val("add_cb_in0_wait_tiles");   // 28 (1x32 tiles)
-    constexpr uint32_t cb_in1_wait_tiles = get_named_compile_time_arg_val("add_cb_in1_wait_tiles");  // 8 (pages)
+    constexpr uint32_t cb_in0_num_tiles =
+        get_named_compile_time_arg_val("add_cb_in0_wait_tiles");  // pages in 32x32-view CB
+    constexpr uint32_t cb_in1_wait_tiles =
+        get_named_compile_time_arg_val("add_cb_in1_wait_tiles");  // pages in 32x32-view CB
 
     unified_kernels::setup_sharded_buffer(cb_in0, cb_in0_num_tiles);
     unified_kernels::setup_sharded_buffer(cb_in1, cb_in1_wait_tiles);
