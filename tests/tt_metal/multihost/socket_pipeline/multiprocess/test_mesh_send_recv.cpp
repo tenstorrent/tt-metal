@@ -257,9 +257,9 @@ TEST_P(MeshDeviceNanoExabox2x4SendRecvFixture, MultiSendRecvAsync) {
 // Uses single-host fixture (MeshDevice4x8Fabric2DFixture) for single-host execution
 class FabricSendRecv2x4MigratedFixture : public MeshDevice4x8Fabric2DFixture {};
 
-TEST_F(FabricSendRecv2x4MigratedFixture, SRTestMigrated) {
+void run_sr_test_migrated(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, bool enable_correctness_check) {
     using namespace tt::tt_metal::distributed;
-    auto mesh_device = get_mesh_device();
 
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 0);
@@ -340,11 +340,9 @@ TEST_F(FabricSendRecv2x4MigratedFixture, SRTestMigrated) {
     EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
     const uint32_t latency_measurement_address = latency_measurement_buffer->address();
     std::cout << "Latency measurement buffer address: " << latency_measurement_address << std::endl;
-    // return;
+
     const uint32_t i = 0;
     // Create input buffer using metal-level API (no ttnn dependencies)
-    // Equivalent to: ttnn::distributed::distribute_tensor(ttnn::experimental::view(ttnn::arange(i, num_elems + i, 1,
-    // dtype), input_shape).to_layout(layout), ...).to_device(...)
     DeviceLocalBufferConfig buffer_config = {
         .page_size = buffer_size,
         .buffer_type = BufferType::L1,
@@ -375,7 +373,8 @@ TEST_F(FabricSendRecv2x4MigratedFixture, SRTestMigrated) {
         send_socket_0,
         recv_socket_end,
         latency_measurement_address,
-        NUM_ITERATIONS);
+        NUM_ITERATIONS,
+        enable_correctness_check);
     tt::tt_metal::socket_forward(
         mesh_device.get(),
         recv_socket_1,
@@ -417,6 +416,14 @@ TEST_F(FabricSendRecv2x4MigratedFixture, SRTestMigrated) {
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "Average latency in cycles: " << avg_latency_cycles << std::endl;
     std::cout << "Average latency in microseconds: " << avg_latency_us << std::endl;
+}
+
+TEST_F(FabricSendRecv2x4MigratedFixture, SRTestMigrated) {
+    run_sr_test_migrated(get_mesh_device(), /*enable_correctness_check=*/false);
+}
+
+TEST_F(FabricSendRecv2x4MigratedFixture, SRTestMigratedWithCorrectnessCheck) {
+    run_sr_test_migrated(get_mesh_device(), /*enable_correctness_check=*/true);
 }
 
 }  // namespace tt::tt_metal
