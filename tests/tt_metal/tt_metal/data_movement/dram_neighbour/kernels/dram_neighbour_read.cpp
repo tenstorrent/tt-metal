@@ -38,23 +38,5 @@ void kernel_main() {
         }
         noc_async_read_barrier();
 
-
-
-        // DPRINT << "DRAM Bank to NOC XY Mapping:" << ENDL();
-        // for (uint32_t bank_id = 0; bank_id < 6; bank_id++) {
-        //     uint16_t noc_addr = dram_bank_to_noc_xy[0][bank_id];
-        //     uint32_t noc_x = (noc_addr >> 8) & 0xFF;
-        //     uint32_t noc_y = (noc_addr) & 0xFF;
-        //     DPRINT <<  "  Bank {"<<bank_id<<"} -> NOC ({"<<noc_x<<"}, {"<<noc_y<<"}, {"<<noc_addr<<"})" << ENDL();
-        //     // DPRINT <<  "  get_dram_channel_from_bank_id: {"<<get_dram_channel_from_bank_id(bank_id)<<"}" << ENDL();
-        //     for(uint32_t i = 15; i < 16; i--) {  
-        //         DPRINT << ((noc_addr & (1U << i)) ? "1" : "0");
-        //     }
-        //     DPRINT << ENDL();
-        // }
-
-
-
-
     }
 }
