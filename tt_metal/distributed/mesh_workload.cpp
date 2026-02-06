@@ -7,7 +7,7 @@
 #include <mesh_workload.hpp>
 #include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
-#include "tt_metal/experimental/dataflow_buffer/dataflow_buffer.hpp"
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <functional>
