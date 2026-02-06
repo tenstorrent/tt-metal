@@ -674,6 +674,35 @@ void add_exit_node_constraints(
 
     std::unordered_map<MeshId, std::set<tt::tt_metal::AsicID>> valid_physical_exit_nodes_by_mesh;
     std::unordered_map<MeshId, std::set<FabricNodeId>> valid_logical_exit_nodes_by_mesh;
+
+    // Get the valid physical exit nodes for each mesh direction
+    for (const auto& src_exit_node : physical_exit_node_graph.get_nodes()) {
+        // Get the valid logical exit nodes for this source exit node
+        const auto& dst_exit_nodes = physical_exit_node_graph.get_neighbors(src_exit_node);
+
+        // There should only be one valid logical exit node for each source exit node
+        TT_FATAL(dst_exit_nodes.size() == 1, "Multiple valid logical exit nodes found for source exit node");
+        const auto& dst_exit_node = dst_exit_nodes.front();
+
+        valid_physical_exit_nodes_by_mesh[dst_exit_node.mesh_id].insert(src_exit_node.asic_id);
+    }
+
+    // Add cardinal constraints for each mesh
+    for (const auto& src_exit_node : logical_exit_node_graph.get_nodes()) {
+        // Get the valid logical exit nodes for this source exit node
+        const auto& dst_exit_nodes = logical_exit_node_graph.get_neighbors(src_exit_node);
+
+        // There should only be one valid logical exit node for each source exit node
+        TT_FATAL(dst_exit_nodes.size() == 1, "Multiple valid logical exit nodes found for source exit node");
+        const auto& dst_exit_node = dst_exit_nodes.front();
+
+        // Get the valid physical exit nodes for this source exit node
+        const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_exit_node.mesh_id);
+        const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_by_mesh.at(mapped_physical_dst_mesh_id);
+
+        // Add cardinal constraints for this source exit node
+        // TODO: implement this
+    }
 }
 
 // Helper function to build detailed inter-mesh mapping error message
