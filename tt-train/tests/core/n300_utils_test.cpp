@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
@@ -118,6 +119,9 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2) {
 }
 
 TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
+    // Test failing with watcher enabled, github issue #30521
+    SKIP_FOR_WATCHER();
+
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -146,6 +150,9 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
 }
 
 TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
+    // Test failing with watcher enabled, github issue #30521
+    SKIP_FOR_WATCHER();
+
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -255,6 +262,8 @@ TEST_F(N300UtilsTest, DropoutDifferentSeed) {
 }
 
 TEST_F(N300UtilsTest, MorehClipGradNorm) {
+    // Skip with watcher enabled github issue #37040
+    SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
     xt::xarray<float> xtensor = xt::ones<float>({4, 1, 20, 5});
