@@ -627,6 +627,7 @@ bool is_uneven(const TensorSpec& t) {
     const auto& shard = get_shard_spec(t)->shape;
     const auto rank = shape.rank();
 
+    TT_FATAL(rank >= 2, "Rank must be at least 2");
     // Compute product of all dimensions except the last
     uint64_t volume_except_last = 1;
     for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
