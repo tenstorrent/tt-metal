@@ -250,39 +250,23 @@ Verify the files are in place:
 ls -la /data/scaleout_configs/<your-config-name>/
 ```
 
-## Step 4: Update Validation Scripts
+## Step 4: Run Physical Validation
 
-Before running validation, update the script to use your new configuration files.
+Run `run_validation.sh` with `--cabling-descriptor-path` and `--deployment-descriptor-path` pointing to your merged configs from Step 3.
 
-Edit the validation script for your topology (4x32 or 8x16):
+See [Physical Validation](./README.md#physical-validation) for script usage, analysis commands, and interpreting results. For troubleshooting failures, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
 
-```bash
-# Check current configuration paths
-grep "descriptor-path" ./tools/scaleout/exabox/run_validation_4x32.sh
-```
+## Step 5: Run Dispatch Tests
 
-Update the `--cabling-descriptor-path` and `--deployment-descriptor-path` arguments to point to your merged configs:
+Stress test all chips in the cluster to verify compute, memory, and data-movement stability.
 
-```bash
---cabling-descriptor-path /data/scaleout_configs/<your-config-name>/merged_cabling_descriptor.textproto
---deployment-descriptor-path /data/scaleout_configs/<your-config-name>/merged_deployment_descriptor.textproto
-```
+See [Dispatch Tests](./README.md#dispatch-tests) for usage.
 
-Alternatively, if you generated an FSD, update the scripts to use `--factory-descriptor-path` instead.
+## Step 6: Run Fabric Tests
 
-## Step 5: Run Physical Validation
+After physical validation and dispatch tests pass, run fabric tests to verify coordinated workloads across the mesh.
 
-Run 50 iterations of physical validation to verify hardware stability. Use the merged descriptors from Step 3.
-
-See [Physical Validation](./README.md#physical-validation) in the README for validation script usage and result analysis.
-
-For success criteria and interpreting results, see [Analyzing validation logs](./TROUBLESHOOTING.md#general-debugging-tips) in the Troubleshooting guide.
-
-## Step 6: Run Fabric Tests (Optional)
-
-After physical validation passes, run fabric tests to verify coordinated workloads across the mesh.
-
-See [Fabric Tests](./README.md#fabric-tests) in the README for topology-specific scripts and usage.
+See [Fabric Tests](./README.md#fabric-tests) for topology-specific scripts and usage.
 
 ## Troubleshooting
 
