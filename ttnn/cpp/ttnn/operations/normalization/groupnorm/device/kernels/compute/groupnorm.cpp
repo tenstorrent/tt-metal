@@ -311,7 +311,7 @@ void kernel_main() {
                 // Partial/E[x]
                 cb_wait_front(cb_x, out_block_hw_normal);
                 compute_kernel_lib::reduce<
-                    PoolType::SUM,
+                    PoolType::AVG,
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
@@ -327,7 +327,7 @@ void kernel_main() {
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
                 compute_kernel_lib::reduce<
-                    PoolType::SUM,
+                    PoolType::AVG,
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
@@ -443,7 +443,7 @@ void kernel_main() {
                 // Partial-Var(x)
                 cb_wait_front(cb_xmm, out_block_hw_normal);
                 compute_kernel_lib::reduce<
-                    PoolType::SUM,
+                    PoolType::AVG,
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
@@ -457,7 +457,7 @@ void kernel_main() {
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
                 compute_kernel_lib::reduce<
-                    PoolType::SUM,
+                    PoolType::AVG,
                     ReduceDim::REDUCE_SCALAR,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(

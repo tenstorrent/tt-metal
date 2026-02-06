@@ -80,7 +80,7 @@ void kernel_main() {
          * RMSNorm reduces sum(x**2) directly into cb_var for rsqrt computation.
          * Uses auto-batched STREAMING mode - library handles CB lifecycle.
          */
-        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+        compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
             cb_stats, cb_reduce, cb_var, compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
 
         /*

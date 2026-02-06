@@ -9,7 +9,7 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
+#define REDUCE_OP PoolType::AVG
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
 #include "compute_kernel_api/reduce.h"

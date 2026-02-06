@@ -79,13 +79,13 @@ void kernel_main() {
         //         n
 #ifdef FUSE_PRE_ADD
         numeric::row_wise_mean_with_pre_add<
-            PoolType::SUM,
+            PoolType::AVG,
             ReduceDim::REDUCE_ROW,
             FLOAT32_REDUCTION,
             policies::FullBlockWithPopPolicy>(cb_in, cb_inb, cb_scaler, cb_ex, W, Wt, blk);
 #else
         numeric::
-            row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
+            row_wise_mean<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
                 cb_in, cb_scaler, cb_ex, W, Wt, blk);
 #endif
 #endif  // !RMS ifdef end
@@ -149,10 +149,10 @@ void kernel_main() {
 
             // Accumulate (x-E[x])^2
             reconfig_data_format(cb_xmm2, cb_scaler);
-            reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_accumulate);
+            reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_accumulate);
             for (auto i : block.local()) {
                 const auto scaler_tile_idx = block.to_global(i) == Wt - 1 && last_tile_is_partial ? 1 : 0;
-                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
+                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
                     cb_xmm2, cb_scaler, i, scaler_tile_idx, dst0);
             }
 

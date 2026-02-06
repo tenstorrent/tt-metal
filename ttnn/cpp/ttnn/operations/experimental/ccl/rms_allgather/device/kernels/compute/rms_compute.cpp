@@ -126,7 +126,7 @@ void kernel_main() {
     cb_wait_front(cb_x2, num_tiles_per_block);
 
     compute_kernel_lib::reduce<
-        PoolType::SUM,
+        PoolType::AVG,
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
@@ -144,7 +144,7 @@ void kernel_main() {
             (!use_two_stage_reduce or is_second_stage_reader) ? cb_to_allgather_writer : cb_ex2;
 
         compute_kernel_lib::reduce<
-            PoolType::SUM,
+            PoolType::AVG,
             ReduceDim::REDUCE_ROW,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
@@ -171,7 +171,7 @@ void kernel_main() {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
 
             compute_kernel_lib::reduce<
-                PoolType::SUM,
+                PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
                 compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                 compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
