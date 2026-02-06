@@ -100,6 +100,9 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
                 TT_FATAL(
                     in_ref.nd_shard_spec().value().grid == first_nd_shard_spec.value().grid,
                     "ND Sharded tensors must have the same grid.");
+                TT_FATAL(
+                    in_ref.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+                    "Block sharded inputs necessary for ND sharded tensors");
 
                 // Verify that shard shapes differ only in the concat dimension
                 const auto& first_shard_shape = first_nd_shard_spec.value().shard_shape;
@@ -134,7 +137,11 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
                 TT_FATAL(
                     in_ref.shard_spec().value().grid == first_input.shard_spec().value().grid,
                     "Sharded tensors must have the same grid.");
+                TT_FATAL(
+                    in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
+                    "Block sharded inputs are not supported");
             }
+
             TT_FATAL(
                 in_ref.memory_config().memory_layout() == first_input.memory_config().memory_layout(),
                 "Sharded tensors must have the same memory layout.");
@@ -142,10 +149,6 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 input_tensors.size() > 2 || in_ref.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
                 "Width sharded inputs are not supported for two tensors concat yet");
-            // TODO:Z Next TT_FATAL - to bypass
-            TT_FATAL(
-                in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
-                "Block sharded inputs are not supported");
         }
     }
     if (warn_about_alignment) {

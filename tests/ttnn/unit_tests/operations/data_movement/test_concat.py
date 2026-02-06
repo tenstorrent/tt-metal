@@ -388,19 +388,16 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
     for 2, 3, and 4 input tensors across different concat dimensions.
     """
     torch.manual_seed(0)
-    print("\n\nodin\n\n")
 
     # Skip incompatible configurations
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is only valid for TILE_LAYOUT")
-    print("\n\ndwa\n\n")
 
     # Setup grid
     grid_size = device.compute_with_storage_grid_size()
     core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
     grid = ttnn.CoreRangeSet([core_range])  # TODOZ: to discuss/test partial core range set
 
-    print("\n\ntri\n\n")
     # Create ND shard spec for input tensors
     input_nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid)
     input_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, input_nd_shard_spec)
@@ -438,8 +435,8 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
     # For concat dim, the output shard shape might need adjustment based on memory layout
     # For simplicity, keep same shard shape and let output be interleaved
 
-    # Perform concat - output to DRAM (interleaved) since ND sharded output may not be supported yet
-    output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    # usage of ND sharded tensors supposes only L1_BLOCK_SHARDED_MEMORY_CONFIG memory config
+    output_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
 
     ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim, memory_config=output_memory_config)
 
