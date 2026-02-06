@@ -27,7 +27,7 @@ enum class BinaryBitwiseOp : std::uint8_t
 template <bool APPROXIMATION_MODE, BinaryBitwiseOp BITWISE_OP, InstrModLoadStore INSTRUCTION_MODE = INT32, int ITERATIONS = 8>
 inline void _calculate_sfpu_binary_bitwise_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
-    constexpr auto instruction_mode = static_cast<std::underlying_type_t<InstrModLoadStore>>(INSTRUCTION_MODE);
+    constexpr auto instruction_mode = to_underlying(INSTRUCTION_MODE);
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
     {

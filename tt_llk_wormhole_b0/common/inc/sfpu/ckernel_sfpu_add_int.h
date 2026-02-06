@@ -24,7 +24,7 @@ inline void _add_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
 
     // For int32, use '12' if Dest is in sign-magnitude format and '4' for 2's complement,
     // because TTI_SFPIADD requires 2's complement format in LREGs
-    constexpr int sfpload_instr_mod = SIGN_MAGNITUDE_FORMAT ? INT32_2S_COMP : static_cast<std::underlying_type_t<InstrModLoadStore>>(INSTRUCTION_MODE);
+    constexpr int sfpload_instr_mod = SIGN_MAGNITUDE_FORMAT ? INT32_2S_COMP : to_underlying(INSTRUCTION_MODE);
 
     // Operand A is input1 (int32/uint16/uint32)
     // Operand B is input2 (int32/uint16/uint32)

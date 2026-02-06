@@ -211,7 +211,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 void run_kernel(const volatile struct RuntimeParams *params)
 {
-    std::uint32_t use_32bit_dest = formats.unpack_dst == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Tf32);
+    std::uint32_t use_32bit_dest = formats.unpack_dst == ckernel::to_underlying(DataFormat::Tf32);
     {
         ZONE_SCOPED("INIT")
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();

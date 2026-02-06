@@ -19,7 +19,7 @@ namespace
 {
 constexpr std::underlying_type_t<DataFormat> get_data_format(DataFormat format)
 {
-    return static_cast<std::underlying_type_t<DataFormat>>(format);
+    return ckernel::to_underlying(format);
 }
 } // namespace
 

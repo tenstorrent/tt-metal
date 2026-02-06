@@ -61,8 +61,8 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
               THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);                                              // Save tile x dim per context
     TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1); // Save descriptor 1
 
-    const std::uint32_t unpA_ch1_x_stride = (unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
-                                            : (unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
+    const std::uint32_t unpA_ch1_x_stride = (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
+                                            : (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
                                                                                                               : 1;
     const std::uint32_t unpA_ch1_y_stride = FACE_R_DIM * unpA_ch1_x_stride;
 

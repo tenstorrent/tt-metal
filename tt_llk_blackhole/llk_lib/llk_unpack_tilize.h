@@ -53,9 +53,8 @@ inline void _llk_unpack_tilize_init_(
 
     // In case of 32-bit numbers, we have to unpack into dest register
     // For integers, always unpack to dest. For Float32, only if unpack_dst_format is Float32 (lossless tilize mode)
-    const bool unpack_to_dest = (unpack_src_format == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::UInt32)) ||
-                                (unpack_src_format == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Int32)) ||
-                                (unpack_dst_format == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float32));
+    const bool unpack_to_dest = (unpack_src_format == to_underlying(DataFormat::UInt32)) || (unpack_src_format == to_underlying(DataFormat::Int32)) ||
+                                (unpack_dst_format == to_underlying(DataFormat::Float32));
 
     // Set face dim
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
@@ -106,9 +105,8 @@ inline void _llk_unpack_tilize_(
 
     // In case of 32-bit numbers, we have to unpack into dest register
     // For integers, always unpack to dest. For Float32, only if unpack_dst_format is Float32 (lossless tilize mode)
-    const bool unpack_to_dest = (unpack_src_format == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::UInt32)) ||
-                                (unpack_src_format == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Int32)) ||
-                                (unpack_dst_format == static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float32));
+    const bool unpack_to_dest = (unpack_src_format == to_underlying(DataFormat::UInt32)) || (unpack_src_format == to_underlying(DataFormat::Int32)) ||
+                                (unpack_dst_format == to_underlying(DataFormat::Float32));
 
     std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE(unpack_src_format, tile_index) << (narrow_tile ? 0 : 1);
 

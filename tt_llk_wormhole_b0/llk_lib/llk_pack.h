@@ -282,11 +282,11 @@ inline void _llk_pack_fast_tilize_init_(const std::uint32_t use_32bit_dest, cons
     // set the address offset to the size of the tile in 16B words
     std::uint32_t tile_size = SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM * TILE_R_DIM);
     // Not sure why BFP formats are not included SCALE_DATUM_SIZE but too scared to change that.
-    if (pack_dst_format == (std::uint32_t)DataFormat::Bfp4 || pack_dst_format == (std::uint32_t)DataFormat::Bfp4_b)
+    if (pack_dst_format == to_underlying(DataFormat::Bfp4) || pack_dst_format == to_underlying(DataFormat::Bfp4_b))
     {
         tile_size = tile_size / 2; // 2 BFP4 datums per byte
     }
-    else if (pack_dst_format == (std::uint32_t)DataFormat::Bfp2 || pack_dst_format == (std::uint32_t)DataFormat::Bfp2_b)
+    else if (pack_dst_format == to_underlying(DataFormat::Bfp2) || pack_dst_format == to_underlying(DataFormat::Bfp2_b))
     {
         tile_size = tile_size / 4; // 4 BFP2 datums per byte
     }

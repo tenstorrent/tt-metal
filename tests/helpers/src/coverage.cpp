@@ -47,8 +47,8 @@ extern "C"
 
     static void write_data(const void* _data, unsigned int length, void*)
     {
-        std::uint8_t* data     = (std::uint8_t*)_data;
-        std::uint32_t* written = (std::uint32_t*)__coverage_start;
+        const std::uint8_t* data = static_cast<const std::uint8_t*>(_data);
+        auto* written            = reinterpret_cast<std::uint32_t*>(__coverage_start);
 
         std::uint8_t* mem = __coverage_start + *written;
 
@@ -69,7 +69,7 @@ extern "C"
     void gcov_dump(void)
     {
         // First word is for file length, start writing past that.
-        *(std::uint32_t*)__coverage_start = 4;
+        *reinterpret_cast<std::uint32_t*>(__coverage_start) = 4;
 
         const struct gcov_info* const* info = __gcov_info_start;
         asm volatile("" : "+r"(info)); // Prevent optimizations.

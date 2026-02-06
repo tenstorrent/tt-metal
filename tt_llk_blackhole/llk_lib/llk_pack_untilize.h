@@ -160,9 +160,9 @@ inline void _llk_pack_untilize_init_(
     tile_dst_offset_state = 0;
 
     // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
-    std::uint32_t x_stride       = (std::uint32_t)(pack_src_format & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
-                                   : (std::uint32_t)(pack_src_format & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
-                                                                                                                  : 1;
+    std::uint32_t x_stride       = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
+                                   : (pack_src_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
+                                                                                                   : 1;
     std::uint32_t y_stride       = FACE_C_DIM * x_stride;
     const std::uint32_t z_stride = 2 * face_r_dim * y_stride;
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);

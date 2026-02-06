@@ -210,8 +210,8 @@ inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::
 {
     const std::uint32_t input_df  = src_format & 0xF;
     const std::uint32_t output_df = dst_format & 0xF;
-    return ((input_df == (std::uint32_t)DataFormat::Int32) || (input_df == (std::uint32_t)DataFormat::Float32)) &&
-           ((output_df == (std::uint32_t)DataFormat::Int32) || (output_df == (std::uint32_t)DataFormat::Float32));
+    return ((input_df == to_underlying(DataFormat::Int32)) || (input_df == to_underlying(DataFormat::Float32))) &&
+           ((output_df == to_underlying(DataFormat::Int32)) || (output_df == to_underlying(DataFormat::Float32)));
 }
 
 inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc)

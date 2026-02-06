@@ -260,7 +260,7 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
                 .set(ADDR_MOD_0);
 
             // Just unpack into B and move to Dest
-            if (dst_format == (std::uint32_t)DataFormat::UInt16) // UInt16 case needs to use MOVB2D, which is 4 rows per op
+            if (dst_format == to_underlying(DataFormat::UInt16)) // UInt16 case needs to use MOVB2D, which is 4 rows per op
             {
                 addr_mod_t {
                     .srca = {.incr = 0},
@@ -293,7 +293,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         std::uint32_t innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
         std::uint32_t outerloop = tilize ? 1 : num_faces;
 
-        if (((is_fp32_dest_acc_en || is_int_fpu_en) && !(dst_format == (std::uint32_t)DataFormat::UInt16)) || (dst_format == (std::uint32_t)DataFormat::UInt8))
+        if (((is_fp32_dest_acc_en || is_int_fpu_en) && !(dst_format == to_underlying(DataFormat::UInt16))) || (dst_format == to_underlying(DataFormat::UInt8)))
         {
             // use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode OR to handle uint8 datums
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
@@ -321,7 +321,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
             outerloop = 2;
             // ELWADD with zeros will be used for non UInt16 case, since it moves 8 rows per cycle
             broadcast_type = p_elwise::SRCB_BCAST_COL;
-            if (dst_format == (std::uint32_t)DataFormat::UInt16)
+            if (dst_format == to_underlying(DataFormat::UInt16))
             {
                 innerloop      = 16 >> 2; // movb2d produces 4 rows per op
                 broadcast_type = p_movb2d::MOV_4_ROWS_D0_BRCST;
@@ -348,7 +348,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         else if constexpr (bcast_type == BroadcastType::COL)
         {
             if (dst_format ==
-                (std::uint32_t)DataFormat::UInt16) // UInt16 case needs to use MOVB2D because for ELWADD FPU interprets some numbers as a float with exp 0
+                to_underlying(DataFormat::UInt16)) // UInt16 case needs to use MOVB2D because for ELWADD FPU interprets some numbers as a float with exp 0
             {
                 ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
                 tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));

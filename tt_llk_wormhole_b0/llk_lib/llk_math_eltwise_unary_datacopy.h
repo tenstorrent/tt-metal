@@ -233,7 +233,7 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
                 .set(ADDR_MOD_0);
 
             // Just unpack into B and move to Dest
-            if (dst_format == (std::uint32_t)DataFormat::UInt16) // UInt16 case needs to use MOVB2D, which is 4 rows per op
+            if (dst_format == to_underlying(DataFormat::UInt16)) // UInt16 case needs to use MOVB2D, which is 4 rows per op
             {
                 addr_mod_t {
                     .srca = {.incr = 0},
@@ -266,7 +266,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         std::uint32_t innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
         std::uint32_t outerloop = num_faces;
 
-        if (((is_fp32_dest_acc_en || is_int_fpu_en) && !(dst_format == (std::uint32_t)DataFormat::UInt16)) || (dst_format == (std::uint32_t)DataFormat::UInt8))
+        if (((is_fp32_dest_acc_en || is_int_fpu_en) && !(dst_format == to_underlying(DataFormat::UInt16))) || (dst_format == to_underlying(DataFormat::UInt8)))
         {
             // use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode OR to handle uint8 datums
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
@@ -294,7 +294,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
             outerloop = 2;
             // ELWADD with zeros will be used for non UInt16 case, since it moves 8 rows per cycle
             broadcast_type = p_elwise::SRCB_BCAST_COL;
-            if (dst_format == (std::uint32_t)DataFormat::UInt16)
+            if (dst_format == to_underlying(DataFormat::UInt16))
             {
                 innerloop      = 16 >> 2; // movb2d produces 4 rows per op
                 broadcast_type = p_movb2d::MOV_4_ROWS_D0_BRCST;
@@ -310,7 +310,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
             outerloop      = 1;
             innerloop      = num_faces * (total_rows >> 3);
             broadcast_type = p_elwise::SRCB_BCAST_ALL;
-            if (dst_format == (std::uint32_t)DataFormat::UInt16)
+            if (dst_format == to_underlying(DataFormat::UInt16))
             {
                 broadcast_type = p_movb2d::MOV_8_ROW_BRCST_D0_BRCST;
             }
@@ -318,7 +318,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
 
         if constexpr (bcast_type == BroadcastType::SCALAR)
         {
-            if (dst_format == (std::uint32_t)DataFormat::UInt16)
+            if (dst_format == to_underlying(DataFormat::UInt16))
             {
                 ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
                 tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
@@ -334,7 +334,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         else if constexpr (bcast_type == BroadcastType::COL)
         {
             if (dst_format ==
-                (std::uint32_t)DataFormat::UInt16) // UInt16 case needs to use MOVB2D because for ELWADD FPU interprets some numbers as a float with exp 0
+                to_underlying(DataFormat::UInt16)) // UInt16 case needs to use MOVB2D because for ELWADD FPU interprets some numbers as a float with exp 0
             {
                 ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
                 tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
@@ -421,7 +421,7 @@ inline void _llk_math_fast_tilize_addrmod_config_(const std::uint32_t unpack_dst
 
     // next two addrmods are mostly used for jumping to and from the offset for the bottom faces
     // offset for the bottom faces is always half the number of rows in the dest bank (512 / 2 for 16bit and 256 / 2 for 32bit since DstSync is always Half)
-    std::uint32_t bottom_face_offset = (unpack_dst_format == (std::uint32_t)DataFormat::Tf32 ? 256 : 512) / 2;
+    std::uint32_t bottom_face_offset = (unpack_dst_format == to_underlying(DataFormat::Tf32) ? 256 : 512) / 2;
     // unit_dim 1 copies 2 faces before jumping so at the moment of the jump dest RWC is
     // 2*16 (two faces) -  8 (number of rows moved by current instruction)
     // unit_dim 2 copies 4 faces before jumping so at the moment of the jump dest RWC is
@@ -488,7 +488,7 @@ inline void _llk_math_fast_tilize_init_(const std::uint32_t unpack_dst_format, c
     // it would be easier if they just fully respected ALU_ACC_CTRL_Fp32_enabled but it's a hardware quirk
     // so in non Tf32 cases, clear it to fully ignore FP32 dest mode
     // not sure why it doesn't work if CFG_STATE_ID_StateID is not 1
-    if (unpack_dst_format != (std::uint32_t)DataFormat::Tf32)
+    if (unpack_dst_format != to_underlying(DataFormat::Tf32))
     {
         TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 1);
         TTI_NOP;
@@ -511,7 +511,7 @@ inline void _llk_math_fast_tilize_uninit_(const std::uint32_t unpack_dst_format)
 {
     // if ALU_ACC_CTRL_Fp32_enabled was previously cleared, restore it
     // still not sure why this CFG_STATE_ID_StateID manipulation is needed
-    if (unpack_dst_format != (std::uint32_t)DataFormat::Tf32)
+    if (unpack_dst_format != to_underlying(DataFormat::Tf32))
     {
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
@@ -599,7 +599,7 @@ inline void _llk_math_fast_tilize_block_(
             std::uint32_t top_face_offset = dst_index + i * 3; // copy 3 tiles per iteration
             // offset to the bottom is the number of tiles that fit into the dest bank
             // since half size faces are specified, this gets into the correct position in the second half
-            std::uint32_t bottom_face_offset = top_face_offset + (unpack_dst_format == (std::uint32_t)DataFormat::Tf32 ? 4 : 8);
+            std::uint32_t bottom_face_offset = top_face_offset + (unpack_dst_format == to_underlying(DataFormat::Tf32) ? 4 : 8);
             math::set_dst_write_addr<DstTileShape::Tile32x16, UnpackDestination::SrcRegs>(bottom_face_offset);
             // srcA has the top 8 rows of the bottom faces (6 of them), copy them
             // inside mop:

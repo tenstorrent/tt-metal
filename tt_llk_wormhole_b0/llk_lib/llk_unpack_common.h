@@ -78,7 +78,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring unpack to/from Int8 formats requires FP32 Dest mode enabled");
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcAUnsigned_RMW>(((std::uint32_t)unpack_src_format == (std::uint32_t)DataFormat::UInt8) ? 1 : 0);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcAUnsigned_RMW>((unpack_src_format == to_underlying(DataFormat::UInt8)) ? 1 : 0);
     }
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format);
@@ -94,7 +94,7 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring unpack to/from Int8 formats requires FP32 Dest mode enabled");
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcBUnsigned_RMW>(((std::uint32_t)unpack_src_format == (std::uint32_t)DataFormat::UInt8) ? 1 : 0);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcBUnsigned_RMW>((unpack_src_format == to_underlying(DataFormat::UInt8)) ? 1 : 0);
     }
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
     cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format);

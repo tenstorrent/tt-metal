@@ -223,23 +223,23 @@ inline void configure_unpack_AB(
     // Reset address counters
     unpacker_addr_counter_init();
 
-    const std::uint32_t unpA_src_format_masked = (std::uint32_t)unpA_src_format & 0x0F;
-    const std::uint32_t unpB_src_format_masked = (std::uint32_t)unpB_src_format & 0x0F;
-    const std::uint32_t unpA_dst_format_masked = (std::uint32_t)unpA_dst_format & 0x0F;
-    const std::uint32_t unpB_dst_format_masked = (std::uint32_t)unpB_dst_format & 0x0F;
+    const std::uint32_t unpA_src_format_masked = static_cast<std::uint32_t>(unpA_src_format) & 0x0F;
+    const std::uint32_t unpB_src_format_masked = static_cast<std::uint32_t>(unpB_src_format) & 0x0F;
+    const std::uint32_t unpA_dst_format_masked = static_cast<std::uint32_t>(unpA_dst_format) & 0x0F;
+    const std::uint32_t unpB_dst_format_masked = static_cast<std::uint32_t>(unpB_dst_format) & 0x0F;
 
     // Get pointer to registers for current state ID
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
-    std::uint32_t unpA_ch1_x_stride = (std::uint32_t)(unpA_dst_format_masked & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
-                                      : (std::uint32_t)(unpA_dst_format_masked & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
-                                                                                                                            : 1;
-    std::uint32_t unpB_ch1_x_stride = (std::uint32_t)(unpB_dst_format_masked & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
-                                      : (std::uint32_t)(unpB_dst_format_masked & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
-                                                                                                                            : 1;
+    std::uint32_t unpA_ch1_x_stride = (unpA_dst_format_masked & 0x3) == to_underlying(DataFormat::Float32)   ? 4
+                                      : (unpA_dst_format_masked & 0x3) == to_underlying(DataFormat::Float16) ? 2
+                                                                                                             : 1;
+    std::uint32_t unpB_ch1_x_stride = (unpB_dst_format_masked & 0x3) == to_underlying(DataFormat::Float32)   ? 4
+                                      : (unpB_dst_format_masked & 0x3) == to_underlying(DataFormat::Float16) ? 2
+                                                                                                             : 1;
     std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
     std::uint32_t unpB_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpB_ch1_x_stride;
-    std::uint32_t exp_width         = ((std::uint32_t)unpA_dst_format_masked >> 2) & 0x1; // 0=5-bit, 1=8-bit
+    std::uint32_t exp_width         = (static_cast<std::uint32_t>(unpA_dst_format_masked) >> 2) & 0x1; // 0=5-bit, 1=8-bit
 
     // Strides for incrementing ch1 address to srcA and srcB
     cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
@@ -261,11 +261,11 @@ inline void configure_unpack_AB(
 
     constexpr std::uint32_t alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_FORMAT_SPEC_REG0_SrcBUnsigned_MASK;
 
-    if ((std::uint32_t)unpA_src_format == (std::uint32_t)DataFormat::UInt8)
+    if (unpA_src_format == to_underlying(DataFormat::UInt8))
     {
         alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcAUnsigned = 1;
     }
-    if ((std::uint32_t)unpB_src_format == (std::uint32_t)DataFormat::UInt8)
+    if (unpB_src_format == to_underlying(DataFormat::UInt8))
     {
         alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcBUnsigned = 1;
     }
@@ -290,12 +290,12 @@ inline void configure_unpack_AB(
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
     // Set FP8 E4M3 mode, bit is accessible by unpacker/packer
-    if ((unpA_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3)
+    if ((unpA_src_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3))
     {
         cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(1);
     }
 
-    if ((unpB_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3)
+    if ((unpB_src_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3))
     {
         cfg_reg_rmw_tensix<THCON_SEC1_REG1_Unp_LF8_4b_exp_RMW>(1);
     }
@@ -308,7 +308,7 @@ inline void configure_unpack_AB(
     {
         tile_descriptor.val[i] = 0;
     }
-    tile_descriptor.f.in_data_format = (std::uint32_t)unpA_src_format_masked;
+    tile_descriptor.f.in_data_format = static_cast<std::uint32_t>(unpA_src_format_masked);
     tile_descriptor.f.uncompressed   = 1; // Input tile is uncompressed
     tile_descriptor.f.x_dim          = 0; // Not used for unpA as value is overridden by per context x_dim set below. Used for unpB
     tile_descriptor.f.y_dim          = 1;
@@ -319,7 +319,7 @@ inline void configure_unpack_AB(
     {
         cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + i] = tile_descriptor.val[i];
     }
-    tile_descriptor.f.in_data_format = row_pool ? (std::uint32_t)DataFormat::Float32 : unpB_src_format_masked;
+    tile_descriptor.f.in_data_format = row_pool ? to_underlying(DataFormat::Float32) : unpB_src_format_masked;
     tile_descriptor.f.x_dim          = unpB_face_r_dim * FACE_C_DIM;
     tile_descriptor.f.z_dim          = unpB_num_faces;
     for (std::uint32_t i = 0; i < TILE_DESC_SIZE; i++)
@@ -349,7 +349,7 @@ inline void configure_unpack_AB(
         cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + i] = config.val[i];
     }
 
-    config.f.out_data_format = row_pool ? ((std::uint32_t)DataFormat::Float16 | (exp_width << 2)) : unpB_dst_format_masked;
+    config.f.out_data_format = row_pool ? (to_underlying(DataFormat::Float16) | (exp_width << 2)) : unpB_dst_format_masked;
     config.f.haloize_mode    = 0;
 
     for (std::uint32_t i = 0; i < CONFIG_SIZE; i++)
@@ -418,8 +418,8 @@ inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, cons
 {
     const std::uint32_t input_df  = unpack_src_format & 0xF;
     const std::uint32_t output_df = unpack_dst_format & 0xF;
-    return ((input_df == (std::uint32_t)DataFormat::Int32) || (input_df == (std::uint32_t)DataFormat::Float32)) &&
-           ((output_df == (std::uint32_t)DataFormat::Int32) || (output_df == (std::uint32_t)DataFormat::Float32));
+    return ((input_df == to_underlying(DataFormat::Int32)) || (input_df == to_underlying(DataFormat::Float32))) &&
+           ((output_df == to_underlying(DataFormat::Int32)) || (output_df == to_underlying(DataFormat::Float32)));
 }
 
 inline void wait_for_dest_available()
@@ -450,9 +450,9 @@ inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint3
     std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId));  // Apply fixed offset of 4*16 to dest address
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                          // Disable address bit swizzle
     TTI_RDCFG(p_gpr_unpack::UNPACK_STRIDE, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Save current stride
-    std::uint32_t unpA_ch1_x_stride = (std::uint32_t)(unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
-                                      : (std::uint32_t)(unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
-                                                                                                                       : 1;
+    std::uint32_t unpA_ch1_x_stride = (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
+                                      : (unpack_dst_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
+                                                                                                        : 1;
     std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
     TT_SETDMAREG(0, LOWER_HALFWORD(unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
     TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Set unpack stride

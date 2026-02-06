@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "tensix.h"
 
@@ -15,6 +16,14 @@
 
 namespace ckernel
 {
+
+// Helper function to convert to underlying type
+// e.g. to_underlying(MathFidelity::HiFi4) -> 4 (underlying type of MathFidelity is std::uint8_t)
+template <typename T>
+constexpr auto to_underlying(T t) noexcept
+{
+    return static_cast<std::underlying_type_t<T>>(t);
+}
 
 enum register_space_e
 {

@@ -166,9 +166,9 @@ inline void packer_addr_counter_init()
 template <bool untilize = false, bool tilize = false>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
-    std::uint32_t x_stride = (std::uint32_t)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float32)   ? 4
-                             : (std::uint32_t)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float16) ? 2
-                                                                                                                          : 1;
+    std::uint32_t x_stride = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
+                             : (pack_src_format & 0x3) == to_underlying(DataFormat::Float16) ? 2
+                                                                                             : 1;
     std::uint32_t y_stride = FACE_C_DIM * x_stride;
     std::uint32_t w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride;
 
@@ -206,8 +206,8 @@ inline void set_packer_config(
     // Get pointer to registers for current state ID
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
 
-    const std::uint32_t pack_output_src_format = (std::uint32_t)pack_src_format & 0xF;
-    const std::uint32_t pack_output_dst_format = (std::uint32_t)pack_dst_format & 0xF;
+    const std::uint32_t pack_output_src_format = static_cast<std::uint32_t>(pack_src_format) & 0xF;
+    const std::uint32_t pack_output_dst_format = static_cast<std::uint32_t>(pack_dst_format) & 0xF;
 
     // Set packer config
     pack_config_u config;
@@ -217,7 +217,7 @@ inline void set_packer_config(
     }
 
     config.f.exp_section_size =
-        ((pack_output_dst_format == static_cast<DataFormatType>(DataFormat::Lf8)) || (pack_output_dst_format == static_cast<DataFormatType>(DataFormat::Int8)))
+        ((pack_output_dst_format == to_underlying(DataFormat::Lf8)) || (pack_output_dst_format == to_underlying(DataFormat::Int8)))
             ? 0
             : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
 
@@ -270,21 +270,20 @@ inline void set_packer_config(
     dest_rd_ctrl_u dest_rd_ctrl;
     dest_rd_ctrl.val = 0;
 
-    bool is_32b_format = pack_src_format == static_cast<DataFormatType>(DataFormat::Int32) ||
-                         pack_src_format == static_cast<DataFormatType>(DataFormat::UInt32) ||
-                         pack_src_format == static_cast<DataFormatType>(DataFormat::Float32);
-    bool is_int8_format = pack_src_format == static_cast<DataFormatType>(DataFormat::Int8) || pack_src_format == static_cast<DataFormatType>(DataFormat::UInt8);
+    bool is_32b_format = pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32) ||
+                         pack_src_format == to_underlying(DataFormat::Float32);
+    bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
 
     dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
     dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
 
-    if (pack_dst_format == static_cast<DataFormatType>(DataFormat::UInt8))
+    if (pack_dst_format == to_underlying(DataFormat::UInt8))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
     }
 
     // Round to 10 bit mantissa from fp32 dest
-    if (is_fp32_dest_acc_en && (pack_src_format == static_cast<DataFormatType>(DataFormat::Float16)))
+    if (is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16)))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
@@ -306,8 +305,8 @@ inline void reconfig_packer_data_format(
     const bool partial_face)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    const std::uint32_t pack_output_src_format = (std::uint32_t)pack_src_format & 0xF;
-    const std::uint32_t pack_output_dst_format = (std::uint32_t)pack_dst_format & 0xF;
+    const std::uint32_t pack_output_src_format = static_cast<std::uint32_t>(pack_src_format) & 0xF;
+    const std::uint32_t pack_output_dst_format = static_cast<std::uint32_t>(pack_dst_format) & 0xF;
 
     // Configure packers
     pack_config_u config;
@@ -336,20 +335,19 @@ inline void reconfig_packer_data_format(
     dest_rd_ctrl_u dest_rd_ctrl;
     dest_rd_ctrl.val = 0;
 
-    bool is_32b_format = pack_src_format == static_cast<DataFormatType>(DataFormat::Int32) ||
-                         pack_src_format == static_cast<DataFormatType>(DataFormat::UInt32) ||
-                         pack_src_format == static_cast<DataFormatType>(DataFormat::Float32);
-    bool is_int8_format = pack_src_format == static_cast<DataFormatType>(DataFormat::Int8) || pack_src_format == static_cast<DataFormatType>(DataFormat::UInt8);
+    bool is_32b_format = pack_src_format == to_underlying(DataFormat::Int32) || pack_src_format == to_underlying(DataFormat::UInt32) ||
+                         pack_src_format == to_underlying(DataFormat::Float32);
+    bool is_int8_format = pack_src_format == to_underlying(DataFormat::Int8) || pack_src_format == to_underlying(DataFormat::UInt8);
 
     dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
     dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
 
-    if (pack_dst_format == static_cast<DataFormatType>(DataFormat::UInt8))
+    if (pack_dst_format == to_underlying(DataFormat::UInt8))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
     }
     // Round to 10 bit mantissa from fp32 dest
-    if (is_fp32_dest_acc_en && (pack_src_format == static_cast<DataFormatType>(DataFormat::Float16)))
+    if (is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16)))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
@@ -362,8 +360,7 @@ inline void reconfig_packer_data_format(
     {
         cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_section_size_RMW>((partial_face ? 1 : num_faces));
     }
-    else if (
-        (pack_output_dst_format == static_cast<DataFormatType>(DataFormat::Lf8)) || (pack_output_dst_format == static_cast<DataFormatType>(DataFormat::Int8)))
+    else if ((pack_output_dst_format == to_underlying(DataFormat::Lf8)) || (pack_output_dst_format == to_underlying(DataFormat::Int8)))
     {
         TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
     }
@@ -410,14 +407,14 @@ inline void configure_pack(
     // Get pointer to registers for current state ID
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
-    const std::uint32_t pack_output_src_format = (std::uint32_t)pack_src_format & 0xF;
+    const std::uint32_t pack_output_src_format = static_cast<std::uint32_t>(pack_src_format) & 0xF;
 
     set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
 
     t6_mutex_acquire(mutex::REG_RMW);
 
     // Set Fp8 E4M3 mode for packer
-    if ((pack_dst_format & 0x1F) == static_cast<DataFormatType>(DataFormat::Fp8_e4m3))
+    if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3))
     {
         cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(1);
     }

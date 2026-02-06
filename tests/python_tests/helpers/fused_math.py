@@ -280,7 +280,9 @@ class ReduceFpu(Fpu):
         )
 
     def uninit(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
-        unp_a_src_format = f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{operation.src_a.data_format})"
+        unp_a_src_format = (
+            f"ckernel::to_underlying(DataFormat::{operation.src_a.data_format})"
+        )
 
         if config.architecture == ChipArchitecture.WORMHOLE:
             return f"    _llk_math_reduce_uninit_({unp_a_src_format});\n"
@@ -897,7 +899,7 @@ class Math:
         format = f"DataFormat::{operation.math_format.name}"
         code = (
             f"    // Operation {stage}: Math Setup\n"
-            f"    const std::uint32_t math_format{stage} = static_cast<std::underlying_type_t<DataFormat>>({format});\n"
+            f"    const std::uint32_t math_format{stage} = ckernel::to_underlying({format});\n"
             f"    const DstSync dest_sync{stage} = DstSync::Sync{operation.dest_sync.name};\n"
         )
 

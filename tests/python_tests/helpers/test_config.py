@@ -641,23 +641,23 @@ class TestConfig:
 
             # Create array of format configurations for multiple L1-to-L1 iterations
             unpack_a_in_values = [
-                f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.unpack_A_src.name})"
+                f"ckernel::to_underlying(DataFormat::{fmt.unpack_A_src.name})"
                 for fmt in formats_config
             ]
             unpack_a_out_values = [
-                f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.unpack_A_dst.name})"
+                f"ckernel::to_underlying(DataFormat::{fmt.unpack_A_dst.name})"
                 for fmt in formats_config
             ]
             math_values = [
-                f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.math.name})"
+                f"ckernel::to_underlying(DataFormat::{fmt.math.name})"
                 for fmt in formats_config
             ]
             pack_in_values = [
-                f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.pack_src.name})"
+                f"ckernel::to_underlying(DataFormat::{fmt.pack_src.name})"
                 for fmt in formats_config
             ]
             pack_out_values = [
-                f"static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{fmt.pack_dst.name})"
+                f"ckernel::to_underlying(DataFormat::{fmt.pack_dst.name})"
                 for fmt in formats_config
             ]
 
@@ -678,11 +678,11 @@ class TestConfig:
             header_content.extend(
                 [
                     "// Format data for single L1-to-L1 iteration",
-                    f"constexpr auto UNPACK_A_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.unpack_A_src.name});",
-                    f"constexpr auto UNPACK_A_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.unpack_A_dst.name});",
-                    f"constexpr auto MATH_FORMAT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.math.name});",
-                    f"constexpr auto PACK_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.pack_src.name});",
-                    f"constexpr auto PACK_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats_config.pack_dst.name});",
+                    f"constexpr auto UNPACK_A_IN = ckernel::to_underlying(DataFormat::{formats_config.unpack_A_src.name});",
+                    f"constexpr auto UNPACK_A_OUT = ckernel::to_underlying(DataFormat::{formats_config.unpack_A_dst.name});",
+                    f"constexpr auto MATH_FORMAT = ckernel::to_underlying(DataFormat::{formats_config.math.name});",
+                    f"constexpr auto PACK_IN = ckernel::to_underlying(DataFormat::{formats_config.pack_src.name});",
+                    f"constexpr auto PACK_OUT = ckernel::to_underlying(DataFormat::{formats_config.pack_dst.name});",
                 ]
             )
 

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel_ops.h"
 #include "llk_defs.h"
@@ -105,27 +106,35 @@ static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
 #define LO_16(REG) (2 * (REG))
 #define HI_16(REG) (2 * (REG) + 1)
 
+// Helper function to convert to underlying type
+// e.g. to_underlying(MathFidelity::HiFi4) -> 4 (underlying type of MathFidelity is std::uint8_t)
+template <typename T>
+constexpr auto to_underlying(T t) noexcept
+{
+    return static_cast<std::underlying_type_t<T>>(t);
+}
+
 constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
 {
     switch (format & 0xF)
     {
-        case ((std::uint8_t)DataFormat::Int32):
-        case ((std::uint8_t)DataFormat::Float32):
+        case (to_underlying(DataFormat::Int32)):
+        case (to_underlying(DataFormat::Float32)):
             return (4096 >> 4);
-        case ((std::uint8_t)DataFormat::Float16):
-        case ((std::uint8_t)DataFormat::Float16_b):
+        case (to_underlying(DataFormat::Float16)):
+        case (to_underlying(DataFormat::Float16_b)):
             return (2048 >> 4);
-        case ((std::uint8_t)DataFormat::Bfp8):
-        case ((std::uint8_t)DataFormat::Bfp8_b):
+        case (to_underlying(DataFormat::Bfp8)):
+        case (to_underlying(DataFormat::Bfp8_b)):
             return ((1024 >> 4) + (64 >> 4));
-        case ((std::uint8_t)DataFormat::Bfp4):
-        case ((std::uint8_t)DataFormat::Bfp4_b):
+        case (to_underlying(DataFormat::Bfp4)):
+        case (to_underlying(DataFormat::Bfp4_b)):
             return ((512 >> 4) + (64 >> 4));
-        case ((std::uint8_t)DataFormat::Bfp2):
-        case ((std::uint8_t)DataFormat::Bfp2_b):
+        case (to_underlying(DataFormat::Bfp2)):
+        case (to_underlying(DataFormat::Bfp2_b)):
             return ((256 >> 4) + (64 >> 4));
-        case ((std::uint8_t)DataFormat::Int8):
-        case ((std::uint8_t)DataFormat::Lf8):
+        case (to_underlying(DataFormat::Int8)):
+        case (to_underlying(DataFormat::Lf8)):
             return (1024 >> 4);
         default:
             return ((1024 >> 4) + (64 >> 4));
@@ -136,12 +145,12 @@ constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
 {
     switch (format & 0xF)
     {
-        case ((std::uint8_t)DataFormat::Bfp8):
-        case ((std::uint8_t)DataFormat::Bfp8_b):
-        case ((std::uint8_t)DataFormat::Bfp4):
-        case ((std::uint8_t)DataFormat::Bfp4_b):
-        case ((std::uint8_t)DataFormat::Bfp2):
-        case ((std::uint8_t)DataFormat::Bfp2_b):
+        case (to_underlying(DataFormat::Bfp8)):
+        case (to_underlying(DataFormat::Bfp8_b)):
+        case (to_underlying(DataFormat::Bfp4)):
+        case (to_underlying(DataFormat::Bfp4_b)):
+        case (to_underlying(DataFormat::Bfp2)):
+        case (to_underlying(DataFormat::Bfp2_b)):
             return true;
         default:
             return false;
@@ -152,9 +161,9 @@ constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
 {
     switch (format & 0xF)
     {
-        case ((std::uint8_t)DataFormat::Bfp8):
-        case ((std::uint8_t)DataFormat::Bfp4):
-        case ((std::uint8_t)DataFormat::Bfp2):
+        case (to_underlying(DataFormat::Bfp8)):
+        case (to_underlying(DataFormat::Bfp4)):
+        case (to_underlying(DataFormat::Bfp2)):
             return true;
         default:
             return false;
@@ -165,11 +174,11 @@ constexpr static bool IS_A_FORMAT(std::uint32_t format)
 {
     switch (format & 0xF)
     {
-        case ((std::uint8_t)DataFormat::Lf8):
-        case ((std::uint8_t)DataFormat::Float16):
-        case ((std::uint8_t)DataFormat::Bfp8):
-        case ((std::uint8_t)DataFormat::Bfp4):
-        case ((std::uint8_t)DataFormat::Bfp2):
+        case (to_underlying(DataFormat::Lf8)):
+        case (to_underlying(DataFormat::Float16)):
+        case (to_underlying(DataFormat::Bfp8)):
+        case (to_underlying(DataFormat::Bfp4)):
+        case (to_underlying(DataFormat::Bfp2)):
             return true;
         default:
             return false;

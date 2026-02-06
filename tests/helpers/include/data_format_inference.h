@@ -110,11 +110,11 @@ constexpr bool is_format_combination_outlier(DataFormat input, DataFormat output
 constexpr FormatConfig get_data_formats(DataFormat unpack_in, DataFormat unpack_out, DataFormat math, DataFormat pack_in, DataFormat pack_out)
 {
     return {
-        static_cast<std::underlying_type_t<DataFormat>>(unpack_in),
-        static_cast<std::underlying_type_t<DataFormat>>(unpack_out),
-        static_cast<std::underlying_type_t<DataFormat>>(math),
-        static_cast<std::underlying_type_t<DataFormat>>(pack_in),
-        static_cast<std::underlying_type_t<DataFormat>>(pack_out)};
+        ckernel::to_underlying(unpack_in),
+        ckernel::to_underlying(unpack_out),
+        ckernel::to_underlying(math),
+        ckernel::to_underlying(pack_in),
+        ckernel::to_underlying(pack_out)};
 }
 
 /**

@@ -27,7 +27,7 @@ inline void _sub_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
 
     // Use '12' if Dest is in sign-magnitude format and '4' for 2's complement,
     // because TTI_SFPIADD requires 2's complement format in LREGs
-    constexpr int sfpload_instr_mod = SIGN_MAGNITUDE_FORMAT ? INT32_2S_COMP : static_cast<std::underlying_type_t<InstrModLoadStore>>(INSTRUCTION_MODE);
+    constexpr int sfpload_instr_mod = SIGN_MAGNITUDE_FORMAT ? INT32_2S_COMP : to_underlying(INSTRUCTION_MODE);
 
     // size of each tile in Dest is 64 rows
     constexpr std::uint32_t dst_tile_size = 64;
