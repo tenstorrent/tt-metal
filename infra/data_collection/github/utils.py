@@ -402,21 +402,23 @@ def _get_device_type_from_runner_environment(sku_from_test: Optional[str] = None
         return "unknown"
 
     # Not tt-ubuntu: check .github/sku_config.yaml for arch from runs_on labels matching runner
-    sku_config_path = _get_repo_root() / ".github" / "sku_config.yaml"
-    if sku_config_path.exists():
-        with open(sku_config_path) as f:
-            config = yaml.safe_load(f)
-        skus = config.get("skus") or {}
+    if sku_from_test:
+        sku_config_path = _get_repo_root() / ".github" / "sku_config.yaml"
+        if sku_config_path.exists():
+            with open(sku_config_path) as f:
+                config = yaml.safe_load(f)
+            skus = config.get("skus") or {}
 
-        if sku_from_test and sku_from_test in skus:
-            # Use sku_from_test from workflow: get runs_on labels for this SKU
-            runs_on = skus[sku_from_test].get("runs_on") or []
-            for label in runs_on:
-                label_lower = label.lower()
-                if "blackhole" in label_lower:
-                    return "blackhole"
-                if "wormhole" in label_lower:
-                    return "wormhole_b0"
+            if sku_from_test in skus:
+                # Use sku_from_test from workflow: get runs_on labels for this SKU
+                runs_on = skus[sku_from_test].get("runs_on") or []
+                for label in runs_on:
+                    label_lower = label.lower()
+                    # Only checks CIv1 style labels in sku_config for now
+                    if "arch-blackhole" in label_lower:
+                        return "blackhole"
+                    if "arch-wormhole" in label_lower:
+                        return "wormhole_b0"
 
     # Failed to parse from CIv2 runner name and failed to parse from sku_config:
     # Fallback to using ARCH_NAME env var
