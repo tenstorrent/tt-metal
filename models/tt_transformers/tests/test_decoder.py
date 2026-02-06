@@ -11,11 +11,11 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, PagedAttentionConfig
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
 
 @torch.no_grad()
@@ -72,6 +72,7 @@ def test_decoder_inference(
     use_prefetcher,
 ):
     dtype = ttnn.bfloat8_b
+
     mode = Mode.DECODE
     num_tensors = 5 if use_prefetcher else 0
     prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
@@ -85,6 +86,7 @@ def test_decoder_inference(
         max_seq_len=max_seq_len,
         cache_hf=True,
         prefetcher=prefetcher,
+        use_hf_rope=True,
     )
     model_args.n_layers = 1
 
@@ -95,14 +97,14 @@ def test_decoder_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = model_args.reference_decoder()
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model = model_args.reference_decoder(load_checkpoint=True)
 
     generation_start_pos = 0
     all_tests_pass = True
 
     # Setup RoPE transformation matrices
-    rope_setup = RotarySetup(
+    DefaultRopeSetup = HfRotarySetup if model_args.use_hf_rope else RotarySetup
+    rope_setup = DefaultRopeSetup(
         mesh_device,
         model_args.max_batch_size,
         model_args.head_dim,
@@ -174,7 +176,16 @@ def test_decoder_inference(
 
     seqlen = 1
 
-    freqs_cis = None
+    # Precompute freqs_cis for reference model
+    cos, sin = precompute_freqs(
+        model_args.head_dim,
+        model_args.max_seq_len * 2,
+        model_args.rope_theta,
+        model_args.rope_scaling.factor if model_args.rope_scaling else None,
+        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+        model_args.rope_scaling.rope_type.value if model_args.rope_scaling else "llama3",
+    )
+    freqs_cis = torch.complex(cos, sin)
 
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
@@ -230,7 +241,7 @@ def test_decoder_inference(
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 
         # In this test all users have the same position
-        freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0) if freqs_cis is not None else None
+        freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
         # Reference model
         ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
