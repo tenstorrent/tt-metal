@@ -28,7 +28,7 @@ pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py
 #### Multi Device (DP=2, N300):
 - For `640x640`, end-2-end perf is `372` FPS :
   ```
-  pytest --disable-warnings models/demos/yolov11/tests/test_e2e_performant.py::test_e2e_performant_dp
+  pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
 
 ### Demo with Trace+2CQ

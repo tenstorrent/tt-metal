@@ -153,15 +153,11 @@ class TtConv:
         if self.deallocate_activation:
             conv_config.deallocate_activation = self.deallocate_activation
 
-        # if self.change_shard:
-        #    conv_config.shard_layout = None
-
         if self.act_block_h:
             conv_config.act_block_h_override = self.act_blocks
 
         if self.block_shard:
             conv_config.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            # Enable weights double buffering for block-sharded layers for better performance
             if not self.enable_weights_double_buffer:
                 self.enable_weights_double_buffer = True
                 conv_config.enable_weights_double_buffer = True
