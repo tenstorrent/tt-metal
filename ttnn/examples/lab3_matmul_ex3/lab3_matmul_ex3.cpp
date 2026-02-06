@@ -405,7 +405,7 @@ void matmul_multi_core(
             uint32_t x = core_logical.x;
             uint32_t y = core_logical.y;
 
-            log_info(tt::LogAlways, "Setting runtime arguments for core ({}, {})", x, y);
+            // log_info(tt::LogAlways, "Setting runtime arguments for core ({}, {})", x, y);
 
             CoreCoord second_core_in_the_row_device =
                 prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(1, y));
@@ -611,7 +611,7 @@ int main() {
 
         // Initialize program state (includes device creation)
         ProgramState prog_state = init_program();
-        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, {10, 10}, prog_state);
+        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, {5, 5}, prog_state);
 
         log_info(tt::LogAlways, "Output vector of size {}", result_vec.size());
 
