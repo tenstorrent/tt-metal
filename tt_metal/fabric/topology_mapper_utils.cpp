@@ -597,6 +597,76 @@ void add_pinning_constraints(
     }
 }
 
+// Helper function to add exit node constraints
+// Constrains a subset of fabric nodes (equal to the number of intermesh connections needed) to be mappable to exit node
+// ASICs
+void add_exit_node_constraints(
+    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
+    const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& logical_graph,
+    const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
+    const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& exit_node_graph,
+    const LogicalMultiMeshGraph& logical_multi_mesh_graph,
+    MeshId logical_mesh_id) {
+    // Get all fabric nodes from the logical graph
+    const auto& fabric_nodes = logical_graph.get_nodes();
+    std::vector<FabricNodeId> all_fabric_nodes(fabric_nodes.begin(), fabric_nodes.end());
+
+    if (all_fabric_nodes.empty()) {
+        // No fabric nodes to constrain
+        return;
+    }
+
+    // Count intermesh connections needed for this logical mesh
+    size_t num_intermesh_connections = 0;
+    const auto& mesh_level_neighbors = logical_multi_mesh_graph.mesh_level_graph_.get_neighbors(logical_mesh_id);
+    num_intermesh_connections = mesh_level_neighbors.size();
+
+    if (num_intermesh_connections == 0) {
+        // No intermesh connections needed, no exit node constraints required
+        return;
+    }
+
+    // Get all nodes from the physical graph for validation
+    const auto& physical_nodes = physical_graph.get_nodes();
+    std::set<tt::tt_metal::AsicID> physical_node_set(physical_nodes.begin(), physical_nodes.end());
+
+    // Collect valid exit node ASICs by iterating through exit node graph connections
+    std::set<tt::tt_metal::AsicID> exit_node_asic_set;
+    const auto& exit_nodes = exit_node_graph.get_nodes();
+    for (const auto& exit_node : exit_nodes) {
+        // Check if exit node is in the physical graph
+        if (physical_node_set.find(exit_node) == physical_node_set.end()) {
+            continue;
+        }
+
+        // Get connections for this exit node
+        const auto& connections = exit_node_graph.get_neighbors(exit_node);
+        if (!connections.empty()) {
+            // Add this exit node to the set of valid exit nodes
+            exit_node_asic_set.insert(exit_node);
+        }
+    }
+
+    if (exit_node_asic_set.empty()) {
+        return;
+    }
+
+    // Only constrain the number of fabric nodes equal to the number of intermesh connections needed
+    // Select the first N fabric nodes deterministically
+    size_t num_fabric_nodes_to_constrain = std::min(num_intermesh_connections, all_fabric_nodes.size());
+    std::set<FabricNodeId> fabric_nodes_to_constrain(
+        all_fabric_nodes.begin(), all_fabric_nodes.begin() + num_fabric_nodes_to_constrain);
+
+    // Add many-to-many constraint: selected fabric nodes can map to any exit node ASIC
+    // This creates a constraint where any fabric node from the subset can map to any ASIC from the exit node set
+    try {
+        intra_mesh_constraints.add_required_constraint(fabric_nodes_to_constrain, exit_node_asic_set);
+    } catch (const std::exception&) {
+        // If adding constraint fails (e.g., causes conflict with other constraints),
+        // skip silently - this can happen if exit node ASICs conflict with existing constraints
+    }
+}
+
 // Helper function to determine intra-mesh validation mode
 ::tt::tt_fabric::ConnectionValidationMode determine_intra_mesh_validation_mode(
     const TopologyMappingConfig& config, MeshId logical_mesh_id) {
@@ -839,6 +909,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
             // Get the logical graph and the physical graph
             const auto& logical_graph = adjacency_map_logical.mesh_adjacency_graphs_.at(logical_mesh_id);
             const auto& physical_graph = adjacency_map_physical.mesh_adjacency_graphs_.at(physical_mesh_id);
+            const auto& exit_node_graph = adjacency_map_physical.mesh_exit_node_graphs_.at(physical_mesh_id);
 
             // Build intra-mesh constraints
             ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> intra_mesh_constraints;
@@ -846,6 +917,15 @@ TopologyMappingResult map_multi_mesh_to_physical(
             // Add rank binding constraints
             add_rank_binding_constraints(
                 intra_mesh_constraints, config, logical_mesh_id, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
+
+            // Add exit node constraints
+            add_exit_node_constraints(
+                intra_mesh_constraints,
+                logical_graph,
+                physical_graph,
+                exit_node_graph,
+                adjacency_map_logical,
+                logical_mesh_id);
 
             // Build ASIC positions map and add pinning constraints
             auto asic_positions_to_asic_ids = build_asic_positions_map(physical_graph, config);

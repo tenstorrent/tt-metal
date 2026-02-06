@@ -1136,7 +1136,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineBasic) {
 
     // Run search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
 
     // Should find a mapping (e.g., 1->10, 2->11)
     EXPECT_TRUE(found);
@@ -1188,7 +1188,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineWithConstraints) {
 
     // Run search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
 
     // Should find a mapping
     EXPECT_TRUE(found);
@@ -1225,7 +1225,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineNoSolution) {
 
     // Run search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
 
     // Should not find a mapping (target graph too large)
     EXPECT_FALSE(found);
@@ -1257,7 +1257,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineStrictMode) {
 
     // Run search in STRICT mode - should find mapping (1->10, 2->12) since 12 has 2 channels
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::STRICT);
+    bool found = engine.search(graph_data, constraint_data, ConnectionValidationMode::STRICT);
 
     EXPECT_TRUE(found);
     const auto& state = engine.get_state();
@@ -1297,7 +1297,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineRelaxedModeChannelPreference) {
 
     // Run search in RELAXED mode
     DFSSearchEngine<TestTargetNode, TestGlobalNode> engine;
-    bool found = engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
 
     EXPECT_TRUE(found);
     const auto& state = engine.get_state();
@@ -1361,7 +1361,7 @@ TEST_F(TopologySolverTest, MappingValidatorSavesPartialMapping) {
     // Build result - should save partial mapping even though it's incomplete
     MappingResult<TestTargetNode, TestGlobalNode> result =
         MappingValidator<TestTargetNode, TestGlobalNode>::build_result(
-            state.mapping, graph_data, state, constraints, ConnectionValidationMode::RELAXED);
+            state.mapping, graph_data, constraint_data, state, ConnectionValidationMode::RELAXED);
 
     // Should fail (incomplete mapping)
     EXPECT_FALSE(result.success);
@@ -1772,7 +1772,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DRingOn2DMesh) {
 
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
     const auto& state = search_engine.get_state();
 
     // This should succeed - a 1D ring can be embedded in a 2D mesh
@@ -1854,7 +1854,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DChainOn2DMesh_Negative) {
         ConstraintIndexData constraint_data(constraints, graph_data);
 
         DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-        bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+        bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
         const auto& state = search_engine.get_state();
 
         EXPECT_TRUE(found) << "1D chain of 9 nodes should map to 3x3 mesh (9 nodes)";
@@ -1871,7 +1871,7 @@ TEST_F(TopologySolverTest, DFSSearchEngineStressTest_1DChainOn2DMesh_Negative) {
         ConstraintIndexData constraint_data(constraints, graph_data);
 
         DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-        bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+        bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
         const auto& state = search_engine.get_state();
 
         if (found) {
@@ -1931,7 +1931,7 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedTargetGraph) {
 
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
     const auto& state = search_engine.get_state();
 
     // This should succeed - two disconnected chains can map to one connected chain
@@ -2004,7 +2004,7 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedGlobalGraph) {
 
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
     const auto& state = search_engine.get_state();
 
     // This should fail - a connected chain cannot map to disconnected components
@@ -2046,7 +2046,7 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Success) {
 
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
     const auto& state = search_engine.get_state();
 
     // This should succeed - disconnected target can map to disconnected global
@@ -2098,7 +2098,7 @@ TEST_F(TopologySolverTest, DFSSearchEngine_DisconnectedBothGraphs_Failure) {
 
     // Run DFS search
     DFSSearchEngine<TestTargetNode, TestGlobalNode> search_engine;
-    bool found = search_engine.search(graph_data, constraint_data, constraints, ConnectionValidationMode::RELAXED);
+    bool found = search_engine.search(graph_data, constraint_data, ConnectionValidationMode::RELAXED);
     const auto& state = search_engine.get_state();
 
     // This should fail - target has 6 nodes but global only has 5
@@ -2586,6 +2586,88 @@ TEST_F(TopologySolverTest, MappingConstraintsForbiddenBasic) {
     EXPECT_FALSE(constraints.is_valid_mapping(1, 12));
 }
 
+TEST_F(TopologySolverTest, MappingConstraintsManyToMany) {
+    // Test many-to-many constraint: any target node from a set can map to any global node from a set
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    std::set<TestTargetNode> target_nodes = {1, 2, 3};
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+
+    // Add many-to-many constraint
+    constraints.add_required_constraint(target_nodes, global_nodes);
+
+    // Verify all target nodes can map to any of the global nodes
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(12), 1u);
+
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(12), 1u);
+
+    EXPECT_EQ(constraints.get_valid_mappings(3).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(3).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(3).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(3).count(12), 1u);
+
+    // Verify is_valid_mapping works correctly
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 10));
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 11));
+    EXPECT_TRUE(constraints.is_valid_mapping(1, 12));
+    EXPECT_TRUE(constraints.is_valid_mapping(2, 10));
+    EXPECT_TRUE(constraints.is_valid_mapping(3, 12));
+    EXPECT_FALSE(constraints.is_valid_mapping(1, 20));  // Not in global_nodes set
+    EXPECT_FALSE(
+        constraints.is_valid_mapping(4, 10));  // Not in target_nodes set (but constraint still applies if queried)
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsManyToManyIntersection) {
+    // Test many-to-many constraint intersection with existing constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // First, add individual constraint for target node 1
+    std::set<TestGlobalNode> initial_globals = {10, 11};
+    constraints.add_required_constraint(1, initial_globals);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 2u);
+
+    // Now add many-to-many constraint that includes target node 1
+    std::set<TestTargetNode> target_nodes = {1, 2, 3};
+    std::set<TestGlobalNode> many_to_many_globals = {11, 12, 13};
+
+    // This should intersect: target 1 can only map to {10, 11} ∩ {11, 12, 13} = {11}
+    constraints.add_required_constraint(target_nodes, many_to_many_globals);
+
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 0u);  // Removed by intersection
+
+    // Target nodes 2 and 3 should have all three options
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 3u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(12), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(13), 1u);
+
+    EXPECT_EQ(constraints.get_valid_mappings(3).size(), 3u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsManyToManyConflict) {
+    // Test many-to-many constraint that causes conflict
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // First constrain target 1 to only global 10
+    constraints.add_required_constraint(1, 10);
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+
+    // Now add many-to-many constraint that doesn't include global 10
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {11, 12};
+
+    // This should cause a conflict for target 1: {10} ∩ {11, 12} = {}
+    EXPECT_THROW(constraints.add_required_constraint(target_nodes, global_nodes), std::runtime_error);
+}
+
 TEST_F(TopologySolverTest, MappingConstraintsForbiddenOneToMany) {
     // Test forbidden constraint with multiple global nodes
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
@@ -2711,5 +2793,963 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_WithForbiddenConstraints) {
 
     // Verify forbidden constraint is satisfied (target 2 should not map to 12)
     EXPECT_NE(result.target_to_global.at(2), 12) << "Forbidden constraint should be satisfied";
+}
+
+// ============================================================================
+// Cardinality Constraint Tests
+// ============================================================================
+
+TEST_F(TopologySolverTest, CardinalityConstraint_Basic) {
+    // Test basic cardinality constraint: at least 1 of {(x,1), (x,2), (y,1), (y,2)} must be satisfied
+    // Create simple target graph: x -> y
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};  // x=1, y=2
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)} must be satisfied
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality constraint should succeed";
+
+    // Verify at least one of the cardinality pairs is satisfied
+    bool cardinality_satisfied = false;
+    if ((result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+        (result.target_to_global.at(2) == 10) || (result.target_to_global.at(2) == 11)) {
+        cardinality_satisfied = true;
+    }
+    EXPECT_TRUE(cardinality_satisfied) << "At least one cardinality constraint pair should be satisfied";
+
+    // Verify graph isomorphism is maintained
+    TestGlobalNode global1 = result.target_to_global.at(1);
+    TestGlobalNode global2 = result.target_to_global.at(2);
+    const auto& neighbors1 = global_graph.get_neighbors(global1);
+    bool connected = std::find(neighbors1.begin(), neighbors1.end(), global2) != neighbors1.end();
+    EXPECT_TRUE(connected) << "Mapped nodes should be connected in global graph";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_MinCountGreaterThanOne) {
+    // Test cardinality constraint with min_count = 2
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13 -> 14
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12, 14};
+    global_adj_map[14] = {13};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add cardinality constraint: at least 2 of {(1,10), (1,11), (2,11), (2,12), (3,12), (3,13)} must be satisfied
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {
+        {1, 10}, {1, 11}, {2, 11}, {2, 12}, {3, 12}, {3, 13}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 2);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality constraint (min_count=2) should succeed";
+
+    // Count how many cardinality pairs are satisfied
+    size_t satisfied_count = 0;
+    if (result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11) {
+        satisfied_count++;
+    }
+    if (result.target_to_global.at(2) == 11 || result.target_to_global.at(2) == 12) {
+        satisfied_count++;
+    }
+    if (result.target_to_global.at(3) == 12 || result.target_to_global.at(3) == 13) {
+        satisfied_count++;
+    }
+
+    EXPECT_GE(satisfied_count, 2u) << "At least 2 cardinality constraint pairs should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WithRequiredConstraints) {
+    // Test cardinality constraint combined with required constraints
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Add required constraint: node 1 must map to 10
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)} must be satisfied
+    // Note: (1,11) will be filtered out because 1 must map to 10
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality + required constraints should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_EQ(result.target_to_global.at(1), 10) << "Required constraint should be satisfied";
+
+    // Verify cardinality constraint is satisfied (either (1,10) or (2,10) or (2,11))
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(2) == 10) ||
+                                 (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ConflictWithRequired) {
+    // Test that cardinality constraint throws error when incompatible with required constraints
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 must map to 20
+    constraints.add_required_constraint(1, 20);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11)} must be satisfied
+    // This should fail because 1 can only map to 20, not 10 or 11
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}};
+    EXPECT_THROW(constraints.add_cardinality_constraint(cardinality_pairs, 1), std::runtime_error)
+        << "Cardinality constraint incompatible with required constraints should throw";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_MultipleConstraints) {
+    // Test multiple cardinality constraints
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // First cardinality constraint: at least 1 of {(1,10), (1,11)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs1 = {{1, 10}, {1, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs1, 1);
+
+    // Second cardinality constraint: at least 1 of {(2,11), (2,12)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs2 = {{2, 11}, {2, 12}};
+    constraints.add_cardinality_constraint(cardinality_pairs2, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with multiple cardinality constraints should succeed";
+
+    // Verify first cardinality constraint is satisfied
+    bool constraint1_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11);
+    EXPECT_TRUE(constraint1_satisfied) << "First cardinality constraint should be satisfied";
+
+    // Verify second cardinality constraint is satisfied
+    bool constraint2_satisfied = (result.target_to_global.at(2) == 11) || (result.target_to_global.at(2) == 12);
+    EXPECT_TRUE(constraint2_satisfied) << "Second cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_Validation) {
+    // Test that cardinality constraint validation works correctly
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Test empty pairs - should throw
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> empty_pairs;
+    EXPECT_THROW(constraints.add_cardinality_constraint(empty_pairs, 1), std::runtime_error)
+        << "Empty cardinality constraint should throw";
+
+    // Test min_count > pairs.size() - should throw
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> pairs = {{1, 10}, {2, 11}};
+    EXPECT_THROW(constraints.add_cardinality_constraint(pairs, 3), std::runtime_error)
+        << "min_count > pairs.size() should throw";
+
+    // Test min_count = 0 - should throw
+    EXPECT_THROW(constraints.add_cardinality_constraint(pairs, 0), std::runtime_error) << "min_count = 0 should throw";
+
+    // Test valid constraint
+    EXPECT_NO_THROW(constraints.add_cardinality_constraint(pairs, 1))
+        << "Valid cardinality constraint should not throw";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_IntegrationWithSolver) {
+    // Test that cardinality constraints work correctly with the full solver pipeline
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13 -> 14
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12, 14};
+    global_adj_map[14] = {13};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,11), (2,12), (3,12), (3,13)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {
+        {1, 10}, {1, 11}, {2, 11}, {2, 12}, {3, 12}, {3, 13}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality constraint should succeed";
+    EXPECT_TRUE(result.error_message.empty()) << "Should have no error message on success";
+
+    // Verify all nodes are mapped
+    EXPECT_EQ(result.target_to_global.size(), 3u) << "Should map all 3 target nodes";
+    EXPECT_EQ(result.global_to_target.size(), 3u) << "Should have bidirectional mappings";
+
+    // Verify graph isomorphism
+    for (size_t i = 1; i <= 3; ++i) {
+        TestTargetNode target_i = static_cast<TestTargetNode>(i);
+        TestGlobalNode global_i = result.target_to_global.at(target_i);
+
+        // Check neighbors
+        const auto& target_neighbors = target_graph.get_neighbors(target_i);
+        const auto& global_neighbors = global_graph.get_neighbors(global_i);
+
+        for (const auto& target_neighbor : target_neighbors) {
+            TestGlobalNode mapped_neighbor = result.target_to_global.at(target_neighbor);
+            bool neighbor_connected =
+                std::find(global_neighbors.begin(), global_neighbors.end(), mapped_neighbor) != global_neighbors.end();
+            EXPECT_TRUE(neighbor_connected) << "Neighbor " << target_neighbor << " mapped to " << mapped_neighbor
+                                            << " should be connected to " << global_i << " in global graph";
+        }
+    }
+
+    // Verify statistics
+    EXPECT_GT(result.stats.dfs_calls, 0u) << "Should have made DFS calls";
+    EXPECT_GE(result.stats.elapsed_time.count(), 0) << "Should have elapsed time";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ConstraintIndexData) {
+    // Test that cardinality constraints are correctly converted to ConstraintIndexData
+    using namespace tt::tt_fabric::detail;
+
+    // Create simple graphs
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+
+    // Add cardinality constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Convert to ConstraintIndexData
+    ConstraintIndexData constraint_data(constraints, graph_data);
+
+    // Verify cardinality constraints are present
+    EXPECT_FALSE(constraint_data.cardinality_constraints.empty())
+        << "Cardinality constraints should be converted to index data";
+
+    // Verify we can check cardinality constraints
+    std::vector<int> mapping = {0, 1};  // target 1 -> global 10 (idx 0), target 2 -> global 11 (idx 1)
+    EXPECT_TRUE(constraint_data.check_cardinality_constraints(mapping))
+        << "Cardinality constraints should be satisfied by this mapping";
+
+    // Test can_satisfy_cardinality_constraints with partial mapping
+    std::vector<int> partial_mapping = {0, -1};  // target 1 mapped, target 2 not mapped
+    EXPECT_TRUE(constraint_data.can_satisfy_cardinality_constraints(partial_mapping))
+        << "Cardinality constraints should still be satisfiable with partial mapping";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ForwardConsistency) {
+    // Test that cardinality constraints are checked during forward consistency checking
+    // This ensures branches are pruned early if cardinality constraints cannot be satisfied
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,11), (2,12)} must be satisfied
+    // This constraint should guide the solver
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 11}, {2, 12}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality constraint should succeed";
+
+    // Verify cardinality constraint is satisfied
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                 (result.target_to_global.at(2) == 11) || (result.target_to_global.at(2) == 12);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WithPreferredConstraints) {
+    // Test cardinality constraint combined with preferred constraints
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add preferred constraint: node 1 prefers 10
+    constraints.add_preferred_constraint(1, 10);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality + preferred constraints should succeed";
+
+    // Verify cardinality constraint is satisfied
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                 (result.target_to_global.at(2) == 10) || (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied";
+
+    // Preferred constraint should guide the solver (but not required)
+    // If cardinality is satisfied by (1,10), preferred constraint is also satisfied
+    if (result.target_to_global.at(1) == 10) {
+        EXPECT_EQ(result.constraint_stats.preferred_satisfied, 1u) << "Preferred constraint should be satisfied";
+    }
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WithForbiddenConstraints) {
+    // Test cardinality constraint combined with forbidden constraints
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11, 12}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11, 12});
+
+    // Forbid node 1 from mapping to 10
+    constraints.add_forbidden_constraint(1, 10);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)} must be satisfied
+    // Note: (1,10) will be filtered out because it's forbidden
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality + forbidden constraints should succeed";
+
+    // Verify forbidden constraint is satisfied (node 1 should not map to 10)
+    EXPECT_NE(result.target_to_global.at(1), 10) << "Forbidden constraint should be satisfied";
+
+    // Verify cardinality constraint is satisfied (must be via (1,11), (2,10), or (2,11))
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 11) || (result.target_to_global.at(2) == 10) ||
+                                 (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WithManyToManyConstraints) {
+    // Test cardinality constraint combined with many-to-many constraints
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add many-to-many constraint: nodes {1, 2} can map to {10, 11, 12}
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_required_constraint(target_nodes, global_nodes);
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality + many-to-many constraints should succeed";
+
+    // Verify many-to-many constraint is satisfied
+    EXPECT_TRUE(global_nodes.count(result.target_to_global.at(1)) > 0) << "Node 1 should map to {10,11,12}";
+    EXPECT_TRUE(global_nodes.count(result.target_to_global.at(2)) > 0) << "Node 2 should map to {10,11,12}";
+
+    // Verify cardinality constraint is satisfied
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                 (result.target_to_global.at(2) == 10) || (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_WithMultipleConstraintTypes) {
+    // Test cardinality constraint combined with multiple constraint types
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11, 12}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11, 12});
+
+    // Add preferred constraint: node 2 prefers 11
+    constraints.add_preferred_constraint(2, 11);
+
+    // Add forbidden constraint: node 1 cannot map to 12
+    constraints.add_forbidden_constraint(1, 12);
+
+    // Add cardinality constraint: at least 2 of {(1,10), (1,11), (2,10), (2,11), (2,12)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {
+        {1, 10}, {1, 11}, {2, 10}, {2, 11}, {2, 12}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 2);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with multiple constraint types should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_TRUE(result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11)
+        << "Node 1 should map to {10, 11} (12 is forbidden)";
+
+    // Verify forbidden constraint is satisfied
+    EXPECT_NE(result.target_to_global.at(1), 12) << "Forbidden constraint should be satisfied";
+
+    // Verify cardinality constraint is satisfied (at least 2 pairs)
+    size_t satisfied_pairs = 0;
+    if (result.target_to_global.at(1) == 10) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(1) == 11) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 10) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 11) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 12) {
+        satisfied_pairs++;
+    }
+    EXPECT_GE(satisfied_pairs, 2u) << "At least 2 cardinality pairs should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_IntersectionWithRequired) {
+    // Test cardinality constraint with intersection scenarios
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11});
+
+    // Add cardinality constraint: at least 1 of {(1,10), (1,11), (1,12), (2,10), (2,11)} must be satisfied
+    // Note: (1,12) will be filtered out because 1 can only map to {10, 11}
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {
+        {1, 10}, {1, 11}, {1, 12}, {2, 10}, {2, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with cardinality intersection should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_TRUE(result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11)
+        << "Node 1 should map to {10, 11}";
+
+    // Verify cardinality constraint is satisfied (must be via valid pairs)
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                 (result.target_to_global.at(2) == 10) || (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Cardinality constraint should be satisfied with valid pairs";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_MinCountWithConstraints) {
+    // Test cardinality constraint with min_count > 1 combined with other constraints
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11});
+
+    // Add forbidden constraint: node 2 cannot map to 12
+    constraints.add_forbidden_constraint(2, 12);
+
+    // Add cardinality constraint: at least 2 of {(1,10), (1,11), (2,10), (2,11), (2,12)} must be satisfied
+    // Note: (2,12) will be filtered out because it's forbidden
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs = {
+        {1, 10}, {1, 11}, {2, 10}, {2, 11}, {2, 12}};
+    constraints.add_cardinality_constraint(cardinality_pairs, 2);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with min_count=2 and constraints should succeed";
+
+    // Verify constraints are satisfied
+    EXPECT_TRUE(result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11)
+        << "Node 1 should map to {10, 11}";
+    EXPECT_NE(result.target_to_global.at(2), 12) << "Node 2 should not map to 12 (forbidden)";
+
+    // Verify cardinality constraint is satisfied (at least 2 pairs)
+    size_t satisfied_pairs = 0;
+    if (result.target_to_global.at(1) == 10) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(1) == 11) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 10) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 11) {
+        satisfied_pairs++;
+    }
+    EXPECT_GE(satisfied_pairs, 2u) << "At least 2 cardinality pairs should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_MultipleCardinalityWithOtherConstraints) {
+    // Test multiple cardinality constraints combined with other constraint types
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11});
+
+    // Add preferred constraint: node 2 prefers 11
+    constraints.add_preferred_constraint(2, 11);
+
+    // Add first cardinality constraint: at least 1 of {(1,10), (1,11), (2,10)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs1 = {{1, 10}, {1, 11}, {2, 10}};
+    constraints.add_cardinality_constraint(cardinality_pairs1, 1);
+
+    // Add second cardinality constraint: at least 1 of {(2,11), (2,12), (3,11)} must be satisfied
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> cardinality_pairs2 = {{2, 11}, {2, 12}, {3, 11}};
+    constraints.add_cardinality_constraint(cardinality_pairs2, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with multiple cardinality constraints should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_TRUE(result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11)
+        << "Node 1 should map to {10, 11}";
+
+    // Verify first cardinality constraint is satisfied
+    bool cardinality1_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                  (result.target_to_global.at(2) == 10);
+    EXPECT_TRUE(cardinality1_satisfied) << "First cardinality constraint should be satisfied";
+
+    // Verify second cardinality constraint is satisfied
+    bool cardinality2_satisfied = (result.target_to_global.at(2) == 11) || (result.target_to_global.at(2) == 12) ||
+                                  (result.target_to_global.at(3) == 11);
+    EXPECT_TRUE(cardinality2_satisfied) << "Second cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_Basic) {
+    // Test many-to-many cardinality constraint: at least 1 mapping from {1,2} × {10,11,12}
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add many-to-many cardinality constraint: at least 1 of {(1,10), (1,11), (1,12), (2,10), (2,11), (2,12)}
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11, 12};
+    constraints.add_cardinality_constraint(target_nodes, global_nodes, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with many-to-many cardinality constraint should succeed";
+
+    // Verify cardinality constraint is satisfied (at least 1 pair)
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(1) == 11) ||
+                                 (result.target_to_global.at(1) == 12) || (result.target_to_global.at(2) == 10) ||
+                                 (result.target_to_global.at(2) == 11) || (result.target_to_global.at(2) == 12);
+    EXPECT_TRUE(cardinality_satisfied) << "Many-to-many cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_MinCountGreaterThanOne) {
+    // Test many-to-many cardinality constraint with min_count = 2
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add many-to-many cardinality constraint: at least 2 of {(1,10), (1,11), (2,10), (2,11)}
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    constraints.add_cardinality_constraint(target_nodes, global_nodes, 2);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with many-to-many cardinality constraint (min_count=2) should succeed";
+
+    // Verify cardinality constraint is satisfied (at least 2 pairs)
+    size_t satisfied_pairs = 0;
+    if (result.target_to_global.at(1) == 10 || result.target_to_global.at(1) == 11) {
+        satisfied_pairs++;
+    }
+    if (result.target_to_global.at(2) == 10 || result.target_to_global.at(2) == 11) {
+        satisfied_pairs++;
+    }
+    EXPECT_GE(satisfied_pairs, 2u) << "At least 2 pairs from many-to-many cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_WithRequiredConstraints) {
+    // Test many-to-many cardinality constraint combined with required constraints
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 must map to 10
+    constraints.add_required_constraint(1, 10);
+
+    // Add many-to-many cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)}
+    // Note: (1,11) will be filtered out because 1 must map to 10
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    constraints.add_cardinality_constraint(target_nodes, global_nodes, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with many-to-many cardinality + required constraints should succeed";
+
+    // Verify required constraint is satisfied
+    EXPECT_EQ(result.target_to_global.at(1), 10) << "Required constraint should be satisfied";
+
+    // Verify cardinality constraint is satisfied (via (1,10) or (2,10) or (2,11))
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 10) || (result.target_to_global.at(2) == 10) ||
+                                 (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Many-to-many cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_WithForbiddenConstraints) {
+    // Test many-to-many cardinality constraint combined with forbidden constraints
+    // Create target graph: 1 -> 2 -> 3
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1, 3};
+    target_adj_map[3] = {2};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12 -> 13
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11, 13};
+    global_adj_map[13] = {12};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Add required constraint: node 1 can map to {10, 11, 12}
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11, 12});
+
+    // Forbid node 1 from mapping to 10
+    constraints.add_forbidden_constraint(1, 10);
+
+    // Add many-to-many cardinality constraint: at least 1 of {(1,10), (1,11), (2,10), (2,11)}
+    // Note: (1,10) will be filtered out because it's forbidden
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    constraints.add_cardinality_constraint(target_nodes, global_nodes, 1);
+
+    // Solve
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+
+    // Should succeed
+    EXPECT_TRUE(result.success) << "Mapping with many-to-many cardinality + forbidden constraints should succeed";
+
+    // Verify forbidden constraint is satisfied
+    EXPECT_NE(result.target_to_global.at(1), 10) << "Forbidden constraint should be satisfied";
+
+    // Verify cardinality constraint is satisfied (must be via (1,11), (2,10), or (2,11))
+    bool cardinality_satisfied = (result.target_to_global.at(1) == 11) || (result.target_to_global.at(2) == 10) ||
+                                 (result.target_to_global.at(2) == 11);
+    EXPECT_TRUE(cardinality_satisfied) << "Many-to-many cardinality constraint should be satisfied";
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_Validation) {
+    // Test validation of many-to-many cardinality constraint
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    // Test empty target nodes - should throw
+    std::set<TestTargetNode> empty_targets;
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    EXPECT_THROW(constraints.add_cardinality_constraint(empty_targets, global_nodes, 1), std::runtime_error);
+
+    // Test empty global nodes - should throw
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> empty_globals;
+    EXPECT_THROW(constraints.add_cardinality_constraint(target_nodes, empty_globals, 1), std::runtime_error);
+
+    // Test min_count greater than number of pairs - should throw
+    std::set<TestTargetNode> small_targets = {1};
+    std::set<TestGlobalNode> small_globals = {10};
+    EXPECT_THROW(constraints.add_cardinality_constraint(small_targets, small_globals, 2), std::runtime_error);
+
+    // Test min_count = 0 - should throw
+    EXPECT_THROW(constraints.add_cardinality_constraint(target_nodes, global_nodes, 0), std::runtime_error);
+}
+
+TEST_F(TopologySolverTest, CardinalityConstraint_ManyToMany_EquivalentToExplicitPairs) {
+    // Test that many-to-many cardinality constraint is equivalent to explicitly listing all pairs
+    // Create target graph: 1 -> 2
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Create global graph: 10 -> 11 -> 12
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10, 12};
+    global_adj_map[12] = {11};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Test 1: Using many-to-many convenience method
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints1;
+    std::set<TestTargetNode> target_nodes = {1, 2};
+    std::set<TestGlobalNode> global_nodes = {10, 11};
+    constraints1.add_cardinality_constraint(target_nodes, global_nodes, 1);
+
+    // Test 2: Using explicit pairs (equivalent)
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints2;
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> explicit_pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    constraints2.add_cardinality_constraint(explicit_pairs, 1);
+
+    // Both should have the same cardinality constraints
+    EXPECT_EQ(constraints1.get_cardinality_constraints().size(), constraints2.get_cardinality_constraints().size());
+    if (!constraints1.get_cardinality_constraints().empty() && !constraints2.get_cardinality_constraints().empty()) {
+        const auto& pairs1 = constraints1.get_cardinality_constraints()[0].first;
+        const auto& pairs2 = constraints2.get_cardinality_constraints()[0].first;
+        EXPECT_EQ(pairs1.size(), pairs2.size());
+        EXPECT_EQ(pairs1, pairs2) << "Many-to-many should generate same pairs as explicit listing";
+    }
 }
 }  // namespace tt::tt_fabric

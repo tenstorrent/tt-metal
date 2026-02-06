@@ -180,6 +180,20 @@ public:
     void add_required_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
 
     /**
+     * @brief Add explicit required constraint (many-to-many)
+     *
+     * Constrains multiple target nodes to map to any of the provided global nodes.
+     * This creates a many-to-many relationship: any target node from the set can map
+     * to any global node from the set. Intersects with existing constraints for each target.
+     * Throws TT_THROW if constraint causes conflicts.
+     *
+     * @param target_nodes The set of target nodes to constrain
+     * @param global_nodes The set of global nodes they can map to
+     * @throws std::runtime_error If constraint causes empty valid mappings
+     */
+    void add_required_constraint(const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes);
+
+    /**
      * @brief Add explicit preferred constraint (one-to-one)
      *
      * Suggests a mapping but doesn't restrict valid mappings.
@@ -252,6 +266,45 @@ public:
     void add_forbidden_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
 
     /**
+     * @brief Add cardinality constraint (at-least-N constraint)
+     *
+     * Requires that at least `min_count` of the provided (target, global) mapping pairs
+     * must be satisfied in the final solution. This allows expressing constraints like
+     * "at least 1 of these mappings must be satisfied" or "at least 2 of these mappings".
+     *
+     * Example: If you want nodes x, y to map to values 1, 2, 3, 4, but only need one
+     * of them to map, you can add all possible pairs and set min_count=1:
+     *   add_cardinality_constraint({{x,1}, {x,2}, {x,3}, {x,4}, {y,1}, {y,2}, {y,3}, {y,4}}, 1)
+     *
+     * @param mapping_pairs Set of (target_node, global_node) pairs that form the constraint group
+     * @param min_count Minimum number of pairs that must be satisfied (default: 1)
+     * @throws std::runtime_error If min_count is greater than the number of pairs
+     */
+    void add_cardinality_constraint(
+        const std::set<std::pair<TargetNode, GlobalNode>>& mapping_pairs, size_t min_count = 1);
+
+    /**
+     * @brief Add many-to-many cardinality constraint (convenience method)
+     *
+     * Generates all possible (target, global) pairs from the Cartesian product of the two sets
+     * and requires that at least `min_count` of these pairs must be satisfied in the final solution.
+     * This is a convenience method that avoids manually listing all pairs.
+     *
+     * Example: If you want nodes {x, y} to map to values {1, 2, 3, 4}, but only need 2
+     * of the possible mappings to be satisfied:
+     *   add_cardinality_constraint({x, y}, {1, 2, 3, 4}, 2)
+     * This is equivalent to:
+     *   add_cardinality_constraint({{x,1}, {x,2}, {x,3}, {x,4}, {y,1}, {y,2}, {y,3}, {y,4}}, 2)
+     *
+     * @param target_nodes Set of target nodes
+     * @param global_nodes Set of global nodes
+     * @param min_count Minimum number of pairs that must be satisfied (default: 1)
+     * @throws std::runtime_error If min_count is greater than the number of possible pairs
+     */
+    void add_cardinality_constraint(
+        const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes, size_t min_count = 1);
+
+    /**
      * @brief Get valid mappings for a specific target node
      *
      * @param target The target node
@@ -290,10 +343,27 @@ public:
      */
     const std::map<TargetNode, std::set<GlobalNode>>& get_preferred_mappings() const;
 
+    /**
+     * @brief Get all cardinality constraints (for solver access)
+     *
+     * @return const std::vector<std::pair<std::set<std::pair<TargetNode, GlobalNode>>, size_t>>&
+     *         Vector of (mapping_pairs, min_count) tuples representing cardinality constraints
+     */
+    const std::vector<std::pair<std::set<std::pair<TargetNode, GlobalNode>>, size_t>>& get_cardinality_constraints()
+        const;
+
 private:
     // Internal representation: intersection of all constraints
     std::map<TargetNode, std::set<GlobalNode>> valid_mappings_;      // Required constraints
     std::map<TargetNode, std::set<GlobalNode>> preferred_mappings_;  // Preferred constraints
+
+    // Cardinality constraints: vector of (mapping_pairs, min_count) tuples
+    // Each constraint requires that at least min_count of the mapping_pairs must be satisfied
+    std::vector<std::pair<std::set<std::pair<TargetNode, GlobalNode>>, size_t>> cardinality_constraints_;
+
+    // Track which global nodes are exclusively reserved by many-to-many constraints
+    // Maps global node -> set of target nodes that are allowed to map to it via many-to-many constraints
+    std::map<GlobalNode, std::set<TargetNode>> reserved_global_nodes_;
 
     // Helper to intersect two sets
     static std::set<GlobalNode> intersect_sets(const std::set<GlobalNode>& set1, const std::set<GlobalNode>& set2);
@@ -301,6 +371,10 @@ private:
     // Internal validation - throws if invalid
     // If saved_state is provided and validation fails, restores the saved state before throwing
     void validate_and_throw(const std::map<TargetNode, std::set<GlobalNode>>* saved_state = nullptr);
+
+    // Validate that all cardinality constraints are compatible with required constraints
+    // and that they are satisfiable together
+    void validate_cardinality_constraints() const;
 };
 
 /**
@@ -472,6 +546,10 @@ struct ConstraintIndexData {
     // Used for optimization, doesn't restrict valid mappings
     std::vector<std::vector<size_t>> preferred_global_indices;
 
+    // Cardinality constraints: vector of (mapping_pairs_as_indices, min_count) tuples
+    // Each constraint requires that at least min_count of the (target_idx, global_idx) pairs must be satisfied
+    std::vector<std::pair<std::set<std::pair<size_t, size_t>>, size_t>> cardinality_constraints;
+
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
      *
@@ -487,6 +565,23 @@ struct ConstraintIndexData {
     // Helper: get candidates for target node
     // Returns restricted candidates if available, otherwise returns empty vector (meaning all are valid)
     const std::vector<size_t>& get_candidates(size_t target_idx) const;
+
+    // Helper: check if cardinality constraints are satisfied by a complete mapping
+    // Returns true if all cardinality constraints are satisfied, false otherwise
+    bool check_cardinality_constraints(const std::vector<int>& mapping) const;
+
+    // Helper: check if cardinality constraints can still be satisfied by a partial mapping
+    // Returns true if it's still possible to satisfy all cardinality constraints, false if impossible
+    bool can_satisfy_cardinality_constraints(const std::vector<int>& mapping) const;
+
+    // Helper: check if a target node has exactly one required constraint (for pre-assignment)
+    // Returns the global index if exactly one, SIZE_MAX otherwise
+    size_t get_single_required_mapping(size_t target_idx) const;
+
+    // Helper: compute constraint statistics from a complete mapping
+    // Returns (required_satisfied, preferred_satisfied, preferred_total)
+    std::tuple<size_t, size_t, size_t> compute_constraint_stats(
+        const std::vector<int>& mapping, const GraphIndexData<TargetNode, GlobalNode>& graph_data) const;
 };
 
 /**
@@ -525,15 +620,13 @@ public:
      * the best partial mapping found, which will be saved by MappingValidator for debugging.
      *
      * @param graph_data Indexed graph data
-     * @param constraint_data Indexed constraint data
-     * @param constraints Mapping constraints (for pre-assignment)
+     * @param constraint_data Indexed constraint data (includes all constraint information)
      * @param validation_mode Connection validation mode
      * @return true if complete valid mapping found, false otherwise (but state still has best found)
      */
     bool search(
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
         const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
-        const MappingConstraints<TargetNode, GlobalNode>& constraints,
         ConnectionValidationMode validation_mode,
         bool quiet_mode = false);
 
@@ -581,20 +674,24 @@ struct MappingValidator {
     /**
      * @brief Validate a complete mapping
      *
-     * Checks that all edges exist and validates connection counts according to validation_mode.
+     * Checks that all edges exist, validates connection counts according to validation_mode,
+     * and checks cardinality constraints.
      * In STRICT mode: fails if channel counts insufficient.
      * In RELAXED mode: collects warnings for insufficient channel counts but doesn't fail.
      * In NONE mode: skips channel count validation.
      *
      * @param mapping Complete mapping (mapping[i] = global_idx)
      * @param graph_data Indexed graph data
+     * @param constraint_data Indexed constraint data (for cardinality constraint checking)
      * @param validation_mode Connection validation mode
      * @param warnings Optional vector to collect warnings
+     * @param quiet_mode If true, log errors at debug level instead of error level
      * @return true if mapping is valid, false otherwise
      */
     static bool validate_mapping(
         const std::vector<int>& mapping,
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
         ConnectionValidationMode validation_mode,
         std::vector<std::string>* warnings = nullptr,
         bool quiet_mode = false);
@@ -642,16 +739,16 @@ struct MappingValidator {
      *
      * @param mapping Complete mapping (may be incomplete if search failed)
      * @param graph_data Indexed graph data
+     * @param constraint_data Indexed constraint data (for computing constraint stats)
      * @param state Search state (for statistics and error messages)
-     * @param constraints Mapping constraints (for computing constraint stats)
      * @param validation_mode Connection validation mode
      * @return MappingResult with success status, mappings (always saved even if invalid), warnings, and statistics
      */
     static MappingResult<TargetNode, GlobalNode> build_result(
         const std::vector<int>& mapping,
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+        const ConstraintIndexData<TargetNode, GlobalNode>& constraint_data,
         const DFSSearchEngine<TargetNode, GlobalNode>::SearchState& state,
-        const MappingConstraints<TargetNode, GlobalNode>& constraints,
         ConnectionValidationMode validation_mode,
         bool quiet_mode = false);
 };
