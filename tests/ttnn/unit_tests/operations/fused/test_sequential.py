@@ -1591,3 +1591,148 @@ class TestSequentialDebugHang:
         passing, pcc = comp_pcc(golden, torch_output, pcc=0.98)
         print(f"Single LN SOURCE_CODE PCC: {pcc}")
         assert passing, f"Single LN SOURCE_CODE PCC check failed: {pcc}"
+
+
+@pytest.fixture
+def matmul_tensors(device):
+    """Create test tensors for matmul tests."""
+    torch.manual_seed(42)
+
+    # A: [1, 1, 32, 64], B: [1, 1, 64, 128] -> C: [1, 1, 32, 128]
+    torch_a = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    torch_b = torch.randn(1, 1, 64, 128, dtype=torch.bfloat16)
+
+    tt_a = ttnn.from_torch(
+        torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_b = ttnn.from_torch(
+        torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # Weights for LN on matmul output shape [1, 1, 32, 128]
+    ln_weight_shape = (1, 1, 1, 128)
+    torch_ln_weight = torch.ones(ln_weight_shape, dtype=torch.bfloat16)
+    torch_ln_bias = torch.zeros(ln_weight_shape, dtype=torch.bfloat16)
+
+    tt_ln_weight = ttnn.from_torch(
+        torch_ln_weight,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_ln_bias = ttnn.from_torch(
+        torch_ln_bias,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    return {
+        "torch_a": torch_a,
+        "torch_b": torch_b,
+        "tt_a": tt_a,
+        "tt_b": tt_b,
+        "torch_ln_weight": torch_ln_weight,
+        "torch_ln_bias": torch_ln_bias,
+        "tt_ln_weight": tt_ln_weight,
+        "tt_ln_bias": tt_ln_bias,
+    }
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+class TestMatmulDescriptor:
+    """Tests for the matmul descriptor API."""
+
+    def test_matmul_standalone_descriptor(self, device, matmul_tensors):
+        """Test single matmul execution via descriptor API."""
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors import composite
+
+        desc = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"])
+
+        outputs = composite.launch([desc])
+        tt_output = outputs[0][0]
+        torch_output = ttnn.to_torch(tt_output)
+
+        torch_golden = matmul_tensors["torch_a"] @ matmul_tensors["torch_b"]
+
+        passing, pcc = comp_pcc(torch_golden, torch_output, pcc=0.99)
+        print(f"Matmul standalone PCC: {pcc}")
+        assert passing, f"Matmul PCC check failed: {pcc}"
+
+    def test_matmul_composite_parallel_with_layernorm(self, device, matmul_tensors, test_tensors):
+        """Test running matmul + layernorm in parallel on different cores via composite."""
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+        from models.experimental.ops.descriptors.normalization import layer_norm
+        from models.experimental.ops.descriptors import composite
+
+        cores1 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        cores2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
+
+        mm_desc = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"], core_range_set=cores1)
+
+        ln_desc = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=cores2,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+
+        outputs = composite.launch([mm_desc, ln_desc])
+        assert len(outputs) == 2
+
+        # Verify matmul output
+        torch_mm_out = ttnn.to_torch(outputs[0][0])
+        golden_mm = matmul_tensors["torch_a"] @ matmul_tensors["torch_b"]
+        passing1, pcc1 = comp_pcc(golden_mm, torch_mm_out, pcc=0.99)
+        print(f"Matmul PCC: {pcc1}")
+        assert passing1, f"Matmul PCC: {pcc1}"
+
+        # Verify layernorm output
+        torch_ln_out = ttnn.to_torch(outputs[1][0])
+        golden_ln = torch_layer_norm(
+            test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"], eps=1e-5
+        )
+        passing2, pcc2 = comp_pcc(golden_ln, torch_ln_out, pcc=0.99)
+        print(f"LayerNorm PCC: {pcc2}")
+        assert passing2, f"LayerNorm PCC: {pcc2}"
+
+    def test_matmul_descriptor_cb_info(self, device, matmul_tensors):
+        """Test extracting CB info from a matmul descriptor."""
+        from models.experimental.ops.descriptors.sequential import extract_cb_info
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        desc = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"])
+
+        cb_info = extract_cb_info(desc.descriptor)
+        assert len(cb_info) > 0, "Matmul should have CB descriptors"
+
+        cb_indices = set(cb_info.keys())
+        print(f"Matmul uses {len(cb_info)} CBs: {sorted(cb_indices)}")
+
+        # Matmul should have at least: c_0 (in0), c_1 (in1), c_4 (out)
+        assert 0 in cb_indices, "Should have input A CB (c_0)"
+        assert 1 in cb_indices, "Should have input B CB (c_1)"
+        assert 4 in cb_indices, "Should have output CB (c_4)"
+
+    def test_matmul_descriptor_named_args(self, device, matmul_tensors):
+        """Test that matmul descriptor has named compile-time args for CB indices."""
+        from models.experimental.ops.descriptors.sequential import extract_cb_names_from_kernel
+        from models.experimental.ops.descriptors.matmul import matmul as matmul_desc
+
+        desc = matmul_desc(matmul_tensors["tt_a"], matmul_tensors["tt_b"])
+
+        found_named_args = False
+        for kernel in desc.descriptor.kernels:
+            cb_names = extract_cb_names_from_kernel(kernel)
+            if cb_names:
+                found_named_args = True
+                print(f"Kernel CB names: {cb_names}")
+                # Verify expected matmul CB names
+                assert "cb_in0" in cb_names, "Should have cb_in0"
+                assert "cb_out" in cb_names, "Should have cb_out"
+
+        assert found_named_args, "At least one kernel should have named compile-time args"
