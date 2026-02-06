@@ -10,6 +10,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 
@@ -25,6 +26,8 @@ protected:
 };
 
 TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
