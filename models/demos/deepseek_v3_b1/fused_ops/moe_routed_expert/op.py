@@ -725,6 +725,8 @@ class MoeRoutedExpert:
         eps=1e-20,
         scaling_factor=2.5,
         use_hardcoded_expert_index=False,
+        hardcoded_expert_index=0,
+        explicit_expert_scale=None,
     ):
         """
         PyTorch reference implementation for validation.
@@ -765,9 +767,9 @@ class MoeRoutedExpert:
 
         # 3. Expert matmuls (if expert weights provided)
         if gate_proj_weights_dict is not None:
-            # Get the first selected expert index
+            # Get the selected expert index
             if use_hardcoded_expert_index:
-                selected_expert_idx = 0  # For testing: always use expert 0
+                selected_expert_idx = hardcoded_expert_index
             else:
                 selected_expert_idx = int(top8_indices[0, 0].item())
 
@@ -781,8 +783,11 @@ class MoeRoutedExpert:
             up_proj_weights = up_proj_weights_dict[selected_expert_idx]
             up_proj_output = input_for_expert @ up_proj_weights.float()
 
-            # Get expert scale (first score for the selected expert)
-            expert_scale = top8_scores[0, 0].float()
+            # Get expert scale (use explicit if provided, otherwise from gate output position 0)
+            if explicit_expert_scale is not None:
+                expert_scale = explicit_expert_scale
+            else:
+                expert_scale = top8_scores[0, 0].float()
 
             # Fused output: silu(gate_proj) * up_proj * expert_scale
             fused_output = gate_proj_output * up_proj_output * expert_scale
@@ -881,8 +886,17 @@ class MoeRoutedExpert:
         sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
 
         # Get device and compute grid
-        device = input_tensor.device()
-        device_grid_size = device.compute_with_storage_grid_size()
+        mesh_device = input_tensor.device()
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+
+        # Get mesh shape (1x1 for single device)
+        mesh_shape = mesh_device.shape
+        mesh_rows = mesh_shape[0]
+        mesh_cols = mesh_shape[1]
+
+        # Get first device for setup calculations
+        input_tensors_per_device = ttnn.get_device_tensors(input_tensor)
+        device = input_tensors_per_device[0].device()
 
         # Get DRAM matmul cores from output tensor's shard spec
         gate_proj_output_memory_config = gate_proj_output_tensor.memory_config()
@@ -1222,103 +1236,107 @@ class MoeRoutedExpert:
             ("add_cb_in1_wait_tiles", add_params["cb_in1_wait_tiles"]),
         ]
 
-        # Named compile-time args for BRISC (mcast sender + gather receiver + index mcast sender + dram matmul writer)
-        brisc_named_compile_time_args = [
-            # Mcast sender args
-            ("mcast_dest_noc_start_x", input_mcast_params["dest_noc_start_x"]),
-            ("mcast_dest_noc_start_y", input_mcast_params["dest_noc_start_y"]),
-            ("mcast_dest_noc_end_x", input_mcast_params["dest_noc_end_x"]),
-            ("mcast_dest_noc_end_y", input_mcast_params["dest_noc_end_y"]),
-            ("mcast_num_cores", input_mcast_params["num_cores"]),
-            ("mcast_data_sender_semaphore", input_mcast_params["sender_semaphore_id"]),
-            ("mcast_data_receiver_semaphore", input_mcast_params["receiver_semaphore_id"]),
-            ("mcast_data_size_bytes", input_mcast_params["data_size_bytes"]),
-            ("mcast_src_cb", input_mcast_params["src_cb"]),
-            ("mcast_dst_cb", input_mcast_params["dst_cb"]),
-            ("mcast_src_num_pages", input_mcast_params["src_num_pages"]),
-            ("mcast_is_part_of_receiver_grid", input_mcast_params["is_sender_part_of_receiver_grid"]),
-            # Gather receiver args (sender core receives from compute cores)
-            ("gather_noc0_num_senders", gate_mm_gather_params["noc0_num_senders"]),
-            ("gather_noc1_num_senders", gate_mm_gather_params["noc1_num_senders"]),
-            ("gather_noc0_receiver_semaphore_id", gate_mm_gather_params["noc0_receiver_semaphore_id"]),
-            ("gather_noc1_receiver_semaphore_id", gate_mm_gather_params["noc1_receiver_semaphore_id"]),
-            ("gather_dst_cb", gate_mm_gather_params["dst_cb"]),
-            ("gather_dst_num_pages", gate_mm_gather_params["dst_num_pages"]),
-            # Gate writer args (sender core)
-            ("gate_output_cb", gate_params["output_cb"]),
-            ("gate_output_indices_cb", gate_params["output_indices_cb"]),
-            # Index mcast sender args (sender core broadcasts indices to compute cores)
-            ("index_mcast_sender_semaphore", index_mcast_sender_semaphore_id),
-            ("index_mcast_receiver_semaphore", index_mcast_receiver_semaphore_id),
-            ("index_mcast_data_size_bytes", index_mcast_data_size_bytes),
-            ("index_mcast_num_pages", index_mcast_num_pages),
-            ("gate_proj_cb_index", gate_proj_cb_index),
-            # Expert scale mcast sender args (sender core broadcasts scale to compute cores)
-            ("expert_scale_mcast_sender_semaphore", expert_scale_mcast_sender_semaphore_id),
-            ("expert_scale_mcast_receiver_semaphore", expert_scale_mcast_receiver_semaphore_id),
-            ("expert_scale_mcast_data_size_bytes", expert_scale_mcast_data_size_bytes),
-            ("expert_scale_mcast_num_pages", expert_scale_mcast_num_pages),
-            ("mul_cb_scalar_src", mul_cb_scalar_src),
-            ("mul_cb_scalar", mul_cb_scalar),
-            ("mul_scalar_index_offset", 0),  # Index into scalar source tensor (same as gate_proj_index_offset)
-            # DRAM streaming matmul writer args (compute cores)
-            ("gate_proj_cb_in1", gate_proj_cb_in1),
-            ("gate_proj_cb_out", gate_proj_cb_out),
-            ("gate_proj_in1_tensor_addr", gate_proj_params["in1_tensor_addr"]),
-            ("gate_proj_in1_page_size", gate_proj_params["in1_page_size"]),
-            ("gate_proj_in1_num_pages", gate_proj_params["in1_num_pages"]),
-            ("gate_proj_subblock_k", gate_proj_params["subblock_k"]),
-            ("gate_proj_per_core_n", gate_proj_params["per_core_n"]),
-            ("gate_proj_in1_block_size_bytes", gate_proj_params["in1_block_size_bytes"]),
-            ("gate_proj_out_num_tiles", gate_proj_params["out_num_tiles"]),
-            ("gate_proj_num_subblocks_k", gate_proj_params["num_subblocks_k"]),
-            ("gate_proj_index_offset", 0),  # Always use first index from the mcasted index tensor
-            # up_proj matmul writer args (compute cores) - writes to intermediate CB
-            ("up_proj_cb_in1", up_proj_cb_in1),
-            ("up_proj_in1_tensor_addr", up_proj_params["in1_tensor_addr"]),
-            ("up_proj_in1_page_size", up_proj_params["in1_page_size"]),
-            ("up_proj_in1_num_pages", up_proj_params["in1_num_pages"]),
-            ("up_proj_subblock_k", up_proj_params["subblock_k"]),
-            ("up_proj_per_core_n", up_proj_params["per_core_n"]),
-            ("up_proj_in1_block_size_bytes", up_proj_params["in1_block_size_bytes"]),
-            ("up_proj_out_num_tiles", up_proj_params["out_num_tiles"]),
-            ("up_proj_num_subblocks_k", up_proj_params["num_subblocks_k"]),
-            ("up_proj_cb_index", gate_proj_cb_index),  # Reuses same index CB as gate_proj
-            ("up_proj_index_offset", 0),  # Same expert index as gate_proj
-            ("up_proj_cb_mm_out", up_proj_cb_mm_out),  # Intermediate output for up_proj (before mul)
-            # Mul writer args (waits for final output)
-            ("mul_cb_out", mul_cb_out),
-            ("mul_num_tiles", mul_num_tiles),
-            # down_proj_gather receiver args (sender core receives fused output from gate_proj cores)
-            ("down_proj_gather_noc0_num_senders", down_proj_gather_params["noc0_num_senders"]),
-            ("down_proj_gather_noc1_num_senders", down_proj_gather_params["noc1_num_senders"]),
-            ("down_proj_gather_noc0_receiver_semaphore_id", down_proj_gather_params["noc0_receiver_semaphore_id"]),
-            ("down_proj_gather_noc1_receiver_semaphore_id", down_proj_gather_params["noc1_receiver_semaphore_id"]),
-            ("down_proj_gather_dst_cb", down_proj_gather_params["dst_cb"]),
-            ("down_proj_gather_dst_num_pages", down_proj_gather_params["dst_num_pages"]),
-            # down_proj_mcast sender args (sender core broadcasts fused output to compute cores)
-            ("down_proj_mcast_sender_semaphore", down_proj_mcast_params["sender_semaphore_id"]),
-            ("down_proj_mcast_receiver_semaphore", down_proj_mcast_params["receiver_semaphore_id"]),
-            ("down_proj_mcast_data_size_bytes", down_proj_mcast_params["data_size_bytes"]),
-            ("down_proj_mcast_src_cb", down_proj_mcast_params["src_cb"]),
-            ("down_proj_mcast_dst_cb", down_proj_mcast_params["dst_cb"]),
-            ("down_proj_mcast_src_num_pages", down_proj_mcast_params["src_num_pages"]),
-            # down_proj DRAM matmul writer args (compute cores)
-            ("down_proj_cb_in1", down_proj_cb_in1),
-            ("down_proj_cb_out", down_proj_cb_out),
-            ("down_proj_in1_tensor_addr", down_proj_params["in1_tensor_addr"]),
-            ("down_proj_in1_page_size", down_proj_params["in1_page_size"]),
-            ("down_proj_in1_num_pages", down_proj_params["in1_num_pages"]),
-            ("down_proj_subblock_k", down_proj_params["subblock_k"]),
-            ("down_proj_per_core_n", down_proj_params["per_core_n"]),
-            ("down_proj_in1_block_size_bytes", down_proj_params["in1_block_size_bytes"]),
-            ("down_proj_out_num_tiles", down_proj_params["out_num_tiles"]),
-            ("down_proj_num_subblocks_k", down_proj_params["num_subblocks_k"]),
-            ("down_proj_cb_index", gate_proj_cb_index),  # Reuses same index CB
-            ("down_proj_index_offset", 0),  # Same expert index
-            # Testing flag: use hardcoded expert index 0 instead of gate output
-            ("use_hardcoded_expert_index", 1 if use_hardcoded_expert_index else 0),
-        ]
+        # Helper to create BRISC compile-time args with chip-specific mesh_chip_id
+        def create_brisc_compile_time_args(mesh_chip_id: int) -> list:
+            return [
+                # Mcast sender args
+                ("mcast_dest_noc_start_x", input_mcast_params["dest_noc_start_x"]),
+                ("mcast_dest_noc_start_y", input_mcast_params["dest_noc_start_y"]),
+                ("mcast_dest_noc_end_x", input_mcast_params["dest_noc_end_x"]),
+                ("mcast_dest_noc_end_y", input_mcast_params["dest_noc_end_y"]),
+                ("mcast_num_cores", input_mcast_params["num_cores"]),
+                ("mcast_data_sender_semaphore", input_mcast_params["sender_semaphore_id"]),
+                ("mcast_data_receiver_semaphore", input_mcast_params["receiver_semaphore_id"]),
+                ("mcast_data_size_bytes", input_mcast_params["data_size_bytes"]),
+                ("mcast_src_cb", input_mcast_params["src_cb"]),
+                ("mcast_dst_cb", input_mcast_params["dst_cb"]),
+                ("mcast_src_num_pages", input_mcast_params["src_num_pages"]),
+                ("mcast_is_part_of_receiver_grid", input_mcast_params["is_sender_part_of_receiver_grid"]),
+                # Gather receiver args (sender core receives from compute cores)
+                ("gather_noc0_num_senders", gate_mm_gather_params["noc0_num_senders"]),
+                ("gather_noc1_num_senders", gate_mm_gather_params["noc1_num_senders"]),
+                ("gather_noc0_receiver_semaphore_id", gate_mm_gather_params["noc0_receiver_semaphore_id"]),
+                ("gather_noc1_receiver_semaphore_id", gate_mm_gather_params["noc1_receiver_semaphore_id"]),
+                ("gather_dst_cb", gate_mm_gather_params["dst_cb"]),
+                ("gather_dst_num_pages", gate_mm_gather_params["dst_num_pages"]),
+                # Gate writer args (sender core)
+                ("gate_output_cb", gate_params["output_cb"]),
+                ("gate_output_indices_cb", gate_params["output_indices_cb"]),
+                # Index mcast sender args (sender core broadcasts indices to compute cores)
+                ("index_mcast_sender_semaphore", index_mcast_sender_semaphore_id),
+                ("index_mcast_receiver_semaphore", index_mcast_receiver_semaphore_id),
+                ("index_mcast_data_size_bytes", index_mcast_data_size_bytes),
+                ("index_mcast_num_pages", index_mcast_num_pages),
+                ("gate_proj_cb_index", gate_proj_cb_index),
+                # Expert scale mcast sender args (sender core broadcasts scale to compute cores)
+                ("expert_scale_mcast_sender_semaphore", expert_scale_mcast_sender_semaphore_id),
+                ("expert_scale_mcast_receiver_semaphore", expert_scale_mcast_receiver_semaphore_id),
+                ("expert_scale_mcast_data_size_bytes", expert_scale_mcast_data_size_bytes),
+                ("expert_scale_mcast_num_pages", expert_scale_mcast_num_pages),
+                ("mul_cb_scalar_src", mul_cb_scalar_src),
+                ("mul_cb_scalar", mul_cb_scalar),
+                (
+                    "mul_scalar_index_offset",
+                    mesh_chip_id,
+                ),  # Index into scalar source tensor (offset by chip_id for mesh mode)
+                # DRAM streaming matmul writer args (compute cores)
+                ("gate_proj_cb_in1", gate_proj_cb_in1),
+                ("gate_proj_cb_out", gate_proj_cb_out),
+                ("gate_proj_in1_tensor_addr", gate_proj_params["in1_tensor_addr"]),
+                ("gate_proj_in1_page_size", gate_proj_params["in1_page_size"]),
+                ("gate_proj_in1_num_pages", gate_proj_params["in1_num_pages"]),
+                ("gate_proj_subblock_k", gate_proj_params["subblock_k"]),
+                ("gate_proj_per_core_n", gate_proj_params["per_core_n"]),
+                ("gate_proj_in1_block_size_bytes", gate_proj_params["in1_block_size_bytes"]),
+                ("gate_proj_out_num_tiles", gate_proj_params["out_num_tiles"]),
+                ("gate_proj_num_subblocks_k", gate_proj_params["num_subblocks_k"]),
+                ("gate_proj_index_offset", mesh_chip_id),  # Index offset (chip_id for mesh mode)
+                # up_proj matmul writer args (compute cores) - writes to intermediate CB
+                ("up_proj_cb_in1", up_proj_cb_in1),
+                ("up_proj_in1_tensor_addr", up_proj_params["in1_tensor_addr"]),
+                ("up_proj_in1_page_size", up_proj_params["in1_page_size"]),
+                ("up_proj_in1_num_pages", up_proj_params["in1_num_pages"]),
+                ("up_proj_subblock_k", up_proj_params["subblock_k"]),
+                ("up_proj_per_core_n", up_proj_params["per_core_n"]),
+                ("up_proj_in1_block_size_bytes", up_proj_params["in1_block_size_bytes"]),
+                ("up_proj_out_num_tiles", up_proj_params["out_num_tiles"]),
+                ("up_proj_num_subblocks_k", up_proj_params["num_subblocks_k"]),
+                ("up_proj_cb_index", gate_proj_cb_index),  # Reuses same index CB as gate_proj
+                ("up_proj_index_offset", mesh_chip_id),  # Index offset (chip_id for mesh mode)
+                ("up_proj_cb_mm_out", up_proj_cb_mm_out),  # Intermediate output for up_proj (before mul)
+                # Mul writer args (waits for final output)
+                ("mul_cb_out", mul_cb_out),
+                ("mul_num_tiles", mul_num_tiles),
+                # down_proj_gather receiver args (sender core receives fused output from gate_proj cores)
+                ("down_proj_gather_noc0_num_senders", down_proj_gather_params["noc0_num_senders"]),
+                ("down_proj_gather_noc1_num_senders", down_proj_gather_params["noc1_num_senders"]),
+                ("down_proj_gather_noc0_receiver_semaphore_id", down_proj_gather_params["noc0_receiver_semaphore_id"]),
+                ("down_proj_gather_noc1_receiver_semaphore_id", down_proj_gather_params["noc1_receiver_semaphore_id"]),
+                ("down_proj_gather_dst_cb", down_proj_gather_params["dst_cb"]),
+                ("down_proj_gather_dst_num_pages", down_proj_gather_params["dst_num_pages"]),
+                # down_proj_mcast sender args (sender core broadcasts fused output to compute cores)
+                ("down_proj_mcast_sender_semaphore", down_proj_mcast_params["sender_semaphore_id"]),
+                ("down_proj_mcast_receiver_semaphore", down_proj_mcast_params["receiver_semaphore_id"]),
+                ("down_proj_mcast_data_size_bytes", down_proj_mcast_params["data_size_bytes"]),
+                ("down_proj_mcast_src_cb", down_proj_mcast_params["src_cb"]),
+                ("down_proj_mcast_dst_cb", down_proj_mcast_params["dst_cb"]),
+                ("down_proj_mcast_src_num_pages", down_proj_mcast_params["src_num_pages"]),
+                # down_proj DRAM matmul writer args (compute cores)
+                ("down_proj_cb_in1", down_proj_cb_in1),
+                ("down_proj_cb_out", down_proj_cb_out),
+                ("down_proj_in1_tensor_addr", down_proj_params["in1_tensor_addr"]),
+                ("down_proj_in1_page_size", down_proj_params["in1_page_size"]),
+                ("down_proj_in1_num_pages", down_proj_params["in1_num_pages"]),
+                ("down_proj_subblock_k", down_proj_params["subblock_k"]),
+                ("down_proj_per_core_n", down_proj_params["per_core_n"]),
+                ("down_proj_in1_block_size_bytes", down_proj_params["in1_block_size_bytes"]),
+                ("down_proj_out_num_tiles", down_proj_params["out_num_tiles"]),
+                ("down_proj_num_subblocks_k", down_proj_params["num_subblocks_k"]),
+                ("down_proj_cb_index", gate_proj_cb_index),  # Reuses same index CB
+                ("down_proj_index_offset", mesh_chip_id),  # Index offset (chip_id for mesh mode)
+                # Testing flag: use hardcoded expert index instead of gate output
+                ("use_hardcoded_expert_index", 1 if use_hardcoded_expert_index else 0),
+            ]
 
         # Named compile-time args for TRISC (matmul + sigmoid compute + gate compute + dram matmul compute)
         trisc_named_compile_time_args = [
@@ -1451,136 +1469,119 @@ class MoeRoutedExpert:
             vc_core_values.append((core, vc))
             sender_idx_core_values.append((core, idx))  # Explicit sender idx
 
-        # Unified kernel descriptor
-        unified_kernel = UnifiedKernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe_routed_expert/moe_routed_expert_kernel.cpp",
-            core_ranges=full_device_grid,
-            ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
-            brisc_named_compile_time_args=brisc_named_compile_time_args,
-            trisc_named_compile_time_args=trisc_named_compile_time_args,
-            trisc_compute_config=ttnn.ComputeConfigDescriptor(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=False,
-                # fp32_dest_acc_en disabled because gate's transpose doesn't support it
-                fp32_dest_acc_en=False,
-                dst_full_sync_en=False,
+        # Common unified_compile_time_core_descriptors and per_core_compile_time_descriptors
+        # (shared between single device and mesh modes)
+        unified_compile_time_core_descriptors = [
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_sender_core",
+                core_range=sender_core,
+                value=1,
+                other_value=0,
             ),
-            unified_compile_time_core_descriptors=[
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_sender_core",
-                    core_range=sender_core,
-                    value=1,
-                    other_value=0,
-                ),
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_mcast_grid_core",
-                    core_range=mcast_grid,
-                    value=1,
-                    other_value=0,
-                ),
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_gate_mm_core",
-                    core_range=gate_mm_params["core_grid"],
-                    value=1,
-                    other_value=0,
-                ),
-                UnifiedCompileTimeCoreDescriptor(
-                    named_compile_time_arg="is_gate_proj_core",
-                    core_range=gate_proj_core_ranges,
-                    value=1,
-                    other_value=0,
-                ),
-            ],
-            per_core_compile_time_descriptors=[
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="gate_proj_bank_id",
-                    core_values=bank_id_core_values,
-                    other_value=0,
-                ),
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="gate_proj_vc",
-                    core_values=vc_core_values,
-                    other_value=0,
-                ),
-                # up_proj uses same cores as gate_proj, so same bank_id and vc
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="up_proj_bank_id",
-                    core_values=bank_id_core_values,
-                    other_value=0,
-                ),
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="up_proj_vc",
-                    core_values=vc_core_values,
-                    other_value=0,
-                ),
-                # down_proj uses same cores as gate_proj, so same bank_id and vc
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="down_proj_bank_id",
-                    core_values=bank_id_core_values,
-                    other_value=0,
-                ),
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="down_proj_vc",
-                    core_values=vc_core_values,
-                    other_value=0,
-                ),
-                # Explicit sender idx for down_proj_gather (scattered optimal DRAM bank cores)
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="down_proj_gather_sender_idx",
-                    core_values=sender_idx_core_values,
-                    other_value=0,
-                ),
-                # Per-core sender_index for eltwise_add (to offset into fused_add)
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="add_sender_index",
-                    core_values=add_params["sender_index_core_values"],
-                    other_value=0,
-                ),
-            ],
-        )
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_mcast_grid_core",
+                core_range=mcast_grid,
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_gate_mm_core",
+                core_range=gate_mm_params["core_grid"],
+                value=1,
+                other_value=0,
+            ),
+            UnifiedCompileTimeCoreDescriptor(
+                named_compile_time_arg="is_gate_proj_core",
+                core_range=gate_proj_core_ranges,
+                value=1,
+                other_value=0,
+            ),
+        ]
 
-        # Create program descriptor
-        program_descriptor = ttnn.ProgramDescriptor(
-            kernels=unified_kernel.get_kernel_descriptors().kernels,
-            cbs=[
-                input_cb_descriptor,
-                gate_mm_input_cb_descriptor,
-                gate_mm_params["weights_cb_descriptor"],
-                gate_mm_params["output_cb_descriptor"],
-                gate_params["input_cb_descriptor"],
-                gate_params["bias_cb_descriptor"],
-                gate_params["indices_cb_descriptor"],
-                gate_params["output_cb_descriptor"],
-                gate_params["output_indices_cb_descriptor"],
-                gate_proj_cb_in1_descriptor,
-                gate_proj_cb_index_descriptor,
-                gate_proj_cb_out_descriptor,
-                up_proj_cb_in1_descriptor,
-                up_proj_cb_mm_out_descriptor,
-                mul_cb_in0_descriptor,
-                mul_cb_in1_descriptor,
-                mul_cb_out_descriptor,
-                mul_cb_scalar_src_descriptor,
-                mul_cb_scalar_descriptor,
-                down_proj_gather_dst_cb_descriptor,
-                down_proj_mcast_dst_cb_descriptor,
-                down_proj_cb_in1_descriptor,
-                down_proj_cb_out_descriptor,
-                add_cb_in0_descriptor,
-                add_cb_in1_descriptor,
-                add_cb_out_descriptor,
-            ],
-            semaphores=[
-                mcast_sender_semaphore_descriptor,
-                mcast_receiver_semaphore_descriptor,
-                gather_noc0_semaphore_descriptor,
-                gather_noc1_semaphore_descriptor,
-                expert_scale_mcast_sender_semaphore_descriptor,
-                expert_scale_mcast_receiver_semaphore_descriptor,
-            ],
-        )
+        per_core_compile_time_descriptors = [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="gate_proj_bank_id",
+                core_values=bank_id_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="gate_proj_vc",
+                core_values=vc_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="up_proj_bank_id",
+                core_values=bank_id_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="up_proj_vc",
+                core_values=vc_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="down_proj_bank_id",
+                core_values=bank_id_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="down_proj_vc",
+                core_values=vc_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="down_proj_gather_sender_idx",
+                core_values=sender_idx_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="add_sender_index",
+                core_values=add_params["sender_index_core_values"],
+                other_value=0,
+            ),
+        ]
 
-        # Execute generic op
+        # CB descriptors list (shared across devices)
+        cb_descriptors = [
+            input_cb_descriptor,
+            gate_mm_input_cb_descriptor,
+            gate_mm_params["weights_cb_descriptor"],
+            gate_mm_params["output_cb_descriptor"],
+            gate_params["input_cb_descriptor"],
+            gate_params["bias_cb_descriptor"],
+            gate_params["indices_cb_descriptor"],
+            gate_params["output_cb_descriptor"],
+            gate_params["output_indices_cb_descriptor"],
+            gate_proj_cb_in1_descriptor,
+            gate_proj_cb_index_descriptor,
+            gate_proj_cb_out_descriptor,
+            up_proj_cb_in1_descriptor,
+            up_proj_cb_mm_out_descriptor,
+            mul_cb_in0_descriptor,
+            mul_cb_in1_descriptor,
+            mul_cb_out_descriptor,
+            mul_cb_scalar_src_descriptor,
+            mul_cb_scalar_descriptor,
+            down_proj_gather_dst_cb_descriptor,
+            down_proj_mcast_dst_cb_descriptor,
+            down_proj_cb_in1_descriptor,
+            down_proj_cb_out_descriptor,
+            add_cb_in0_descriptor,
+            add_cb_in1_descriptor,
+            add_cb_out_descriptor,
+        ]
+
+        # Semaphore descriptors list (shared across devices)
+        semaphore_descriptors = [
+            mcast_sender_semaphore_descriptor,
+            mcast_receiver_semaphore_descriptor,
+            gather_noc0_semaphore_descriptor,
+            gather_noc1_semaphore_descriptor,
+            expert_scale_mcast_sender_semaphore_descriptor,
+            expert_scale_mcast_receiver_semaphore_descriptor,
+        ]
+
+        # IO tensors list
         io_tensors = [
             input_tensor,
             mcast_output_tensor,
@@ -1605,6 +1606,43 @@ class MoeRoutedExpert:
             fused_add_tensor,
             final_output_tensor,
         ]
-        ttnn.generic_op(io_tensors, program_descriptor)
+
+        # Create per-device programs (single device = 1x1 mesh with chip_id=0)
+        mesh_program_descriptor = ttnn.MeshProgramDescriptor()
+
+        for row in range(mesh_rows):
+            for col in range(mesh_cols):
+                coord = ttnn.MeshCoordinate(row, col)
+                chip_id = row * mesh_cols + col
+
+                # Create unified kernel with chip_id-specific mesh_chip_id
+                chip_unified_kernel = UnifiedKernelDescriptor(
+                    kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe_routed_expert/moe_routed_expert_kernel.cpp",
+                    core_ranges=full_device_grid,
+                    ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+                    brisc_named_compile_time_args=create_brisc_compile_time_args(chip_id),
+                    trisc_named_compile_time_args=trisc_named_compile_time_args,
+                    trisc_compute_config=ttnn.ComputeConfigDescriptor(
+                        math_fidelity=ttnn.MathFidelity.LoFi,
+                        math_approx_mode=False,
+                        fp32_dest_acc_en=False,
+                        dst_full_sync_en=False,
+                    ),
+                    unified_compile_time_core_descriptors=unified_compile_time_core_descriptors,
+                    per_core_compile_time_descriptors=per_core_compile_time_descriptors,
+                )
+
+                # Create program for this device
+                program = ttnn.ProgramDescriptor(
+                    kernels=chip_unified_kernel.get_kernel_descriptors().kernels,
+                    cbs=cb_descriptors,
+                    semaphores=semaphore_descriptors,
+                )
+
+                # Assign to mesh coordinate
+                mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
+
+        # Execute with mesh program descriptor
+        ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
         return gate_output_scores_tensor, gate_output_indices_tensor, final_output_tensor
