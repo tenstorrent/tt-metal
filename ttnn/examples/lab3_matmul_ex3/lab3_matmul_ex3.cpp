@@ -390,9 +390,12 @@ void matmul_multi_core(
             uint32_t x = core_logical.x;
             uint32_t y = core_logical.y;
 
-            CoreCoord core_to_the_right_device =
-                prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(x + 1, y));
-            CoreCoord core_below_device = prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(x, y + 1));
+            log_info(tt::LogAlways, "Setting runtime arguments for core ({}, {})", x, y);
+
+            CoreCoord second_core_in_the_row_device =
+                prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(1, y));
+            CoreCoord second_core_in_the_column_device =
+                prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(x, 1));
             CoreCoord last_core_in_row_device =
                 prog_state.mesh_device->worker_core_from_logical_core(CoreCoord(core_grid.x - 1, y));
             CoreCoord last_core_in_column_device =
@@ -409,16 +412,16 @@ void matmul_multi_core(
                     ab_sender_id,
                     core_logical,
                     // A receivers are in the current row, but one column to the right.
-                    {core_to_the_right_device.x,
-                     core_to_the_right_device.y,
+                    {second_core_in_the_row_device.x,
+                     second_core_in_the_row_device.y,
                      last_core_in_row_device.x,
                      last_core_in_row_device.y,
                      a_receivers_ready_semaphore,
                      a_tile_sent_semaphore,
                      a_num_receivers,
                      // B receivers are in the current column, but one row below.
-                     core_below_device.x,
-                     core_below_device.y,
+                     second_core_in_the_column_device.x,
+                     second_core_in_the_column_device.y,
                      last_core_in_column_device.x,
                      last_core_in_column_device.y,
                      b_receivers_ready_semaphore,
@@ -441,8 +444,8 @@ void matmul_multi_core(
                     a_sender_b_receiver_id,
                     core_logical,
                     // A receivers are in the current row, but starting one column to the right (x + 1).
-                    {core_to_the_right_device.x,
-                     core_to_the_right_device.y,
+                    {second_core_in_the_row_device.x,
+                     second_core_in_the_row_device.y,
                      last_core_in_row_device.x,
                      last_core_in_row_device.y,
                      a_receivers_ready_semaphore,
@@ -474,8 +477,8 @@ void matmul_multi_core(
                      a_receivers_ready_semaphore,
                      a_tile_sent_semaphore,
                      // B receivers are in the current column, but starting one row below.
-                     core_below_device.x,
-                     core_below_device.y,
+                     second_core_in_the_column_device.x,
+                     second_core_in_the_column_device.y,
                      last_core_in_column_device.x,
                      last_core_in_column_device.y,
                      b_receivers_ready_semaphore,
@@ -524,6 +527,7 @@ void matmul_multi_core(
         }
     }
 
+    log_info(tt::LogAlways, "Executing kernels");
     // Execute the kernels (data is already on device from Tensor::from_vector)
     prog_state.workload.add_program(prog_state.device_range, std::move(prog_state.program));
     // Last argument is set to true to wait for the workload to complete (blocking call).
