@@ -231,6 +231,23 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b) {
             a.logical_shape()[-1] == 1) {
             return true;
         }
+        // Legacy binary doesn't support subtile broadcasts for non-ADD/SUB/MUL ops
+        const auto& a_shape = a.logical_shape();
+        const auto& b_shape = b.logical_shape();
+        bool width_broadcast_block_format =
+            ((a_shape[-1] == 1 && b_shape[-1] > 1) || (b_shape[-1] == 1 && a_shape[-1] > 1)) &&
+            (is_block_format(a.dtype()) || is_block_format(b.dtype()));
+
+        if ((any_non_llk_row_broadcasted(a, b) || width_broadcast_block_format) &&
+            (binary_op_type != BinaryOpType::ADD && binary_op_type != BinaryOpType::SUB &&
+             binary_op_type != BinaryOpType::MUL)) {
+            return true;
+        }
+
+        if (any_non_llk_row_broadcasted(a, b) and (is_block_format(a.dtype()) or is_block_format(b.dtype()))) {
+            // TODO
+            // return true;
+        }
     }
     return false;
 }
@@ -309,9 +326,10 @@ inline auto invoke_binary_ng(
 
         if constexpr (requires { detail::preprocess_inputs(binary_op_type, lhs, rhs); }) {
             auto [a, b] = detail::preprocess_inputs(binary_op_type, lhs, rhs);
-
+            std::cout << "legacy binary" << std::endl;
             return ttnn::prim::binary(a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
         } else {
+            std::cout << "legacy binary" << std::endl;
             return ttnn::prim::binary(
                 lhs, rhs, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
         }
