@@ -11,8 +11,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# Wormhole Galaxy integration tests
-# Llama3 (commented out; uncomment and add ttnn.integration budget when enabling)
 # - name: Galaxy Llama3 integration tests
 #   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model llama3
 #   model: llama3
@@ -20,6 +18,7 @@
 #   owner_id: U053W15B6JF # Djordje Ivanovic
 #   team: ttnn
 #   timeout: 70
+
 - name: Galaxy resnet50 integration tests
   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model resnet50
   model: resnet50
