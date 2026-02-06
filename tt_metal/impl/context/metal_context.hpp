@@ -97,6 +97,10 @@ public:
     // Switch from mock mode to real hardware (requires all devices to be closed)
     void reinitialize_for_real_hardware();
 
+    // Reinitialize dispatch managers when transitioning dispatch modes (SD<->FD)
+    // This updates cached dispatch/compute core allocations to match current dispatch mode
+    void reinitialize_dispatch_managers();
+
     // Control plane accessors
     void initialize_control_plane();
     tt::tt_fabric::ControlPlane& get_control_plane();
@@ -143,9 +147,6 @@ public:
 
     // Hang detection
     void on_dispatch_timeout_detected();
-
-    /// Regenerate L1 bank-to-NOC table from device allocator so kernel table matches host allocator.
-    void regenerate_device_l1_bank_to_noc_table(ChipId device_id, const Allocator& allocator);
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;

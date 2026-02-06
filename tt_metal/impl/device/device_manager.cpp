@@ -557,12 +557,6 @@ void DeviceManager::activate_device(ChipId id) {
             completion_queue_reader_core,
             this->worker_l1_size_);
         devices_.emplace_back(std::unique_ptr<Device>(device));
-        // Only regenerate L1 bank table on Silicon; simulator/mock use tables from init and regeneration can trigger
-        // unsupported paths (e.g. tile_rd_bytes) in the simulator.
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
-            tt::TargetDevice::Silicon) {
-            tt::tt_metal::MetalContext::instance().regenerate_device_l1_bank_to_noc_table(id, *device->allocator());
-        }
     } else {
         log_debug(tt::LogMetal, "DeviceManager re-initialize device {}", id);
         if (not device->is_initialized()) {
@@ -572,11 +566,6 @@ void DeviceManager::activate_device(ChipId id) {
                 this->trace_region_size_,
                 this->worker_l1_size_,
                 this->l1_bank_remap_);
-            // Only regenerate L1 bank table on Silicon (see comment above).
-            if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
-                tt::TargetDevice::Silicon) {
-                tt::tt_metal::MetalContext::instance().regenerate_device_l1_bank_to_noc_table(id, *device->allocator());
-            }
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
         }

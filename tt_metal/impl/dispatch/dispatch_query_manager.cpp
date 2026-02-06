@@ -118,6 +118,10 @@ const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(u
 }
 
 const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores_on_user_chips() const {
+    // Call dynamically to pick up current dispatch mode from rtoptions (SD vs FD)
+    // instead of using cached value from initialization
+    std::scoped_lock<std::mutex> lock(modifier_mutex);
+    logical_dispatch_cores_on_user_chips_ = populate_all_logical_dispatch_cores(num_hw_cqs_, dispatch_core_config());
     return logical_dispatch_cores_on_user_chips_;
 }
 

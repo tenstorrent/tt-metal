@@ -352,6 +352,13 @@ void MetalContext::initialize(
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
 // undefined behavior. Do not create threads in this function or any functions it calls.
+void MetalContext::reinitialize_dispatch_managers() {
+    // Reinitialize dispatch core manager and query manager to pick up current dispatch mode
+    // This refreshes cached dispatch/compute core allocations when transitioning SD<->FD
+    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config_, num_hw_cqs_);
+    dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs_);
+}
+
 void MetalContext::teardown() {
     ZoneScoped;
 
@@ -1162,27 +1169,13 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id, uint8_t 
         dram_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::DRAM, bank_id);
     }
     const size_t num_l1_banks = allocator.get_num_banks(BufferType::L1);
-    // Kernel expects NUM_L1_BANKS entries (compile-time constant: 64 for wormhole, 140 for blackhole)
-    // Pad arrays to NUM_L1_BANKS to match kernel expectations, wrapping entries beyond actual bank count
-    const auto arch = cluster_->arch();
-    size_t num_l1_banks_kernel;
-    if (arch == ARCH::WORMHOLE_B0) {
-        num_l1_banks_kernel = 64;
-    } else if (arch == ARCH::BLACKHOLE) {
-        num_l1_banks_kernel = 140;
-    } else {
-        num_l1_banks_kernel = num_l1_banks;
-    }
-
-    std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks_kernel);
+    std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
     l1_bank_offset_map_[device_id].clear();
-    l1_bank_offset_map_[device_id].resize(num_l1_banks_kernel);
-    for (unsigned bank_id = 0; bank_id < num_l1_banks_kernel; bank_id++) {
-        // Wrap bank_id to actual bank count if kernel expects more banks than exist
-        unsigned actual_bank_id = (num_l1_banks > 0) ? (bank_id % num_l1_banks) : 0;
+    l1_bank_offset_map_[device_id].resize(num_l1_banks);
+    for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
         l1_noc_coord_per_bank[bank_id] = cluster_->get_virtual_coordinate_from_logical_coordinates(
-            device_id, allocator.get_logical_core_from_bank_id(actual_bank_id), CoreType::WORKER);
-        l1_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::L1, actual_bank_id);
+            device_id, allocator.get_logical_core_from_bank_id(bank_id), CoreType::WORKER);
+        l1_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::L1, bank_id);
     }
 
     dram_bank_to_noc_xy_[device_id].clear();
@@ -1219,56 +1212,6 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id, uint8_t 
             l1_bank_to_noc_xy_[device_id].push_back(xy);
         }
     }
-}
-
-void MetalContext::regenerate_device_l1_bank_to_noc_table(ChipId device_id, const Allocator& allocator) {
-    // Regenerate L1 bank-to-NOC table from the device's allocator so kernel table matches host.
-    const size_t num_l1_banks = allocator.get_num_banks(BufferType::L1);
-    const auto arch = cluster_->arch();
-    size_t num_l1_banks_kernel;
-    if (arch == ARCH::WORMHOLE_B0) {
-        num_l1_banks_kernel = 64;
-    } else if (arch == ARCH::BLACKHOLE) {
-        num_l1_banks_kernel = 140;
-    } else {
-        num_l1_banks_kernel = num_l1_banks;
-    }
-
-    std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks_kernel);
-    l1_bank_offset_map_[device_id].clear();
-    l1_bank_offset_map_[device_id].resize(num_l1_banks_kernel);
-    for (unsigned bank_id = 0; bank_id < num_l1_banks_kernel; bank_id++) {
-        unsigned actual_bank_id = (num_l1_banks > 0) ? (bank_id % num_l1_banks) : 0;
-        CoreCoord logical = allocator.get_logical_core_from_bank_id(actual_bank_id);
-        l1_noc_coord_per_bank[bank_id] =
-            cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical, CoreType::WORKER);
-        l1_bank_offset_map_[device_id][bank_id] = allocator.get_bank_offset(BufferType::L1, actual_bank_id);
-    }
-
-    l1_bank_to_noc_xy_[device_id].clear();
-    l1_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * l1_noc_coord_per_bank.size());
-    for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
-        for (const auto& noc_coord : l1_noc_coord_per_bank) {
-            auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, noc_coord);
-            uint16_t noc_x = l1_noc_coords.x;
-            uint16_t noc_y = l1_noc_coords.y;
-            uint16_t xy = ((noc_y << hal_->get_noc_addr_node_id_bits()) | noc_x) << hal_->get_noc_coord_reg_offset();
-            l1_bank_to_noc_xy_[device_id].push_back(xy);
-        }
-    }
-
-    // Re-push the updated table to all tensix cores so kernels see the allocator's mapping.
-    // Firmware was launched earlier with a dummy-allocator table; cores still have that until we overwrite.
-    // Use compute grid (expanded for slow dispatch) so we update every core that can run kernels.
-    const CoreCoord& compute_grid_size = tt::get_compute_grid_size(device_id, num_hw_cqs_, dispatch_core_config_);
-    CoreCoord start_core =
-        cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord(0, 0), CoreType::WORKER);
-    CoreCoord end_core = cluster_->get_virtual_coordinate_from_logical_coordinates(
-        device_id, CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1), CoreType::WORKER);
-    initialize_device_bank_to_noc_tables(device_id, HalProgrammableCoreType::TENSIX, start_core, end_core);
-
-    // Ensure all writes to L1 complete before firmware reads the tables
-    cluster_->l1_barrier(device_id);
 }
 
 void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
