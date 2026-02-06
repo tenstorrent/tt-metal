@@ -881,29 +881,36 @@ std::string QuasarDataMovementKernel::config_hash() const {
 uint8_t QuasarDataMovementKernel::expected_num_binaries() const { return this->dm_processors_.size(); }
 
 uint32_t QuasarComputeKernel::get_kernel_processor_type(int index) const {
+    log_info(tt::LogMetal, "get_kernel_processor_type()");
     TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
     return enchantum::to_underlying(this->compute_processors_[index]);
 }
 
 void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) const {
+    log_info(tt::LogMetal, "generate_binaries()");
     jit_build_genfiles_triscs_src(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    int riscv_id = static_cast<std::underlying_type_t<QuasarComputeProcessor>>(this->compute_processors_[0]);
-    const JitBuildState& orig_processor_build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-        device->build_id(), tensix_core_type, compute_class_idx, riscv_id);
-    jit_build(orig_processor_build_state, this);
-    for (uint32_t i = 1; i < this->compute_processors_.size(); i++) {
-        riscv_id = static_cast<std::underlying_type_t<QuasarComputeProcessor>>(this->compute_processors_[i]);
-        const JitBuildState& additional_processor_build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, compute_class_idx, riscv_id);
-        jit_link_additional_processor(orig_processor_build_state, additional_processor_build_state, this);
-    }
+    // int riscv_id = static_cast<std::underlying_type_t<QuasarComputeProcessor>>(this->compute_processors_[0]);
+    // const JitBuildState& orig_processor_build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+    //     device->build_id(), tensix_core_type, compute_class_idx, riscv_id);
+    // jit_build(orig_processor_build_state, this);
+    // for (uint32_t i = 1; i < this->compute_processors_.size(); i++) {
+    //     riscv_id = static_cast<std::underlying_type_t<QuasarComputeProcessor>>(this->compute_processors_[i]);
+    //     const JitBuildState& additional_processor_build_state =
+    //     BuildEnvManager::get_instance().get_kernel_build_state(
+    //         device->build_id(), tensix_core_type, compute_class_idx, riscv_id);
+    //     jit_link_additional_processor(orig_processor_build_state, additional_processor_build_state, this);
+    // }
+    auto build_states = BuildEnvManager::get_instance().get_kernel_build_states(
+        device->build_id(), tensix_core_type, compute_class_idx);
+    jit_build_subset(build_states, this);
 }
 
 void QuasarComputeKernel::read_binaries(IDevice* device) {
+    log_info(tt::LogMetal, "read_binaries()");
     TT_ASSERT(this->binaries_exist_on_disk(device));
     std::vector<const ll_api::memory*> binaries;
     const uint32_t tensix_core_type =
@@ -927,6 +934,7 @@ void QuasarComputeKernel::read_binaries(IDevice* device) {
 
 void QuasarComputeKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
+    log_info(tt::LogMetal, "process_defines()");
     Kernel::process_defines(callback);
     // TODO: Need to add this define because kernels don't build on Quasar otherwise.
     // Since Quasar will only have one NOC, should we keep this define or update the kernel to not need this define?
@@ -936,39 +944,52 @@ void QuasarComputeKernel::process_defines(
 
 bool QuasarComputeKernel::configure(
     IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
+    log_info(tt::LogMetal, "configure()");
     TT_FATAL(
         is_on_logical_core(logical_core), "Cannot configure kernel because it is not on core {}", logical_core.str());
     const ChipId device_id = device->id();
     const CoreCoord worker_core = device->worker_core_from_logical_core(logical_core);
     const std::vector<const ll_api::memory*>& binaries =
         this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+    const uint32_t dm_count = MetalContext::instance().hal().get_processor_types_count(
+        HalProgrammableCoreType::TENSIX, enchantum::to_underlying(HalProcessorClassType::DM));
     for (int i = 0; i < this->expected_num_binaries(); i++) {
         llrt::write_binary_to_address(
             *binaries[i],
             device_id,
             worker_core,
-            base_address +
-                offsets[static_cast<std::underlying_type_t<QuasarComputeProcessor>>(this->compute_processors_[i])]);
+            base_address + offsets
+                               [dm_count + static_cast<std::underlying_type_t<QuasarComputeProcessor>>(
+                                               this->compute_processors_[i])]);
     }
 
     return true;
 }
 
 std::string_view QuasarComputeKernel::get_compiler_opt_level() const {
+    log_info(tt::LogMetal, "get_compiler_opt_level()");
     return enchantum::to_string(this->config_.opt_level);
 }
 
-std::string_view QuasarComputeKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
+std::string_view QuasarComputeKernel::get_linker_opt_level() const {
+    log_info(tt::LogMetal, "get_linker_opt_level()");
+    return this->get_compiler_opt_level();
+}
 
 std::string QuasarComputeKernel::config_hash() const {
+    log_info(tt::LogMetal, "config_hash()");
     // QuasarComputeCore values must be sorted to ensure consistent ordering for hash generation
     TT_ASSERT(std::is_sorted(this->compute_processors_.begin(), this->compute_processors_.end()));
     return fmt::format("{}", fmt::join(this->compute_processors_, "_"));
 }
 
-uint8_t QuasarComputeKernel::expected_num_binaries() const { return this->compute_processors_.size(); }
+uint8_t QuasarComputeKernel::expected_num_binaries() const {
+    log_info(tt::LogMetal, "expected_num_binaries(): {}", this->compute_processors_.size());
+    return this->compute_processors_.size();
+}
 
 void QuasarComputeKernel::set_build_options(JitBuildOptions& build_options) const {
+    log_info(tt::LogMetal, "set_build_options()");
     build_options.set_hlk_math_fidelity_all_cores(this->config_.math_fidelity);
     build_options.set_hlk_math_approx_mode_all_cores(this->config_.math_approx_mode);
     build_options.fp32_dest_acc_en = this->config_.fp32_dest_acc_en;

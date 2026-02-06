@@ -158,6 +158,7 @@ void jit_build_genfiles_kernel_include(
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
+    log_info(tt::LogMetal, "out_dir: {}", out_dir);
     string kernel_header = out_dir + "kernel_includes.hpp";
 
     const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);

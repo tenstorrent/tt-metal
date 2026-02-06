@@ -718,6 +718,7 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
+    log_info(tt::LogMetal, "jit_build_subset()");
     std::vector<std::shared_future<void>> events;
     for (const auto& build : build_subset) {
         // Capture the necessary objects by reference

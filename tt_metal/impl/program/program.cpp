@@ -435,12 +435,15 @@ KernelGroup::KernelGroup(
     for (auto kernel_id : this->kernel_ids) {
         const auto kernel = program.get_kernel(kernel_id);
         auto processor_class = kernel->get_kernel_processor_class();
+        log_info(tt::LogMetal, "processor_class: {}", processor_class);
         auto num_binaries = kernel->expected_num_binaries();
         for (uint32_t i = 0; i < num_binaries; i++) {
             auto processor_type = kernel->get_kernel_processor_type(i);
+            log_info(tt::LogMetal, "processor_type: {}", processor_type);
             auto processor_index = hal.get_processor_index(
                 hal.get_programmable_core_type(programmable_core_type_index), processor_class, processor_type);
             kernel_config.watcher_kernel_ids()[processor_index] = kernel->get_watcher_kernel_id();
+            log_info(tt::LogMetal, "processor_index: {}", processor_index);
             kernel_config.enables() |= 1u << processor_index;
         }
 
