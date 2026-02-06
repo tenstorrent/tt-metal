@@ -1,24 +1,13 @@
 #!/usr/bin/env python3
 """
-Script the hosted tt-CableGen app via HTTP API: upload cabling guide CSV, get back
-cabling and/or deployment descriptor (textproto).
+Scriptable flow: Cabling guide CSV → Cabling descriptor and/or Deployment descriptor.
 
-Uses the same endpoints as the web UI:
-  POST /upload_csv          – multipart form, key "csv_file" → JSON { success, data: { elements, metadata } }
-  POST /export_cabling_descriptor   – JSON body { elements, metadata } → text/plain (textproto)
-  POST /export_deployment_descriptor – same JSON body → text/plain (textproto)
+Use from the command line or import and call csv_to_descriptors() / csv_to_cabling_descriptor().
 
-Usage:
-  # Default base URL http://localhost:5000; override with CABLEGEN_URL or --base-url
-  python3 api_csv_to_descriptors.py path/to/cabling_guide.csv
-  python3 api_csv_to_descriptors.py path/to/cabling_guide.csv --base-url https://cablegen.example.com
-  python3 api_csv_to_descriptors.py path/to/cabling_guide.csv --cabling-out out.textproto --deployment-out deploy.textproto
-
-  # From Python
-  from api_csv_to_descriptors import csv_to_descriptors_via_api
-  result = csv_to_descriptors_via_api("https://host/", csv_path="guide.csv")
-  cabling_text = result["cabling_descriptor"]
-  deployment_text = result["deployment_descriptor"]
+Requirements:
+  - TT_METAL_HOME set and scaleout protobufs built (same as export_descriptors.py).
+  - For deployment descriptor: CSV must provide hostnames (and optionally hall, aisle, rack, shelf_u)
+    on the shelf rows so the visualizer can fill them; otherwise deployment export is skipped.
 """
 
 import os
@@ -26,176 +15,165 @@ import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-try:
-    import requests
-except ImportError:
-    print("This script requires the requests library. Install with: pip install requests", file=sys.stderr)
-    sys.exit(1)
+# Project root
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from import_cabling import NetworkCablingCytoscapeVisualizer
+
+# Export may fail if TT_METAL_HOME/protobuf not set; import only when needed
+def _get_export_functions():
+    try:
+        from export_descriptors import (
+            export_cabling_descriptor_for_visualizer,
+            export_deployment_descriptor_for_visualizer,
+        )
+        return export_cabling_descriptor_for_visualizer, export_deployment_descriptor_for_visualizer
+    except (ImportError, SystemExit) as e:
+        raise RuntimeError(
+            "Export descriptors not available. Set TT_METAL_HOME and build scaleout protobufs."
+        ) from e
 
 
-def csv_to_descriptors_via_api(
-    base_url: str,
-    csv_path: Optional[str | Path] = None,
-    csv_content: Optional[str | bytes] = None,
+def csv_to_descriptors(
+    csv_path: str | Path,
     *,
     export_cabling: bool = True,
     export_deployment: bool = True,
-    timeout: float = 60.0,
 ) -> Dict[str, Any]:
     """
-    Call the hosted app API: upload CSV, then export cabling and/or deployment descriptor.
-
-    Exactly one of csv_path or csv_content must be provided.
+    Parse a cabling guide CSV and return cabling and/or deployment descriptor textproto strings.
 
     Args:
-        base_url: App base URL (e.g. https://cablegen.example.com or http://localhost:5000).
-                  Trailing slash optional.
-        csv_path: Path to cabling guide CSV file (read from disk).
-        csv_content: CSV content as string or bytes (e.g. from another API or string buffer).
-        export_cabling: Request cabling descriptor.
-        export_deployment: Request deployment descriptor (may fail if no hostnames in CSV).
-        timeout: Request timeout in seconds.
+        csv_path: Path to the cabling guide CSV file.
+        export_cabling: If True, include cabling_descriptor in the result.
+        export_deployment: If True, try to include deployment_descriptor (requires hostnames in CSV).
 
     Returns:
-        Dict with:
-          - "cabling_descriptor": str or None (textproto)
-          - "deployment_descriptor": str or None (textproto)
-          - "cytoscape_data": dict (elements + metadata) from upload step
-          - "error": str only if upload or a requested export failed
-          - "deployment_skip_reason": str if deployment was requested but failed (e.g. no hostnames)
+        Dict with optional keys:
+          - "cabling_descriptor": str (textproto) if export_cabling and success.
+          - "deployment_descriptor": str (textproto) or None if export_deployment but no hostnames / error.
+          - "cytoscape_data": dict (elements + metadata) for further use.
+          - "error": str only if parsing or cabling export failed.
+        Deployment export is omitted (None) if hostnames are missing or export raises.
     """
-    base = base_url.rstrip("/")
-    out: Dict[str, Any] = {}
+    csv_path = Path(csv_path)
+    if not csv_path.is_file():
+        return {"error": f"File not found: {csv_path}"}
 
-    if csv_path is not None and csv_content is not None:
-        out["error"] = "Provide exactly one of csv_path or csv_content"
-        return out
-    if csv_path is None and csv_content is None:
-        out["error"] = "Provide csv_path or csv_content"
-        return out
+    visualizer = NetworkCablingCytoscapeVisualizer()
+    connections = visualizer.parse_csv(str(csv_path))
+    if not connections:
+        return {"error": "No valid connections found in CSV"}
 
-    # 1) Upload CSV
-    upload_url = f"{base}/upload_csv"
-    try:
-        if csv_path is not None:
-            path = Path(csv_path)
-            if not path.is_file():
-                out["error"] = f"File not found: {path}"
-                return out
-            with open(path, "rb") as f:
-                files = {"csv_file": (path.name, f, "text/csv")}
-                r = requests.post(upload_url, files=files, timeout=timeout)
-        else:
-            content = csv_content if isinstance(csv_content, bytes) else csv_content.encode("utf-8")
-            files = {"csv_file": ("cabling_guide.csv", content, "text/csv")}
-            r = requests.post(upload_url, files=files, timeout=timeout)
-    except requests.RequestException as e:
-        out["error"] = f"Upload request failed: {e}"
-        return out
+    vis_data = visualizer.generate_visualization_data()
+    cytoscape_data = {
+        "elements": vis_data["elements"],
+        "metadata": vis_data.get("metadata", {}),
+    }
 
-    try:
-        resp = r.json()
-    except Exception as e:
-        out["error"] = f"Upload response not JSON: {e}"
-        return out
+    result = {"cytoscape_data": cytoscape_data}
 
-    if not resp.get("success"):
-        out["error"] = resp.get("error", "Upload failed")
-        return out
-
-    data = resp.get("data")
-    if not data or "elements" not in data:
-        out["error"] = "Upload response missing data.elements"
-        return out
-
-    cytoscape_data = {"elements": data["elements"], "metadata": data.get("metadata", {})}
-    out["cytoscape_data"] = cytoscape_data
-
-    # 2) Export cabling descriptor
     if export_cabling:
         try:
-            r2 = requests.post(
-                f"{base}/export_cabling_descriptor",
-                json=cytoscape_data,
-                timeout=timeout,
-                headers={"Content-Type": "application/json"},
-            )
-            r2.raise_for_status()
-            out["cabling_descriptor"] = r2.text
-        except requests.RequestException as e:
-            out["error"] = f"Cabling descriptor export failed: {e}"
-            out["cabling_descriptor"] = None
+            export_cabling_fn, _ = _get_export_functions()
+            result["cabling_descriptor"] = export_cabling_fn(cytoscape_data)
         except Exception as e:
-            out["error"] = str(e)
-            out["cabling_descriptor"] = None
+            result["error"] = f"Cabling descriptor export failed: {e}"
+            result["cabling_descriptor"] = None
     else:
-        out["cabling_descriptor"] = None
+        result["cabling_descriptor"] = None
 
-    # 3) Export deployment descriptor
     if export_deployment:
         try:
-            r3 = requests.post(
-                f"{base}/export_deployment_descriptor",
-                json=cytoscape_data,
-                timeout=timeout,
-                headers={"Content-Type": "application/json"},
-            )
-            if r3.status_code != 200:
-                try:
-                    err = r3.json()
-                    out["deployment_skip_reason"] = err.get("error", r3.text)
-                except Exception:
-                    out["deployment_skip_reason"] = r3.text
-                out["deployment_descriptor"] = None
-            else:
-                out["deployment_descriptor"] = r3.text
-        except requests.RequestException as e:
-            out["deployment_descriptor"] = None
-            out["deployment_skip_reason"] = str(e)
+            _, export_deployment_fn = _get_export_functions()
+            result["deployment_descriptor"] = export_deployment_fn(cytoscape_data)
+        except ValueError as e:
+            # No hostnames or expected deployment precondition
+            result["deployment_descriptor"] = None
+            result["deployment_skip_reason"] = str(e)
+        except Exception as e:
+            result["deployment_descriptor"] = None
+            result["deployment_skip_reason"] = str(e)
     else:
-        out["deployment_descriptor"] = None
+        result["deployment_descriptor"] = None
 
-    return out
+    return result
+
+
+def csv_to_cabling_descriptor(csv_path: str | Path) -> str:
+    """
+    Parse cabling guide CSV and return cabling descriptor textproto string.
+
+    Raises:
+        FileNotFoundError, ValueError, RuntimeError on missing file, no connections, or export failure.
+    """
+    out = csv_to_descriptors(csv_path, export_cabling=True, export_deployment=False)
+    if "error" in out:
+        raise RuntimeError(out["error"])
+    if not out.get("cabling_descriptor"):
+        raise RuntimeError("No cabling descriptor produced")
+    return out["cabling_descriptor"]
+
+
+def csv_to_deployment_descriptor(csv_path: str | Path) -> Optional[str]:
+    """
+    Parse cabling guide CSV and return deployment descriptor textproto string if possible.
+
+    Returns None if the CSV has no hostnames (or deployment export otherwise fails).
+    """
+    out = csv_to_descriptors(csv_path, export_cabling=False, export_deployment=True)
+    return out.get("deployment_descriptor")
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(
-        description="Convert cabling guide CSV to descriptors via hosted tt-CableGen API.",
+        description="Convert cabling guide CSV to cabling and/or deployment descriptor (textproto)."
     )
-    parser.add_argument("csv_file", type=Path, nargs="?", help="Path to cabling guide CSV")
+    parser.add_argument("csv_file", type=Path, help="Input cabling guide CSV path")
     parser.add_argument(
-        "--base-url",
-        default=os.environ.get("CABLEGEN_URL", "https://aus2-cablegen.aus2.tenstorrent.com/"),
-        help="Base URL of the app (default: CABLEGEN_URL or http://localhost:5000)",
+        "--cabling-out",
+        type=Path,
+        default=None,
+        help="Write cabling descriptor to this file (default: print to stdout if only cabling)",
     )
-    parser.add_argument("--cabling-out", type=Path, help="Write cabling descriptor to this file")
-    parser.add_argument("--deployment-out", type=Path, help="Write deployment descriptor to this file")
-    parser.add_argument("--cabling-only", action="store_true", help="Only request cabling descriptor")
-    parser.add_argument("--deployment-only", action="store_true", help="Only request deployment descriptor")
-    parser.add_argument("--timeout", type=float, default=60.0, help="Request timeout in seconds")
+    parser.add_argument(
+        "--deployment-out",
+        type=Path,
+        default=None,
+        help="Write deployment descriptor to this file (optional; requires hostnames in CSV)",
+    )
+    parser.add_argument(
+        "--cabling-only",
+        action="store_true",
+        help="Only produce cabling descriptor",
+    )
+    parser.add_argument(
+        "--deployment-only",
+        action="store_true",
+        help="Only produce deployment descriptor (still parses CSV once)",
+    )
     args = parser.parse_args()
 
-    if not args.csv_file or not args.csv_file.is_file():
-        print("Provide a valid CSV file path.", file=sys.stderr)
-        sys.exit(1)
+    export_cabling = not args.deployment_only
+    export_deployment = not args.cabling_only
 
-    result = csv_to_descriptors_via_api(
-        args.base_url,
-        csv_path=args.csv_file,
-        export_cabling=not args.deployment_only,
-        export_deployment=not args.cabling_only,
-        timeout=args.timeout,
+    result = csv_to_descriptors(
+        args.csv_file,
+        export_cabling=export_cabling,
+        export_deployment=export_deployment,
     )
 
-    if result.get("error"):
+    if "error" in result:
         print(result["error"], file=sys.stderr)
         sys.exit(1)
 
     if result.get("cabling_descriptor") and args.cabling_out:
         args.cabling_out.write_text(result["cabling_descriptor"])
         print(f"Wrote cabling descriptor to {args.cabling_out}", file=sys.stderr)
-    elif result.get("cabling_descriptor") and not args.deployment_out and not args.cabling_only:
+    elif result.get("cabling_descriptor") and not args.deployment_out and export_cabling:
         print(result["cabling_descriptor"])
 
     if result.get("deployment_descriptor") and args.deployment_out:
@@ -204,7 +182,7 @@ def main():
     elif result.get("deployment_descriptor") and args.deployment_only and not args.deployment_out:
         print(result["deployment_descriptor"])
 
-    if result.get("deployment_skip_reason"):
+    if result.get("deployment_skip_reason") and export_deployment:
         print(f"Deployment descriptor skipped: {result['deployment_skip_reason']}", file=sys.stderr)
 
 
