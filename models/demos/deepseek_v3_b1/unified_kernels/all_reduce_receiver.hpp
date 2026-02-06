@@ -129,7 +129,6 @@ struct AllReduceReceiver {
             constexpr uint8_t sender_num_hops = 1;
 
             tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
-            open_connections(fabric_connection, 1, fabric_arg_idx);
 
             cb_reserve_back(ReaderCT::packet_header_cb_id, 1);
             const uint32_t sem_header_addr = get_write_ptr(ReaderCT::packet_header_cb_id);
@@ -140,6 +139,8 @@ struct AllReduceReceiver {
 
             // Signal sender that receiver is ready (if not using persistent buffer)
             if constexpr (!ReaderCT::using_persistent_buffer) {
+                open_connections(fabric_connection, 1, fabric_arg_idx);
+
                 auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
                 fabric_set_unicast_route(fabric_connection, sem_header_ptr, 0);
                 sem_header_ptr->to_chip_unicast(sender_num_hops);
@@ -169,7 +170,9 @@ struct AllReduceReceiver {
             noc_semaphore_wait(local_semaphore_ptr, 1);
             noc_semaphore_set(local_semaphore_ptr, 0);
 
-            close_connections(fabric_connection);
+            if constexpr (!ReaderCT::using_persistent_buffer) {
+                close_connections(fabric_connection);
+            }
 
             // Remote data is now ready, push to compute
             cb_reserve_back(ReaderCT::cb_in1, ReaderCT::num_standard_tiles);
