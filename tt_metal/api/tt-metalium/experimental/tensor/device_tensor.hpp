@@ -169,11 +169,13 @@ public:
      */
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const { return get_device_storage().mesh_buffer; }
 
-private:
-    std::unique_ptr<TensorAttributes> impl;
-
+    // INTERNAL ONLY
+    // Might be able to avoid this by exposing cords?
     const DeviceStorage& get_device_storage() const { return std::get<DeviceStorage>(impl->get_storage()); }
     DeviceStorage& get_device_storage() { return std::get<DeviceStorage>(impl->get_storage()); }
+
+private:
+    std::unique_ptr<TensorAttributes> impl;
 };
 
 }  // namespace tt::tt_metal

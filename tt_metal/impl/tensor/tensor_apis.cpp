@@ -260,6 +260,63 @@ void TransferToDevice(
         topology);
 }
 
+void TransferToHost(
+    distributed::MeshCommandQueue& cq, const DeviceTensor& device_tensor, HostTensor& host_tensor, bool blocking) {
+    TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
+
+    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
+    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
+    TT_FATAL(
+        host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
+        "Host tensor has different page config");
+
+    const auto& device_storage = device_tensor.get_device_storage();
+    auto* device = device_tensor.get_device();
+
+    distributed::MeshCommandQueue& mesh_cq = cq;
+
+    const auto& distributed_host_buffer = host_tensor.host_storage().buffer();
+
+    // Host tensor must have pre-allocated buffers for all device shards.
+    // However, it may have some extra shards. Drop them by "unwrapping" the distributed host buffer, and re-wrapping
+    // only for those shards that are actually present on device.
+    std::vector<std::pair<distributed::MeshCoordinate, std::optional<HostBuffer>>> shards;
+    shards.reserve(device_storage.coords.size());
+    for (const auto& device_coord : device_storage.coords) {
+        shards.push_back({device_coord, distributed_host_buffer.get_shard(device_coord)});
+    }
+
+    DistributedHostBuffer dst_distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
+    const size_t expected_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
+    for (const auto& [device_coord, host_buffer] : shards) {
+        dst_distributed_host_buffer.emplace_shard(device_coord, [&]() {
+            // Note the lambda is executed only for host-local shards.
+            // If `host_buffer` is nullopt, the data was not correctly allocated on the host.
+            TT_FATAL(host_buffer.has_value(), "Host shard for device shard {} is not populated.", device_coord);
+
+            TT_FATAL(
+                host_buffer->view_bytes().size() == expected_size_bytes,
+                "Host shard for device shard {} has invalid size: {} != {}",
+                device_coord,
+                host_buffer->view_bytes().size(),
+                expected_size_bytes);
+            return *host_buffer;
+        });
+    }
+
+    const auto& mesh_buffer = device_storage.mesh_buffer;
+    mesh_cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+
+    if (blocking) {
+        cq.finish();
+    }
+
+    host_tensor = HostTensor(
+        HostStorage(std::move(dst_distributed_host_buffer)),
+        device_tensor.tensor_spec(),
+        device_tensor.tensor_topology());
+}
+
 namespace tensor_impl {
 
 std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(

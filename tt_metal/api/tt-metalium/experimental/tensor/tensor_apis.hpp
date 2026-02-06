@@ -32,4 +32,11 @@ void TransferToDevice(
     DeviceTensor& device_tensor,
     bool blocking = true);
 
+// High-level D2H transfer for DeviceTensor/HostTensor
+void TransferToHost(
+    distributed::MeshCommandQueue& cq,
+    const DeviceTensor& device_tensor,
+    HostTensor& host_tensor,
+    bool blocking = true);
+
 }  // namespace tt::tt_metal
