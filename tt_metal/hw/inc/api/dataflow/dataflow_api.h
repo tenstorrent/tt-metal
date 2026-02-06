@@ -2197,8 +2197,10 @@ FORCE_INLINE void noc_semaphore_inc(
  * | incr                       | The value to increment by                                                | uint32_t | Any uint32_t value                         | True     |
  * | num_dests                  | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                   | True     |
  * | noc_id                     | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
+ * | posted (template argument) | Whether the call is posted or nonposted (i.e. needs to be acked)         | bool     | true or false                              | False    |
  */
 // clang-format on
+template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc_multicast(
     uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(
@@ -2217,7 +2219,7 @@ FORCE_INLINE void noc_semaphore_inc_multicast(
         false /*linked*/,
         num_dests,
         /*multicast_path_reserve=*/true,
-        false /*posted*/);
+        posted);
     WAYPOINT("NIMD");
 }
 

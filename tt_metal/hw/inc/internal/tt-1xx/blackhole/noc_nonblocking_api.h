@@ -1146,7 +1146,7 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     bool posted = false) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
-    // mechanism to allow one memory port to move ahead of another. Also, due to HW bug on BH, using posted with
+    // mechanism to allow one memory port to move ahead of another. Also, due to HW bug, using posted with
     // multicast can introduce hangs. To workaround this, we emulate force atomics to be non-posted.
     posted = false;
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {

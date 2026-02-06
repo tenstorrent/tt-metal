@@ -1019,7 +1019,6 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     uint32_t num_dests,
     bool multicast_path_reserve,
     bool posted = false) {
-    posted = false;
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc, num_dests);

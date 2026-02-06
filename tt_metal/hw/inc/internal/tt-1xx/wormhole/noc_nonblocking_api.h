@@ -954,7 +954,7 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     uint32_t num_dests,
     bool multicast_path_reserve,
     bool posted = false) {
-    // Due to a HW bug on WH, using posted with multicast can introduce hangs.
+    // Due to a HW bug, using posted with multicast can introduce hangs.
     posted = false;
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
