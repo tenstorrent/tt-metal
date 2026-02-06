@@ -28,10 +28,21 @@ void kernel_main() {
     std::uint32_t bank_id               = get_arg_val<uint32_t>(1);
     std::uint32_t num_tiles_per_cb      = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t ublock_size_tiles = get_compile_time_arg_val(1);
-    uint32_t ublock_size_bytes = get_tile_size(cb_id) * ublock_size_tiles;
+    constexpr uint32_t start_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t num_cbs_stride = get_compile_time_arg_val(1);
+    constexpr uint32_t stride = get_compile_time_arg_val(2);
+    constexpr uint32_t topmost_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t ublock_size_tiles = get_compile_time_arg_val(4);
 
-    read_and_push_to_cb(cb_id, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes,
-                              bank_id, dram_buffer_src_addr);
+    // Process strided CBs: 0, 8, 16, ...
+    for (uint32_t i = 0; i < num_cbs_stride; i++) {
+        uint32_t cb_id = start_cb + i * stride;
+        uint32_t ublock_size_bytes = get_tile_size(cb_id) * ublock_size_tiles;
+        read_and_push_to_cb(
+            cb_id, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_src_addr);
+    }
+    // Process topmost CB
+    uint32_t ublock_size_bytes = get_tile_size(topmost_cb) * ublock_size_tiles;
+    read_and_push_to_cb(
+        topmost_cb, num_tiles_per_cb, ublock_size_tiles, ublock_size_bytes, bank_id, dram_buffer_src_addr);
 }

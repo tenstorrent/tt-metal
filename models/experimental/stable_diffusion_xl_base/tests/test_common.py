@@ -11,8 +11,8 @@ from typing import List, Optional, Union
 
 from transformers import CLIPTextModelWithProjection
 from ttnn.distributed.distributed import ConcatMeshToTensor
-from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
-from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.common.utility_functions import profiler
 
 import ttnn
