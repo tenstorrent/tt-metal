@@ -544,10 +544,7 @@ def test_attention_1d_fused_qk_profiling(ttnn_mesh_device: ttnn.MeshDevice):
                     trace_err_msg = str(trace_err).split("\n")[0][:120]
                     log_messages.append(f"  {fused_label:10s}: [TRACE FAIL] {trace_err_msg}")
                     if trace_id is not None:
-                        try:
-                            ttnn.release_trace(ttnn_mesh_device, trace_id)
-                        except Exception:
-                            pass
+                        ttnn.release_trace(ttnn_mesh_device, trace_id)
 
                 # =====================================================================
                 # Statistics
