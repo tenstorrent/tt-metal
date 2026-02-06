@@ -62,16 +62,16 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
             Typically 1.0 in DiT transformer blocks.
 
         addcmul_input_tensor1 : ttnn.Tensor
-            Residual/base for addcmul (output += this).
+            Residual/base for addcmul (broadcast like bias).
             - Layout: TILE (required).
             - Device: same device as matmul tensors.
-            - Shape: [..., M, N] - must match matmul output shape.
+            - Shape: [..., 1, N] - broadcast row across all M rows.
 
         addcmul_input_tensor2 : ttnn.Tensor
             Gate/multiplier tensor for addcmul.
             - Layout: TILE (required).
             - Device: same device as matmul tensors.
-            - Shape: [..., M, N] or broadcast-compatible shape.
+            - Shape: [..., M, N] - must match matmul output shape.
 
         bias_tensor : Optional[ttnn.Tensor], default: None
             Optional row-broadcast bias added to the matmul result.
@@ -118,8 +118,8 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
         ---------------
         - matmul_input_tensor: [..., M, K]
         - matmul_weight_tensor: [..., K, N]
-        - addcmul_input_tensor1: [..., M, N]
-        - addcmul_input_tensor2: [..., M, N] or broadcast-compatible
+        - addcmul_input_tensor1: [..., 1, N] (broadcast like bias)
+        - addcmul_input_tensor2: [..., M, N] (full output shape)
         - output: [..., M, N]
 
         Limitations & Requirements
@@ -134,16 +134,16 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
         Use Case
         --------
         This operation is designed for DiT (Diffusion Transformer) models like Wan2.2, where the pattern
-        `residual + gate * feedforward(x)` is common. This fusion eliminates intermediate tensor writes
+        `base_value + gate * feedforward(x)` is common. This fusion eliminates intermediate tensor writes
         and reads, improving performance.
 
         Typical usage in Wan2.2 transformer block:
-            spatial_1BND = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
-                spatial_normed_1BND,  # input after normalization
-                ff_weight,             # feedforward weight
+            output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                input_normed,          # input after normalization [M, K]
+                ff_weight,             # feedforward weight [K, N]
                 1.0,                   # scalar multiplier
-                spatial_1BND,          # residual connection
-                gate_tensor            # gate from timestep embedding
+                base_value,            # broadcast base value [1, N]
+                gate_tensor            # gate from timestep embedding [M, N]
             )
 
         Notes on Implementation
