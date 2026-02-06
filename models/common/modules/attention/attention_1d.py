@@ -720,7 +720,7 @@ class Attention1D(LightweightModule):
             self._kv_update_decode = self._kv_update_decode_fused
         else:
             self._rotary_embed_decode = self._rotary_embed_decode_separate
-            self._kv_update_decode = self._kv_update_decode_separate
+            self._kv_update_decode = self._kv_update_decode_nonfused
 
     # =========================================================================
     # Bound SDPA Decode Methods (paged vs non-paged)
@@ -884,7 +884,7 @@ class Attention1D(LightweightModule):
             keys, k_heads, values, v_heads, update_idxs_tensor=current_pos, page_table=page_table
         )
 
-    def _kv_update_decode_separate(
+    def _kv_update_decode_nonfused(
         self,
         keys: ttnn.Tensor,
         values: ttnn.Tensor,
