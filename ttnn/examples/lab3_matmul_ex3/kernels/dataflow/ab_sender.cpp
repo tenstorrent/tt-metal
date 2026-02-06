@@ -78,9 +78,9 @@ void kernel_main() {
 
     // Precompute multicast addresses (these don't change per tile)
     uint64_t a_tile_sent_sem_mcast_addr = get_noc_multicast_addr(
-        a_receiver_start_x, a_receiver_start_y, a_receiver_end_x, a_receiver_end_y, a_tile_sent_semaphore_addr);
+        a_receiver_end_x, a_receiver_end_y, a_receiver_start_x, a_receiver_start_y, a_tile_sent_semaphore_addr);
     uint64_t b_tile_sent_sem_mcast_addr = get_noc_multicast_addr(
-        b_receiver_start_x, b_receiver_start_y, b_receiver_end_x, b_receiver_end_y, b_tile_sent_semaphore_addr);
+        b_receiver_end_x, b_receiver_end_y, b_receiver_start_x, b_receiver_start_y, b_tile_sent_semaphore_addr);
 
     // Kt dimension is split into K-blocks of size K_block_tiles,
     // such that Kt = num_k_blocks * K_block_tiles.
@@ -124,7 +124,7 @@ void kernel_main() {
 
                 // Multicast tile to all receiver cores
                 uint64_t tile_mcast_addr = get_noc_multicast_addr(
-                    a_receiver_start_x, a_receiver_start_y, a_receiver_end_x, a_receiver_end_y, cb_in0_addr);
+                    a_receiver_end_x, a_receiver_end_y, a_receiver_start_x, a_receiver_start_y, cb_in0_addr);
                 noc_async_write_multicast(cb_in0_addr, tile_mcast_addr, tile_size_bytes_0, a_num_receivers);
 
                 // Flush is needed to ensure the multicast command is sent before the semaphore set command
@@ -175,7 +175,7 @@ void kernel_main() {
 
                 // Multicast tile to all receiver cores
                 uint64_t tile_mcast_addr = get_noc_multicast_addr(
-                    b_receiver_start_x, b_receiver_start_y, b_receiver_end_x, b_receiver_end_y, cb_in1_addr);
+                    b_receiver_end_x, b_receiver_end_y, b_receiver_start_x, b_receiver_start_y, cb_in1_addr);
                 noc_async_write_multicast(cb_in1_addr, tile_mcast_addr, tile_size_bytes_1, b_num_receivers);
 
                 // Flush is needed to ensure the multicast command is sent before the semaphore set command

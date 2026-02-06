@@ -244,6 +244,12 @@ void matmul_multi_core(
     CoreCoord top_left_core_logical{0, 0};
     CoreRangeSet all_cores_logical{CoreRange(top_left_core_logical, CoreCoord(core_grid.x - 1, core_grid.y - 1))};
 
+    CoreRangeSet left_column_cores_logical{
+        CoreRange(top_left_core_logical, CoreCoord(top_left_core_logical.x, core_grid.y - 1))};
+
+    CoreRangeSet all_except_left_column_cores_logical{CoreRange(
+        CoreCoord(top_left_core_logical.x + 1, top_left_core_logical.y), CoreCoord(core_grid.x - 1, core_grid.y - 1))};
+
     // All cores except the top row and left column are receiving A and B.
     CoreRangeSet ab_receiver_cores_logical{CoreRange(
         {top_left_core_logical.x + 1, top_left_core_logical.y + 1}, CoreCoord(core_grid.x - 1, core_grid.y - 1))};
@@ -318,7 +324,7 @@ void matmul_multi_core(
         top_left_core_logical,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .noc = NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
     KernelHandle ab_receiver_id = tt_metal::CreateKernel(
@@ -336,7 +342,7 @@ void matmul_multi_core(
         a_sender_b_receiver_cores_logical,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .noc = NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
     KernelHandle b_sender_a_receiver_id = tt_metal::CreateKernel(
@@ -350,10 +356,19 @@ void matmul_multi_core(
     std::vector<uint32_t> writer_compile_time_args;
 
     TensorAccessorArgs(*dst_mesh_buffer).append_to(writer_compile_time_args);
-    KernelHandle writer_id = tt_metal::CreateKernel(
+    KernelHandle writer_id_left_column = tt_metal::CreateKernel(
         prog_state.program,
         OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex3/kernels/dataflow/write_tiles.cpp",
-        all_cores_logical,
+        left_column_cores_logical,
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
+
+    KernelHandle writer_id_others = tt_metal::CreateKernel(
+        prog_state.program,
+        OVERRIDE_KERNEL_PREFIX "ttnn/examples/lab3_matmul_ex3/kernels/dataflow/write_tiles.cpp",
+        all_except_left_column_cores_logical,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
@@ -519,11 +534,19 @@ void matmul_multi_core(
                      tile_offset_col});
             }
 
-            tt_metal::SetRuntimeArgs(
-                prog_state.program,
-                writer_id,
-                core_logical,
-                {dst_addr, Nt, M_block_tiles, N_block_tiles, tile_offset_row, tile_offset_col});
+            if (x == 0) {
+                tt_metal::SetRuntimeArgs(
+                    prog_state.program,
+                    writer_id_left_column,
+                    core_logical,
+                    {dst_addr, Nt, M_block_tiles, N_block_tiles, tile_offset_row, tile_offset_col});
+            } else {
+                tt_metal::SetRuntimeArgs(
+                    prog_state.program,
+                    writer_id_others,
+                    core_logical,
+                    {dst_addr, Nt, M_block_tiles, N_block_tiles, tile_offset_row, tile_offset_col});
+            }
         }
     }
 
