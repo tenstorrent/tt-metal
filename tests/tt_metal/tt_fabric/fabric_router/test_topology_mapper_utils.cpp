@@ -753,9 +753,29 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_ClosetboxSuperpod) {
         }
     }
 
-    // Verify exit nodes are NOT populated in relaxed mode
-    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.empty())
-        << "Exit nodes should not be populated in relaxed mode (only in strict mode)";
+    // Verify exit nodes ARE populated in relaxed mode (as mesh-level exit nodes)
+    // In relaxed mode, exit nodes are mesh-level (no fabric_node_id specified)
+    EXPECT_FALSE(multi_mesh_graph.mesh_exit_node_graphs_.empty())
+        << "Exit nodes should be populated in relaxed mode (as mesh-level exit nodes)";
+
+    // Verify that all meshes with intermesh connections have exit node graphs
+    for (const auto& mesh_id : {MeshId{0}, MeshId{1}, MeshId{2}}) {
+        if (multi_mesh_graph.mesh_level_graph_.get_neighbors(mesh_id).size() > 0) {
+            EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id))
+                << "Mesh " << mesh_id.get() << " should have exit node graph in relaxed mode";
+
+            const auto& exit_graph = multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id);
+            const auto& exit_nodes = exit_graph.get_nodes();
+            EXPECT_GT(exit_nodes.size(), 0u) << "Mesh " << mesh_id.get() << " should have at least one exit node";
+
+            // Verify exit nodes are mesh-level (fabric_node_id is nullopt)
+            for (const auto& exit_node : exit_nodes) {
+                EXPECT_FALSE(exit_node.fabric_node_id.has_value())
+                    << "Relaxed mode exit nodes should be mesh-level (no fabric_node_id)";
+                EXPECT_EQ(exit_node.mesh_id, mesh_id) << "Exit node mesh_id should match the mesh";
+            }
+        }
+    }
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_StrictModeIntermeshPorts) {
@@ -846,8 +866,8 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_StrictModeIntermeshPo
     const auto& exit_nodes0 = exit_graph0.get_nodes();
     EXPECT_EQ(exit_nodes0.size(), 2u) << "Mesh 0 should have 2 exit nodes";
 
-    FabricNodeId exit_node0_1(MeshId{0}, 1);
-    FabricNodeId exit_node0_3(MeshId{0}, 3);
+    LogicalExitNode exit_node0_1{MeshId{0}, FabricNodeId(MeshId{0}, 1)};
+    LogicalExitNode exit_node0_3{MeshId{0}, FabricNodeId(MeshId{0}, 3)};
     EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_1) != exit_nodes0.end())
         << "Device 1 should be an exit node in mesh 0";
     EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_3) != exit_nodes0.end())
@@ -856,7 +876,7 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_StrictModeIntermeshPo
     // Verify exit node connections: device 1 connects to mesh 1 device 0 (2 channels)
     const auto& exit_neighbors0_1 = exit_graph0.get_neighbors(exit_node0_1);
     EXPECT_EQ(exit_neighbors0_1.size(), 2u) << "Exit node 0_1 should have 2 connections (2 channels)";
-    FabricNodeId target0_1(MeshId{1}, 0);
+    LogicalExitNode target0_1{MeshId{1}, FabricNodeId(MeshId{1}, 0)};
     // Count occurrences of target0_1 (should be 2 for 2 channels)
     uint32_t target0_1_count = 0;
     for (const auto& neighbor : exit_neighbors0_1) {
@@ -869,7 +889,7 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_StrictModeIntermeshPo
     // Verify exit node connections: device 3 connects to mesh 1 device 2 (2 channels)
     const auto& exit_neighbors0_3 = exit_graph0.get_neighbors(exit_node0_3);
     EXPECT_EQ(exit_neighbors0_3.size(), 2u) << "Exit node 0_3 should have 2 connections (2 channels)";
-    FabricNodeId target0_3(MeshId{1}, 2);
+    LogicalExitNode target0_3{MeshId{1}, FabricNodeId(MeshId{1}, 2)};
     // Count occurrences of target0_3 (should be 2 for 2 channels)
     uint32_t target0_3_count = 0;
     for (const auto& neighbor : exit_neighbors0_3) {
@@ -884,8 +904,8 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_StrictModeIntermeshPo
     const auto& exit_nodes1 = exit_graph1.get_nodes();
     EXPECT_EQ(exit_nodes1.size(), 2u) << "Mesh 1 should have 2 exit nodes";
 
-    FabricNodeId exit_node1_0(MeshId{1}, 0);
-    FabricNodeId exit_node1_2(MeshId{1}, 2);
+    LogicalExitNode exit_node1_0{MeshId{1}, FabricNodeId(MeshId{1}, 0)};
+    LogicalExitNode exit_node1_2{MeshId{1}, FabricNodeId(MeshId{1}, 2)};
     EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), exit_node1_0) != exit_nodes1.end())
         << "Device 0 should be an exit node in mesh 1";
     EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), exit_node1_2) != exit_nodes1.end())
@@ -914,6 +934,18 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_StrictModeIntermeshPo
         }
     }
     EXPECT_EQ(exit_node0_3_count, 2u) << "Exit node 1_2 should have 2 connections to mesh 0 device 3 (2 channels)";
+
+    // Verify that strict mode creates fabric node-level exit nodes
+    for (const auto& exit_node : exit_nodes0) {
+        EXPECT_TRUE(exit_node.fabric_node_id.has_value())
+            << "Strict mode exit nodes should be fabric node-level (fabric_node_id must be set)";
+        EXPECT_EQ(exit_node.mesh_id, MeshId{0}) << "Exit node mesh_id should match the mesh";
+    }
+    for (const auto& exit_node : exit_nodes1) {
+        EXPECT_TRUE(exit_node.fabric_node_id.has_value())
+            << "Strict mode exit nodes should be fabric node-level (fabric_node_id must be set)";
+        EXPECT_EQ(exit_node.mesh_id, MeshId{1}) << "Exit node mesh_id should match the mesh";
+    }
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_MixedStrictAndRelaxedConnections) {
@@ -1053,46 +1085,72 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_MixedStrictAndRelaxed
     EXPECT_EQ(mesh2_to_mesh0_count, 3u) << "Mesh 2 should connect to mesh 0 with 3 channels (strict, mesh-level)";
     EXPECT_EQ(mesh2_to_mesh1_count, 0u) << "Mesh 2 should NOT connect to mesh 1";
 
-    // Verify exit nodes are tracked only for device-level strict connections (mesh 0 <-> mesh 1)
-    // Mesh 0 should have exit nodes (device-level strict connection to mesh 1)
+    // Verify exit nodes: device-level connections create device-level exit nodes,
+    // mesh-level connections create mesh-level exit nodes
+    // If a mesh has device-level connections, it only gets device-level exit nodes (not mesh-level)
+    // Mesh 0 should have exit nodes (device-level connection to mesh 1, so device-level exit node)
     EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
-        << "Mesh 0 should have exit nodes (device-level strict connection)";
+        << "Mesh 0 should have exit nodes (device-level connection to mesh 1)";
 
     // Mesh 1 should have exit nodes (device-level strict connection to mesh 0)
     EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
         << "Mesh 1 should have exit nodes (device-level strict connection)";
 
-    // Mesh 2 should NOT have exit nodes (mesh-level connection, not device-level)
-    EXPECT_FALSE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{2}))
-        << "Mesh 2 should NOT have exit nodes (mesh-level connection, not device-level)";
+    // Mesh 2 SHOULD have exit nodes (mesh-level strict connection creates mesh-level exit nodes)
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{2}))
+        << "Mesh 2 should have exit nodes (mesh-level strict connection creates mesh-level exit nodes)";
 
     // Verify exit node details for mesh 0
+    // Mesh 0 has device-level connection to mesh 1 (device 1 specified) -> creates device-level exit node
+    // Mesh 0 has mesh-level connection to mesh 2 (no device specified) -> creates mesh-level exit node
+    // So mesh 0 should have 1 device-level exit node and 1 mesh-level exit node
     const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
     const auto& exit_nodes0 = exit_graph0.get_nodes();
-    EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node (device 1)";
+    EXPECT_EQ(exit_nodes0.size(), 2u)
+        << "Mesh 0 should have 2 exit nodes (1 device-level for mesh 1, 1 mesh-level for mesh 2)";
 
-    FabricNodeId exit_node0_1(MeshId{0}, 1);
-    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_1) != exit_nodes0.end())
-        << "Device 1 should be an exit node in mesh 0";
+    // Find the device-level exit node (device 1, for connection to mesh 1)
+    LogicalExitNode exit_node0_1{MeshId{0}, FabricNodeId(MeshId{0}, 1)};
+    auto fabric_node_exit_it = std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_1);
+    EXPECT_NE(fabric_node_exit_it, exit_nodes0.end())
+        << "Device 1 should be a device-level exit node in mesh 0 (device specified in connection to mesh 1)";
 
-    // Verify exit node connections: device 1 connects to mesh 1 device 0 (2 channels)
+    // Find the mesh-level exit node (for connection to mesh 2)
+    LogicalExitNode mesh_level_exit_node0{MeshId{0}, std::nullopt};
+    auto mesh_level_exit_it = std::find(exit_nodes0.begin(), exit_nodes0.end(), mesh_level_exit_node0);
+    EXPECT_NE(mesh_level_exit_it, exit_nodes0.end())
+        << "Mesh 0 should have a mesh-level exit node (no device specified in connection to mesh 2)";
+
+    // Verify device-level exit node connections: device 1 connects to mesh 1 device 0 (2 channels)
     const auto& exit_neighbors0_1 = exit_graph0.get_neighbors(exit_node0_1);
-    EXPECT_EQ(exit_neighbors0_1.size(), 2u) << "Exit node 0_1 should have 2 connections (2 channels)";
-    FabricNodeId target0_1(MeshId{1}, 0);
+    EXPECT_EQ(exit_neighbors0_1.size(), 2u) << "Device-level exit node 0_1 should have 2 connections (2 channels)";
+    LogicalExitNode target0_1{MeshId{1}, FabricNodeId(MeshId{1}, 0)};
     uint32_t target0_1_count = 0;
     for (const auto& neighbor : exit_neighbors0_1) {
         if (neighbor == target0_1) {
             target0_1_count++;
         }
     }
-    EXPECT_EQ(target0_1_count, 2u) << "Exit node 0_1 should have 2 connections to mesh 1 device 0";
+    EXPECT_EQ(target0_1_count, 2u) << "Device-level exit node 0_1 should have 2 connections to mesh 1 device 0";
+
+    // Verify mesh-level exit node connections: mesh-level exit node connects to mesh 2 (3 channels)
+    const auto& exit_neighbors_mesh_level = exit_graph0.get_neighbors(mesh_level_exit_node0);
+    EXPECT_EQ(exit_neighbors_mesh_level.size(), 3u) << "Mesh-level exit node should have 3 connections (3 channels)";
+    LogicalExitNode target_mesh2{MeshId{2}, std::nullopt};
+    uint32_t target_mesh2_count = 0;
+    for (const auto& neighbor : exit_neighbors_mesh_level) {
+        if (neighbor == target_mesh2) {
+            target_mesh2_count++;
+        }
+    }
+    EXPECT_EQ(target_mesh2_count, 3u) << "Mesh-level exit node should have 3 connections to mesh 2";
 
     // Verify exit node details for mesh 1
     const auto& exit_graph1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
     const auto& exit_nodes1 = exit_graph1.get_nodes();
     EXPECT_EQ(exit_nodes1.size(), 1u) << "Mesh 1 should have 1 exit node (device 0)";
 
-    FabricNodeId exit_node1_0(MeshId{1}, 0);
+    LogicalExitNode exit_node1_0{MeshId{1}, FabricNodeId(MeshId{1}, 0)};
     EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), exit_node1_0) != exit_nodes1.end())
         << "Device 0 should be an exit node in mesh 1";
 
@@ -1106,6 +1164,78 @@ TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_MixedStrictAndRelaxed
         }
     }
     EXPECT_EQ(exit_node0_1_count, 2u) << "Exit node 1_0 should have 2 connections to mesh 0 device 1";
+
+    // ========================================================================
+    // Verify exit node types:
+    // - Device-level connections (device specified) create device-level exit nodes
+    // - Mesh-level connections (no device specified) create mesh-level exit nodes
+    // ========================================================================
+
+    // Verify that mesh 0 has both types of exit nodes
+    bool found_device_level = false;
+    bool found_mesh_level = false;
+    for (const auto& exit_node : exit_nodes0) {
+        EXPECT_EQ(exit_node.mesh_id, MeshId{0}) << "Exit node mesh_id should match the mesh";
+
+        if (exit_node.fabric_node_id.has_value()) {
+            found_device_level = true;
+            // Verify the fabric_node_id is valid and matches expected device
+            const auto& fabric_node_id = exit_node.fabric_node_id.value();
+            EXPECT_EQ(fabric_node_id.mesh_id, MeshId{0}) << "Fabric node ID mesh_id should match exit node mesh_id";
+            EXPECT_EQ(fabric_node_id.chip_id, 1u)
+                << "Mesh 0 device-level exit node should be device 1 (device specified in connection to mesh 1)";
+        } else {
+            found_mesh_level = true;
+        }
+    }
+    EXPECT_TRUE(found_device_level)
+        << "Mesh 0 should have a device-level exit node (device specified in connection to mesh 1)";
+    EXPECT_TRUE(found_mesh_level)
+        << "Mesh 0 should have a mesh-level exit node (no device specified in connection to mesh 2)";
+
+    // Verify that mesh 1 exit nodes are fabric node-level (strict mode, device-level connection)
+    for (const auto& exit_node : exit_nodes1) {
+        EXPECT_TRUE(exit_node.fabric_node_id.has_value())
+            << "Strict mode (device-level) exit nodes should be fabric node-level (fabric_node_id must be set). "
+            << "Found exit node with mesh_id=" << exit_node.mesh_id.get();
+        EXPECT_EQ(exit_node.mesh_id, MeshId{1}) << "Exit node mesh_id should match the mesh";
+
+        // Verify the fabric_node_id is valid and matches expected device
+        const auto& fabric_node_id = exit_node.fabric_node_id.value();
+        EXPECT_EQ(fabric_node_id.mesh_id, MeshId{1}) << "Fabric node ID mesh_id should match exit node mesh_id";
+        EXPECT_EQ(fabric_node_id.chip_id, 0u)
+            << "Mesh 1 exit node should be device 0 (from device-level strict connection)";
+    }
+
+    // Verify exit node connectivity: fabric node-level exit nodes connect to other fabric node-level exit nodes
+    for (const auto& neighbor : exit_neighbors0_1) {
+        EXPECT_TRUE(neighbor.fabric_node_id.has_value())
+            << "Fabric node-level exit node should connect to other fabric node-level exit nodes";
+        EXPECT_NE(neighbor.mesh_id, MeshId{0}) << "Neighbor should be from a different mesh";
+    }
+    for (const auto& neighbor : exit_neighbors1_0) {
+        EXPECT_TRUE(neighbor.fabric_node_id.has_value())
+            << "Fabric node-level exit node should connect to other fabric node-level exit nodes";
+        EXPECT_NE(neighbor.mesh_id, MeshId{1}) << "Neighbor should be from a different mesh";
+    }
+
+    // Verify mesh 2 exit nodes are mesh-level (mesh-level strict connection)
+    const auto& exit_graph2 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{2});
+    const auto& exit_nodes2 = exit_graph2.get_nodes();
+    EXPECT_EQ(exit_nodes2.size(), 1u) << "Mesh 2 should have 1 mesh-level exit node";
+
+    LogicalExitNode mesh_level_exit_node2{MeshId{2}, std::nullopt};
+    EXPECT_TRUE(std::find(exit_nodes2.begin(), exit_nodes2.end(), mesh_level_exit_node2) != exit_nodes2.end())
+        << "Mesh 2 should have a mesh-level exit node";
+
+    // Verify mesh-level exit nodes connect to other mesh-level exit nodes
+    const auto& exit_neighbors2 = exit_graph2.get_neighbors(mesh_level_exit_node2);
+    EXPECT_EQ(exit_neighbors2.size(), 3u) << "Mesh-level exit node should have 3 connections (3 channels)";
+    for (const auto& neighbor : exit_neighbors2) {
+        EXPECT_FALSE(neighbor.fabric_node_id.has_value())
+            << "Mesh-level exit node should connect to other mesh-level exit nodes";
+        EXPECT_EQ(neighbor.mesh_id, MeshId{0}) << "Mesh 2 exit node should connect to mesh 0";
+    }
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_MultiHostMultiMesh) {
@@ -1263,18 +1393,20 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_MultiHostMultiMesh) 
     const auto& exit_nodes_m1 = exit_graph_m1.get_nodes();
     EXPECT_GT(exit_nodes_m1.size(), 0u) << "Mesh 1 should have at least one exit node";
 
-    // Verify that exit nodes have connections (the neighbors are ASICs in other meshes)
-    for (const auto& exit_asic : exit_nodes_m0) {
-        const auto& neighbors = exit_graph_m0.get_neighbors(exit_asic);
-        EXPECT_GT(neighbors.size(), 0u) << "Exit node " << exit_asic.get()
+    // Verify that exit nodes have connections (the neighbors are PhysicalExitNodes in other meshes)
+    for (const auto& exit_node : exit_nodes_m0) {
+        EXPECT_EQ(exit_node.mesh_id, MeshId{0}) << "Exit node should belong to mesh 0";
+        const auto& neighbors = exit_graph_m0.get_neighbors(exit_node);
+        EXPECT_GT(neighbors.size(), 0u) << "Exit node " << exit_node.asic_id.get()
                                         << " in mesh 0 should have at least one connection";
         // Verify connection counts are represented by duplicate entries
         // (multiple channels between same pair appear as multiple entries)
     }
 
-    for (const auto& exit_asic : exit_nodes_m1) {
-        const auto& neighbors = exit_graph_m1.get_neighbors(exit_asic);
-        EXPECT_GT(neighbors.size(), 0u) << "Exit node " << exit_asic.get()
+    for (const auto& exit_node : exit_nodes_m1) {
+        EXPECT_EQ(exit_node.mesh_id, MeshId{1}) << "Exit node should belong to mesh 1";
+        const auto& neighbors = exit_graph_m1.get_neighbors(exit_node);
+        EXPECT_GT(neighbors.size(), 0u) << "Exit node " << exit_node.asic_id.get()
                                         << " in mesh 1 should have at least one connection";
         // Verify connection counts are represented by duplicate entries
         // (multiple channels between same pair appear as multiple entries)
@@ -1340,20 +1472,24 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_ExitNodeTracking) {
 
     // Manually populate exit node information (simulating what build_physical_multi_mesh_adjacency_graph does)
     // Mesh 0 exit nodes - each connection has 1 channel
-    AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap exit_adj_m0;
-    exit_adj_m0[asic100] = {asic200};  // 1 channel
-    exit_adj_m0[asic101] = {asic201};  // 1 channel
-    exit_adj_m0[asic102] = {asic202};  // 1 channel
-    physical_multi_mesh_graph.mesh_exit_node_graphs_[physical_mesh0] =
-        AdjacencyGraph<tt::tt_metal::AsicID>(exit_adj_m0);
+    AdjacencyGraph<PhysicalExitNode>::AdjacencyMap exit_adj_m0;
+    PhysicalExitNode exit_node0_100{physical_mesh0, asic100};
+    PhysicalExitNode exit_node0_101{physical_mesh0, asic101};
+    PhysicalExitNode exit_node0_102{physical_mesh0, asic102};
+    PhysicalExitNode exit_node1_200{physical_mesh1, asic200};
+    PhysicalExitNode exit_node1_201{physical_mesh1, asic201};
+    PhysicalExitNode exit_node1_202{physical_mesh1, asic202};
+    exit_adj_m0[exit_node0_100] = {exit_node1_200};  // 1 channel
+    exit_adj_m0[exit_node0_101] = {exit_node1_201};  // 1 channel
+    exit_adj_m0[exit_node0_102] = {exit_node1_202};  // 1 channel
+    physical_multi_mesh_graph.mesh_exit_node_graphs_[physical_mesh0] = AdjacencyGraph<PhysicalExitNode>(exit_adj_m0);
 
     // Mesh 1 exit nodes - each connection has 1 channel
-    AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap exit_adj_m1;
-    exit_adj_m1[asic200] = {asic100};  // 1 channel
-    exit_adj_m1[asic201] = {asic101};  // 1 channel
-    exit_adj_m1[asic202] = {asic102};  // 1 channel
-    physical_multi_mesh_graph.mesh_exit_node_graphs_[physical_mesh1] =
-        AdjacencyGraph<tt::tt_metal::AsicID>(exit_adj_m1);
+    AdjacencyGraph<PhysicalExitNode>::AdjacencyMap exit_adj_m1;
+    exit_adj_m1[exit_node1_200] = {exit_node0_100};  // 1 channel
+    exit_adj_m1[exit_node1_201] = {exit_node0_101};  // 1 channel
+    exit_adj_m1[exit_node1_202] = {exit_node0_102};  // 1 channel
+    physical_multi_mesh_graph.mesh_exit_node_graphs_[physical_mesh1] = AdjacencyGraph<PhysicalExitNode>(exit_adj_m1);
 
     // Verify exit node information for mesh 0
     ASSERT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(physical_mesh0))
@@ -1361,25 +1497,25 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_ExitNodeTracking) {
     const auto& exit_graph_0 = physical_multi_mesh_graph.mesh_exit_node_graphs_.at(physical_mesh0);
     const auto& exit_nodes_0 = exit_graph_0.get_nodes();
     EXPECT_EQ(exit_nodes_0.size(), 3u) << "Mesh 0 should have 3 exit nodes";
-    EXPECT_TRUE(std::find(exit_nodes_0.begin(), exit_nodes_0.end(), asic100) != exit_nodes_0.end())
+    EXPECT_TRUE(std::find(exit_nodes_0.begin(), exit_nodes_0.end(), exit_node0_100) != exit_nodes_0.end())
         << "ASIC 100 should be an exit node";
-    EXPECT_TRUE(std::find(exit_nodes_0.begin(), exit_nodes_0.end(), asic101) != exit_nodes_0.end())
+    EXPECT_TRUE(std::find(exit_nodes_0.begin(), exit_nodes_0.end(), exit_node0_101) != exit_nodes_0.end())
         << "ASIC 101 should be an exit node";
-    EXPECT_TRUE(std::find(exit_nodes_0.begin(), exit_nodes_0.end(), asic102) != exit_nodes_0.end())
+    EXPECT_TRUE(std::find(exit_nodes_0.begin(), exit_nodes_0.end(), exit_node0_102) != exit_nodes_0.end())
         << "ASIC 102 should be an exit node";
 
-    // Verify each exit node connects to the correct ASIC
-    const auto& neighbors_100 = exit_graph_0.get_neighbors(asic100);
+    // Verify each exit node connects to the correct exit node
+    const auto& neighbors_100 = exit_graph_0.get_neighbors(exit_node0_100);
     EXPECT_EQ(neighbors_100.size(), 1u) << "ASIC 100 should have 1 connection";
-    EXPECT_EQ(neighbors_100[0], asic200) << "ASIC 100 should connect to ASIC 200";
+    EXPECT_EQ(neighbors_100[0], exit_node1_200) << "ASIC 100 should connect to ASIC 200";
 
-    const auto& neighbors_101 = exit_graph_0.get_neighbors(asic101);
+    const auto& neighbors_101 = exit_graph_0.get_neighbors(exit_node0_101);
     EXPECT_EQ(neighbors_101.size(), 1u) << "ASIC 101 should have 1 connection";
-    EXPECT_EQ(neighbors_101[0], asic201) << "ASIC 101 should connect to ASIC 201";
+    EXPECT_EQ(neighbors_101[0], exit_node1_201) << "ASIC 101 should connect to ASIC 201";
 
-    const auto& neighbors_102 = exit_graph_0.get_neighbors(asic102);
+    const auto& neighbors_102 = exit_graph_0.get_neighbors(exit_node0_102);
     EXPECT_EQ(neighbors_102.size(), 1u) << "ASIC 102 should have 1 connection";
-    EXPECT_EQ(neighbors_102[0], asic202) << "ASIC 102 should connect to ASIC 202";
+    EXPECT_EQ(neighbors_102[0], exit_node1_202) << "ASIC 102 should connect to ASIC 202";
 
     // Verify exit node information for mesh 1
     ASSERT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(physical_mesh1))
@@ -1387,25 +1523,25 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_ExitNodeTracking) {
     const auto& exit_graph_1 = physical_multi_mesh_graph.mesh_exit_node_graphs_.at(physical_mesh1);
     const auto& exit_nodes_1 = exit_graph_1.get_nodes();
     EXPECT_EQ(exit_nodes_1.size(), 3u) << "Mesh 1 should have 3 exit nodes";
-    EXPECT_TRUE(std::find(exit_nodes_1.begin(), exit_nodes_1.end(), asic200) != exit_nodes_1.end())
+    EXPECT_TRUE(std::find(exit_nodes_1.begin(), exit_nodes_1.end(), exit_node1_200) != exit_nodes_1.end())
         << "ASIC 200 should be an exit node";
-    EXPECT_TRUE(std::find(exit_nodes_1.begin(), exit_nodes_1.end(), asic201) != exit_nodes_1.end())
+    EXPECT_TRUE(std::find(exit_nodes_1.begin(), exit_nodes_1.end(), exit_node1_201) != exit_nodes_1.end())
         << "ASIC 201 should be an exit node";
-    EXPECT_TRUE(std::find(exit_nodes_1.begin(), exit_nodes_1.end(), asic202) != exit_nodes_1.end())
+    EXPECT_TRUE(std::find(exit_nodes_1.begin(), exit_nodes_1.end(), exit_node1_202) != exit_nodes_1.end())
         << "ASIC 202 should be an exit node";
 
-    // Verify each exit node connects to the correct ASIC
-    const auto& neighbors_200 = exit_graph_1.get_neighbors(asic200);
+    // Verify each exit node connects to the correct exit node
+    const auto& neighbors_200 = exit_graph_1.get_neighbors(exit_node1_200);
     EXPECT_EQ(neighbors_200.size(), 1u) << "ASIC 200 should have 1 connection";
-    EXPECT_EQ(neighbors_200[0], asic100) << "ASIC 200 should connect to ASIC 100";
+    EXPECT_EQ(neighbors_200[0], exit_node0_100) << "ASIC 200 should connect to ASIC 100";
 
-    const auto& neighbors_201 = exit_graph_1.get_neighbors(asic201);
+    const auto& neighbors_201 = exit_graph_1.get_neighbors(exit_node1_201);
     EXPECT_EQ(neighbors_201.size(), 1u) << "ASIC 201 should have 1 connection";
-    EXPECT_EQ(neighbors_201[0], asic101) << "ASIC 201 should connect to ASIC 101";
+    EXPECT_EQ(neighbors_201[0], exit_node0_101) << "ASIC 201 should connect to ASIC 101";
 
-    const auto& neighbors_202 = exit_graph_1.get_neighbors(asic202);
+    const auto& neighbors_202 = exit_graph_1.get_neighbors(exit_node1_202);
     EXPECT_EQ(neighbors_202.size(), 1u) << "ASIC 202 should have 1 connection";
-    EXPECT_EQ(neighbors_202[0], asic102) << "ASIC 202 should connect to ASIC 102";
+    EXPECT_EQ(neighbors_202[0], exit_node0_102) << "ASIC 202 should connect to ASIC 102";
 }
 
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
@@ -2502,22 +2638,24 @@ TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_TwoMeshes) 
     const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
     const auto& exit_nodes0 = exit_graph0.get_nodes();
     EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node";
-    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_0) != exit_nodes0.end())
+    PhysicalExitNode exit_node0{MeshId{0}, asic0_0};
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0) != exit_nodes0.end())
         << "ASIC 0_0 should be an exit node";
-    const auto& exit_neighbors0 = exit_graph0.get_neighbors(asic0_0);
+    const auto& exit_neighbors0 = exit_graph0.get_neighbors(exit_node0);
     EXPECT_EQ(exit_neighbors0.size(), 1u) << "Exit node should have 1 connection";
-    EXPECT_EQ(exit_neighbors0[0], asic1_0) << "Exit node should connect to ASIC 1_0";
+    PhysicalExitNode exit_node1{MeshId{1}, asic1_0};
+    EXPECT_EQ(exit_neighbors0[0], exit_node1) << "Exit node should connect to ASIC 1_0";
 
     EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
         << "Should have exit node graph for mesh 1";
     const auto& exit_graph1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
     const auto& exit_nodes1 = exit_graph1.get_nodes();
     EXPECT_EQ(exit_nodes1.size(), 1u) << "Mesh 1 should have 1 exit node";
-    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), asic1_0) != exit_nodes1.end())
+    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), exit_node1) != exit_nodes1.end())
         << "ASIC 1_0 should be an exit node";
-    const auto& exit_neighbors1 = exit_graph1.get_neighbors(asic1_0);
+    const auto& exit_neighbors1 = exit_graph1.get_neighbors(exit_node1);
     EXPECT_EQ(exit_neighbors1.size(), 1u) << "Exit node should have 1 connection";
-    EXPECT_EQ(exit_neighbors1[0], asic0_0) << "Exit node should connect to ASIC 0_0";
+    EXPECT_EQ(exit_neighbors1[0], exit_node0) << "Exit node should connect to ASIC 0_0";
 }
 
 TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_MultipleChannels) {
@@ -2570,14 +2708,16 @@ TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_MultipleCha
     const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
     const auto& exit_nodes0 = exit_graph0.get_nodes();
     EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node";
-    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_0) != exit_nodes0.end())
+    PhysicalExitNode exit_node0_0{MeshId{0}, asic0_0};
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_0) != exit_nodes0.end())
         << "ASIC 0_0 should be an exit node";
 
-    const auto& exit_neighbors0 = exit_graph0.get_neighbors(asic0_0);
+    const auto& exit_neighbors0 = exit_graph0.get_neighbors(exit_node0_0);
     EXPECT_EQ(exit_neighbors0.size(), 3u) << "Exit node should have 3 connections (3 channels)";
-    EXPECT_EQ(exit_neighbors0[0], asic1_0) << "All connections should be to ASIC 1_0";
-    EXPECT_EQ(exit_neighbors0[1], asic1_0);
-    EXPECT_EQ(exit_neighbors0[2], asic1_0);
+    PhysicalExitNode exit_node1_0{MeshId{1}, asic1_0};
+    EXPECT_EQ(exit_neighbors0[0], exit_node1_0) << "All connections should be to ASIC 1_0";
+    EXPECT_EQ(exit_neighbors0[1], exit_node1_0);
+    EXPECT_EQ(exit_neighbors0[2], exit_node1_0);
 
     // Verify mesh 1 has correct internal structure (3 ASICs)
     const auto& mesh1_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{1});
@@ -2587,14 +2727,14 @@ TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_MultipleCha
     const auto& exit_graph1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
     const auto& exit_nodes1 = exit_graph1.get_nodes();
     EXPECT_EQ(exit_nodes1.size(), 1u) << "Mesh 1 should have 1 exit node";
-    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), asic1_0) != exit_nodes1.end())
+    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), exit_node1_0) != exit_nodes1.end())
         << "ASIC 1_0 should be an exit node";
 
-    const auto& exit_neighbors1 = exit_graph1.get_neighbors(asic1_0);
+    const auto& exit_neighbors1 = exit_graph1.get_neighbors(exit_node1_0);
     EXPECT_EQ(exit_neighbors1.size(), 3u) << "Exit node should have 3 connections (3 channels)";
-    EXPECT_EQ(exit_neighbors1[0], asic0_0) << "All connections should be to ASIC 0_0";
-    EXPECT_EQ(exit_neighbors1[1], asic0_0);
-    EXPECT_EQ(exit_neighbors1[2], asic0_0);
+    EXPECT_EQ(exit_neighbors1[0], exit_node0_0) << "All connections should be to ASIC 0_0";
+    EXPECT_EQ(exit_neighbors1[1], exit_node0_0);
+    EXPECT_EQ(exit_neighbors1[2], exit_node0_0);
 }
 
 TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_ThreeMeshes) {
@@ -2825,19 +2965,23 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_MultipleExitNodes
     const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
     const auto& exit_nodes0 = exit_graph0.get_nodes();
     EXPECT_EQ(exit_nodes0.size(), 2u) << "Mesh 0 should have 2 exit nodes";
-    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_0) != exit_nodes0.end())
+    PhysicalExitNode exit_node0_0{MeshId{0}, asic0_0};
+    PhysicalExitNode exit_node0_4{MeshId{0}, asic0_4};
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_0) != exit_nodes0.end())
         << "ASIC 0_0 should be an exit node";
-    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_4) != exit_nodes0.end())
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_4) != exit_nodes0.end())
         << "ASIC 0_4 should be an exit node";
 
     // Verify exit node connections
-    const auto& neighbors0_0 = exit_graph0.get_neighbors(asic0_0);
+    const auto& neighbors0_0 = exit_graph0.get_neighbors(exit_node0_0);
     EXPECT_EQ(neighbors0_0.size(), 1u) << "ASIC 0_0 should have 1 exit connection";
-    EXPECT_EQ(neighbors0_0[0], asic1_0) << "ASIC 0_0 should connect to ASIC 1_0";
+    PhysicalExitNode exit_node1_0{MeshId{1}, asic1_0};
+    EXPECT_EQ(neighbors0_0[0], exit_node1_0) << "ASIC 0_0 should connect to ASIC 1_0";
 
-    const auto& neighbors0_4 = exit_graph0.get_neighbors(asic0_4);
+    const auto& neighbors0_4 = exit_graph0.get_neighbors(exit_node0_4);
     EXPECT_EQ(neighbors0_4.size(), 1u) << "ASIC 0_4 should have 1 exit connection";
-    EXPECT_EQ(neighbors0_4[0], asic2_0) << "ASIC 0_4 should connect to ASIC 2_0";
+    PhysicalExitNode exit_node2_0{MeshId{2}, asic2_0};
+    EXPECT_EQ(neighbors0_4[0], exit_node2_0) << "ASIC 0_4 should connect to ASIC 2_0";
 
     // Verify mesh 1 has correct internal structure (3 ASICs in chain)
     const auto& mesh1_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{1});
@@ -2848,7 +2992,7 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_MultipleExitNodes
     const auto& exit_graph1 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
     const auto& exit_nodes1 = exit_graph1.get_nodes();
     EXPECT_EQ(exit_nodes1.size(), 1u) << "Mesh 1 should have 1 exit node";
-    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), asic1_0) != exit_nodes1.end())
+    EXPECT_TRUE(std::find(exit_nodes1.begin(), exit_nodes1.end(), exit_node1_0) != exit_nodes1.end())
         << "ASIC 1_0 should be an exit node";
 
     // Verify mesh 2 has correct internal structure (3 ASICs in chain)
@@ -2860,7 +3004,7 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_MultipleExitNodes
     const auto& exit_graph2 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{2});
     const auto& exit_nodes2 = exit_graph2.get_nodes();
     EXPECT_EQ(exit_nodes2.size(), 1u) << "Mesh 2 should have 1 exit node";
-    EXPECT_TRUE(std::find(exit_nodes2.begin(), exit_nodes2.end(), asic2_0) != exit_nodes2.end())
+    EXPECT_TRUE(std::find(exit_nodes2.begin(), exit_nodes2.end(), exit_node2_0) != exit_nodes2.end())
         << "ASIC 2_0 should be an exit node";
 
     // Verify mesh-level connectivity
@@ -2940,22 +3084,29 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_MeshWithOnlyExitN
     const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
     const auto& exit_nodes0 = exit_graph0.get_nodes();
     EXPECT_EQ(exit_nodes0.size(), 5u) << "Mesh 0 should have 5 exit nodes (all ASICs)";
-    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_0) != exit_nodes0.end())
+    PhysicalExitNode exit_node0_0{MeshId{0}, asic0_0};
+    PhysicalExitNode exit_node0_1{MeshId{0}, asic0_1};
+    PhysicalExitNode exit_node0_2{MeshId{0}, asic0_2};
+    PhysicalExitNode exit_node0_3{MeshId{0}, asic0_3};
+    PhysicalExitNode exit_node0_4{MeshId{0}, asic0_4};
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_0) != exit_nodes0.end())
         << "ASIC 0_0 should be an exit node";
-    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_1) != exit_nodes0.end())
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_1) != exit_nodes0.end())
         << "ASIC 0_1 should be an exit node";
-    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_2) != exit_nodes0.end())
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_2) != exit_nodes0.end())
         << "ASIC 0_2 should be an exit node";
-    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_3) != exit_nodes0.end())
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_3) != exit_nodes0.end())
         << "ASIC 0_3 should be an exit node";
-    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0_4) != exit_nodes0.end())
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_4) != exit_nodes0.end())
         << "ASIC 0_4 should be an exit node";
 
     // Verify exit node connections
-    EXPECT_EQ(exit_graph0.get_neighbors(asic0_0).size(), 1u) << "ASIC 0_0 should have 1 exit connection";
-    EXPECT_EQ(exit_graph0.get_neighbors(asic0_0)[0], asic1_0) << "ASIC 0_0 should connect to ASIC 1_0";
-    EXPECT_EQ(exit_graph0.get_neighbors(asic0_1).size(), 1u) << "ASIC 0_1 should have 1 exit connection";
-    EXPECT_EQ(exit_graph0.get_neighbors(asic0_1)[0], asic1_1) << "ASIC 0_1 should connect to ASIC 1_1";
+    PhysicalExitNode exit_node1_0{MeshId{1}, asic1_0};
+    PhysicalExitNode exit_node1_1{MeshId{1}, asic1_1};
+    EXPECT_EQ(exit_graph0.get_neighbors(exit_node0_0).size(), 1u) << "ASIC 0_0 should have 1 exit connection";
+    EXPECT_EQ(exit_graph0.get_neighbors(exit_node0_0)[0], exit_node1_0) << "ASIC 0_0 should connect to ASIC 1_0";
+    EXPECT_EQ(exit_graph0.get_neighbors(exit_node0_1).size(), 1u) << "ASIC 0_1 should have 1 exit connection";
+    EXPECT_EQ(exit_graph0.get_neighbors(exit_node0_1)[0], exit_node1_1) << "ASIC 0_1 should connect to ASIC 1_1";
 
     // Verify mesh 1 has correct internal structure (5 ASICs in chain)
     const auto& mesh1_graph = multi_mesh_graph.mesh_adjacency_graphs_.at(MeshId{1});
@@ -3030,9 +3181,11 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_UnassignedASICs) 
 
     // Verify exit node graph - asic0 should connect to asic1 (intermesh)
     const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
-    const auto& exit_neighbors0 = exit_graph0.get_neighbors(asic0);
+    PhysicalExitNode exit_node0{MeshId{0}, asic0};
+    PhysicalExitNode exit_node1{MeshId{1}, asic1};
+    const auto& exit_neighbors0 = exit_graph0.get_neighbors(exit_node0);
     EXPECT_EQ(exit_neighbors0.size(), 1u) << "ASIC 0 should have 1 exit connection";
-    EXPECT_EQ(exit_neighbors0[0], asic1) << "ASIC 0 should connect to ASIC 1 (not unassigned)";
+    EXPECT_EQ(exit_neighbors0[0], exit_node1) << "ASIC 0 should connect to ASIC 1 (not unassigned)";
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_RingTopology) {
@@ -3152,11 +3305,12 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_StarTopology) {
     const auto& exit_graph0 = multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
     const auto& exit_nodes0 = exit_graph0.get_nodes();
     EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node";
-    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), asic0) != exit_nodes0.end())
+    PhysicalExitNode exit_node0{MeshId{0}, asic0};
+    EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0) != exit_nodes0.end())
         << "ASIC 0 should be the exit node";
 
     // Verify exit node has 3 connections
-    const auto& exit_neighbors0 = exit_graph0.get_neighbors(asic0);
+    const auto& exit_neighbors0 = exit_graph0.get_neighbors(exit_node0);
     EXPECT_EQ(exit_neighbors0.size(), 3u) << "Exit node should have 3 connections";
 }
 
@@ -3169,26 +3323,70 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_InterMeshConnectivity_2x2
     constexpr size_t kFullMeshSize = 9;
     constexpr size_t kAllocatedSize = 2;
 
-    // Create logical meshes: 2x2 grids
-    std::vector<FabricNodeId> logical_nodes_m0;
-    for (uint32_t i = 0; i < kAllocatedSize * kAllocatedSize; ++i) {
-        logical_nodes_m0.push_back(FabricNodeId(MeshId{0}, i));
-    }
-    auto logical_adj_m0 = build_grid_adjacency(logical_nodes_m0, kAllocatedSize, kAllocatedSize);
+    // Create logical meshes: 2x2 grids using MGD to properly capture exit nodes
+    const std::string mgd_textproto = R"proto(
+        # --- Meshes ---------------------------------------------------------------
 
-    std::vector<FabricNodeId> logical_nodes_m1;
-    for (uint32_t i = 0; i < kAllocatedSize * kAllocatedSize; ++i) {
-        logical_nodes_m1.push_back(FabricNodeId(MeshId{1}, i));
-    }
-    auto logical_adj_m1 = build_grid_adjacency(logical_nodes_m1, kAllocatedSize, kAllocatedSize);
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 2, 2 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 1 }
+        }
 
-    LogicalMultiMeshGraph logical_multi_mesh_graph;
-    logical_multi_mesh_graph.mesh_adjacency_graphs_[MeshId{0}] = AdjacencyGraph<FabricNodeId>(logical_adj_m0);
-    logical_multi_mesh_graph.mesh_adjacency_graphs_[MeshId{1}] = AdjacencyGraph<FabricNodeId>(logical_adj_m1);
-    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj_map;
-    logical_mesh_level_adj_map[MeshId{0}] = {MeshId{1}};
-    logical_mesh_level_adj_map[MeshId{1}] = {MeshId{0}};
-    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj_map);
+        # --- Graphs ---------------------------------------------------------------
+
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          # Instances: mesh ids 0,1 (all 2x2)
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+          # Intermesh connection between mesh 0 and mesh 1
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+            channels { count: 1 }
+          }
+          connections {
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
+            nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+            channels { count: 1 }
+          }
+        }
+
+        # --- Instantiation ----------------------------------------------------------
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Create temporary MGD file
+    const std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 15);
+    std::string unique_suffix;
+    for (int i = 0; i < 8; ++i) {
+        unique_suffix += "0123456789abcdef"[dis(gen)];
+    }
+    const std::filesystem::path temp_mgd_path = temp_dir / ("test_intermesh_2x2_" + unique_suffix + ".textproto");
+
+    // Write the MGD content to temporary file
+    {
+        std::ofstream mgd_file(temp_mgd_path);
+        ASSERT_TRUE(mgd_file.is_open()) << "Failed to create temporary MGD file";
+        mgd_file << mgd_textproto;
+    }  // File is closed here
+
+    // Load MeshGraph from the temporary file
+    ::tt::tt_fabric::MeshGraph mesh_graph(temp_mgd_path.string());
+
+    // Clean up temporary file immediately after loading
+    std::filesystem::remove(temp_mgd_path);
+
+    // Build the logical multi-mesh graph from MGD (this properly captures exit nodes)
+    LogicalMultiMeshGraph logical_multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
 
     // Create flattened physical mesh: two 9x9 grids with intermesh connections
     PhysicalAdjacencyMap flat_physical_adj;
@@ -3278,18 +3476,20 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MixedStrictAndRelaxedConn
     //      tt_metal/fabric/topology_mapper_utils.cpp build_logical_multi_mesh_adjacency_graph
     //
     // Expected behavior when implemented:
-    // - Strict mode connections (device-level) should create exit nodes
-    // - Relaxed mode connections (mesh-level) should NOT create exit nodes
+    // - Strict mode connections (device-level) should create fabric node-level exit nodes
+    // - Relaxed mode connections (mesh-level) should create mesh-level exit nodes
     // - Both connection types should be processed correctly in the mapping
     //
     // Test setup for mixed connections:
-    // - Mesh 0 <-> Mesh 1: STRICT mode (device-level, creates exit nodes)
-    // - Mesh 1 <-> Mesh 2: RELAXED mode (mesh-level, no exit nodes)
+    // - Mesh 0 <-> Mesh 1: STRICT mode (device-level, creates fabric node-level exit nodes)
+    // - Mesh 1 <-> Mesh 2: RELAXED mode (mesh-level, creates mesh-level exit nodes)
     //
     // This verifies:
-    // 1. Exit nodes are only created for strict mode connections (mesh 0-1)
-    // 2. Mesh-level connectivity includes both connection types
-    // 3. Mapping succeeds with both types present
+    // 1. Exit nodes are created for both connection types (different levels)
+    // 2. Strict mode creates ExitNode with fabric_node_id set
+    // 3. Relaxed mode creates ExitNode with fabric_node_id nullopt
+    // 4. Mesh-level connectivity includes both connection types
+    // 5. Mapping succeeds with both types present
 
     GTEST_SKIP() << "Mixed STRICT and RELAXED policies not yet supported - validation prevents this";
 
@@ -3375,22 +3575,54 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MixedStrictAndRelaxedConn
     const auto& mesh2_neighbors = logical_multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{2});
     EXPECT_EQ(mesh2_neighbors.size(), 3u) << "Mesh 2 should have 3 connections to mesh 1 (relaxed)";
 
-    // Verify exit nodes are ONLY tracked for strict mode connections (mesh 0-1)
+    // Verify exit nodes are tracked for both strict and relaxed mode connections
     EXPECT_TRUE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{0}))
-        << "Mesh 0 should have exit nodes (strict mode connection)";
+        << "Mesh 0 should have exit nodes (strict mode connection - fabric node-level)";
     EXPECT_TRUE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1}))
-        << "Mesh 1 should have exit nodes (strict mode connection)";
-    EXPECT_FALSE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{2}))
-        << "Mesh 2 should NOT have exit nodes (only relaxed mode connections)";
+        << "Mesh 1 should have exit nodes (strict mode connection - fabric node-level, and relaxed mode - mesh-level)";
+    EXPECT_TRUE(logical_multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{2}))
+        << "Mesh 2 should have exit nodes (relaxed mode connection - mesh-level)";
 
     // Verify exit node details for mesh 0 (strict connection)
     const auto& exit_graph0 = logical_multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{0});
     const auto& exit_nodes0 = exit_graph0.get_nodes();
     EXPECT_EQ(exit_nodes0.size(), 1u) << "Mesh 0 should have 1 exit node (device 1)";
 
-    FabricNodeId exit_node0_1(MeshId{0}, 1);
+    LogicalExitNode exit_node0_1{MeshId{0}, FabricNodeId(MeshId{0}, 1)};
     EXPECT_TRUE(std::find(exit_nodes0.begin(), exit_nodes0.end(), exit_node0_1) != exit_nodes0.end())
         << "Device 1 should be an exit node in mesh 0";
+    // Verify it's a fabric node-level exit node (strict mode)
+    EXPECT_TRUE(exit_node0_1.fabric_node_id.has_value())
+        << "Mesh 0 exit node should be fabric node-level (strict mode)";
+
+    // Verify exit node details for mesh 1 (has both strict and relaxed connections)
+    const auto& exit_graph1 = logical_multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1});
+    const auto& exit_nodes1 = exit_graph1.get_nodes();
+    EXPECT_GT(exit_nodes1.size(), 0u) << "Mesh 1 should have exit nodes";
+
+    // Mesh 1 should have both fabric node-level (strict) and mesh-level (relaxed) exit nodes
+    bool has_fabric_node_level = false;
+    bool has_mesh_level = false;
+    for (const auto& exit_node : exit_nodes1) {
+        if (exit_node.fabric_node_id.has_value()) {
+            has_fabric_node_level = true;
+        } else {
+            has_mesh_level = true;
+        }
+    }
+    EXPECT_TRUE(has_fabric_node_level) << "Mesh 1 should have fabric node-level exit nodes (strict mode)";
+    EXPECT_TRUE(has_mesh_level) << "Mesh 1 should have mesh-level exit nodes (relaxed mode)";
+
+    // Verify exit node details for mesh 2 (relaxed connection - mesh-level only)
+    const auto& exit_graph2 = logical_multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{2});
+    const auto& exit_nodes2 = exit_graph2.get_nodes();
+    EXPECT_GT(exit_nodes2.size(), 0u) << "Mesh 2 should have exit nodes";
+
+    // All exit nodes in mesh 2 should be mesh-level (relaxed mode)
+    for (const auto& exit_node : exit_nodes2) {
+        EXPECT_FALSE(exit_node.fabric_node_id.has_value()) << "Mesh 2 exit nodes should be mesh-level (relaxed mode)";
+        EXPECT_EQ(exit_node.mesh_id, MeshId{2}) << "Exit node mesh_id should match mesh 2";
+    }
 
     // Create physical multi-mesh graph for mapping
     // Physical topology: 3 meshes, each 2x2, with intermesh connections matching logical

@@ -184,6 +184,68 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
 using LogicalMeshNode = MeshId;
 
 /**
+ * @brief Represents a logical exit node that can be at either the mesh level or fabric node level
+ *
+ * Logical exit nodes can represent:
+ * - Mesh-level exit nodes: mesh_id is set, fabric_node_id is empty (represents the entire mesh as an exit point)
+ * - Fabric node-level exit nodes: both mesh_id and fabric_node_id are set (represents a specific fabric node as an exit
+ * point)
+ */
+struct LogicalExitNode {
+    MeshId mesh_id;
+    std::optional<FabricNodeId> fabric_node_id;
+
+    bool operator<(const LogicalExitNode& other) const {
+        if (mesh_id < other.mesh_id) {
+            return true;
+        }
+        if (other.mesh_id < mesh_id) {
+            return false;
+        }
+        // If mesh_ids are equal, compare fabric_node_ids
+        if (!fabric_node_id && !other.fabric_node_id) {
+            return false;  // Both empty, equal
+        }
+        if (!fabric_node_id) {
+            return true;  // This is empty, other is not, so this < other
+        }
+        if (!other.fabric_node_id) {
+            return false;  // Other is empty, this is not, so other < this
+        }
+        return *fabric_node_id < *other.fabric_node_id;
+    }
+
+    bool operator==(const LogicalExitNode& other) const {
+        return mesh_id == other.mesh_id && fabric_node_id == other.fabric_node_id;
+    }
+};
+
+/**
+ * @brief Represents a physical exit node (ASIC that connects to other meshes)
+ *
+ * Physical exit nodes represent ASICs that have intermesh connections.
+ * Each physical exit node has a mesh_id (which mesh it belongs to) and an asic_id (the ASIC identifier).
+ */
+struct PhysicalExitNode {
+    MeshId mesh_id;
+    tt::tt_metal::AsicID asic_id;
+
+    bool operator<(const PhysicalExitNode& other) const {
+        if (mesh_id < other.mesh_id) {
+            return true;
+        }
+        if (other.mesh_id < mesh_id) {
+            return false;
+        }
+        return asic_id < other.asic_id;
+    }
+
+    bool operator==(const PhysicalExitNode& other) const {
+        return mesh_id == other.mesh_id && asic_id == other.asic_id;
+    }
+};
+
+/**
  * @brief Multi-mesh adjacency graph where meshes are nodes
  *
  * Efficient representation that avoids duplicating adjacency graphs:
@@ -202,11 +264,13 @@ struct LogicalMultiMeshGraph {
     AdjacencyGraph<MeshId> mesh_level_graph_;
 
     // Map from MeshId to exit node adjacency graph for that mesh (optional, only populated if specified)
-    // Contains only exit nodes (FabricNodeIds that connect to FabricNodeIds in other meshes) as nodes,
-    // and their connections to FabricNodeIds in other meshes as edges.
+    // Contains exit nodes (LogicalExitNode structs) that can represent either:
+    // - Mesh-level exit nodes (mesh_id set, fabric_node_id empty) - the entire mesh serves as an exit point
+    // - Fabric node-level exit nodes (both mesh_id and fabric_node_id set) - specific fabric nodes serve as exit points
+    // and their connections to exit nodes in other meshes as edges.
     // Multiple channels between the same pair are represented by duplicate entries.
     // Only populated when strict mode intermesh ports are specified.
-    std::map<MeshId, AdjacencyGraph<FabricNodeId>> mesh_exit_node_graphs_;
+    std::map<MeshId, AdjacencyGraph<LogicalExitNode>> mesh_exit_node_graphs_;
 };
 
 /**
@@ -215,13 +279,15 @@ struct LogicalMultiMeshGraph {
  * Creates a LogicalMultiMeshGraph with:
  * - Mesh-level adjacency graph (AdjacencyGraph<MeshId>) representing inter-mesh connectivity
  * - Map of mesh IDs to their internal adjacency graphs (AdjacencyGraph<FabricNodeId>)
- * - Map of mesh IDs to exit node adjacency graphs (AdjacencyGraph<FabricNodeId>), optional
- *   - Only populated when strict mode intermesh ports are specified
- *   - Contains exit nodes (FabricNodeIds that connect to other meshes) and their intermesh connections
+ * - Map of mesh IDs to exit node adjacency graphs (AdjacencyGraph<LogicalExitNode>), optional
+ *   - Populated for both strict mode (requested_intermesh_ports) and relaxed mode (requested_intermesh_connections)
+ *   - Strict mode: Creates fabric node-level exit nodes (LogicalExitNode with mesh_id and fabric_node_id set)
+ *   - Relaxed mode: Creates mesh-level exit nodes (LogicalExitNode with mesh_id only, fabric_node_id is nullopt)
+ *   - Exit nodes and their intermesh connections to other exit nodes
  *
  * The top layer represents inter-mesh connectivity (which meshes connect to which meshes),
  * while the internal graphs represent intra-mesh connectivity (which fabric nodes connect within each mesh).
- * Exit node graphs track which specific logical nodes serve as intermesh connection points (strict mode only).
+ * Exit node graphs track which logical nodes (at mesh or fabric node level) serve as intermesh connection points.
  *
  * @param mesh_graph Reference to the mesh graph object containing fabric topology
  * @return LogicalMultiMeshGraph containing mesh-level graph, internal mesh graphs, and optional exit node graphs
@@ -262,10 +328,11 @@ struct PhysicalMultiMeshGraph {
     AdjacencyGraph<MeshId> mesh_level_graph_;
 
     // Map from MeshId to exit node adjacency graph for that mesh
-    // Contains only exit nodes (ASICs that connect to ASICs in other meshes) as nodes,
-    // and their connections to ASICs in other meshes as edges.
-    // Multiple channels between the same pair are represented by duplicate entries.
-    std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> mesh_exit_node_graphs_;
+    // Contains only exit nodes (PhysicalExitNode structs representing ASICs that connect to ASICs in other meshes) as
+    // nodes, and their connections to PhysicalExitNodes in other meshes as edges. Each PhysicalExitNode includes the
+    // mesh_id (which mesh it belongs to) and asic_id (the ASIC identifier). Multiple channels between the same pair are
+    // represented by duplicate entries.
+    std::map<MeshId, AdjacencyGraph<PhysicalExitNode>> mesh_exit_node_graphs_;
 };
 
 /**
@@ -349,3 +416,35 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
 }  // namespace tt::tt_metal::experimental::tt_fabric
+
+// Formatter for LogicalExitNode to enable fmt::format debugging
+template <>
+struct fmt::formatter<tt::tt_metal::experimental::tt_fabric::LogicalExitNode> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_metal::experimental::tt_fabric::LogicalExitNode& exit_node, format_context& ctx) const
+        -> format_context::iterator {
+        if (exit_node.fabric_node_id.has_value()) {
+            return fmt::format_to(
+                ctx.out(),
+                "LogicalExitNode(mesh_id={}, fabric_node_id={})",
+                exit_node.mesh_id.get(),
+                *exit_node.fabric_node_id);
+        } else {
+            return fmt::format_to(
+                ctx.out(), "LogicalExitNode(mesh_id={}, fabric_node_id=None)", exit_node.mesh_id.get());
+        }
+    }
+};
+
+// Formatter for PhysicalExitNode to enable fmt::format debugging
+template <>
+struct fmt::formatter<tt::tt_metal::experimental::tt_fabric::PhysicalExitNode> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_metal::experimental::tt_fabric::PhysicalExitNode& exit_node, format_context& ctx) const
+        -> format_context::iterator {
+        return fmt::format_to(
+            ctx.out(), "PhysicalExitNode(mesh_id={}, asic_id={})", exit_node.mesh_id.get(), exit_node.asic_id);
+    }
+};

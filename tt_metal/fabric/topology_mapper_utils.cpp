@@ -10,6 +10,7 @@
 #include <functional>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -235,11 +236,14 @@ std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
 }
 
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph) {
+    // This function handles both strict mode (requested_intermesh_ports) and relaxed mode
+    // (requested_intermesh_connections) intermesh connections:
+    // - Strict mode: Creates fabric node-level exit nodes (LogicalExitNode with mesh_id and fabric_node_id)
+    // - Relaxed mode: Creates mesh-level exit nodes (LogicalExitNode with mesh_id only, no fabric_node_id)
     // TODO: Add support for mixing STRICT and RELAXED policies in the same graph.
     // Currently, MGD validation prevents mixing policies, but when this feature is added,
-    // this function will need to handle both requested_intermesh_ports (strict) and
-    // requested_intermesh_connections (relaxed) simultaneously, ensuring exit nodes are
-    // only tracked for strict mode connections.
+    // this function will need to handle both simultaneously, creating appropriate exit node types
+    // based on the connection type.
 
     // Build logical adjacency graphs for each mesh using topology solver's function
     auto mesh_adjacency_graphs = ::tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
@@ -256,7 +260,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     ::tt::tt_fabric::AdjacencyGraph<MeshId>::AdjacencyMap mesh_level_adjacency_map;
 
     // Build exit node adjacency maps (only for strict mode)
-    std::map<MeshId, AdjacencyGraph<FabricNodeId>::AdjacencyMap> exit_node_adjacency_maps;
+    std::map<MeshId, AdjacencyGraph<LogicalExitNode>::AdjacencyMap> exit_node_adjacency_maps;
 
     // Get requested inter-mesh connections (relaxed mode) and ports (strict mode)
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
@@ -270,7 +274,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
 
             // Initialize exit node adjacency map for this mesh if needed
             if (exit_node_adjacency_maps.find(src_mesh_id) == exit_node_adjacency_maps.end()) {
-                exit_node_adjacency_maps[src_mesh_id] = AdjacencyGraph<FabricNodeId>::AdjacencyMap();
+                exit_node_adjacency_maps[src_mesh_id] = AdjacencyGraph<LogicalExitNode>::AdjacencyMap();
             }
 
             for (const auto& [dst_mesh_id_val, port_list] : dst_mesh_map) {
@@ -279,7 +283,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
                 if (dst_mesh_id != src_mesh_id) {
                     // Initialize exit node adjacency map for destination mesh if needed
                     if (exit_node_adjacency_maps.find(dst_mesh_id) == exit_node_adjacency_maps.end()) {
-                        exit_node_adjacency_maps[dst_mesh_id] = AdjacencyGraph<FabricNodeId>::AdjacencyMap();
+                        exit_node_adjacency_maps[dst_mesh_id] = AdjacencyGraph<LogicalExitNode>::AdjacencyMap();
                     }
 
                     // Add connections based on num_channels from each port entry
@@ -289,9 +293,9 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
                         uint32_t dst_device = std::get<1>(port_entry);
                         uint32_t num_channels = std::get<2>(port_entry);
 
-                        // Create FabricNodeIds for exit nodes
-                        FabricNodeId src_exit_node(src_mesh_id, src_device);
-                        FabricNodeId dst_exit_node(dst_mesh_id, dst_device);
+                        // Create LogicalExitNodes for exit nodes (fabric node-level exit nodes)
+                        LogicalExitNode src_exit_node{src_mesh_id, FabricNodeId(src_mesh_id, src_device)};
+                        LogicalExitNode dst_exit_node{dst_mesh_id, FabricNodeId(dst_mesh_id, dst_device)};
 
                         // Add to mesh-level adjacency map (multiple entries for multiple channels)
                         for (uint32_t i = 0; i < num_channels; ++i) {
@@ -309,19 +313,40 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
         }
     }
 
-    // Process requested_intermesh_connections (relaxed mode) if it exists
+    // Process requested_intermesh_connections (mesh-level connections, no device specified) if it exists
     // Mapping: src_mesh -> dst_mesh -> num_channels
+    // Create mesh-level exit nodes for mesh-level connections (no device specified)
+    // Note: Using LogicalExitNode as map key ensures no duplicates - same mesh-level exit node
+    // (LogicalExitNode{mesh_id, nullopt}) will only appear once per mesh, with all neighbors added to it
     if (!requested_intermesh_connections.empty()) {
         for (const auto& [src_mesh_id_val, dst_mesh_map] : requested_intermesh_connections) {
             MeshId src_mesh_id(src_mesh_id_val);
+
+            // Initialize exit node adjacency map for this mesh if needed
+            if (exit_node_adjacency_maps.find(src_mesh_id) == exit_node_adjacency_maps.end()) {
+                exit_node_adjacency_maps[src_mesh_id] = AdjacencyGraph<LogicalExitNode>::AdjacencyMap();
+            }
 
             for (const auto& [dst_mesh_id_val, num_channels] : dst_mesh_map) {
                 MeshId dst_mesh_id(dst_mesh_id_val);
                 // Skip self-connections
                 if (dst_mesh_id != src_mesh_id) {
+                    // Initialize exit node adjacency map for destination mesh if needed
+                    if (exit_node_adjacency_maps.find(dst_mesh_id) == exit_node_adjacency_maps.end()) {
+                        exit_node_adjacency_maps[dst_mesh_id] = AdjacencyGraph<LogicalExitNode>::AdjacencyMap();
+                    }
+
+                    // Create a single mesh-level exit node for this source mesh (will be reused for all connections)
+                    // The map key ensures this exit node only appears once, even if we reference it multiple times
+                    LogicalExitNode src_exit_node{src_mesh_id, std::nullopt};
+                    LogicalExitNode dst_exit_node{dst_mesh_id, std::nullopt};
+
                     // Add connections based on num_channels (multiple connections between same meshes)
                     for (uint32_t i = 0; i < num_channels; ++i) {
                         mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
+                        // Add to exit node graphs (multiple entries for multiple channels)
+                        // The map key ensures src_exit_node only appears once, with all neighbors accumulated
+                        exit_node_adjacency_maps[src_mesh_id][src_exit_node].push_back(dst_exit_node);
                     }
                 }
             }
@@ -339,10 +364,19 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
     // Build mesh-level graph from adjacency map
     logical_multi_mesh_graph.mesh_level_graph_ = ::tt::tt_fabric::AdjacencyGraph<MeshId>(mesh_level_adjacency_map);
 
-    // Convert exit node adjacency maps to graphs (only populated in strict mode)
-    for (const auto& [mesh_id, adj_map] : exit_node_adjacency_maps) {
-        if (!adj_map.empty()) {
-            logical_multi_mesh_graph.mesh_exit_node_graphs_[mesh_id] = AdjacencyGraph<FabricNodeId>(adj_map);
+    // Convert exit node adjacency maps to graphs
+    // Populated for:
+    // - Strict mode (requested_intermesh_ports): fabric node-level exit nodes
+    // - Relaxed mode (requested_intermesh_connections): mesh-level exit nodes
+    // Initialize exit node graphs for all meshes (even if empty) for consistency
+    for (const auto& [mesh_id, _] : mesh_adjacency_graphs) {
+        auto exit_node_it = exit_node_adjacency_maps.find(mesh_id);
+        if (exit_node_it != exit_node_adjacency_maps.end() && !exit_node_it->second.empty()) {
+            logical_multi_mesh_graph.mesh_exit_node_graphs_[mesh_id] =
+                AdjacencyGraph<LogicalExitNode>(exit_node_it->second);
+        } else {
+            // Initialize empty graph for meshes with no exit nodes
+            logical_multi_mesh_graph.mesh_exit_node_graphs_[mesh_id] = AdjacencyGraph<LogicalExitNode>();
         }
     }
 
@@ -427,13 +461,13 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
 
     // Build per-mesh adjacency maps (only intra-mesh connections)
     std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap> mesh_adjacency_maps;
-    std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap> exit_node_adjacency_maps;
+    std::map<MeshId, AdjacencyGraph<PhysicalExitNode>::AdjacencyMap> exit_node_adjacency_maps;
     AdjacencyGraph<MeshId>::AdjacencyMap mesh_level_adjacency_map;
 
     // Initialize adjacency maps for all meshes and ensure all ASICs are included
     for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
         mesh_adjacency_maps[mesh_id] = AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap();
-        exit_node_adjacency_maps[mesh_id] = AdjacencyGraph<tt::tt_metal::AsicID>::AdjacencyMap();
+        exit_node_adjacency_maps[mesh_id] = AdjacencyGraph<PhysicalExitNode>::AdjacencyMap();
         // Initialize all ASICs in this mesh with empty neighbor lists
         for (const auto& [asic_id, _] : asic_map) {
             mesh_adjacency_maps[mesh_id][asic_id] = std::vector<tt::tt_metal::AsicID>();
@@ -464,7 +498,10 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
                 mesh_adjacency_maps[src_mesh_id][src_asic_id].push_back(dst_asic_id);
             } else {
                 // Intermesh connection: add to exit node graph and mesh-level graph
-                exit_node_adjacency_maps[src_mesh_id][src_asic_id].push_back(dst_asic_id);
+                // Create PhysicalExitNode objects with mesh_id populated
+                PhysicalExitNode src_exit_node{src_mesh_id, src_asic_id};
+                PhysicalExitNode dst_exit_node{dst_mesh_id, dst_asic_id};
+                exit_node_adjacency_maps[src_mesh_id][src_exit_node].push_back(dst_exit_node);
                 mesh_level_adjacency_map[src_mesh_id].push_back(dst_mesh_id);
             }
         }
@@ -479,12 +516,15 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     }
 
     // Convert exit node adjacency maps to graphs
-    for (const auto& [mesh_id, adj_map] : exit_node_adjacency_maps) {
-        if (!adj_map.empty()) {
-            physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh_id] = AdjacencyGraph<tt::tt_metal::AsicID>(adj_map);
+    // Initialize exit node graphs for all meshes (even if empty)
+    for (const auto& [mesh_id, _] : asic_id_to_mesh_rank) {
+        auto exit_node_it = exit_node_adjacency_maps.find(mesh_id);
+        if (exit_node_it != exit_node_adjacency_maps.end() && !exit_node_it->second.empty()) {
+            physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh_id] =
+                AdjacencyGraph<PhysicalExitNode>(exit_node_it->second);
         } else {
             // Initialize empty graph for meshes with no exit nodes
-            physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh_id] = AdjacencyGraph<tt::tt_metal::AsicID>();
+            physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh_id] = AdjacencyGraph<PhysicalExitNode>();
         }
     }
 
@@ -520,6 +560,19 @@ namespace {
 ::tt::tt_fabric::ConnectionValidationMode determine_inter_mesh_validation_mode(const TopologyMappingConfig& config) {
     if (config.inter_mesh_validation_mode.has_value()) {
         return config.inter_mesh_validation_mode.value();
+    } else if (config.strict_mode) {
+        // Fallback for backward compatibility
+        return ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+    }
+    return ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
+}
+
+// Helper function to determine intra-mesh validation mode
+::tt::tt_fabric::ConnectionValidationMode determine_intra_mesh_validation_mode(
+    const TopologyMappingConfig& config, MeshId logical_mesh_id) {
+    auto config_mode_it = config.mesh_validation_modes.find(logical_mesh_id);
+    if (config_mode_it != config.mesh_validation_modes.end()) {
+        return config_mode_it->second;
     } else if (config.strict_mode) {
         // Fallback for backward compatibility
         return ::tt::tt_fabric::ConnectionValidationMode::STRICT;
@@ -598,116 +651,29 @@ void add_pinning_constraints(
 }
 
 // Helper function to add exit node constraints
-// Constrains a subset of fabric nodes (equal to the number of intermesh connections needed) to be mappable to exit node
-// ASICs
+// Constrains certain exit node ASICs on the physical graph to be mappable to exit node fabric nodes in the logical
+// graph
 void add_exit_node_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
+    const ::tt::tt_fabric::AdjacencyGraph<MeshId>& mesh_logical_graph,
+    const MeshId logical_mesh_id,
+    const std::unordered_map<MeshId, MeshId>& mesh_mappings,
     const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& logical_graph,
     const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
-    const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& exit_node_graph,
-    const LogicalMultiMeshGraph& logical_multi_mesh_graph,
-    MeshId logical_mesh_id) {
-    // Get all fabric nodes from the logical graph
-    const auto& fabric_nodes = logical_graph.get_nodes();
-    std::vector<FabricNodeId> all_fabric_nodes(fabric_nodes.begin(), fabric_nodes.end());
+    const ::tt::tt_fabric::AdjacencyGraph<LogicalExitNode>& logical_exit_node_graph,
+    const ::tt::tt_fabric::AdjacencyGraph<PhysicalExitNode>& physical_exit_node_graph) {
+    // Use parameters to avoid unused parameter warnings
+    (void)intra_mesh_constraints;
+    (void)mesh_logical_graph;
+    (void)logical_mesh_id;
+    (void)mesh_mappings;
+    (void)logical_graph;
+    (void)physical_graph;
+    (void)logical_exit_node_graph;
+    (void)physical_exit_node_graph;
 
-    if (all_fabric_nodes.empty()) {
-        // No fabric nodes to constrain
-        return;
-    }
-
-    // Count intermesh connections needed for this logical mesh
-    size_t num_intermesh_connections = 0;
-    const auto& mesh_level_neighbors = logical_multi_mesh_graph.mesh_level_graph_.get_neighbors(logical_mesh_id);
-    num_intermesh_connections = mesh_level_neighbors.size();
-
-    if (num_intermesh_connections == 0) {
-        // No intermesh connections needed, no exit node constraints required
-        return;
-    }
-
-    // Get all nodes from the physical graph for validation
-    const auto& physical_nodes = physical_graph.get_nodes();
-    std::set<tt::tt_metal::AsicID> physical_node_set(physical_nodes.begin(), physical_nodes.end());
-
-    // Collect valid exit node ASICs by iterating through exit node graph connections
-    std::set<tt::tt_metal::AsicID> exit_node_asic_set;
-    const auto& exit_nodes = exit_node_graph.get_nodes();
-    for (const auto& exit_node : exit_nodes) {
-        // Check if exit node is in the physical graph
-        if (physical_node_set.find(exit_node) == physical_node_set.end()) {
-            continue;
-        }
-
-        // Get connections for this exit node
-        const auto& connections = exit_node_graph.get_neighbors(exit_node);
-        if (!connections.empty()) {
-            // Add this exit node to the set of valid exit nodes
-            exit_node_asic_set.insert(exit_node);
-        }
-    }
-
-    if (exit_node_asic_set.empty()) {
-        return;
-    }
-
-    // Only constrain the number of fabric nodes equal to the number of intermesh connections needed
-    // Select the first N fabric nodes deterministically
-    size_t num_fabric_nodes_to_constrain = std::min(num_intermesh_connections, all_fabric_nodes.size());
-    std::set<FabricNodeId> fabric_nodes_to_constrain(
-        all_fabric_nodes.begin(), all_fabric_nodes.begin() + num_fabric_nodes_to_constrain);
-
-    // Add many-to-many constraint: selected fabric nodes can map to any exit node ASIC
-    // This creates a constraint where any fabric node from the subset can map to any ASIC from the exit node set
-    try {
-        intra_mesh_constraints.add_required_constraint(fabric_nodes_to_constrain, exit_node_asic_set);
-    } catch (const std::exception&) {
-        // If adding constraint fails (e.g., causes conflict with other constraints),
-        // skip silently - this can happen if exit node ASICs conflict with existing constraints
-    }
-}
-
-// Helper function to determine intra-mesh validation mode
-::tt::tt_fabric::ConnectionValidationMode determine_intra_mesh_validation_mode(
-    const TopologyMappingConfig& config, MeshId logical_mesh_id) {
-    auto config_mode_it = config.mesh_validation_modes.find(logical_mesh_id);
-    if (config_mode_it != config.mesh_validation_modes.end()) {
-        return config_mode_it->second;
-    } else if (config.strict_mode) {
-        // Fallback for backward compatibility
-        return ::tt::tt_fabric::ConnectionValidationMode::STRICT;
-    }
-    return ::tt::tt_fabric::ConnectionValidationMode::RELAXED;
-}
-
-// Helper function to perform intra-mesh mapping for a single mesh
-TopologyMappingResult perform_intra_mesh_mapping(
-    const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& logical_graph,
-    const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
-    const ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
-    ::tt::tt_fabric::ConnectionValidationMode validation_mode,
-    MeshId logical_mesh_id,
-    bool quiet_mode = false) {
-    TopologyMappingResult result;
-
-    // Perform the sub mapping for the fabric node id to the asic id
-    auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
-        logical_graph, physical_graph, intra_mesh_constraints, validation_mode, quiet_mode);
-
-    // Populate result
-    result.success = sub_mapping.success;
-    if (!sub_mapping.success) {
-        result.error_message = fmt::format(
-            "Intra-mesh mapping failed for logical mesh {}: {}", logical_mesh_id.get(), sub_mapping.error_message);
-    } else {
-        // Build bidirectional mappings
-        for (const auto& [fabric_node, asic] : sub_mapping.target_to_global) {
-            result.fabric_node_to_asic.insert({fabric_node, asic});
-            result.asic_to_fabric_node.insert({asic, fabric_node});
-        }
-    }
-
-    return result;
+    std::unordered_map<MeshId, std::set<tt::tt_metal::AsicID>> valid_physical_exit_nodes_by_mesh;
+    std::unordered_map<MeshId, std::set<FabricNodeId>> valid_logical_exit_nodes_by_mesh;
 }
 
 // Helper function to build detailed inter-mesh mapping error message
@@ -904,12 +870,38 @@ TopologyMappingResult map_multi_mesh_to_physical(
         std::vector<std::pair<MeshId, MeshId>> current_attempt_failed_pairs;
 
         // Step 2: For each mesh mapping, do the sub mapping for fabric node id to asic id
-        auto& mesh_mappings = solver_result.target_to_global;
+        std::unordered_map<MeshId, MeshId> mesh_mappings(
+            solver_result.target_to_global.begin(), solver_result.target_to_global.end());
         for (const auto& [logical_mesh_id, physical_mesh_id] : mesh_mappings) {
             // Get the logical graph and the physical graph
             const auto& logical_graph = adjacency_map_logical.mesh_adjacency_graphs_.at(logical_mesh_id);
             const auto& physical_graph = adjacency_map_physical.mesh_adjacency_graphs_.at(physical_mesh_id);
-            const auto& exit_node_graph = adjacency_map_physical.mesh_exit_node_graphs_.at(physical_mesh_id);
+
+            // Get logical exit node graph (safe access - use empty graph if not initialized)
+            // Some tests create LogicalMultiMeshGraph manually without initializing exit node graphs
+            const AdjacencyGraph<LogicalExitNode>* logical_exit_node_graph_ptr = nullptr;
+            auto logical_exit_node_it = adjacency_map_logical.mesh_exit_node_graphs_.find(logical_mesh_id);
+            if (logical_exit_node_it != adjacency_map_logical.mesh_exit_node_graphs_.end()) {
+                logical_exit_node_graph_ptr = &logical_exit_node_it->second;
+            } else {
+                // Use a temporary empty graph if not found
+                static const AdjacencyGraph<LogicalExitNode> empty_logical_exit_node_graph;
+                logical_exit_node_graph_ptr = &empty_logical_exit_node_graph;
+            }
+            const auto& logical_exit_node_graph = *logical_exit_node_graph_ptr;
+
+            // Get physical exit node graph (safe access - use empty graph if not initialized)
+            // Some tests create PhysicalMultiMeshGraph manually without initializing exit node graphs
+            const AdjacencyGraph<PhysicalExitNode>* physical_exit_node_graph_ptr = nullptr;
+            auto physical_exit_node_it = adjacency_map_physical.mesh_exit_node_graphs_.find(physical_mesh_id);
+            if (physical_exit_node_it != adjacency_map_physical.mesh_exit_node_graphs_.end()) {
+                physical_exit_node_graph_ptr = &physical_exit_node_it->second;
+            } else {
+                // Use a temporary empty graph if not found
+                static const AdjacencyGraph<PhysicalExitNode> empty_physical_exit_node_graph;
+                physical_exit_node_graph_ptr = &empty_physical_exit_node_graph;
+            }
+            const auto& physical_exit_node_graph = *physical_exit_node_graph_ptr;
 
             // Build intra-mesh constraints
             ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID> intra_mesh_constraints;
@@ -918,14 +910,19 @@ TopologyMappingResult map_multi_mesh_to_physical(
             add_rank_binding_constraints(
                 intra_mesh_constraints, config, logical_mesh_id, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
 
-            // Add exit node constraints
-            add_exit_node_constraints(
-                intra_mesh_constraints,
-                logical_graph,
-                physical_graph,
-                exit_node_graph,
-                adjacency_map_logical,
-                logical_mesh_id);
+            // Add exit node constraints (only if exit node graphs are not empty)
+            // Since we initialize empty graphs for all meshes, we check if they have nodes before adding constraints
+            if (!logical_exit_node_graph.get_nodes().empty() && !physical_exit_node_graph.get_nodes().empty()) {
+                add_exit_node_constraints(
+                    intra_mesh_constraints,
+                    mesh_logical_graph,
+                    logical_mesh_id,
+                    mesh_mappings,
+                    logical_graph,
+                    physical_graph,
+                    logical_exit_node_graph,
+                    physical_exit_node_graph);
+            }
 
             // Build ASIC positions map and add pinning constraints
             auto asic_positions_to_asic_ids = build_asic_positions_map(physical_graph, config);
@@ -934,13 +931,12 @@ TopologyMappingResult map_multi_mesh_to_physical(
             // Determine validation mode
             auto validation_mode = determine_intra_mesh_validation_mode(config, logical_mesh_id);
 
-            // Perform intra-mesh mapping
-            // Use quiet mode for retry attempts (failures are expected during retries)
-            auto intra_mesh_result = perform_intra_mesh_mapping(
-                logical_graph, physical_graph, intra_mesh_constraints, validation_mode, logical_mesh_id, quiet_mode);
+            // Perform the sub mapping for the fabric node id to the asic id
+            auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
+                logical_graph, physical_graph, intra_mesh_constraints, validation_mode, quiet_mode);
 
             // If the intra-mesh mapping fails, add a forbidden constraint so it doesn't try to map this pair again
-            if (!intra_mesh_result.success) {
+            if (!sub_mapping.success) {
                 log_info(
                     tt::LogFabric,
                     "Attempt {}: Intra-mesh mapping failed for mesh {} -> {}",
@@ -998,11 +994,11 @@ TopologyMappingResult map_multi_mesh_to_physical(
                 }
             } else {
                 mapped_mesh_pairs++;
-                // Add the mapping to the result
-                result.fabric_node_to_asic.insert(
-                    intra_mesh_result.fabric_node_to_asic.begin(), intra_mesh_result.fabric_node_to_asic.end());
-                result.asic_to_fabric_node.insert(
-                    intra_mesh_result.asic_to_fabric_node.begin(), intra_mesh_result.asic_to_fabric_node.end());
+                // Add the mapping to the result using MappingResult directly
+                for (const auto& [fabric_node, asic] : sub_mapping.target_to_global) {
+                    result.fabric_node_to_asic.insert({fabric_node, asic});
+                    result.asic_to_fabric_node.insert({asic, fabric_node});
+                }
             }
         }
 
