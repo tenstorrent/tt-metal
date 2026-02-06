@@ -293,7 +293,7 @@ static Tensor reduce_impl(
         } else if constexpr (reduce_type == ReduceType::Mean) {
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
-                tt::tt_metal::ReduceOpMath::SUM,
+                tt::tt_metal::ReduceOpMath::AVG,
                 reduce_op_dim,
                 scalar / reduced_volume,
                 memory_config,

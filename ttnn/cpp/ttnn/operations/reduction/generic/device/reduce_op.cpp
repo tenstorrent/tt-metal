@@ -21,7 +21,6 @@ std::map<std::string, std::string> get_defines(
     tt::tt_metal::ReduceOpMath reduce_op, tt::tt_metal::ReduceOpDim reduce_dim) {
     std::map<std::string, std::string> defines;
     // TOOD(AP): need a sync with Reduce::Max from HLK headers
-    bool do_max = reduce_op == tt::tt_metal::ReduceOpMath::MAX;
     std::string reduce_dim_str;
     switch (reduce_dim) {
         case tt::tt_metal::ReduceOpDim::W: reduce_dim_str = "ReduceDim::REDUCE_ROW"; break;
@@ -29,9 +28,14 @@ std::map<std::string, std::string> get_defines(
         case tt::tt_metal::ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
         default: TT_THROW("Invalid reduce_op!");
     }
-    defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
+    switch (reduce_op) {
+        case tt::tt_metal::ReduceOpMath::MAX: defines["REDUCE_OP"] = "PoolType::MAX"; break;
+        case tt::tt_metal::ReduceOpMath::AVG: defines["REDUCE_OP"] = "PoolType::AVG"; break;
+        default: defines["REDUCE_OP"] = "PoolType::SUM"; break;
+    }
     defines["REDUCE_DIM"] = reduce_dim_str;
-    if (reduce_dim == tt::tt_metal::ReduceOpDim::W && reduce_op == tt::tt_metal::ReduceOpMath::SUM) {
+    if (reduce_dim == tt::tt_metal::ReduceOpDim::W &&
+        (reduce_op == tt::tt_metal::ReduceOpMath::SUM || reduce_op == tt::tt_metal::ReduceOpMath::AVG)) {
         defines["REDUCE_ROW_SUM_VIA_MM"] = "1";
     }
     return defines;
