@@ -192,7 +192,7 @@ TopologyMapper::TopologyMapper(
     mesh_host_rank_coord_ranges_.clear();
     mesh_host_rank_to_mpi_rank_.clear();
     initialize_chip_topology_mapping_map();
-    build_mapping();
+    build_mapping(cluster);
 }
 
 // Removed bus-id pinning constructor
@@ -215,7 +215,7 @@ TopologyMapper::TopologyMapper(
     mesh_host_rank_coord_ranges_.clear();
     mesh_host_rank_to_mpi_rank_.clear();
     initialize_chip_topology_mapping_map();
-    build_mapping();
+    build_mapping(cluster);
 }
 
 // Constructor that skips discovery and builds mapping directly from provided logical to physical chip mapping
@@ -439,7 +439,7 @@ void TopologyMapper::initialize_chip_topology_mapping_map() {
         tt::LogFabric, "TopologyMapper: Initialized {} chip topology info entries", chip_topology_mapping_.size());
 }
 
-void TopologyMapper::build_mapping() {
+void TopologyMapper::build_mapping(const Cluster& cluster) {
     log_debug(tt::LogFabric, "TopologyMapper: Building mapping between fabric node IDs and physical ASIC IDs");
 
     // Check that this is not a multi-mesh-per-host system not supported by this algorithm
@@ -516,7 +516,7 @@ void TopologyMapper::build_mapping() {
     rebuild_host_rank_structs_from_mapping(asic_id_to_mesh_rank);
 
     // Verify the topology mapping against PSD, rank bindings, and cluster API
-    verify_topology_mapping();
+    verify_topology_mapping(cluster);
 }
 
 std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping()
@@ -1634,7 +1634,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     const MeshId mesh_id{0};
     for (const auto& mesh_shape : mesh_shapes_to_try) {
         auto mesh_graph = MeshGraph::generate_mesh_graph_of_shape(
-            cluster, mesh_shape, fabric_type, reliability_mode, cluster.arch(), number_of_connections);
+            mesh_shape, fabric_type, reliability_mode, cluster.arch(), number_of_connections);
         auto logical_adjacency_matrix = tt::tt_metal::experimental::tt_fabric::build_adjacency_map_logical(mesh_graph);
 
         // Extract adjacency maps for this mesh_id
@@ -1696,10 +1696,9 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     TT_THROW("No possible mesh shape found to match physical adjacency matrix");
 }
 
-void TopologyMapper::verify_topology_mapping() const {
+void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
     log_debug(tt::LogFabric, "TopologyMapper: Verifying topology mapping against PSD and cluster API");
 
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& cluster_unique_chip_ids = cluster.get_unique_chip_ids();
     const auto& my_hostname = physical_system_descriptor_.my_host_name();
 

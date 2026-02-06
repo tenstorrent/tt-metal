@@ -45,7 +45,10 @@ uint32_t compute_max_1d_hops(const std::vector<MeshShape>& mesh_shapes);
 uint32_t compute_max_2d_hops(const std::vector<MeshShape>& mesh_shapes);
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction);
+    const ControlPlane& control_plane,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    RoutingDirection direction);
 
 // Helper: Build adjacency map and discover corners/edges using BFS
 using AdjacencyMap = std::unordered_map<ChipId, std::vector<ChipId>>;

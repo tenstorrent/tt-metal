@@ -324,7 +324,7 @@ private:
      * based on the mesh IDs and fabric chip IDs from the mesh_container, mapping them
      * to the ASIC IDs of the physical descriptor.
      */
-    void build_mapping();
+    void build_mapping(const Cluster& cluster);
 
     /**
      * @brief Initialize chip_topology_mapping_ map with all ASICs from physical system descriptor
@@ -454,7 +454,7 @@ private:
      * - Verifies tray IDs and ASIC locations match the Physical System Descriptor
      * - Ensures physical chip IDs map correctly to ASIC IDs via cluster API for local chips
      */
-    void verify_topology_mapping() const;
+    void verify_topology_mapping(const Cluster& cluster) const;
 
     void print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map) const;
     void print_physical_adjacency_map(const std::map<MeshId, PhysicalAdjacencyMap>& adj_map) const;
