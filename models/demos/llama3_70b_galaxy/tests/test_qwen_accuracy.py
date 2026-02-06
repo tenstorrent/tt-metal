@@ -408,7 +408,7 @@ def test_qwen_model_acc(
             )[0, 0, 0, : model_args.vocab_size]
 
         tt_argmax_token = ttnn.to_torch(
-            tt_out_tok,
+            tt_out_tok[0],
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(3, 1),
