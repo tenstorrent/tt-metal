@@ -36,8 +36,7 @@ void sub_exp_block_bcast_cols_inplace_2x4(
 
     // Initialize operation
     sub_bcast_cols_init_short(in0_cb, in1_cb);
-    // exp_tile_init<true, true, scale_fp32>();
-    exp_packthread_tile_init<true, true, scale_fp32>();  // todo: move outside.
+    // exp_packthread_tile_init<true, true, scale_fp32>();  // todo: move outside.
 
     // Wait for tiles:
     // - in0_cb: cumulative wait since we never pop it
@@ -225,6 +224,7 @@ void sdpa_inner_loop_8x4x16(
     uint32_t q_index_offset = 0;
     uint32_t kt_index_offset = 0;
 
+    exp_packthread_tile_init<true, true, scale_fp32>();  // todo: move outside.
     pack_reconfig_data_format(cb_qkt_im);
     reconfig_data_format(cb_kt_in, cb_q_in);
     cb_reserve_back(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
@@ -275,7 +275,7 @@ void sdpa_inner_loop_8x4x16(
                             subblock_h,
                             in0_block_w);
                         q_index++;
-                        kt_index += Sq_chunk_t;
+                        kt_index += Sk_chunk_t;
                     }
                     // tensix_sync();
                     tile_regs_commit();
@@ -299,10 +299,10 @@ void sdpa_inner_loop_8x4x16(
                 MATH(
                     DPRINT << "Packing " << subblock_h * subblock_w << " tiles to cb_qkt_im for Q[" << q_subblock
                            << "] Kt[" << kt_subblock << "]" << ENDL());
-                cb_push_back(cb_qkt_im, subblock_h * subblock_w);  // todo: fix indexing bug, should work on rows.
             }
             kt_index_offset += subblock_w;
         }
+        cb_push_back(cb_qkt_im, subblock_h * Sk_chunk_t);
 
         // Max reduce
         MATH(DPRINT << "Max reduce for Q[" << q_subblock << ", :]" << ENDL());
