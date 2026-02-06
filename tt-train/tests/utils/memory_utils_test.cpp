@@ -31,6 +31,9 @@ size_t compute_tensor_size(const ttnn::Tensor& tensor) {
 }
 
 TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
+    // Test is skipped with watcher due to the nature of the test.
+    // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
+    // since watcher adds code overhead and uses memory to store its assert messages
     SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
 
@@ -101,6 +104,9 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
 }
 
 TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
+    // Test is skipped with watcher due to the nature of the test.
+    // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
+    // since watcher adds code overhead and uses memory to store its assert messages
     SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
 
@@ -182,6 +188,9 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
 }
 
 TEST_F(MemoryUtilsTest, L1Usage) {
+    // Test is skipped with watcher due to the nature of the test.
+    // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
+    // since watcher adds code overhead and uses memory to store its assert messages
     SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
 
@@ -278,6 +287,9 @@ TEST_F(MemoryUtilsTest, L1Usage) {
 }
 
 TEST_F(MemoryUtilsTest, SnapshotFeature) {
+    // Test is skipped with watcher due to the nature of the test.
+    // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
+    // since watcher adds code overhead and uses memory to store its assert messages
     SKIP_FOR_WATCHER();
     auto* device = &ttml::autograd::ctx().get_device();
     device->disable_and_clear_program_cache();
