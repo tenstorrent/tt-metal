@@ -190,11 +190,6 @@ class RunTimeOptions {
     // If not set, fabric code will use its own default
     std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
 
-    // Fabric profiling settings
-    struct FabricProfilingSettings {
-        bool enable_rx_ch_fwd = false;
-    } fabric_profiling_settings;
-
     // 4-byte aligned: uint32_t, unsigned, int, std::atomic<bool>, enums, std::optional<small types>
     uint32_t profiler_perf_counter_mode = 0;
     uint32_t watcher_debug_delay = 0;
@@ -209,9 +204,14 @@ class RunTimeOptions {
     // Force disables using DMA for reads and writes
     std::atomic<bool> disable_dma_ops = false;
 
-    // 1-byte aligned: bool, uint8_t enums
+    // 1-byte aligned: bool, uint8_t enums, small structs
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
+
+    // Fabric profiling settings
+    struct FabricProfilingSettings {
+        bool enable_rx_ch_fwd = false;
+    } fabric_profiling_settings;
 
     bool is_cache_dir_env_var_set = false;
     bool is_kernel_dir_env_var_set = false;
