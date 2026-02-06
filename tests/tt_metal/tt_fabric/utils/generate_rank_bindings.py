@@ -116,6 +116,18 @@ def generate_supported_rank_bindings():
         2: [4],
         3: [2],
     }
+    # Process Rank ID To Tray ID Mapping for 4x4 + 2x4 + 2x4 (3 mesh) configuration
+    WH_GLX_4X4_2X4_3_MESH_RANK_TO_TRAY_MAPPING = {
+        0: [1, 2],  # 4x4 mesh needs 2 trays (16 devices)
+        1: [3],  # 2x4 mesh needs 1 tray (8 devices)
+        2: [4],  # 2x4 mesh needs 1 tray (8 devices)
+    }
+    # Process Rank ID To Tray ID Mapping for 2x4 + 2x4 + 2x8 (3 mesh) configuration
+    WH_GLX_2X8_2X4_3_MESH_RANK_TO_TRAY_MAPPING = {
+        0: [1],  # 2x4 mesh needs 1 tray (8 devices)
+        1: [3],  # 2x4 mesh needs 1 tray (8 devices)
+        2: [2, 4],  # 2x8 mesh needs 2 trays (16 devices)
+    }
     # Process Rank ID To Tray ID Mapping when spawning 2 processes on a BH Galaxy
     # Trays 1+2 form the top 4x4 half, trays 3+4 form the bottom 4x4 half
     BH_GLX_DUAL_RANK_TO_TRAY_MAPPING = {
@@ -261,6 +273,44 @@ def generate_supported_rank_bindings():
         {
             "rank": 3,
             "mesh_id": 3,
+            "mesh_host_rank": 0,
+        },
+    ]
+
+    # Rank bindings for Tri Mesh Setup: 4x4 + 2x4 + 2x4 (1 process per mesh, 3 meshes)
+    TRI_MESH_4X4_2X4_RANK_BINDINGS = [
+        {
+            "rank": 0,
+            "mesh_id": 0,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 1,
+            "mesh_id": 1,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 2,
+            "mesh_id": 2,
+            "mesh_host_rank": 0,
+        },
+    ]
+
+    # Rank bindings for Tri Mesh Setup: 2x4 + 2x4 + 2x8 (1 process per mesh, 3 meshes)
+    TRI_MESH_2X8_2X4_RANK_BINDINGS = [
+        {
+            "rank": 0,
+            "mesh_id": 0,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 1,
+            "mesh_id": 1,
+            "mesh_host_rank": 0,
+        },
+        {
+            "rank": 2,
+            "mesh_id": 2,
             "mesh_host_rank": 0,
         },
     ]
