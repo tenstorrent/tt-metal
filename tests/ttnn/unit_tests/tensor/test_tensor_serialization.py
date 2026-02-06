@@ -33,7 +33,7 @@ def test_serialization(tmp_path, shape, tt_dtype):
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-    if dtype in {torch.int16, torch.int32}:
+    if dtype in {torch.int16, torch.int32, torch.uint16}:
         torch_tensor = torch.randint(0, 1024, shape, dtype=dtype)
     else:
         torch_tensor = torch.rand(shape, dtype=dtype)
