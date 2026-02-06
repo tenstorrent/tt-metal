@@ -134,6 +134,17 @@ class AllGatherAsyncConfig(OpConfigBase):
 
 
 @dataclass
+class AllBroadcastAsyncConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.all_broadcast_async op"""
+
+    num_links: int | None = 4
+    cluster_axis: int | None = None
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+
+
+@dataclass
 class AllToAllAsyncGenericConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.all_to_all_async_generic op"""
 

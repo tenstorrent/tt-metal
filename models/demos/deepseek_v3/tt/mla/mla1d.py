@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 from pathlib import Path
 from typing import Sequence
 
@@ -16,6 +15,7 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
+    AllBroadcastAsyncConfig,
     AllGatherAsyncConfig,
     AllToAllAsyncGenericConfig,
     ConcatConfig,
@@ -28,13 +28,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     SavedWeight,
     SliceConfig,
 )
-
-optimal_topology = (
-    ttnn.Topology.Ring
-    if ((os.getenv("MESH_DEVICE") == "QUAD") or (os.getenv("USE_TORUS_MODE") is not None))
-    else ttnn.Topology.Linear
-)
-
 from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
     dequantize,
@@ -630,10 +623,8 @@ class MLA1D(AbstractModule):
         )
 
         # WO
-        wo_ag_config = AllGatherAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wo_ag_config = AllBroadcastAsyncConfig(
             cluster_axis=1,
-            dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
@@ -1331,9 +1322,7 @@ class MLA1D(AbstractModule):
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz // 8, num_heads * v_head_dim))
         # All_gather
         v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v_out = ttnn.all_broadcast(
-            v_out, num_links=4, cluster_axis=1, topology=optimal_topology, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        v_out = ttnn.all_broadcast(v_out, **cfg["wo_ag_decode"])
         v_out = ttnn.concat(v_out, dim=2)
         v_out = ttnn.tilize(v_out)
         # 1,1,32,16384 L1 interleaved
