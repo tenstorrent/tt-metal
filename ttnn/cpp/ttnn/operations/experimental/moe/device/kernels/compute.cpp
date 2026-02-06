@@ -159,11 +159,11 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Apply SILU activation and then eltwise multiply
             //---------------------------------------------------------------------
-            // PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-            //             PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
-            //
-            //             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-            //             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
+            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+
+            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
+            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
 
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
@@ -180,8 +180,12 @@ void kernel_main() {
         // Compute in2 @ W2 (in pairs of 4)
         //---------------------------------------------------------------------
         // Initialize pack untilize for row-major output: 4 tiles wide -> 32 rows x 128 datums
+        if (expert_id == 1) {
+            cb_push_back(cb_c2s_out_untilized, 224);
+        }
         pack_untilize_dest_init<4, 20>(cb_c2s_out_untilized);
-        uint32_t out_index = (expert_id & 1) ? 26 : 0;
+
+        uint32_t out_index = (expert_id & 1) ? 0 : 0;
         uint32_t untilize_iter = 0;
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
@@ -226,16 +230,16 @@ void kernel_main() {
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }
 
-            // fill_tile_init();
-            //             fill_tile_int(0, ring_core_id);
-            //             fill_tile_int(1, ring_core_id);
-            //             fill_tile_int(2, ring_core_id);
-            //             fill_tile_int(3, ring_core_id);
+            //             fill_tile_init();
+            //             fill_tile(0, (float) expert_id+1);
+            //             fill_tile(1,(float) expert_id+1);
+            //             fill_tile(2,(float) expert_id+1);
+            //             fill_tile(3, (float) expert_id+1);
 
             tile_regs_commit();
 
             // Reserve space in the output CB for the untilized data
-            cb_reserve_back(cb_c2s_out_untilized, 1);
+            // cb_reserve_back(cb_c2s_out_untilized, 1);
 
             tile_regs_wait();
             // Pack 4 tiles as row-major: 32 rows x 128 datums (32*4 width)
@@ -247,9 +251,13 @@ void kernel_main() {
         cb_reserve_back(cb_c2w_rdy, 1);
         cb_push_back(cb_c2w_rdy, 1);
         // Restore normal packer state after untilize
-    }  // end for (expert_id)
 
-    pack_untilize_uninit(cb_c2s_out_untilized);
+        if (expert_id == 1) {
+            cb_pop_front(cb_c2s_out_untilized, 224);
+            cb_push_back(cb_c2s_out_untilized, 224);
+        }
+        pack_untilize_uninit(cb_c2s_out_untilized);
+    }  // end for (expert_id)
 
     // Drain the pipeline - the last dummy push
     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);

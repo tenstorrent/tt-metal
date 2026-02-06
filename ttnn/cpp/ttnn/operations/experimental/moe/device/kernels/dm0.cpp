@@ -142,6 +142,9 @@ void kernel_main() {
     uint32_t trid_to_issue = 1, trid_to_wait = 1, slot_to_issue = 0;
     bool txns_in_flight = false;
 
+    // uint32_t expert_1_input_l1_addr = get_write_ptr(cb_s2c_in) + 32*7168*2;
+    // tt::data_movement::common::print_bf16_pages(expert_1_input_l1_addr,7168, 1);
+
     // We reserve one to kick start the pipeline, and then it is steady state
     cb_reserve_back(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
