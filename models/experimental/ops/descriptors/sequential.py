@@ -124,6 +124,7 @@ class CBRemapper:
         previous_output_cb: Optional[int] = None,
         target_input_cb: Optional[int] = None,
         shared_cb_mapping: Optional[Dict[int, int]] = None,
+        phantom_cb_indices: Optional[Set[int]] = None,
     ) -> Dict[int, int]:
         """
         Allocate remapped CB indices for a phase.
@@ -138,6 +139,8 @@ class CBRemapper:
             target_input_cb: The original CB index that should receive the chained input
             shared_cb_mapping: Optional mapping of original CB index -> physical CB index
                               to reuse from a previous phase (e.g., for shared gamma/beta/scratch)
+            phantom_cb_indices: CB indices referenced in named args but without descriptors.
+                               Identity-mapped and marked as allocated.
 
         Returns:
             Mapping of original CB index -> remapped CB index
@@ -149,6 +152,11 @@ class CBRemapper:
             for original_idx in phase.cb_info.keys():
                 remapping[original_idx] = original_idx
                 self.allocated.add(original_idx)
+            # Mark phantom CBs as allocated and add identity mapping
+            if phantom_cb_indices:
+                for phantom_idx in phantom_cb_indices:
+                    self.allocated.add(phantom_idx)
+                    remapping[phantom_idx] = phantom_idx
             self.phase_allocations.append(remapping)
             return remapping
 
@@ -698,6 +706,17 @@ class SequentialChainBuilder:
                 if cb_idx not in READER_FILLED_CB_INDICES:
                     per_phase_original_indices.add(cb_idx)
 
+        # Detect phantom CB indices: those referenced in named args but without descriptors.
+        # These must be identity-mapped to prevent collisions.
+        phantom_cb_indices: Set[int] = set()
+        for phase in self.phases:
+            for kernel_desc in phase.op_descriptor.descriptor.kernels:
+                if hasattr(kernel_desc, "named_compile_time_args"):
+                    for name, value in kernel_desc.named_compile_time_args:
+                        if name.startswith("cb_") and isinstance(value, int):
+                            if value not in phase.cb_info:
+                                phantom_cb_indices.add(value)
+
         # First pass: allocate CB indices for all phases
         phase0_remapping: Dict[int, int] = {}
         for i, phase in enumerate(self.phases):
@@ -724,12 +743,15 @@ class SequentialChainBuilder:
                         shared_cb_mapping[orig_idx] = phys_idx
 
             # Allocate CBs for this phase
+            # For phase 0, also pass phantom CB indices to mark them as allocated
+            phantoms = phantom_cb_indices if i == 0 else None
             remapping = remapper.allocate_for_phase(
                 phase,
                 chain_from_previous=chain_from_prev,
                 previous_output_cb=prev_output_cb,
                 target_input_cb=target_input_cb,
                 shared_cb_mapping=shared_cb_mapping,
+                phantom_cb_indices=phantoms,
             )
             phase.cb_remapping = remapping
 
