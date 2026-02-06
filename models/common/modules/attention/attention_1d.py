@@ -43,7 +43,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
-from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
+from models.common.modules.tt_ccl import TT_CCL, default_topology, get_tt_ccl
 from models.common.tensor_utils import (
     TILE_SIZE,
     get_rot_transformation_mat,
@@ -1438,7 +1438,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
 
     # Auto-detect topology
     if config.topology is None:
-        to_set["topology"] = _default_topology(mesh_device)
+        to_set["topology"] = default_topology(mesh_device)
 
     topology = to_set.get("topology", config.topology)
 
@@ -1958,19 +1958,6 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
 # =============================================================================
 # Helper functions
 # =============================================================================
-
-
-def _default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
-    """Auto-detect CCL topology based on cluster type and device count."""
-    num_devices = mesh_device.get_num_devices()
-    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.GALAXY,
-    ]:
-        return ttnn.Topology.Ring
-    elif num_devices > 1:
-        return ttnn.Topology.Linear
-    return None
 
 
 def _find_largest_divisor(n: int, max_divisor: int = 8) -> int:

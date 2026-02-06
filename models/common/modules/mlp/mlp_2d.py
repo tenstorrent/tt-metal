@@ -23,7 +23,7 @@ from typing import Any, Callable, Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
+from models.common.modules.tt_ccl import TT_CCL, default_topology, get_tt_ccl
 from models.common.tensor_utils import pad_dim_to_size
 from models.common.utility_functions import is_blackhole
 
@@ -633,19 +633,6 @@ class MLP2D(LightweightModule):
 
 
 # todo)) work with the CCL team to find opportunity to simplify this --> e.g., build into TTNN APIs?
-def _default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
-    """Auto-detect CCL topology based on cluster type and device count."""
-    num_devices = mesh_device.get_num_devices()
-    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.GALAXY,
-    ]:
-        # NOTE: we always want to do ring if it is available
-        return ttnn.Topology.Ring
-    elif num_devices > 1:
-        # NOTE: this should be a fallback when the ring is not available
-        return ttnn.Topology.Linear
-    return None
 
 
 def _compute_kernel_config_hifi2_fp16() -> ttnn.WormholeComputeKernelConfig:
@@ -703,7 +690,7 @@ def _resolve_mlp2d_config(config: MLP2DConfig) -> MLP2DConfig:
     # Auto-detect topology
     topology = config.topology
     if config.topology is None:
-        topology = _default_topology(mesh_device)
+        topology = default_topology(mesh_device)
         to_set["topology"] = topology
 
     # --- Phase 2: Dtypes and Tunings ---

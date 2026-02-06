@@ -24,7 +24,7 @@ from typing import Callable, Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
+from models.common.modules.tt_ccl import TT_CCL, default_topology, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim, pad_dim_to_size
 from models.common.utility_functions import is_blackhole
 
@@ -585,20 +585,6 @@ class MLP1D(LightweightModule):
 # =============================================================================
 
 
-# todo)) work with the CCL team to find opportunity to simplify this --> e.g., build into TTNN APIs?
-def _default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
-    """Auto-detect CCL topology based on cluster type and device count."""
-    num_devices = mesh_device.get_num_devices()
-    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.GALAXY,
-    ]:
-        return ttnn.Topology.Ring
-    elif num_devices > 1:
-        return ttnn.Topology.Linear
-    return None
-
-
 # =============================================================================
 # Config helper functions (adapted from TTTv1 model_config.py)
 # =============================================================================
@@ -792,7 +778,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
     # Auto-detect topology
     topology = config.topology
     if config.topology is None:
-        topology = _default_topology(mesh_device)
+        topology = default_topology(mesh_device)
         to_set["topology"] = topology
 
     # --- Phase 2: Derived fields ---

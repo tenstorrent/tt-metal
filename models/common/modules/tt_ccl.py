@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional
+
 import ttnn
 
 # =============================================================================
@@ -93,6 +95,27 @@ class TT_CCL:
     def get_num_links(self, cluster_axis=None):
         """Get the number of available Ethernet links for CCL operations on this mesh device."""
         return get_num_links(self.mesh_device, cluster_axis)
+
+
+# =============================================================================
+# Topology auto-detection
+# =============================================================================
+
+
+# todo)) work with the CCL team to find opportunity to simplify this --> e.g., build into TTNN APIs?
+def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
+    """Auto-detect CCL topology based on cluster type and device count."""
+    num_devices = mesh_device.get_num_devices()
+    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
+        ttnn.cluster.ClusterType.T3K,
+        ttnn.cluster.ClusterType.GALAXY,
+    ]:
+        # NOTE: we always want to do ring if it is available
+        return ttnn.Topology.Ring
+    elif num_devices > 1:
+        # NOTE: this should be a fallback when the ring is not available
+        return ttnn.Topology.Linear
+    return None
 
 
 # =============================================================================
