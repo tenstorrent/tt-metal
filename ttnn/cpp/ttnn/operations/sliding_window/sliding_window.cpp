@@ -473,6 +473,10 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
         auto [in_start, in_end] = in_shard;
         max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, in_end - in_start + 1);
     }
+
+    TT_FATAL(
+        max_out_nsticks_per_core < std::numeric_limits<uint16_t>::max(),
+        "Calculated max_out_nsticks_per_core exceeds uint16_t limit");
     return max_out_nsticks_per_core;
 }
 
