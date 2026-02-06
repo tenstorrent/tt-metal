@@ -53,7 +53,7 @@ def run_sdpa_noncausal(
         sk = sq
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=[11, 10],
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -128,7 +128,7 @@ def run_sdpa_determinism(
         sk = sq
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=[11, 10],
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -363,9 +363,9 @@ def test_sdpa_create_perf_table(b, nh, s, d):
     Sweep chunk sizes for a given SDPA shape and print a performance table.
     Shows the best chunk size configurations ranked by kernel duration.
     """
-    # NOTE: Hardcoded for P150 Blackhole (10x13 grid = 130 cores)
+    # NOTE: Hardcoded for Blackhole (11x10 grid = 110 cores)
     # Cannot query device here as it causes TLB resource contention with subprocess tests
-    num_cores = 130
+    num_cores = 110
 
     subdir = "ttnn_sdpa_performance"
     perf_results = []
