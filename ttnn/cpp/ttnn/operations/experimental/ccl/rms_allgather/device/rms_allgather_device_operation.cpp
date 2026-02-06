@@ -178,52 +178,95 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         shard_spec.shape[1]);
 }
 
-TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
+std::vector<TensorSpec> RMSAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    if (args.inplace) {
-        return input_tensor.tensor_spec();
-    }
 
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output->tensor_spec();
-    }
+    // Compute output tensor spec
+    TensorSpec output_spec = [&]() {
+        if (args.inplace) {
+            return input_tensor.tensor_spec();
+        }
 
-    auto output_shape = input_tensor.logical_shape();
-    auto output_padded_shape = input_tensor.padded_shape();
+        if (tensor_args.preallocated_output.has_value()) {
+            return tensor_args.preallocated_output->tensor_spec();
+        }
 
-    auto output_shard_spec = args.output_mem_config.shard_spec().value();
-    auto input_shard_spec = input_tensor.shard_spec().value();
-    if (output_shard_spec != input_shard_spec) {
-        output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
-    }
+        auto output_shape = input_tensor.logical_shape();
+        auto output_padded_shape = input_tensor.padded_shape();
 
-    auto mem_config = args.output_mem_config;
-    if (!mem_config.shard_spec().has_value()) {
-        mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
-    }
+        auto output_shard_spec = args.output_mem_config.shard_spec().value();
+        auto input_shard_spec = input_tensor.shard_spec().value();
+        if (output_shard_spec != input_shard_spec) {
+            output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
+        }
 
-    return ttnn::TensorSpec(
-        output_shape,
-        TensorLayout::fromPaddedShape(
-            args.dtype.value_or(input_tensor.dtype()),
-            PageConfig(Layout::TILE),
-            mem_config,
+        auto mem_config = args.output_mem_config;
+        if (!mem_config.shard_spec().has_value()) {
+            mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
+        }
+
+        return ttnn::TensorSpec(
             output_shape,
-            output_padded_shape));
+            TensorLayout::fromPaddedShape(
+                args.dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE),
+                mem_config,
+                output_shape,
+                output_padded_shape));
+    }();
+
+    // Compute stats tensor spec (used for all-gather intermediate buffer)
+    TensorSpec stats_spec = [&]() {
+        if (tensor_args.stats.has_value()) {
+            return tensor_args.stats->tensor_spec();
+        }
+
+        // Create stats tensor spec: shape (1, 1, 32, ring_size * TILE_WIDTH)
+        // Stats buffer collects one tile per device in the ring
+        uint32_t stats_width = args.ring_size * TILE_WIDTH;
+        ttnn::Shape stats_shape({1, 1, TILE_HEIGHT, stats_width});
+
+        // Get the first core from input's shard grid for stats placement
+        auto input_shard_spec = input_tensor.shard_spec().value();
+        auto first_core = input_shard_spec.grid.bounding_box().start_coord;
+        CoreRangeSet stats_grid(CoreRange(first_core, first_core));
+
+        ShardSpec stats_shard_spec(stats_grid, {TILE_HEIGHT, stats_width}, ShardOrientation::ROW_MAJOR);
+
+        MemoryConfig stats_mem_config(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, stats_shard_spec);
+
+        return ttnn::TensorSpec(
+            stats_shape,
+            TensorLayout::fromPaddedShape(
+                DataType::BFLOAT16, PageConfig(Layout::TILE), stats_mem_config, stats_shape, stats_shape));
+    }();
+
+    return {output_spec, stats_spec};
 }
 
-Tensor RMSAllGatherDeviceOperation::create_output_tensors(
+std::vector<Tensor> RMSAllGatherDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
-    }
+    auto tensor_specs = compute_output_specs(args, tensor_args);
+    const auto& input_tensor = tensor_args.input;
 
-    if (args.inplace) {
-        return tensor_args.input;
-    }
-    auto output_spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input.device());
+    // Create or use preallocated output tensor
+    ttnn::Tensor output_tensor = [&]() {
+        if (tensor_args.preallocated_output.has_value()) {
+            return tensor_args.preallocated_output.value();
+        }
+        if (args.inplace) {
+            return tensor_args.input;
+        }
+        return create_device_tensor(tensor_specs[0], input_tensor.device());
+    }();
+
+    // Create or use preallocated stats tensor
+    ttnn::Tensor stats_tensor = tensor_args.stats.has_value()
+                                    ? tensor_args.stats.value()
+                                    : create_device_tensor(tensor_specs[1], input_tensor.device());
+
+    return {output_tensor, stats_tensor};
 }
 
 tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
@@ -327,7 +370,10 @@ ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms
         .stats = stats,
         .preallocated_output = persistent_output_tensor};
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    // Launch operation - returns [output_tensor, stats_tensor]
+    // Return only the output tensor (index 0) to the caller
+    auto result = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return result.at(0);
 }
 
 }  // namespace ttnn::prim

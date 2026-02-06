@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 from models.tt_transformers.tt.model_config import determine_device_name
 
@@ -471,14 +473,48 @@ def tt_sharded_distributed_rmsnorm(
         num_buffers_per_channel=2,
     )
 
-    # Run distributed rmsnorm part 2
-    tt_out = ttnn.rms_norm_post_all_gather(
-        inp,
-        epsilon=epsilon,
-        weight=gamma,
-        program_config=ln_sharded_progcfg,
-        stats=tt_stats,
-    )
-    tt_stats.deallocate(True)
+        # Run distributed rmsnorm part 1
+        tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
 
+        # All gather stats
+        tt_stats = ttnn.experimental.all_gather_async(
+            tt_stats,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+            num_links=1,
+            cluster_axis=cluster_axis,
+            topology=ttnn.Topology.Linear,
+            memory_config=ln_sharded_stats_memcfg,
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+
+        # Run distributed rmsnorm part 2
+        tt_out = ttnn.rms_norm_post_all_gather(
+            inp,
+            epsilon=epsilon,
+            weight=gamma,
+            program_config=ln_sharded_progcfg,
+            stats=tt_stats,
+        )
+        tt_stats.deallocate(True)
+    else:
+        tt_out = ttnn.fused_rms_minimal(
+            inp,
+            ln_sharded_progcfg,
+            cluster_axis,
+            tt_ccl.mesh_device,
+            tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis)[0],
+            topology=ttnn.Topology.Linear,
+            residual_input_tensor=None,
+            num_links=1,
+            epsilon=epsilon,
+            weight=gamma,
+            memory_config=output_mem_config,
+            stats=stats_buffer,  # Pre-allocated stats buffer for intermediate all-gather
+            use_noc1_only=False,
+        )
     return tt_out

@@ -145,6 +145,12 @@ class Transformer(LightweightModule):
         else:
             self.sampling = None
 
+    def init_decode_buffers(self):
+        """Initialize L1 buffers needed for decode mode.
+        Must be called after prefill warmup but before decode trace capture."""
+        # Initialize shared buffers in TT_CCL (used by all DistributedNorm instances)
+        self.tt_ccl.init_decode_buffers()
+
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
