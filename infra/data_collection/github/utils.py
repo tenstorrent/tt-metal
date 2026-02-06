@@ -349,11 +349,15 @@ def get_job_rows_from_github_info(workflow_outputs_dir, github_jobs_json, github
     return [x for x in job_rows if x is not None]
 
 
+def _get_repo_root() -> pathlib.Path:
+    """Return the repository root directory (parent of infra/)."""
+    return pathlib.Path(__file__).resolve().parents[3]
+
+
 def get_github_partial_benchmark_data_filenames():
     logger.info("We are assuming generated/benchmark_data exists from previous passing test")
 
-    current_utils_path = pathlib.Path(__file__)
-    benchmark_data_dir = current_utils_path.parent.parent.parent.parent / "generated/benchmark_data"
+    benchmark_data_dir = _get_repo_root() / "generated/benchmark_data"
     assert benchmark_data_dir.exists()
     assert benchmark_data_dir.is_dir()
 
@@ -395,8 +399,7 @@ def _get_device_type_from_runner_environment() -> str:
         return "unknown"
 
     # Not tt-ubuntu: check .github/sku_config.yaml for arch from runs_on labels matching runner
-    repo_root = pathlib.Path(__file__).parent.parent.parent.parent
-    sku_config_path = repo_root / ".github" / "sku_config.yaml"
+    sku_config_path = _get_repo_root() / ".github" / "sku_config.yaml"
     if sku_config_path.exists():
         with open(sku_config_path) as f:
             config = yaml.safe_load(f)
@@ -411,6 +414,8 @@ def _get_device_type_from_runner_environment() -> str:
                     if label in runner_name or "blackhole" in runner_name.lower():
                         return "blackhole"
 
+    # Failed to parse from CIv2 runner name and failed to parse from sku_config:
+    # Fallback to using ARCH_NAME env var
     if "ARCH_NAME" in os.environ:
         arch = os.environ["ARCH_NAME"]
         if arch in ("wormhole_b0", "blackhole"):
