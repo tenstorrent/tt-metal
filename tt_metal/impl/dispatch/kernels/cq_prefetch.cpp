@@ -1953,12 +1953,14 @@ uint32_t process_relay_linear_packed_h_cmd(uint32_t cmd_ptr, uint32_t& downstrea
     CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr* sub_cmd = (CQPrefetchRelayLinearPackedSubCmd tt_l1_ptr*)(l1_cache);
     uint64_t current_addr = sub_cmd->addr;
     uint32_t current_length = sub_cmd->length;
-    uint32_t amt_to_read = (scratch_db_half_size - start_offset > total_length) ? total_length : scratch_db_half_size - start_offset;
+    uint32_t amt_to_read =
+        (scratch_db_half_size - start_offset > total_length) ? total_length : scratch_db_half_size - start_offset;
     uint32_t amt_read = 0;
 
     while (amt_read < amt_to_read) {
-        uint32_t amt_to_read2 =
-            (scratch_db_half_size - start_offset - amt_read > current_length) ? current_length : scratch_db_half_size - start_offset - amt_read;
+        uint32_t amt_to_read2 = (scratch_db_half_size - start_offset - amt_read > current_length)
+                                    ? current_length
+                                    : scratch_db_half_size - start_offset - amt_read;
         noc_read_64bit_any_len<true>(noc_xy_addr, current_addr, scratch_read_addr, amt_to_read2);
         scratch_read_addr += amt_to_read2;
         amt_read += amt_to_read2;
@@ -1999,8 +2001,9 @@ uint32_t process_relay_linear_packed_h_cmd(uint32_t cmd_ptr, uint32_t& downstrea
             amt_read = 0;
             amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
             while (amt_read < amt_to_read) {
-                uint32_t amt_to_read2 =
-                    (scratch_db_half_size - amt_read > current_length) ? current_length : scratch_db_half_size - amt_read;
+                uint32_t amt_to_read2 = (scratch_db_half_size - amt_read > current_length)
+                                            ? current_length
+                                            : scratch_db_half_size - amt_read;
                 noc_read_64bit_any_len<false>(noc_xy_addr, current_addr, scratch_read_addr, amt_to_read2);
                 scratch_read_addr += amt_to_read2;
                 amt_read += amt_to_read2;
@@ -2030,7 +2033,6 @@ uint32_t process_relay_linear_packed_h_cmd(uint32_t cmd_ptr, uint32_t& downstrea
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     return stride + sizeof(CQPrefetchHToPrefetchDHeader);
-
 }
 
 // This function is only valid when called on the H variant

@@ -1367,12 +1367,15 @@ public:
 
         // Source: L1 on MMIO device worker core (pre-populated with data)
         const CoreCoord first_worker = default_worker_start;
-        const CoreCoord first_virt_worker = mmio_device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
-        const uint32_t src_noc_xy = mmio_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
+        const CoreCoord first_virt_worker =
+            mmio_device_->virtual_core_from_logical_core(first_worker, CoreType::WORKER);
+        const uint32_t src_noc_xy =
+            mmio_device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
 
         // Destination: DRAM bank 0 on remote device
         const uint32_t dest_bank_id = 0;
-        const uint32_t dest_dram_channel = remote_device_->allocator_impl()->get_dram_channel_from_bank_id(dest_bank_id);
+        const uint32_t dest_dram_channel =
+            remote_device_->allocator_impl()->get_dram_channel_from_bank_id(dest_bank_id);
         const CoreCoord dest_dram_physical_core =
             MetalContext::instance()
                 .get_cluster()
@@ -1427,11 +1430,11 @@ public:
 
             HostMemDeviceCommand cmd1(dispatch_cmd_size);
             cmd1.add_dispatch_write_linear<flush_prefetch_, inline_data_>(
-                0,              // num_mcast_dests
-                dst_noc_xy,     // NOC coordinates for DESTINATION (dispatcher writes here)
-                dram_dest_addr, // destination address
-                total_length,   // data size
-                nullptr         // payload data
+                0,               // num_mcast_dests
+                dst_noc_xy,      // NOC coordinates for DESTINATION (dispatcher writes here)
+                dram_dest_addr,  // destination address
+                total_length,    // data size
+                nullptr          // payload data
             );
             commands_per_iteration.push_back(std::move(cmd1));
 
