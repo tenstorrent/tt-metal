@@ -15,13 +15,14 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/send_recv_op_utils.hpp"
-#include "tests/ttnn/unit_tests/gtests/multiprocess/utils/mesh_socket_send_recv.hpp"
-#include "tests/ttnn/unit_tests/gtests/multiprocess/utils/mesh_socket_forward.hpp"
+#include "tt_metal/multihost/socket_pipeline/multiprocess/utils/mesh_socket_send_recv.hpp"
+#include "tt_metal/multihost/socket_pipeline/multiprocess/utils/mesh_socket_forward.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <iomanip>
 
 namespace tt::tt_metal {
 
@@ -407,9 +408,15 @@ TEST_F(FabricSendRecv2x4MigratedFixture, SRTestMigrated) {
         sizeof(uint64_t) * NUM_ITERATIONS,
         tt_cxy_pair(start_device_id, start_core_coord),
         latency_measurement_address);
+    double avg_latency_cycles = 0.0;
     for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
-        std::cout << "Iteration " << i << " latency: " << latencies[i] << std::endl;
+        avg_latency_cycles += static_cast<double>(latencies[i]);
     }
+    avg_latency_cycles /= NUM_ITERATIONS;
+    double avg_latency_us = (avg_latency_cycles / (1.35e9)) * 1e6;
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "Average latency in cycles: " << avg_latency_cycles << std::endl;
+    std::cout << "Average latency in microseconds: " << avg_latency_us << std::endl;
 }
 
 }  // namespace tt::tt_metal

@@ -17,6 +17,7 @@ namespace tt::tt_metal {
 // Optionally uses recv_socket for backward communication
 // latency_measurement_address: L1 address used for credit synchronization and latency measurements
 // num_iterations: number of send/recv iterations the kernel will execute
+// enable_correctness_check: when true, the sender kernel validates received data matches expected values
 void send_async(
     distributed::MeshDevice* mesh_device,
     const Buffer* input_buffer,
@@ -24,6 +25,7 @@ void send_async(
     const distributed::MeshSocket& mesh_socket,
     const std::optional<distributed::MeshSocket>& recv_socket,
     uint32_t latency_measurement_address,
-    uint32_t num_iterations);
+    uint32_t num_iterations,
+    bool enable_correctness_check = false);
 
 }  // namespace tt::tt_metal

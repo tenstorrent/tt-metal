@@ -37,7 +37,8 @@ tt::tt_metal::Program create_send_async_program(
     const tt::tt_metal::distributed::MeshCoordinate& mesh_coordinate,
     distributed::MeshDevice* mesh_device,
     uint32_t latency_measurement_address,
-    uint32_t num_iterations) {
+    uint32_t num_iterations,
+    bool enable_correctness_check) {
     tt::tt_metal::Program program{};
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
@@ -131,12 +132,13 @@ tt::tt_metal::Program create_send_async_program(
         input_page_size,              // input_page_size
         latency_measurement_address,  // credit_address (reused for credit sync and latency measurements)
         num_iterations,               // num_iterations
+        static_cast<uint32_t>(enable_correctness_check),  // enable_correctness_check
     };
     writer_compile_args.insert(writer_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
     auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "tests/ttnn/unit_tests/gtests/multiprocess/utils/kernels/sender_writer.cpp",
+        "tests/tt_metal/multihost/socket_pipeline/multiprocess/utils/kernels/sender_writer.cpp",
         sender_core_coord,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
@@ -186,7 +188,8 @@ void send_async(
     const distributed::MeshSocket& mesh_socket,
     const std::optional<distributed::MeshSocket>& recv_socket,
     uint32_t latency_measurement_address,
-    uint32_t num_iterations) {
+    uint32_t num_iterations,
+    bool enable_correctness_check) {
     // Determine which mesh coordinates need programs based on socket configuration
     // Create programs for all sender device coordinates in the socket configuration
     const auto& socket_connections = mesh_socket.get_config().socket_connection_config;
@@ -208,7 +211,8 @@ void send_async(
                 device_coord,
                 mesh_device,
                 latency_measurement_address,
-                num_iterations);
+                num_iterations,
+                enable_correctness_check);
 
             workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(program));
         }

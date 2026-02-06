@@ -5,8 +5,8 @@
 
 #include "gtest/gtest.h"
 
-#include "tests/ttnn/unit_tests/gtests/multiprocess/utils/mesh_socket_send_recv.hpp"
-#include "tests/ttnn/unit_tests/gtests/multiprocess/utils/mesh_socket_forward.hpp"
+#include "tt_metal/multihost/socket_pipeline/multiprocess/utils/mesh_socket_send_recv.hpp"
+#include "tt_metal/multihost/socket_pipeline/multiprocess/utils/mesh_socket_forward.hpp"
 
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -16,6 +16,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <chrono>
+#include <iomanip>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 
 namespace tt::tt_metal {
@@ -265,15 +266,15 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
     return tt::tt_metal::PhysicalSystemDescriptor(driver, distributed_context, &hal, rtoptions, run_discovery);
 }
 
-// Main benchmark:
+// Main benchmark helper:
 // - Setup the sender, forwarding and receiver sockets across all pipeline stages
 // - Host writes data to the first pipeline stage (14K)
-// - This data is streamed through the pipeline for 1000000 iterations to benchmark steady-state throughput.
+// - This data is streamed through the pipeline for NUM_ITERATIONS iterations to benchmark steady-state throughput.
 // - Sender, Forwarding and Receiver kernels are launched once and loop on device
 // - The final throughput is computed based on the amount of time spent on the last pipeline stage.
 // - This value corresponds to amount of time the receiver spent waiting for data + time spent on the forwarding kernel.
 // - During steady state, this represents the average pipeline stage throughput.
-TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
+void run_closetbox_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_device, bool enable_correctness_check) {
     constexpr uint32_t XFER_SIZE = 14 * 1024;
     constexpr uint32_t NUM_ITERATIONS = 100;
 
@@ -285,7 +286,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     const uint32_t socket_fifo_size = XFER_SIZE * 16;
 
     auto physical_system_descriptor = create_physical_system_descriptor();
-    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device_);
+    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
     auto pipeline_stages = build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord);
 
     const auto my_mesh_id = *distributed_context->rank();
@@ -306,12 +307,12 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             distributed::MeshCoreCoord(sender_coord, logical_coord),
             distributed::MeshCoreCoord(recv_coord, logical_coord));
         auto config = distributed::SocketConfig({connection}, socket_mem_config);
-        return distributed::MeshSocket::create_socket_pair(mesh_device_, mesh_device_, config);
+        return distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, config);
     };
 
     // Helper to run warmup iteration with barrier synchronization
     auto barrier = [&]() {
-        Synchronize(mesh_device_.get(), std::nullopt);
+        Synchronize(mesh_device.get(), std::nullopt);
         distributed_context->barrier();
     };
 
@@ -333,11 +334,11 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     auto latency_measurement_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = latency_measurement_buffer_size},
         latency_measurement_buffer_specs,
-        mesh_device_.get());
+        mesh_device.get());
     // Write 0 to latency measurement buffer (initializes credit/barrier to 0)
     std::vector<uint32_t> latency_init_data(latency_measurement_buffer_size / sizeof(uint32_t), 0);
     distributed::EnqueueWriteMeshBuffer(
-        mesh_device_->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
+        mesh_device->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
 
     const uint32_t latency_measurement_address = latency_measurement_buffer->address();
 
@@ -357,7 +358,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             socket_mem_config,
             distributed_context->rank(),
             distributed::multihost::Rank(downstream_mesh_id));
-        auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
+        auto send_socket = distributed::MeshSocket(mesh_device, send_socket_config);
 
         auto pipeline_end_stage = *(distributed_context->size());
         auto [my_recv, upstream_send] =
@@ -368,7 +369,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             distributed::MeshCoreCoord(my_recv, logical_coord));
         auto recv_socket_config = distributed::SocketConfig(
             {bwd_connection}, socket_mem_config, pipeline_end_rank, distributed_context->rank());
-        auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
+        auto recv_socket = distributed::MeshSocket(mesh_device, recv_socket_config);
 
         auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_recv, start_coord);
 
@@ -383,7 +384,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             .sub_device_id = std::nullopt,
         };
         auto input_mesh_buffer = distributed::MeshBuffer::create(
-            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device_.get());
+            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device.get());
 
         // Initialize buffer with data (arange equivalent: 0, 1, 2, ..., num_elems-1)
         std::vector<uint32_t> host_data(num_elems);
@@ -392,24 +393,25 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         }
 
         // Write data to device buffer
-        distributed::EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_mesh_buffer, host_data, true);
+        distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
 
         // Extract buffer pointer for metal-level operations
         Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
 
         // Launch kernels
         tt::tt_metal::send_async(
-            mesh_device_.get(),
+            mesh_device.get(),
             input_buffer,
             tt::DataFormat::UInt32,
             intermed_send,
             intermed_recv_2,
             latency_measurement_address,
-            NUM_ITERATIONS);
+            NUM_ITERATIONS,
+            enable_correctness_check);
         tt::tt_metal::socket_forward(
-            mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
         tt::tt_metal::socket_forward(
-            mesh_device_.get(), recv_socket, intermed_send_2, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), recv_socket, intermed_send_2, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
     } else {
         auto [my_recv, upstream_send] = get_connecting_coords(pipeline_stages, my_mesh_id, upstream_mesh_id);
 
@@ -421,7 +423,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             socket_mem_config,
             distributed::multihost::Rank(upstream_mesh_id),
             distributed_context->rank());
-        auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
+        auto recv_socket = distributed::MeshSocket(mesh_device, recv_socket_config);
 
         distributed::MeshSocket send_socket;
         distributed::MeshSocket intermed_send;
@@ -437,7 +439,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             socket_mem_config,
             distributed_context->rank(),
             distributed::multihost::Rank(downstream_socket_rank));
-        send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
+        send_socket = distributed::MeshSocket(mesh_device, send_socket_config);
 
         std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, my_sender);
 
@@ -452,19 +454,19 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             .sub_device_id = std::nullopt,
         };
         auto output_mesh_buffer = distributed::MeshBuffer::create(
-            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device_.get());
+            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device.get());
 
         // Launch kernels
         tt::tt_metal::socket_forward(
-            mesh_device_.get(), recv_socket, intermed_send, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), recv_socket, intermed_send, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
         tt::tt_metal::socket_forward(
-            mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
     }
     barrier();
     if (is_pipeline_start) {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        auto start_device_id = mesh_device_->get_device(start_coord)->id();
-        auto start_core_coord = mesh_device_->worker_core_from_logical_core(logical_coord);
+        auto start_device_id = mesh_device->get_device(start_coord)->id();
+        auto start_core_coord = mesh_device->worker_core_from_logical_core(logical_coord);
         std::vector<uint64_t> latencies = std::vector<uint64_t>(NUM_ITERATIONS, 0);
         uint32_t base_addr = latency_measurement_address;
         cluster.read_core(
@@ -472,13 +474,27 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             sizeof(uint64_t) * NUM_ITERATIONS,
             tt_cxy_pair(start_device_id, start_core_coord),
             base_addr);
+        double avg_latency_cycles = 0.0;
         for (auto latency : latencies) {
-            std::cout << latency << std::endl;
+            avg_latency_cycles += static_cast<double>(latency);
         }
+        avg_latency_cycles /= NUM_ITERATIONS;
+        double avg_latency_us = (avg_latency_cycles / (1.35e9)) * 1e6;
+        std::cout << std::fixed << std::setprecision(2);
+        std::cout << "Average latency in cycles: " << avg_latency_cycles << std::endl;
+        std::cout << "Average latency in microseconds: " << avg_latency_us << std::endl;
     }
 }
 
-// Single-galaxy pipeline test (multi-process, 4 ranks, one per tray).
+TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
+    run_closetbox_pipeline(mesh_device_, /*enable_correctness_check=*/false);
+}
+
+TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipelineWithCorrectnessCheck) {
+    run_closetbox_pipeline(mesh_device_, /*enable_correctness_check=*/true);
+}
+
+// Single-galaxy pipeline test helper (multi-process, 4 ranks, one per tray).
 // Uses the SINGLE_GALAXY pipeline config and follows the same setup logic
 // as the ClosetBox SendRecvPipeline test, but with 4 stages across 4 trays
 // and a separate sender device (T1D2).
@@ -486,7 +502,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
 // Pipeline path (9 hops):
 //   T1D2(send) -> T1D6(fwd) -> T3D6(fwd) -> T3D4(fwd) -> T4D4(fwd) ->
 //   T4D7(fwd) -> T2D7(fwd) -> T2D4(fwd) -> T1D4(fwd) -> T1D2(recv)
-TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
+void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_device, bool enable_correctness_check) {
     constexpr uint32_t XFER_SIZE = 14 * 1024;
     constexpr uint32_t NUM_ITERATIONS = 100;
 
@@ -497,7 +513,7 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
     const uint32_t socket_fifo_size = XFER_SIZE * 16;
 
     auto physical_system_descriptor = create_physical_system_descriptor();
-    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device_);
+    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
 
     // Build pipeline from the SINGLE_GALAXY config (4 stages, one per tray)
     auto physical_config = get_physical_pipeline_config(PipelineType::SINGLE_GALAXY);
@@ -521,12 +537,12 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
             distributed::MeshCoreCoord(sender_coord, logical_coord),
             distributed::MeshCoreCoord(recv_coord, logical_coord));
         auto config = distributed::SocketConfig({connection}, socket_mem_config);
-        return distributed::MeshSocket::create_socket_pair(mesh_device_, mesh_device_, config);
+        return distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, config);
     };
 
     // Helper to run warmup iteration with barrier synchronization
     auto barrier = [&]() {
-        Synchronize(mesh_device_.get(), std::nullopt);
+        Synchronize(mesh_device.get(), std::nullopt);
         distributed_context->barrier();
     };
 
@@ -556,11 +572,11 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
     auto latency_measurement_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = latency_measurement_buffer_size},
         latency_measurement_buffer_specs,
-        mesh_device_.get());
+        mesh_device.get());
     // Write 0 to latency measurement buffer (initializes credit/barrier to 0)
     std::vector<uint32_t> latency_init_data(latency_measurement_buffer_size / sizeof(uint32_t), 0);
     distributed::EnqueueWriteMeshBuffer(
-        mesh_device_->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
+        mesh_device->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
 
     const uint32_t latency_measurement_address = latency_measurement_buffer->address();
 
@@ -586,7 +602,7 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
             socket_mem_config,
             distributed_context->rank(),
             distributed::multihost::Rank(downstream_rank));
-        auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
+        auto send_socket = distributed::MeshSocket(mesh_device, send_socket_config);
 
         // Cross-mesh recv: upstream_exit (T2D4) -> my_entry (T1D4)
         auto bwd_connection = distributed::SocketConnection(
@@ -597,7 +613,7 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
             socket_mem_config,
             distributed::multihost::Rank(upstream_rank),
             distributed_context->rank());
-        auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
+        auto recv_socket = distributed::MeshSocket(mesh_device, recv_socket_config);
 
         // Inbound: my_entry (T1D4) -> start_coord (T1D2)
         auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_entry, start_coord);
@@ -611,7 +627,7 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
             .sub_device_id = std::nullopt,
         };
         auto input_mesh_buffer = distributed::MeshBuffer::create(
-            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device_.get());
+            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device.get());
 
         // Initialize buffer with data (arange equivalent: 0, 1, 2, ..., num_elems-1)
         std::vector<uint32_t> host_data(num_elems);
@@ -620,7 +636,7 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
         }
 
         // Write data to device buffer
-        distributed::EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_mesh_buffer, host_data, true);
+        distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
 
         // Extract buffer pointer for metal-level operations
         Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
@@ -630,17 +646,18 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
         // - socket_forward on T1D6: forwards from intermed to cross-mesh send socket (to T3D6)
         // - socket_forward on T1D4: forwards from cross-mesh recv socket (from T2D4) to intermed_2 (to T1D2)
         tt::tt_metal::send_async(
-            mesh_device_.get(),
+            mesh_device.get(),
             input_buffer,
             tt::DataFormat::UInt32,
             intermed_send,
             intermed_recv_2,
             latency_measurement_address,
-            NUM_ITERATIONS);
+            NUM_ITERATIONS,
+            enable_correctness_check);
         tt::tt_metal::socket_forward(
-            mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
         tt::tt_metal::socket_forward(
-            mesh_device_.get(), recv_socket, intermed_send_2, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), recv_socket, intermed_send_2, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
     } else {
         // Non-start ranks: receive from upstream, forward locally, send to downstream
 
@@ -653,7 +670,7 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
             socket_mem_config,
             distributed::multihost::Rank(upstream_rank),
             distributed_context->rank());
-        auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
+        auto recv_socket = distributed::MeshSocket(mesh_device, recv_socket_config);
 
         distributed::MeshSocket send_socket;
         distributed::MeshSocket intermed_send;
@@ -668,7 +685,7 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
             socket_mem_config,
             distributed_context->rank(),
             distributed::multihost::Rank(downstream_rank));
-        send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
+        send_socket = distributed::MeshSocket(mesh_device, send_socket_config);
 
         // Local intermed: my_entry -> my_exit
         std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_entry, my_exit);
@@ -682,19 +699,19 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
             .sub_device_id = std::nullopt,
         };
         auto output_mesh_buffer = distributed::MeshBuffer::create(
-            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device_.get());
+            distributed::ReplicatedBufferConfig{.size = buffer_size}, buffer_config, mesh_device.get());
 
         // Launch kernels: forward from upstream to downstream through local intermed
         tt::tt_metal::socket_forward(
-            mesh_device_.get(), recv_socket, intermed_send, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), recv_socket, intermed_send, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
         tt::tt_metal::socket_forward(
-            mesh_device_.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
+            mesh_device.get(), intermed_recv, send_socket, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
     }
     barrier();
     if (is_pipeline_start) {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        auto start_device_id = mesh_device_->get_device(start_coord)->id();
-        auto start_core_coord = mesh_device_->worker_core_from_logical_core(logical_coord);
+        auto start_device_id = mesh_device->get_device(start_coord)->id();
+        auto start_core_coord = mesh_device->worker_core_from_logical_core(logical_coord);
         std::vector<uint64_t> latencies = std::vector<uint64_t>(NUM_ITERATIONS, 0);
         uint32_t base_addr = latency_measurement_address;
         cluster.read_core(
@@ -702,10 +719,24 @@ TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
             sizeof(uint64_t) * NUM_ITERATIONS,
             tt_cxy_pair(start_device_id, start_core_coord),
             base_addr);
+        double avg_latency_cycles = 0.0;
         for (auto latency : latencies) {
-            std::cout << latency << std::endl;
+            avg_latency_cycles += static_cast<double>(latency);
         }
+        avg_latency_cycles /= NUM_ITERATIONS;
+        double avg_latency_us = (avg_latency_cycles / (1.35e9)) * 1e6;
+        std::cout << std::fixed << std::setprecision(2);
+        std::cout << "Average latency in cycles: " << avg_latency_cycles << std::endl;
+        std::cout << "Average latency in microseconds: " << avg_latency_us << std::endl;
     }
+}
+
+TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxy) {
+    run_single_galaxy_pipeline(mesh_device_, /*enable_correctness_check=*/false);
+}
+
+TEST_F(MeshDeviceSingleGalaxyPipelineFixture, SendRecvPipelineSingleGalaxyWithCorrectnessCheck) {
+    run_single_galaxy_pipeline(mesh_device_, /*enable_correctness_check=*/true);
 }
 
 }  // namespace tt::tt_metal

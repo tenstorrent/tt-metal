@@ -104,7 +104,7 @@ tt::tt_metal::Program create_socket_forward_program(
 
     auto kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "tests/ttnn/unit_tests/gtests/multiprocess/utils/kernels/socket_forward.cpp",
+        "tests/tt_metal/multihost/socket_pipeline/multiprocess/utils/kernels/socket_forward.cpp",
         my_core_coord,
         tt::tt_metal::WriterDataMovementConfig(compile_args));
 

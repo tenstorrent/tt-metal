@@ -22,8 +22,9 @@ constexpr uint32_t num_whole_packets_link_1 = get_compile_time_arg_val(6);
 constexpr uint32_t input_page_size = get_compile_time_arg_val(7);
 constexpr uint32_t credit_address = get_compile_time_arg_val(8);
 constexpr uint32_t num_iterations = get_compile_time_arg_val(9);
+constexpr uint32_t enable_correctness_check = get_compile_time_arg_val(10);
 
-constexpr uint32_t input_args_cta_idx = 10;
+constexpr uint32_t input_args_cta_idx = 11;
 constexpr uint32_t input_args_crta_idx = 0;
 
 FORCE_INLINE void write_data_to_remote_core_with_ack(
@@ -167,13 +168,15 @@ void kernel_main() {
         socket_push_pages(sender_socket, 1);
 
         socket_wait_for_pages(receiver_socket, 1);
-        uint32_t socket_read_addr = receiver_socket.read_ptr;
-        uint32_t val = 0;
-        for (uint32_t j = 0; j < input_page_size / 4; j += 4) {
-            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket_read_addr + j) != val) {
-                while (true);
+        if constexpr (enable_correctness_check) {
+            uint32_t socket_read_addr = receiver_socket.read_ptr;
+            uint32_t val = 0;
+            for (uint32_t j = 0; j < input_page_size / 4; j += 4) {
+                if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket_read_addr + j) != val) {
+                    while (true);
+                }
+                val++;
             }
-            val++;
         }
         socket_pop_pages(receiver_socket, 1);
         if ((i & 7) == 0) {
