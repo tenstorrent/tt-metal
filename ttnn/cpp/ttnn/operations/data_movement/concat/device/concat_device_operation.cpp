@@ -19,6 +19,8 @@ namespace ttnn::prim {
 
 ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    TT_FATAL(false, "ConcatDeviceOperation: I have got here");
+
     if (tensor_args.input_tensors.empty()) {
         TT_FATAL(false, "ConcatDeviceOperation: input_tensors cannot be empty");
     }
@@ -34,19 +36,24 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const bool output_is_sharded = args.output_mem_config.is_sharded();
 
     if (output_is_sharded) {
-        // Sharded-to-sharded (s2s) cases
-        if (input_tensors.size() == 2) {
-            // Optimized 2-tensor case
-            TT_FATAL(
-                input_tensors[0].layout() == input_tensors[1].layout(),
-                "Expected all input tensors to have the same layout for 2-tensor sharded concat");
+        if (const auto& first_nd_shard_spec = input_tensors[0].nd_shard_spec(); first_nd_shard_spec.has_value()) {
+            std::cout << "~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+            TT_FATAL(!first_nd_shard_spec.has_value(), "expected string");
+            return ConcatS2IProgramFactory{};
+        } else
+            // Sharded-to-sharded (s2s) cases
+            if (input_tensors.size() == 2) {
+                // Optimized 2-tensor case
+                TT_FATAL(
+                    input_tensors[0].layout() == input_tensors[1].layout(),
+                    "Expected all input tensors to have the same layout for 2-tensor sharded concat");
 
-            if (input_tensors[0].layout() == Layout::ROW_MAJOR) {
-                return ConcatS2SRMProgramFactory{};
-            }
-            return ConcatS2STiledProgramFactory{};
+                if (input_tensors[0].layout() == Layout::ROW_MAJOR) {
+                    return ConcatS2SRMProgramFactory{};
+                }
+                return ConcatS2STiledProgramFactory{};
 
-        }  // Multi-tensor s2s case
+            }  // Multi-tensor s2s case
         return ConcatS2SMultiProgramFactory{};
     }
     // Sharded-to-interleaved (s2i) case
@@ -197,6 +204,7 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         shape_out[args.dim] += curr_shape[args.dim];
     }
 
+    std::cout << "compute_output_specs: I have got here2\n";
     return TensorSpec(
         shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
 }
@@ -204,6 +212,7 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
 Tensor ConcatDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    std::cout << "create_output_tensors: I have got here3\n";
     return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
 }
 

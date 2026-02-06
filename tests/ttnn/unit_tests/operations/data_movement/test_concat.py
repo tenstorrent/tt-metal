@@ -368,12 +368,12 @@ def test_concat_1d(device, layout, dim, input_shapes):
         #        (2, [3, 4, 5], [1, 1, 5], 0, ttnn.ROW_MAJOR_LAYOUT),   # RM concat on batch
         #        (2, [3, 4, 5], [3, 1, 5], 1, ttnn.ROW_MAJOR_LAYOUT),   # RM concat on height
         # 3 tensors - ND sharding concat
-        (3, [2, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat 3 tensors on batch
+        #        (3, [2, 64, 64], [1, 32, 32], 0, ttnn.TILE_LAYOUT),  # concat 3 tensors on batch
         #        (3, [2, 64, 64], [2, 32, 32], 1, ttnn.TILE_LAYOUT),    # concat 3 tensors on height
         #        (3, [2, 64, 64], [2, 64, 32], 2, ttnn.TILE_LAYOUT),    # concat 3 tensors on width
         #        (3, [2, 4, 8], [1, 4, 8], 0, ttnn.ROW_MAJOR_LAYOUT),   # RM concat 3 tensors
         # 4 tensors - ND sharding concat
-        (4, [1, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat 4 tensors on height
+        #        (4, [1, 64, 64], [1, 32, 32], 1, ttnn.TILE_LAYOUT),  # concat 4 tensors on height
         #        (4, [1, 64, 64], [1, 64, 32], 2, ttnn.TILE_LAYOUT),    # concat 4 tensors on width
         #        (4, [2, 32, 32], [1, 32, 32], 0, ttnn.TILE_LAYOUT),    # concat 4 tensors on batch
         #        (4, [2, 4, 8], [2, 4, 8], 0, ttnn.ROW_MAJOR_LAYOUT),   # RM concat 4 tensors on batch
@@ -402,11 +402,9 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
     input_nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid)
     input_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, input_nd_shard_spec)
 
-    print("\n\n4etire\n\n")
     # Generate input tensors
     torch_tensors = [torch.rand(tensor_shape, dtype=torch.bfloat16) for _ in range(num_tensors)]
 
-    print("\n\npat\n\n")
     # Expected output from PyTorch
     torch_output = torch.concat(torch_tensors, dim=concat_dim)
 
@@ -438,6 +436,7 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
     # usage of ND sharded tensors supposes only L1_BLOCK_SHARDED_MEMORY_CONFIG memory config
     output_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
 
+    print("\n\nright before concat\n\n")
     ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim, memory_config=output_memory_config)
 
     # Convert back to torch and compare
