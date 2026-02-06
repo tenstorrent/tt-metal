@@ -415,9 +415,9 @@ def _get_device_type_from_runner_environment(sku_from_test: Optional[str] = None
                 for label in runs_on:
                     label_lower = label.lower()
                     # Only checks CIv1 style labels in sku_config for now
-                    if "arch-blackhole" in label_lower:
+                    if "blackhole" in label_lower:
                         return "blackhole"
-                    if "arch-wormhole" in label_lower:
+                    if "wormhole" in label_lower:
                         return "wormhole_b0"
 
     # Failed to parse from CIv2 runner name and failed to parse from sku_config:
