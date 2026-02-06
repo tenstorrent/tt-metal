@@ -38,10 +38,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
-            .github/scripts
-            .github/time_budget.yaml
+            .github
             tests/pipeline_reorg
-          sparse-checkout-cone-mode: false
+          sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget

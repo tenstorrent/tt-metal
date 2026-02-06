@@ -38,9 +38,8 @@ jobs:
           submodules: recursive
           sparse-checkout: |
             .github/scripts
-            .github/time_budget.yaml
             tests/pipeline_reorg/ops/sanity
-          sparse-checkout-cone-mode: false
+          sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
