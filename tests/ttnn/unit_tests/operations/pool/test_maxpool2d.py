@@ -6,6 +6,7 @@ import ttnn
 import math
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool2d
+from models.common.utility_functions import is_watcher_enabled, skip_with_watcher
 
 
 # Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
@@ -112,6 +113,7 @@ parameters = {
 @pytest.mark.parametrize("input_spec", parameters["dram_slice_tests"]["input_specs"])
 @pytest.mark.parametrize("in_specs", parameters["dram_slice_tests"]["in_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_dram_slice(device, in_specs, input_spec):
     (
         in_n,
@@ -154,6 +156,7 @@ def test_max_pool2d_dram_slice(device, in_specs, input_spec):
 
 @pytest.mark.parametrize("input_spec", parameters["height_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["height_shard_tests"]["in_dtype"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
@@ -171,6 +174,13 @@ def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
         ceil_mode,
     ) = input_spec
 
+    # Test failing with watcher enabled
+    if (
+        is_watcher_enabled()
+        and in_dtype == ttnn.bfloat16
+        and input_spec == [1, 1, 59, 59, 3, 5, 4, 2, 1, 1, 5, 4, True]
+    ):
+        pytest.skip("Test is not passing with watcher enabled, github issue #29024")
     run_max_pool2d(
         [in_n, in_c, in_h, in_w],
         (kernel_h, kernel_w),
@@ -189,6 +199,7 @@ def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
 
 @pytest.mark.parametrize("input_spec", parameters["width_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["width_shard_tests"]["in_dtype"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_width_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
@@ -224,6 +235,7 @@ def test_max_pool2d_width_shard(device, in_dtype, input_spec, tensor_map):
 
 @pytest.mark.parametrize("input_spec", parameters["block_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["block_shard_tests"]["in_dtype"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_block_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
@@ -260,6 +272,7 @@ def test_max_pool2d_block_shard(device, in_dtype, input_spec, tensor_map):
 @pytest.mark.parametrize("input_spec", parameters["out_mem_config_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["out_mem_config_tests"]["in_dtype"])
 @pytest.mark.parametrize("out_memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_mem_config(device, in_dtype, input_spec, out_memory_config, tensor_map):
     (
         in_n,
@@ -297,6 +310,7 @@ def test_max_pool2d_mem_config(device, in_dtype, input_spec, out_memory_config, 
 @pytest.mark.parametrize("input_spec", parameters["tiled_out_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["tiled_out_tests"]["in_dtype"])
 @pytest.mark.parametrize("out_dtype", parameters["tiled_out_tests"]["out_dtype"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype, tensor_map):
     output_layout = ttnn.TILE_LAYOUT
 
@@ -336,6 +350,7 @@ def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype, tensor_ma
 
 @pytest.mark.parametrize("input_spec", parameters["in_mem_config_tests"]["input_specs"])
 @pytest.mark.parametrize("cores", parameters["in_mem_config_tests"]["cores"])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37097")
 def test_max_pool2d_in_mem_config(device, input_spec, cores, tensor_map):
     (
         in_n,
