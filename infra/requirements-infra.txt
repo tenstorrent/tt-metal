@@ -6,4 +6,4 @@ pydantic
 toolz
 defusedxml
 pytest
-yaml
+PyYAML
