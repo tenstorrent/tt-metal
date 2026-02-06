@@ -292,7 +292,7 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
 
     const distributed::SocketMemoryConfig socket_mem_config(BufferType::L1, socket_fifo_size);
 
-    // Metal-level buffer configuration - no ttnn dependencies
+    // Metal-level buffer configuration
     const uint32_t num_elems = XFER_SIZE / sizeof(uint32_t);
     const DeviceAddr buffer_size = XFER_SIZE;
     const DeviceAddr page_size = XFER_SIZE;  // Single page buffer
@@ -385,7 +385,7 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
         // Inbound: my_entry (T1D4) -> start_coord (T1D2)
         auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_entry, start_coord);
 
-        // Create device buffer using metal-level API (no ttnn dependencies)
+        // Create device buffer using metal-level API
         distributed::DeviceLocalBufferConfig buffer_config = {
             .page_size = page_size,
             .buffer_type = BufferType::DRAM,
@@ -453,7 +453,7 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
         // Local intermed: my_entry -> my_exit
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(my_entry, my_exit);
 
-        // Create device buffer using metal-level API (no ttnn dependencies)
+        // Create device buffer using metal-level API
         distributed::DeviceLocalBufferConfig buffer_config = {
             .page_size = page_size,
             .buffer_type = BufferType::DRAM,
