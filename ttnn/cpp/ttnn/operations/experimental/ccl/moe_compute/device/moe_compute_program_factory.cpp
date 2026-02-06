@@ -271,10 +271,6 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Drain-sync core then signals to non-drain-sync core that they can begin sending the next chunk.
     auto tilize_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
 
-    // Since both reader and writer are using NoC1, we have the readers wait until all writers have sent their
-    // chunk portion to the matmul cores before reading in another set of tokens to tilize
-    auto previous_chunk_sent_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
-
     //-------------------------------------------------------------------------
     // Matmul semaphores
     //-------------------------------------------------------------------------
@@ -391,7 +387,6 @@ MoEComputeMeshWorkloadFactory::create_at(
     uint32_t max_tilize_subtoken_size =
         std::max(tilize_units_per_core_g1, tilize_units_per_core_g2) * tilize_subtoken_bytes_aligned;
 
-    constexpr uint32_t buffering_factor = 2;
     constexpr uint32_t tokens_per_chunk = 32;  // Hardcoding for now, can adjust when tiny tiles support added
 
     tt::tt_metal::create_cb(
@@ -441,14 +436,16 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_mapping_pages,
         tilize_mapping_data_format);
 
-    // tilize input buffer: holds subtokens for tokens_per_chunk tokens, double-buffered
+    // Tilize input buffer: holds subtokens for tokens_per_chunk tokens
     // Each tilize core reads its subtoken portion of incoming tokens
+    // Single buffered so we don't start reading in next set of tokens
+    // before previous chunk fully sent to matmul cores
     tt::tt_metal::create_cb(
         tilize_input_cb_id,
         program,
         tilize_core_range_set,
         max_tilize_subtoken_size,
-        tokens_per_chunk * buffering_factor,  // double-buffered tokens_per_chunk
+        tokens_per_chunk,
         tilize_input_data_format);
 
     tt::tt_metal::create_cb(
@@ -677,7 +674,6 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
         {"tilize_chunk_ready_semaphore_id", tilize_chunk_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
-        {"previous_chunk_sent_semaphore_id", previous_chunk_sent_semaphore_id},
     };
 
     std::vector<uint32_t> tilize_compile_time_args = {};
