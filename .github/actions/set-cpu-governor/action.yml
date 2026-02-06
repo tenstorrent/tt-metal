@@ -16,8 +16,10 @@ runs:
         echo "🔧 Setting CPU governor to: $governor for all cores"
 
         # Check if scaling_governor exists (may not on VMs)
+        shopt -s nullglob
         scaling_governors=(/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor)
-        if [ ! -e "${scaling_governors[0]}" ]; then
+        shopt -u nullglob
+        if [ ${#scaling_governors[@]} -eq 0 ]; then
           echo "⚠️ No scaling_governor found under /sys/devices/system/cpu/cpu*/cpufreq/"
           echo "⚠️ This may be running on a virtual machine where CPU frequency scaling is not available."
           echo "⚠️ Skipping CPU governor configuration."
