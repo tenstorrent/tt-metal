@@ -411,7 +411,7 @@ def _get_device_type_from_runner_environment(sku_from_test: Optional[str] = None
 
             if sku_from_test in skus:
                 # Use sku_from_test from workflow: get runs_on labels for this SKU
-                runs_on = skus[sku_from_test].get("runs_on") or []
+                runs_on = skus.get(sku_from_test, {}).get("runs_on") or []
                 for label in runs_on:
                     label_lower = label.lower()
                     # Only checks CIv1 style labels in sku_config for now
