@@ -8,7 +8,6 @@ import time
 from torch import nn
 
 from models.experimental.tt_symbiote.core.run_config import DispatchManager, DistributedConfig
-from typing import Optional
 
 
 class DeviceInit:
@@ -25,10 +24,10 @@ class DeviceInit:
         return cls.DEVICE_TO_STATE_DICT[device]
 
     @classmethod
-    def init_state_impl(cls, device) -> Optional[DistributedConfig]:
+    def init_state_impl(cls, device) -> DistributedConfig:
         """Implementation-specific device state initialization."""
         # Placeholder for actual device state initialization logic
-        return None
+        return DistributedConfig(device)
 
 
 def _initialize_module_on_device(module: "TTNNModule", device, device_init=DeviceInit):
