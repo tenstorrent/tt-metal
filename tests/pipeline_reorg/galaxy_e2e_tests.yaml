@@ -46,7 +46,7 @@
   team: fabric
   timeout: 15
 
-# Blackhole Galaxy e2e tests 
+# Blackhole Galaxy e2e tests
 - name: BH Galaxy CCL tests
   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
   sku: bh_galaxy
