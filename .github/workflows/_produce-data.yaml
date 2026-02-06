@@ -72,7 +72,7 @@ on:
       - "(Galaxy) Multi-user Isolation Tests"
       - "(Galaxy) demo tests"
       - "(Galaxy) integration tests"
-      - "(Galaxy) perf tests"
+      - "(Galaxy) model perf tests"
       - "(Galaxy) e2e tests"
       - "(Galaxy) profiler tests"
       - "(Galaxy) Stress"

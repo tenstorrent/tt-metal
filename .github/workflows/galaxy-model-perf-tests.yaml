@@ -1,4 +1,4 @@
-name: "(Galaxy) perf tests"
+name: "(Galaxy) model perf tests"
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ on:
           - sd35
           - flux1-dev
           - motif
-#          - sentence_bert
+          - sentence_bert
           - wan2-2
           - mochi
           - qwenimage
@@ -61,14 +61,13 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
-  galaxy-perf-tests:
+  galaxy-model-perf-tests:
     needs: build-artifact-profiler
     secrets: inherit
-    uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-model-perf-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      # Galaxy perf runs on Wormhole Galaxy (wh_galaxy) only.
-      enabled-skus: wh_galaxy
       model: ${{ inputs.model || 'all' }}
+      topology: topology-6u

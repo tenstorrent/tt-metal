@@ -53,7 +53,7 @@ jobs:
               ".github/workflows/galaxy-profiler-tests.yaml",
               ".github/workflows/galaxy-multi-user-isolation-tests.yaml",
               ".github/workflows/galaxy-deepseek-tests.yaml",
-              ".github/workflows/galaxy-perf-tests.yaml",
+              ".github/workflows/galaxy-model-perf-tests.yaml",
               ".github/workflows/galaxy-demo-tests.yaml",
               ".github/workflows/galaxy-unit-tests.yaml",
               ".github/workflows/galaxy-integration-tests.yaml",
