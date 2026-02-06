@@ -15,6 +15,17 @@ runs:
         governor="${{ inputs.governor }}"
         echo "🔧 Setting CPU governor to: $governor for all cores"
 
+        # Check if scaling_governor exists (may not on VMs)
+        shopt -s nullglob
+        scaling_governors=(/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor)
+        shopt -u nullglob
+        if [ ${#scaling_governors[@]} -eq 0 ]; then
+          echo "⚠️ No scaling_governor found under /sys/devices/system/cpu/cpu*/cpufreq/"
+          echo "⚠️ This may be running on a virtual machine where CPU frequency scaling is not available."
+          echo "⚠️ Skipping CPU governor configuration."
+          exit 0
+        fi
+
         # Set governor for all CPU cores by writing directly to sysfs
         if echo "$governor" | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null; then
           echo "✅ Successfully set $governor governor for all CPU cores"
