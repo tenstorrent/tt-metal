@@ -180,11 +180,15 @@ class TestSequentialChainInfrastructure:
             epsilon=1e-5,
         )
 
+        # Use LN compute config for RMS so all phases have consistent fp32_dest_acc_en
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
         rms_desc = rms_norm.rms_norm(
             test_tensors["tt_input"],  # Placeholder - will be replaced by chain
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
         )
 
         ln2_desc = layer_norm.layer_norm(
@@ -505,11 +509,16 @@ class TestSequentialChainExecution:
             epsilon=1e-5,
         )
 
+        # Use LN compute config for RMS so all phases have consistent fp32_dest_acc_en.
+        # DST_ACCUM_MODE is a kernel-level hardware setting — all fused phases must agree.
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
         rms_desc = rms_norm.rms_norm(
             test_tensors["tt_input"],
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
         )
 
         ln2_desc = layer_norm.layer_norm(
@@ -899,6 +908,9 @@ class TestParallelChains:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # Use consistent fp32 config for all phases
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
+
         # Chain 1: LayerNorm -> RMSNorm on cores1
         ln1 = layer_norm.layer_norm(
             test_tensors["tt_input"],
@@ -911,6 +923,7 @@ class TestParallelChains:
             core_range_set=cores1,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
         )
         chain1 = [ln1, rms1]
 
@@ -920,6 +933,7 @@ class TestParallelChains:
             core_range_set=cores2,
             weight=test_tensors["tt_weight1"],
             epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
         )
         ln2 = layer_norm.layer_norm(
             tt_input2,
@@ -947,6 +961,7 @@ class TestParallelChains:
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
         # Create a chain
         ln1 = layer_norm.layer_norm(
@@ -960,6 +975,7 @@ class TestParallelChains:
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
         )
         ln2 = layer_norm.layer_norm(
             test_tensors["tt_input"],
@@ -1008,6 +1024,7 @@ class TestParallelChains:
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
         ln1 = layer_norm.layer_norm(
             test_tensors["tt_input"],
@@ -1021,6 +1038,7 @@ class TestParallelChains:
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
         )
         ln2 = layer_norm.layer_norm(
             test_tensors["tt_input"],
@@ -1372,6 +1390,7 @@ class TestSequentialDebugHang:
         from models.experimental.ops.descriptors import composite
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
         ln1 = layer_norm.layer_norm(
             test_tensors["tt_input"],
@@ -1385,6 +1404,7 @@ class TestSequentialDebugHang:
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
         )
 
         fused = fuse_layernorm_chain([ln1, rms1])
@@ -1441,6 +1461,7 @@ class TestSequentialDebugHang:
         from models.experimental.ops.descriptors import composite
 
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        ln_compute_config = ttnn.layernorm_default_compute_config(device.arch())
 
         ln1 = layer_norm.layer_norm(
             test_tensors["tt_input"],
@@ -1454,6 +1475,7 @@ class TestSequentialDebugHang:
             core_range_set=core_range,
             weight=test_tensors["tt_weight2"],
             epsilon=1e-5,
+            compute_kernel_config=ln_compute_config,
         )
         ln2 = layer_norm.layer_norm(
             test_tensors["tt_input"],
