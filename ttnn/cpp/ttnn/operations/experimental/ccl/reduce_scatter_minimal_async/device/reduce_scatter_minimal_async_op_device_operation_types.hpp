@@ -15,6 +15,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -44,6 +45,7 @@ struct ReduceScatterMinimalAsyncParams {
     std::optional<uint32_t> chunks_per_sync;
     std::optional<uint32_t> num_workers_per_link;
     std::optional<uint32_t> num_buffers_per_channel;
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -62,6 +64,7 @@ struct ReduceScatterMinimalAsyncParams {
         attrs.emplace_back("chunks_per_sync", chunks_per_sync);
         attrs.emplace_back("num_workers_per_link", num_workers_per_link);
         attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
+        attrs.emplace_back("compute_kernel_config", compute_kernel_config);
         return attrs;
     }
 };

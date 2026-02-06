@@ -43,7 +43,8 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod, const ccl_operation_t& 
                std::optional<uint32_t> cluster_axis,
                std::optional<uint32_t> chunks_per_sync,
                std::optional<uint32_t> num_workers_per_link,
-               std::optional<uint32_t> num_buffers_per_channel) -> ttnn::Tensor {
+               std::optional<uint32_t> num_buffers_per_channel,
+               const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     persistent_output_buffers,
@@ -58,7 +59,8 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod, const ccl_operation_t& 
                     cluster_axis,
                     chunks_per_sync,
                     num_workers_per_link,
-                    num_buffers_per_channel);
+                    num_buffers_per_channel,
+                    compute_kernel_config);
             },
             nb::arg("input_tensor"),
             nb::arg("persistent_output_buffers") = nb::none(),
@@ -74,7 +76,8 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod, const ccl_operation_t& 
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("chunks_per_sync") = nb::none(),
             nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none()});
+            nb::arg("num_buffers_per_channel") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 
 }  // namespace

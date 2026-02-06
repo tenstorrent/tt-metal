@@ -163,6 +163,7 @@ tt::stl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
+        operation_attributes.compute_kernel_config,
         subdevice_core_range_set,
         tensor_args,
         program_factory.index());
@@ -286,7 +287,8 @@ std::vector<Tensor> reduce_scatter_minimal_async(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::ReduceScatterMinimalAsyncDeviceOperation;
     const auto resolved_sub_device_id = sub_device_id.value_or(input_tensor.device()->get_sub_device_ids().at(0));
 
@@ -304,7 +306,8 @@ std::vector<Tensor> reduce_scatter_minimal_async(
         cluster_axis,
         chunks_per_sync,
         num_workers_per_link,
-        num_buffers_per_channel};
+        num_buffers_per_channel,
+        compute_kernel_config};
     auto tensor_args = OperationType::tensor_args_t{input_tensor, optional_intermediate_tensor, optional_output_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
