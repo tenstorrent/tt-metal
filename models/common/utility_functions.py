@@ -1042,6 +1042,10 @@ def is_watcher_enabled():
     return (watcher is not None and watcher != "") or lightweight_asserts == "1"
 
 
+def is_n300():
+    return os.environ.get("MESH_DEVICE", "N150") == "N300"
+
+
 def is_slow_dispatch():
     return os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
 
