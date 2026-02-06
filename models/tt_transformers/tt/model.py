@@ -551,7 +551,7 @@ class Transformer(LightweightModule):
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
                 num_links=num_links,
-                memory_config=tt_logits.memory_config(),
+                memory_config=tt_logits.memory_config() if self.prefetcher is None else ttnn.DRAM_MEMORY_CONFIG,
                 cluster_axis=cluster_axis,
                 topology=self.args.ccl_topology(),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
