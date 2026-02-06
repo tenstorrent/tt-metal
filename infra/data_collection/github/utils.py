@@ -8,6 +8,7 @@ import os
 from datetime import datetime
 from typing import Optional, Union
 
+import yaml
 from loguru import logger
 
 from infra.data_collection.github.workflows import is_job_hanging_from_job_log
@@ -378,6 +379,57 @@ def get_github_runner_environment():
     }
 
 
+def _get_device_type_from_runner_environment() -> str:
+    """
+    Infer device/card type (grayskull, wormhole_b0, blackhole) from runner environment.
+    RUNNER_NAME is a GitHub Actions env var that must be set.
+    """
+    assert "RUNNER_NAME" in os.environ, "RUNNER_NAME must be set (GitHub Actions env var)"
+    runner_name = os.environ["RUNNER_NAME"]
+
+    if runner_name.startswith("tt-ubuntu"):
+        # CIv2: parse arch from runner name (e.g. n150, n300, p150, blackhole_loudbox)
+        r = runner_name.lower()
+        if "blackhole" in r or "bh-" in r or "p150" in r:
+            return "blackhole"
+        if "n150" in r or "n300" in r or "wormhole" in r:
+            return "wormhole_b0"
+        if "grayskull" in r or "e150" in r or "p100" in r:
+            return "grayskull"
+        return "unknown"
+
+    # Not tt-ubuntu: check sku_config.yaml for arch from runs_on labels matching runner
+    repo_root = pathlib.Path(__file__).parent.parent.parent.parent
+    sku_config_path = repo_root / ".github" / "sku_config.yaml"
+    if sku_config_path.exists():
+        with open(sku_config_path) as f:
+            config = yaml.safe_load(f)
+        for sku_name, sku_data in (config.get("skus") or {}).items():
+            runs_on = sku_data.get("runs_on") or []
+            for label in runs_on:
+                label_lower = label.lower()
+                if "arch-wormhole" in label_lower or "wormhole" in label_lower:
+                    if label in runner_name or "wormhole" in runner_name.lower():
+                        return "wormhole_b0"
+                if "arch-blackhole" in label_lower or "blackhole" in label_lower:
+                    if label in runner_name or "blackhole" in runner_name.lower():
+                        return "blackhole"
+                if "arch-grayskull" in label_lower or "grayskull" in label_lower:
+                    if label in runner_name or "grayskull" in runner_name.lower():
+                        return "grayskull"
+
+    if "ARCH_NAME" in os.environ:
+        arch = os.environ["ARCH_NAME"]
+        if arch in ("grayskull", "wormhole_b0", "blackhole"):
+            return arch
+
+    logger.warning(
+        f"Could not infer device type from RUNNER_NAME={runner_name!r}. "
+        "Set ARCH_NAME env var (grayskull, wormhole_b0, blackhole) for accurate benchmark data."
+    )
+    return "unknown"
+
+
 def create_json_with_github_benchmark_environment(github_partial_benchmark_data_filename):
     assert "GITHUB_REPOSITORY" in os.environ
     git_repo_name = os.environ["GITHUB_REPOSITORY"]
@@ -411,9 +463,7 @@ def create_json_with_github_benchmark_environment(github_partial_benchmark_data_
     logger.warning("Hardcoded null for device_ip")
     device_ip = ""
 
-    assert "ARCH_NAME" in os.environ
-    device_type = os.environ["ARCH_NAME"]
-    assert device_type in ("grayskull", "wormhole_b0", "blackhole")
+    device_type = _get_device_type_from_runner_environment()
 
     logger.warning("Hardcoded null for device_memory_size")
     device_memory_size = ""
