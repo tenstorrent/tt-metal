@@ -97,6 +97,15 @@
           "ENABLE_KERNEL_CLANG_TIDY": {"value": "TRUE"},
           "BUILD_TT_TRAIN": {"value": "OFF"}
         }
+      },
+      {
+        "name": "clang-tidy-kernels-fix",
+        "inherits": "clang-tidy-kernels",
+        "description": "Run Clang Tidy on kernel (device) code and apply fix-its",
+        "binaryDir": "${sourceDir}/.build/clang-tidy-kernels-fix",
+        "cacheVariables": {
+          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--fix;--fix-notes"}
+        }
       }
     ],
     "buildPresets": [
@@ -149,6 +158,12 @@
         "configurePreset": "clang-tidy-kernels",
         "targets": ["kernel_clang_tidy"],
         "nativeToolOptions": ["-k0"]
+      },
+      {
+        "name": "clang-tidy-kernels-fix",
+        "configurePreset": "clang-tidy-kernels-fix",
+        "targets": ["kernel_clang_tidy"],
+        "nativeToolOptions": ["-k0", "-j1"]
       }
     ]
   }
