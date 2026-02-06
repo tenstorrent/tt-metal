@@ -381,24 +381,22 @@ def get_github_runner_environment():
 
 def _get_device_type_from_runner_environment() -> str:
     """
-    Infer device/card type (grayskull, wormhole_b0, blackhole) from runner environment.
+    Infer device/card type (wormhole_b0, blackhole) from runner environment.
     RUNNER_NAME is a GitHub Actions env var that must be set.
     """
     assert "RUNNER_NAME" in os.environ, "RUNNER_NAME must be set (GitHub Actions env var)"
     runner_name = os.environ["RUNNER_NAME"]
 
+    # This assumes all CIv2 runner names start with tt-ubuntu
     if runner_name.startswith("tt-ubuntu"):
-        # CIv2: parse arch from runner name (e.g. n150, n300, p150, blackhole_loudbox)
         r = runner_name.lower()
         if "blackhole" in r or "bh-" in r or "p150" in r:
             return "blackhole"
         if "n150" in r or "n300" in r or "wormhole" in r:
             return "wormhole_b0"
-        if "grayskull" in r or "e150" in r or "p100" in r:
-            return "grayskull"
         return "unknown"
 
-    # Not tt-ubuntu: check sku_config.yaml for arch from runs_on labels matching runner
+    # Not tt-ubuntu: check .github/sku_config.yaml for arch from runs_on labels matching runner
     repo_root = pathlib.Path(__file__).parent.parent.parent.parent
     sku_config_path = repo_root / ".github" / "sku_config.yaml"
     if sku_config_path.exists():
@@ -414,18 +412,15 @@ def _get_device_type_from_runner_environment() -> str:
                 if "arch-blackhole" in label_lower or "blackhole" in label_lower:
                     if label in runner_name or "blackhole" in runner_name.lower():
                         return "blackhole"
-                if "arch-grayskull" in label_lower or "grayskull" in label_lower:
-                    if label in runner_name or "grayskull" in runner_name.lower():
-                        return "grayskull"
 
     if "ARCH_NAME" in os.environ:
         arch = os.environ["ARCH_NAME"]
-        if arch in ("grayskull", "wormhole_b0", "blackhole"):
+        if arch in ("wormhole_b0", "blackhole"):
             return arch
 
     logger.warning(
         f"Could not infer device type from RUNNER_NAME={runner_name!r}. "
-        "Set ARCH_NAME env var (grayskull, wormhole_b0, blackhole) for accurate benchmark data."
+        "Set ARCH_NAME env var (wormhole_b0, blackhole) for accurate benchmark data."
     )
     return "unknown"
 
