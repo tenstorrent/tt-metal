@@ -51,32 +51,38 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     //     cb_reserve_back(reduce_cb, tiles_per_row);
     // }
 
-    for (uint32_t i = global_row_base; i < global_row_base + tiles_per_row; i++) {
-        tile_regs_acquire();
-        for (uint32_t j = global_col_base; j < global_col_base + tiles_per_column; j++) {
-            uint32_t in0_tile_index = i * cols + j;  // Absolute tile index for in0_cb
-            sub_tiles_bcast_cols(in0_cb, in1_cb, in0_tile_index, i, j);
+    tile_regs_acquire();
+    uint32_t dst_index = 0;
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        for (uint32_t j = 0; j < tiles_per_column; j++) {
+            uint32_t in0_tile_index =
+                (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for in0_cb
+            sub_tiles_bcast_cols(in0_cb, in1_cb, in0_tile_index, global_row_base + i, dst_index++);
         }
-        tile_regs_commit();
+    }
+    tile_regs_commit();
 
-        // if constexpr (write_result_inplace) {
-        //     cb_pop_front(in0_cb, 1);
-        //     cb_reserve_back(in0_cb, 1);
-        // }
+    tile_regs_wait();
+    dst_index = 0;
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        for (uint32_t j = 0; j < tiles_per_column; j++) {
+            exp_packthread_tile<true, true>(dst_index++, vector_mode);
+        }
+    }
+    PACK(TTI_STALLWAIT(p_stall ::STALL_PACK, p_stall ::WAIT_SFPU));
 
-        tile_regs_wait();
-
+    dst_index = 0;
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
         for (uint32_t j = 0; j < tiles_per_column; ++j) {
-            exp_packthread_tile<true, true>(j, vector_mode);
+            uint32_t in0_tile_index =
+                (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for in0_cb
+            pack_tile<true>(dst_index++, in0_cb, in0_tile_index);      // Pack back to original position in in0_cb
         }
-        PACK(TTI_STALLWAIT(p_stall ::STALL_PACK, p_stall ::WAIT_SFPU));
+    }
 
-        for (uint32_t j = 0; j < tiles_per_column; ++j) {
-            uint32_t in0_tile_index = i * cols + j;  // Absolute tile index for in0_cb
-            pack_tile(j, in0_cb);
-        }
-
-        if constexpr (do_reduce) {
+    if constexpr (do_reduce) {
+        dst_index = 0;
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
             // While we have results in DST, take advantage of L1 accumulation
             // to reduce row x cols tiles to rows x 1 tiles.
             if (global_col_base > 0) {
@@ -85,143 +91,19 @@ void sub_exp_block_bcast_cols_inplace_2x4(
             }
             for (uint32_t j = 0; j < tiles_per_column; ++j) {
                 // Pack to local_row's position in reduce_cb (0 or 1 within this pair)
-                pack_tile<true>(j, reduce_cb, i);
+                pack_tile<true>(dst_index++, reduce_cb, global_col_base + i);
                 if (global_col_base == 0 && j == 0) {
                     // If this was the first tile of a row, start accumulating
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
             }
         }
-        tile_regs_release();
-        if constexpr (do_reduce) {  // todo: move up?
-            PACK((llk_pack_reconfig_l1_acc(0)));
-        }
     }
-
-    // if constexpr (do_reduce) {
-    //     cb_push_back(reduce_cb, tiles_per_row);
-    // }
+    tile_regs_release();
+    if constexpr (do_reduce) {  // todo: move up?
+        PACK((llk_pack_reconfig_l1_acc(0)));
+    }
 }
-
-/**
- * in0_cb = exp((in0_cb - in1_cb) * scale_fp32) - Row-pair re-entrant version
- *
- * Processes exactly 2 rows per invocation, allowing fine-grained pipelining.
- * Must be called total_rows/2 times with row_pair_index = 0, 1, 2, ...
- * Precondition: in0_cb has at least (row_pair_index + 1) * 2 * cols tiles produced
- *               (previous row pairs must have completed their in-place rotation)
- * Precondition: in1_cb has at least (row_pair_index + 1) * 2 tiles produced
- * Postcondition: in0_cb has same tile count, with processed row pair rotated to back
- * Postcondition: in1_cb unchanged (never popped)
- * Postcondition: reduce_cb has 2 more tiles produced (if do_reduce=true)
- */
-// template <
-//     uint32_t in0_cb,
-//     uint32_t total_rows,
-//     uint32_t scale_fp32,
-//     bool write_result_inplace = true,
-//     bool do_reduce = true,
-//     int vector_mode = (int)VectorMode::RC>
-// void sub_exp_block_bcast_cols_inplace_row_pair(
-//     uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols, uint32_t row_pair_index) {
-//     // Constants for 2-row processing
-//     constexpr uint32_t rows_per_pair = 2;
-
-//     // Calculate global row indices for in1_cb access
-//     uint32_t global_row_base = row_pair_index * rows_per_pair;
-
-//     // Initialize operation
-//     sub_bcast_cols_init_short(in0_cb, in1_cb);
-//     // exp_tile_init<true, true, scale_fp32>();
-//     exp_packthread_tile_init<true, true, scale_fp32>(); // todo: move to outer.
-
-//     // Wait for tiles:
-//     // - in0_cb: need 2*cols tiles (previous pairs already popped their tiles via in-place rotation)
-//     // - in1_cb: cumulative wait since we never pop it
-//     cb_wait_front(in0_cb, rows_per_pair * cols);
-//     cb_wait_front(in1_cb, (row_pair_index + 1) * rows_per_pair);
-
-//     if constexpr (do_reduce) {
-//         cb_reserve_back(reduce_cb, rows_per_pair);
-//     }
-
-// #ifdef SUB_EXP_GRANULARITY
-//     uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
-//     uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
-// #else
-//     uint32_t dst_tiles = cols;
-//     uint32_t granularity = 1;
-// #endif
-
-//     MATH(DPRINT << "sub_exp_block_bcast_cols_inplace_row_pair: row_pair_index=" << row_pair_index
-//                 << " cols=" << cols
-//                 << " dst_tiles=" << dst_tiles
-//                 << " granularity=" << granularity << ENDL());
-
-//     // Process exactly 2 rows
-//     for (uint32_t local_row = 0; local_row < rows_per_pair; ++local_row) {
-//         uint32_t global_row = global_row_base + local_row;  // For in1_cb indexing
-
-//         for (uint32_t u = 0; u < granularity; u++) {
-//             tile_regs_acquire();
-
-//             for (uint32_t j = 0; j < dst_tiles; ++j) {
-//                 // in0_cb: index j (relative to current front, which shifts after each pop)
-//                 // in1_cb: index global_row (absolute position, since in1_cb is never popped)
-//                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, global_row, j);
-//                 // exp_tile<true, true>(j, vector_mode);
-//             }
-//             tile_regs_commit();
-
-//             if constexpr (write_result_inplace) {
-//                 cb_pop_front(in0_cb, dst_tiles);
-//                 cb_reserve_back(in0_cb, dst_tiles);
-//             }
-
-//             tile_regs_wait();
-
-//             for (uint32_t j = 0; j < dst_tiles; ++j) {
-
-//                 exp_packthread_tile<true, true>(j, vector_mode);
-//             }
-//             PACK(TTI_STALLWAIT(p_stall ::STALL_PACK, p_stall ::WAIT_SFPU));
-
-//             if constexpr (write_result_inplace) {
-//                 for (uint32_t j = 0; j < dst_tiles; ++j) {
-//                     pack_tile(j, in0_cb);
-//                 }
-//                 // Granular write output to enable following matmul unpack to start early.
-//                 cb_push_back(in0_cb, dst_tiles);
-//             }
-
-//             if constexpr (do_reduce) {
-//                 // While we have results in DST, take advantage of L1 accumulation
-//                 // to reduce row x cols tiles to rows x 1 tiles.
-//                 if (u > 0) {
-//                     // If on the same row, keep accumulating
-//                     PACK((llk_pack_reconfig_l1_acc(1)));
-//                 }
-//                 for (uint32_t j = 0; j < dst_tiles; ++j) {
-//                     // Pack to local_row's position in reduce_cb (0 or 1 within this pair)
-//                     pack_tile<true>(j, reduce_cb, local_row);
-//                     if (u == 0 && j == 0) {
-//                         // If this was the first tile of a row, start accumulating
-//                         PACK((llk_pack_reconfig_l1_acc(1)));
-//                     }
-//                 }
-//             }
-//             tile_regs_release();
-
-//             if constexpr (do_reduce) {
-//                 PACK((llk_pack_reconfig_l1_acc(0)));
-//             }
-//         }
-//     }
-
-//     if constexpr (do_reduce) {
-//         cb_push_back(reduce_cb, rows_per_pair);
-//     }
-// }
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -280,7 +162,7 @@ void reduce_c_row_pair(uint32_t out_cb, uint32_t prev_cb, uint32_t row_pair_inde
     }
 
     /**
-     * For the 2 rows in this pair, compute the max/sum into DST registers.
+     * For the 2 rows in this pair, compute the max into DST registers.
      */
     reduce_block_max_row_init<cols>();
     for (uint32_t i = 0; i < PAIR_SIZE; i++) {
@@ -353,35 +235,42 @@ void sdpa_inner_loop_8x4x16(
             }
 
             {
-                mm_block_init_short(
-                    cb_q_in,
-                    cb_kt_in,
-                    true /*transpose*/,
-                    subblock_w /*ct_dim*/,
-                    subblock_h /*rt_dim*/,
-                    in0_block_w /*kt_dim*/);
-
-                MATH(DPRINT << "Matmul for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
-                DeviceZoneScopedN("matmul_blocks 2x4");
-                tile_regs_acquire();
-                uint32_t dst_index = 0;
-                uint32_t q_index = q_index_offset;
-                uint32_t kt_index = kt_index_offset;
-                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                    matmul_block(
+                {
+                    DeviceZoneScopedN("matmul_blocks 2x4 init");
+                    mm_block_init_short(
                         cb_q_in,
                         cb_kt_in,
-                        q_index,
-                        kt_index,
-                        dst_index,
                         true /*transpose*/,
-                        subblock_w,
-                        subblock_h,
-                        in0_block_w);
-                    q_index++;
-                    kt_index += Sq_chunk_t;
+                        subblock_w /*ct_dim*/,
+                        subblock_h /*rt_dim*/,
+                        in0_block_w /*kt_dim*/);
                 }
-                tile_regs_commit();
+                MATH(DPRINT << "Matmul for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
+
+                {
+                    DeviceZoneScopedN("matmul_blocks 2x4");
+
+                    tile_regs_acquire();
+                    uint32_t dst_index = 0;
+                    uint32_t q_index = q_index_offset;
+                    uint32_t kt_index = kt_index_offset;
+                    for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                        matmul_block(
+                            cb_q_in,
+                            cb_kt_in,
+                            q_index,
+                            kt_index,
+                            dst_index,
+                            true /*transpose*/,
+                            subblock_w,
+                            subblock_h,
+                            in0_block_w);
+                        q_index++;
+                        kt_index += Sq_chunk_t;
+                    }
+                    // tensix_sync();
+                    tile_regs_commit();
+                }
             }
             {
                 DeviceZoneScopedN("Pack 2x4");
@@ -401,7 +290,7 @@ void sdpa_inner_loop_8x4x16(
                 MATH(
                     DPRINT << "Packing " << subblock_h * subblock_w << " tiles to cb_qkt_im for Q[" << q_subblock
                            << "] Kt[" << kt_subblock << "]" << ENDL());
-                cb_push_back(cb_qkt_im, subblock_h * subblock_w);
+                cb_push_back(cb_qkt_im, subblock_h * subblock_w);  // todo: fix indexing bug, should work on rows.
             }
             kt_index_offset += subblock_w;
         }

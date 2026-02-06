@@ -111,22 +111,22 @@ void sdpa_single_core(
     CreateCircularBuffer(program, core, c_identity_scalar_config);
 
     // cb_prev_max
-    auto cb_prev_max_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_28, cb_data_format}})
+    auto cb_prev_max_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_27, cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_27, single_tile_size);
     CreateCircularBuffer(program, core, cb_prev_max_config);
 
     // cb_cur_max
-    auto cb_cur_max_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_27, cb_data_format}})
+    auto cb_cur_max_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_28, cb_data_format}})
                                  .set_page_size(tt::CBIndex::c_28, single_tile_size);
     CreateCircularBuffer(program, core, cb_cur_max_config);
 
     // cb_prev_sum
-    auto cb_prev_sum_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_30, cb_data_format}})
+    auto cb_prev_sum_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_29, cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_29, single_tile_size);
     CreateCircularBuffer(program, core, cb_prev_sum_config);
 
     // cb_cur_sum
-    auto cb_curr_sum_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_29, cb_data_format}})
+    auto cb_curr_sum_config = CircularBufferConfig(Sq_chunk_t * single_tile_size, {{tt::CBIndex::c_30, cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_30, single_tile_size);
     CreateCircularBuffer(program, core, cb_curr_sum_config);
 
