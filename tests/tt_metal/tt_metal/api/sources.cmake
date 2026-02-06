@@ -18,6 +18,7 @@ set(UNIT_TESTS_API_SOURCES
     core_coord/test_CoreRangeSet_contains.cpp
     core_coord/test_CoreRangeSet_intersects.cpp
     core_coord/test_CoreRangeSet_merge.cpp
+    dataflow_buffer/test_dataflow_buffer.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     tensor/test_tensor_sharding.cpp

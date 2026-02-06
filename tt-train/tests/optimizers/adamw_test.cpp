@@ -10,6 +10,7 @@
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "fmt/base.h"
 #include "modules/linear_module.hpp"
@@ -28,6 +29,8 @@ protected:
 };
 
 TEST_F(AdamWFullTest, AdamWTest) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     using namespace ttml::ops;
     ttml::autograd::ctx().set_seed(42);
     auto* device = &ttml::autograd::ctx().get_device();

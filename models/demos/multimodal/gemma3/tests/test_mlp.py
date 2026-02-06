@@ -52,7 +52,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
 
     reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(partial_state_dict)
-    if model_args.is_90b:
+    if seq_len >= (32 * 1024):
         # float32 ~3x faster than bfloat16.
         # bfloat16 fails on CI (32k and 64k seq_len) with "This test seems to have hung... Timing out test case"
         reference_model.to(torch.float32)
@@ -72,7 +72,11 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
     torch_input = torch.randn(
         1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
     )
+
+    logger.info(f"Run reference...")
     reference_output = reference_model(torch_input)
+    logger.info(f"Run reference... done")
+
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
