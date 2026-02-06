@@ -122,31 +122,51 @@ class CBRemapper:
         chain_from_previous: bool = False,
         previous_output_cb: Optional[int] = None,
         target_input_cb: Optional[int] = None,
+        shared_cb_mapping: Optional[Dict[int, int]] = None,
     ) -> Dict[int, int]:
         """
         Allocate remapped CB indices for a phase.
+
+        For phase 0 (first phase), keep original CB indices - no remapping needed.
+        For phases 1+, remap to avoid conflicts with previous phases.
 
         Args:
             phase: Phase information with CB requirements
             chain_from_previous: If True, connect previous output to this phase's input
             previous_output_cb: The remapped CB index holding previous phase's output
             target_input_cb: The original CB index that should receive the chained input
+            shared_cb_mapping: Optional mapping of original CB index -> physical CB index
+                              to reuse from a previous phase (e.g., for shared gamma/beta/scratch)
 
         Returns:
             Mapping of original CB index -> remapped CB index
         """
         remapping: Dict[int, int] = {}
 
+        # Phase 0: keep original indices (identity mapping)
+        if not chain_from_previous:
+            for original_idx in phase.cb_info.keys():
+                remapping[original_idx] = original_idx
+                self.allocated.add(original_idx)
+            self.phase_allocations.append(remapping)
+            return remapping
+
+        # Phases 1+: remap to avoid conflicts
         # If chaining from previous phase, reuse the output CB as this phase's input
-        if chain_from_previous and previous_output_cb is not None and target_input_cb is not None:
+        if previous_output_cb is not None and target_input_cb is not None:
             remapping[target_input_cb] = previous_output_cb
-            # Mark this CB as in use (it holds live data)
             self.allocated.add(previous_output_cb)
 
-        # Allocate CBs for all other requirements
+        # Apply shared CB mappings (reuse phase 0's physical CBs)
+        if shared_cb_mapping:
+            for original_idx, physical_idx in shared_cb_mapping.items():
+                if original_idx not in remapping and original_idx in phase.cb_info:
+                    remapping[original_idx] = physical_idx
+
+        # Allocate new CBs for remaining requirements
         for original_idx, cb_info in phase.cb_info.items():
             if original_idx in remapping:
-                continue  # Already mapped (chained input)
+                continue  # Already mapped
 
             # Find a free CB index
             new_idx = self._find_free_cb()
@@ -158,7 +178,10 @@ class CBRemapper:
 
     def finish_phase(self, remapping: Dict[int, int], output_cb_original: Optional[int] = None):
         """
-        Mark a phase as complete, freeing non-output CBs.
+        Mark a phase as complete.
+
+        For fused compute kernels where all phases run in the same kernel,
+        we do NOT free any CBs - they're all in use simultaneously.
 
         Args:
             remapping: The CB remapping for this phase
@@ -166,16 +189,11 @@ class CBRemapper:
         """
         output_cb_remapped = remapping.get(output_cb_original) if output_cb_original else None
 
-        for original, remapped in remapping.items():
-            if output_cb_remapped is not None and remapped == output_cb_remapped:
-                # Keep output CB for next phase
-                self.live_data_cbs.add(remapped)
-            else:
-                # Free for reuse
-                self.allocated.discard(remapped)
-
-        # Clear live data CBs from previous phases (they've been consumed)
-        self.live_data_cbs = {output_cb_remapped} if output_cb_remapped else set()
+        # For fused compute kernels, keep ALL CBs allocated since all phases
+        # run in the same kernel and all CBs are in scope.
+        # Only mark the output CB as live data for chaining.
+        if output_cb_remapped is not None:
+            self.live_data_cbs.add(output_cb_remapped)
 
     def _find_free_cb(self) -> int:
         """Find the next available CB index."""
@@ -662,7 +680,15 @@ class SequentialChainBuilder:
         """
         remapper = CBRemapper()
 
+        # CB indices that are unique per phase (chained input/output).
+        # All other CBs can be shared with phase 0's physical indices.
+        per_phase_original_indices: Set[int] = set()
+        for phase in self.phases:
+            per_phase_original_indices.update(phase.input_cb_indices)
+            per_phase_original_indices.update(phase.output_cb_indices)
+
         # First pass: allocate CB indices for all phases
+        phase0_remapping: Dict[int, int] = {}
         for i, phase in enumerate(self.phases):
             # Find if this phase receives input from a previous phase
             chain_from_prev = False
@@ -677,16 +703,30 @@ class SequentialChainBuilder:
                     target_input_cb = conn.target_input_cb
                     break
 
+            # For phases 1+, build shared CB mapping from phase 0.
+            # All CBs except input/output are shared (reader-filled constants
+            # and intermediate scratch buffers that are done before next phase).
+            shared_cb_mapping: Optional[Dict[int, int]] = None
+            if i > 0 and phase0_remapping:
+                shared_cb_mapping = {}
+                for orig_idx, phys_idx in phase0_remapping.items():
+                    if orig_idx not in per_phase_original_indices:
+                        shared_cb_mapping[orig_idx] = phys_idx
+
             # Allocate CBs for this phase
             remapping = remapper.allocate_for_phase(
                 phase,
                 chain_from_previous=chain_from_prev,
                 previous_output_cb=prev_output_cb,
                 target_input_cb=target_input_cb,
+                shared_cb_mapping=shared_cb_mapping,
             )
             phase.cb_remapping = remapping
 
-            # Mark phase complete (frees non-output CBs)
+            if i == 0:
+                phase0_remapping = dict(remapping)
+
+            # Mark phase complete
             output_cb = list(phase.output_cb_indices)[0] if phase.output_cb_indices else None
             remapper.finish_phase(remapping, output_cb)
 
@@ -878,20 +918,228 @@ def _generate_fused_reader(
     Generate a fused reader kernel.
 
     The fused reader:
-    - Phase 0: Reads input tensor from DRAM, generates scaler/eps tiles
-    - Phase 1+: Only needs to read gamma/beta if present (input comes from CB)
+    - Phase 0: Reads input tensor from DRAM, generates scaler/eps tiles, reads gamma/beta
+    - Phase 1+: Reads gamma/beta from DRAM (input comes from previous phase's output CB)
 
-    For simplicity, we use phase 0's reader as-is since it reads the main input.
-    Subsequent phases' gamma/beta are read by their compute kernels or we'd need
-    to generate more complex fused reader logic.
+    For single phase, use phase 0's reader directly.
+    For multi-phase, use phase 0's reader with FILE_PATH source type (preserves include paths).
+
+    Note: We use phase 0's file-based reader instead of generating source code because
+    the LayerNorm reader includes relative headers (layernorm_dataflow_utils.h) that
+    require specific include paths set up by the build system. Generating SOURCE_CODE
+    would lose these include paths.
+
+    Future enhancement: To fully support multi-phase fusion with all gamma/beta reads,
+    either:
+    1. Add the layernorm kernel directory to the compiler's include paths
+    2. Use absolute includes in the generated source
+    3. Extend the runtime args mechanism to pass gamma/beta for phases 1+
     """
     if not phase_kernels or phase_kernels[0]["reader"] is None:
         return None
 
-    # For initial implementation, use phase 0's reader directly
-    # It reads the input tensor and generates scaler/eps
-    # The CB indices are already remapped via named_compile_time_args
-    return phase_kernels[0]["reader"]
+    # Single phase - use as-is
+    if len(phase_kernels) == 1:
+        return phase_kernels[0]["reader"]
+
+    # Multi-phase: Use phase 0's reader directly (preserves FILE_PATH and include paths)
+    # This means phases 1+ won't have their gamma/beta read from DRAM - they must either:
+    # 1. Use the same gamma/beta as phase 0 (common in many models)
+    # 2. Be extended later to read additional gamma/beta via extended runtime args
+    #
+    # For now, this enables the basic fusion case where all phases use the same weights.
+    base_reader = phase_kernels[0]["reader"]
+
+    # Update the named compile-time args to include phase-prefixed CB names
+    # This allows the reader to reference remapped CBs for all phases
+    merged_named_args = _merge_named_compile_time_args_for_readers(phase_kernels)
+
+    # Modify the reader's named args in place (C++ binding limitation prevents deepcopy)
+    base_reader.named_compile_time_args = merged_named_args
+
+    return base_reader
+
+
+def _generate_fused_reader_source(
+    phase_kernels: List[Dict[str, Any]],
+    phases: List[PhaseInfo],
+) -> Optional[str]:
+    """
+    Generate fused reader source that reads inputs for all phases.
+
+    Phase 0's reader reads the main input tensor + scaler/eps + gamma/beta.
+    For phases 1+, we add code to read their gamma/beta from additional runtime args.
+    """
+    if not phase_kernels or phase_kernels[0]["reader"] is None:
+        return None
+
+    # Read phase 0's reader source as the base
+    base_source = _read_kernel_source_from_descriptor(phase_kernels[0]["reader"])
+    if not base_source:
+        return None
+
+    # For phases 1+, we need to add gamma/beta reads
+    # The runtime args for phases 1+ start after phase 0's args (index 10+)
+    additional_reads = []
+    runtime_arg_offset = 10  # Phase 0 uses args 0-9
+
+    for i in range(1, len(phase_kernels)):
+        phase = phases[i]
+        pk = phase_kernels[i]
+        if pk["reader"] is None:
+            continue
+
+        # Check if this phase has gamma/beta by looking at its reader's defines
+        has_gamma = False
+        has_beta = False
+        for name, value in pk["reader"].defines:
+            if name == "FUSE_GAMMA":
+                has_gamma = True
+            if name == "FUSE_BETA":
+                has_beta = True
+
+        if has_gamma or has_beta:
+            # Get remapped CB indices for this phase
+            gamma_cb = phase.cb_remapping.get(5, 5)  # cb_gamma is typically index 5
+            beta_cb = phase.cb_remapping.get(6, 6)  # cb_beta is typically index 6
+
+            if has_gamma:
+                additional_reads.append(
+                    f"""
+    // Read gamma for phase {i}
+    {{
+        uint32_t phase{i}_gamma_addr = get_arg_val<uint32_t>({runtime_arg_offset});
+        constexpr uint32_t phase{i}_cb_gamma = get_named_compile_time_arg_val("phase{i}_cb_gamma");
+        const uint32_t phase{i}_gamma_tile_bytes = get_tile_size(phase{i}_cb_gamma);
+        const auto phase{i}_addrg = TensorAccessor(gamma_args, phase{i}_gamma_addr, phase{i}_gamma_tile_bytes);
+        for (auto block : generic::blocks(Wt, blk)) {{
+            layernorm_dataflow_utils::read_block_to_cb(
+                phase{i}_cb_gamma, phase{i}_addrg, phase{i}_gamma_tile_bytes, block.start(), block);
+        }}
+    }}"""
+                )
+                runtime_arg_offset += 1
+
+            if has_beta:
+                additional_reads.append(
+                    f"""
+    // Read beta for phase {i}
+    {{
+        uint32_t phase{i}_beta_addr = get_arg_val<uint32_t>({runtime_arg_offset});
+        constexpr uint32_t phase{i}_cb_beta = get_named_compile_time_arg_val("phase{i}_cb_beta");
+        const uint32_t phase{i}_beta_tile_bytes = get_tile_size(phase{i}_cb_beta);
+        const auto phase{i}_addrb = TensorAccessor(beta_args, phase{i}_beta_addr, phase{i}_beta_tile_bytes);
+        for (auto block : generic::blocks(Wt, blk)) {{
+            layernorm_dataflow_utils::read_block_to_cb(
+                phase{i}_cb_beta, phase{i}_addrb, phase{i}_beta_tile_bytes, block.start(), block);
+        }}
+    }}"""
+                )
+                runtime_arg_offset += 1
+
+    if not additional_reads:
+        # No additional reads needed, use base source with CB remapping
+        return _apply_cb_remapping_to_source(base_source, phases[0].cb_remapping, phase_idx=0)
+
+    # Insert additional reads before the end of kernel_main
+    # Find the closing brace of kernel_main and insert before it
+    lines = base_source.split("\n")
+    result_lines = []
+    inserted = False
+
+    # Apply phase 0 CB remapping to the base source first
+    remapped_base = _apply_cb_remapping_to_source(base_source, phases[0].cb_remapping, phase_idx=0)
+    lines = remapped_base.split("\n")
+
+    brace_depth = 0
+    in_kernel_main = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        if "void kernel_main()" in line:
+            in_kernel_main = True
+
+        if in_kernel_main:
+            brace_depth += stripped.count("{") - stripped.count("}")
+
+            # Insert additional reads just before the final closing brace
+            if brace_depth == 1 and stripped == "}" and not inserted:
+                # Insert the additional reads
+                for read_code in additional_reads:
+                    result_lines.append(read_code)
+                inserted = True
+
+        result_lines.append(line)
+
+    return "\n".join(result_lines)
+
+
+def _merge_named_compile_time_args_for_readers(
+    phase_kernels: List[Dict[str, Any]],
+) -> List[Tuple[str, int]]:
+    """
+    Merge named compile-time args from all phases' readers.
+
+    Phase 0's args are used AS-IS (no prefix) because we use phase 0's
+    file-based reader which expects the original names.
+    Phases 1+ args get phase-prefixed (for future fused reader source).
+
+    All reader-referenced CBs are shared with Phase 0's physical indices since
+    Phase 0's reader fills them once and the data persists (never popped).
+    """
+    merged = []
+    phase0_values = {}
+
+    for i, pk in enumerate(phase_kernels):
+        if pk["reader"] is None:
+            continue
+
+        for name, value in pk["reader"].named_compile_time_args:
+            if i == 0:
+                merged.append((name, value))
+                phase0_values[name] = value
+            else:
+                # Phase 1+: prefix, but reuse Phase 0's physical CB indices
+                # for all CBs that the reader fills (gamma, beta, eps, scaler, etc.)
+                prefixed_name = f"phase{i}_{name}"
+                if name in phase0_values:
+                    merged.append((prefixed_name, phase0_values[name]))
+                else:
+                    merged.append((prefixed_name, value))
+
+    return merged
+
+
+def _merge_reader_runtime_args(
+    phase_kernels: List[Dict[str, Any]],
+    phases: List[PhaseInfo],
+) -> Any:
+    """
+    Merge runtime args from all phases' readers.
+
+    Phase 0's args are used as the base (indices 0-9).
+    Phases 1+ append their gamma/beta addresses (indices 10+).
+
+    Returns the merged runtime args in the same format as the original.
+    """
+    if not phase_kernels or phase_kernels[0]["reader"] is None:
+        return []
+
+    base_args = phase_kernels[0]["reader"].runtime_args
+
+    # For single phase, just return base args
+    if len(phase_kernels) == 1:
+        return base_args
+
+    # For multi-phase, we need to extend each core's args
+    # Runtime args are a list of (CoreCoord, vector<uint32_t>) pairs
+    # We can't easily iterate them (C++ binding limitation), so we return base for now
+    # The actual extension would need to happen in C++ or via a different mechanism
+
+    # TODO: Properly merge runtime args - for now, return base
+    # This means phases 1+ won't have their gamma/beta read, but the infrastructure is in place
+    return base_args
 
 
 def _generate_fused_writer(
@@ -969,17 +1217,72 @@ def _generate_fused_compute(
     fused_compute.kernel_source = fused_source
     fused_compute.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
     fused_compute.core_ranges = base_compute.core_ranges
-    # Use first phase's compile-time args as base
-    fused_compute.compile_time_args = list(base_compute.compile_time_args)
+    # Merge compile-time args from all phases
+    fused_compute.compile_time_args = _merge_compile_time_args(phase_kernels)
     # Combine named compile-time args from all phases with phase prefixes
     fused_compute.named_compile_time_args = _merge_named_compile_time_args(phase_kernels)
-    fused_compute.defines = list(base_compute.defines)
+    # Merge defines from all phases
+    fused_compute.defines = _merge_defines(phase_kernels)
     # Note: Cannot use list(runtime_args) - causes infinite loop with C++ bindings
-    # Runtime args are set by the descriptor factory, so we copy the reference
+    # For compute kernels, all phases typically have the same runtime args (NCHt)
+    # since they operate on the same data. Use phase 0's args.
     fused_compute.runtime_args = base_compute.runtime_args
     fused_compute.config = base_compute.config
 
     return fused_compute
+
+
+def _merge_compile_time_args(
+    phase_kernels: List[Dict[str, Any]],
+) -> List[int]:
+    """
+    Merge compile-time args from all phases' compute kernels.
+
+    For LayerNorm, compile-time args are: Wt, blk, do_gamma, do_beta, etc.
+    These should be the same across phases operating on the same tensor shape.
+    """
+    if not phase_kernels:
+        return []
+
+    # Use phase 0's compile-time args as the base
+    # All phases should have compatible args since they operate on same tensor
+    base_compute = phase_kernels[0].get("compute")
+    if base_compute is None:
+        return []
+
+    return list(base_compute.compile_time_args)
+
+
+def _merge_defines(
+    phase_kernels: List[Dict[str, Any]],
+) -> List[Tuple[str, str]]:
+    """
+    Merge defines from all phases' compute kernels.
+
+    Each define is prefixed with phaseN_ to avoid conflicts.
+    Common defines (like REDUCE_OP) are only included once.
+    """
+    merged = []
+    seen_common = set()  # Track common defines to avoid duplicates
+
+    # Common defines that shouldn't be prefixed
+    common_defines = {"REDUCE_OP", "REDUCE_DIM", "BCAST_LLKOP", "BCAST_DIM"}
+
+    for i, pk in enumerate(phase_kernels):
+        if pk["compute"] is None:
+            continue
+
+        for name, value in pk["compute"].defines:
+            if name in common_defines:
+                if name not in seen_common:
+                    merged.append((name, value))
+                    seen_common.add(name)
+            else:
+                # Phase-specific defines get prefixed
+                prefixed_name = f"PHASE{i}_{name}"
+                merged.append((prefixed_name, value))
+
+    return merged
 
 
 def _generate_multi_phase_compute_source(
@@ -1006,18 +1309,41 @@ def _generate_multi_phase_compute_source(
     if not phase_sources:
         return None
 
-    # Collect all unique includes
+    # Extract defines, includes, and other pre-main code separately
+    defines = []
     includes = set()
+    other_pre_main = []
+
     for source in phase_sources:
         for line in source.split("\n"):
             stripped = line.strip()
-            if stripped.startswith("#include"):
+            if "void kernel_main()" in line:
+                break
+            if stripped.startswith("#define"):
+                # Only add unique defines
+                if stripped not in [d.strip() for d in defines]:
+                    defines.append(line)
+            elif stripped.startswith("#include"):
                 includes.add(stripped)
 
-    # Extract pre-kernel-main code from first source (macros, namespaces, etc.)
-    pre_main = _extract_pre_kernel_main_code(phase_sources[0])
+    # Extract other pre-main code (namespaces, macros like ALWI, etc.) from first source
+    for line in phase_sources[0].split("\n"):
+        stripped = line.strip()
+        if "void kernel_main()" in line:
+            break
+        if (
+            not stripped.startswith("#define")
+            and not stripped.startswith("#include")
+            and not stripped.startswith("//")
+            and stripped
+        ):
+            other_pre_main.append(line)
 
-    # Build the fused source
+    # Build the fused source - ORDER IS CRITICAL:
+    # 1. Header comments
+    # 2. Defines (REDUCE_OP, REDUCE_DIM must come before includes!)
+    # 3. Includes
+    # 4. Other pre-main code (namespaces, helper macros)
     lines = [
         "// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC",
         "//",
@@ -1027,12 +1353,16 @@ def _generate_multi_phase_compute_source(
         "",
     ]
 
+    # Add defines FIRST (before includes)
+    lines.extend(defines)
+    lines.append("")
+
     # Add includes
     lines.extend(sorted(includes))
     lines.append("")
 
-    # Add pre-main code (macros, namespaces from first phase)
-    lines.append(pre_main)
+    # Add other pre-main code (namespaces, helper macros)
+    lines.extend(other_pre_main)
     lines.append("")
 
     # Generate a phase function for each phase
@@ -1043,8 +1373,13 @@ def _generate_multi_phase_compute_source(
         source = _read_kernel_source_from_descriptor(pk["compute"])
         body = _extract_kernel_body_for_fusion(source)
 
-        # Apply CB remapping with phase prefix
-        remapped_body = _apply_cb_remapping_to_source(body, phase.cb_remapping, phase_idx=i)
+        # Get this phase's compile-time args for substitution
+        phase_compile_args = list(pk["compute"].compile_time_args) if pk["compute"] else []
+
+        # Apply CB remapping with phase prefix, and substitute compile-time args
+        remapped_body = _apply_cb_remapping_to_source(
+            body, phase.cb_remapping, phase_idx=i, compile_time_args=phase_compile_args
+        )
 
         lines.append(f"// Phase {i} compute function")
         lines.append(f"FORCE_INLINE void phase{i}_compute() {{")
@@ -1072,16 +1407,47 @@ def _merge_named_compile_time_args(
     """
     Merge named compile-time args from all phases.
 
-    Each phase has its own CB indices (already remapped). We need to include
-    all of them with phase-prefixed names to avoid conflicts.
+    Phase 0's args use ORIGINAL names (cb_in, cb_out, etc.) because the
+    original kernel body expects them.
+    Phases 1+ use phase-prefixed names to avoid conflicts.
+
+    CB sharing strategy for fused phases:
+    - READER-FILLED CBs (cb_eps, cb_scaler, cb_gamma, cb_beta): These are filled
+      by the reader kernel once and never popped. Phase 1+ reuses Phase 0's
+      physical CBs since the data persists.
+    - INTERMEDIATE SCRATCH CBs (cb_fusion, cb_xmm, cb_ex, cb_ex2, cb_xmm2,
+      cb_ex2pe, cb_x, cb_inb): These are pushed/popped within each NCHt iteration.
+      Phase 1+ can reuse Phase 0's physical CBs since Phase 0 completes before
+      Phase 1 starts in the fused kernel.
+    - PER-PHASE CBs (cb_in, cb_out): These differ per phase due to chaining
+      (Phase 1's input = Phase 0's output). These get unique remapped indices.
     """
+    # CBs filled by reader once, never popped - safe to share
+    READER_FILLED_CBS = {"cb_eps", "cb_scaler", "cb_gamma", "cb_beta"}
+
+    # Intermediate scratch CBs - pushed/popped within each iteration, safe to reuse
+    SCRATCH_CBS = {"cb_fusion", "cb_xmm", "cb_ex", "cb_ex2", "cb_xmm2", "cb_ex2pe", "cb_x", "cb_inb"}
+
+    SHARED_CBS = READER_FILLED_CBS | SCRATCH_CBS
+
     merged = []
+    phase0_values = {}  # Cache phase 0's CB values
+
     for i, pk in enumerate(phase_kernels):
         if pk["compute"] is not None:
             for name, value in pk["compute"].named_compile_time_args:
-                # Add phase prefix to avoid name conflicts
-                prefixed_name = f"phase{i}_{name}"
-                merged.append((prefixed_name, value))
+                if i == 0:
+                    # Phase 0: use original names and cache all values
+                    merged.append((name, value))
+                    phase0_values[name] = value
+                else:
+                    # Phase 1+: add phase prefix
+                    prefixed_name = f"phase{i}_{name}"
+                    if name in SHARED_CBS and name in phase0_values:
+                        # Reuse Phase 0's physical CB index
+                        merged.append((prefixed_name, phase0_values[name]))
+                    else:
+                        merged.append((prefixed_name, value))
     return merged
 
 
@@ -1109,7 +1475,8 @@ def _extract_kernel_body_for_fusion(source: str) -> str:
     """
     Extract the body of kernel_main() for fusion.
 
-    This extracts everything inside kernel_main() { ... }
+    This extracts everything inside kernel_main() { ... }, excluding the
+    final closing brace of kernel_main itself.
     """
     lines = source.split("\n")
     in_kernel_main = False
@@ -1129,40 +1496,82 @@ def _extract_kernel_body_for_fusion(source: str) -> str:
             open_braces = stripped.count("{")
             close_braces = stripped.count("}")
 
-            if brace_depth > 0:
+            # Calculate new brace depth after this line
+            new_brace_depth = brace_depth + open_braces - close_braces
+
+            # Only add the line if we're still inside the function
+            # (i.e., not the final closing brace that brings us to depth 0)
+            if new_brace_depth > 0 or (brace_depth > 0 and new_brace_depth > 0):
                 body_lines.append(line)
+            elif brace_depth > 0 and new_brace_depth == 0:
+                # This is the final closing brace - don't add it
+                # But if there's more content on this line before the brace, keep it
+                if stripped != "}":
+                    # Line has content plus closing brace - need to handle carefully
+                    # For now, skip the whole line as it's usually just "}"
+                    pass
+                break
 
-            brace_depth += open_braces - close_braces
+            brace_depth = new_brace_depth
 
-            if brace_depth == 0 and body_lines:
+            if brace_depth == 0:
                 break
 
     return "\n".join(body_lines)
 
 
-def _apply_cb_remapping_to_source(source: str, cb_remap: Dict[int, int], phase_idx: int) -> str:
+def _apply_cb_remapping_to_source(
+    source: str,
+    cb_remap: Dict[int, int],
+    phase_idx: int,
+    compile_time_args: Optional[List[int]] = None,
+) -> str:
     """
-    Apply CB remapping to kernel source code.
+    Apply CB remapping and compile-time arg substitution to kernel source code.
 
     This modifies:
-    1. get_named_compile_time_arg_val("cb_xxx") calls to use phase-prefixed names
+    1. get_named_compile_time_arg_val("cb_xxx") calls to use phase-prefixed names (phase 1+ only)
     2. Direct CB references like tt::CBIndex::c_N
+    3. For phase 1+: get_compile_time_arg_val(N) calls are replaced with the actual values
+       from this phase's compile-time args (to avoid reading Phase 0's values)
+
+    Phase 0's named args are NOT prefixed because the original kernel body expects
+    the original names (cb_in, cb_out, etc.).
     """
     result = source
-
-    # Replace named compile-time arg references with phase-prefixed versions
-    # Pattern: get_named_compile_time_arg_val("cb_xxx")
     import re
 
-    def replace_named_arg(match):
-        name = match.group(1)
-        return f'get_named_compile_time_arg_val("phase{phase_idx}_{name}")'
+    # For phase 1+, replace positional compile-time arg calls with actual values
+    # This is critical because the merged kernel uses Phase 0's compile-time args,
+    # but each phase has its own do_gamma/do_beta values
+    if phase_idx > 0 and compile_time_args:
 
-    result = re.sub(
-        r'get_named_compile_time_arg_val\("(cb_[^"]+)"\)',
-        replace_named_arg,
-        result,
-    )
+        def replace_compile_time_arg(match):
+            arg_idx = int(match.group(1))
+            if arg_idx < len(compile_time_args):
+                return str(compile_time_args[arg_idx])
+            # If index is out of range, keep original (shouldn't happen)
+            return match.group(0)
+
+        result = re.sub(
+            r"get_compile_time_arg_val\((\d+)\)",
+            replace_compile_time_arg,
+            result,
+        )
+
+    # Replace named compile-time arg references with phase-prefixed versions
+    # But ONLY for phase 1+ - phase 0 keeps original names
+    if phase_idx > 0:
+
+        def replace_named_arg(match):
+            name = match.group(1)
+            return f'get_named_compile_time_arg_val("phase{phase_idx}_{name}")'
+
+        result = re.sub(
+            r'get_named_compile_time_arg_val\("(cb_[^"]+)"\)',
+            replace_named_arg,
+            result,
+        )
 
     # Also remap direct CB index references (tt::CBIndex::c_N)
     for old_idx, new_idx in cb_remap.items():
