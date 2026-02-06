@@ -357,9 +357,9 @@ int main() {
         // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
 
         /* Create source data */
-        constexpr uint32_t M = 640;  // user-defined
-        constexpr uint32_t N = 640;  // user-defined
-        constexpr uint32_t K = 640;  // user-defined
+        constexpr uint32_t M = 3584;  // user-defined
+        constexpr uint32_t N = 3072;  // user-defined
+        constexpr uint32_t K = 768;   // user-defined
         constexpr uint32_t B = 1;    // user-defined
 
         uint32_t Mt = M / TILE_HEIGHT;
