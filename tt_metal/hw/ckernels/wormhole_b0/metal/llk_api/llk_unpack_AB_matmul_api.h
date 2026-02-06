@@ -40,6 +40,25 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const uint32_t unpB_num_faces =
         partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
+#ifdef LIGHTWEIGHT_ASSERT_ENABLED
+    const bool isUnpackerConfiguredCorrectly = are_unpacker_AB_configured_correctly(
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        unpA_num_faces,
+        unpB_num_faces,
+        100 /* nop_count */);
+
+    if (!isUnpackerConfiguredCorrectly) {
+        DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul_init - Need to reconfigure unpacker for AB matmul." << ENDL());
+        // There is no mechanism to actually use message, no point in passing it to assert.
+        LLK_ASSERT(false, "");
+    }
+#endif
+
     _llk_unpack_AB_matmul_init_(
         transpose,
         ct_dim,
@@ -77,6 +96,31 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
     std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
     std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
+
+#ifdef LIGHTWEIGHT_ASSERT_ENABLED
+    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandA_id);
+    const uint32_t unpA_num_faces = partial_face_a ? 1 : get_operand_num_faces(operandB_id);
+    const uint32_t unpB_num_faces =
+        partial_face_b ? 1 : get_operand_num_faces(operandA_id);  // if partial face -> unpack face by face
+
+    const bool isUnpackerConfiguredCorrectly = are_unpacker_AB_configured_correctly(
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        unpA_num_faces,
+        unpB_num_faces,
+        0 /* nop_count */);
+
+    if (!isUnpackerConfiguredCorrectly) {
+        DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul - Need to reconfigure unpacker for AB matmul." << ENDL());
+        // There is no mechanism to actually use message, no point in passing it to assert.
+        LLK_ASSERT(false, "");
+    }
+#endif
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(
