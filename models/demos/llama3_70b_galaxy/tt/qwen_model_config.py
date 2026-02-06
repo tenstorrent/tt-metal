@@ -468,7 +468,7 @@ class TtQwenModelArgs(TtModelArgs):
             def w1_w3_prg_config(seq_len, use_interleaved):
                 if seq_len == 128:
                     # return self.matmul_1d_config(128, 2048, 3584, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=16)
-                    return self.matmul_1d_config(128, 1280, 3200, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=10)
+                    return self.matmul_1d_config(128, 1280, 3200, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=4)
                 if not use_interleaved:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(5, 8),
@@ -546,7 +546,7 @@ class TtQwenModelArgs(TtModelArgs):
                         3200,
                         1280,
                         grid=ttnn.CoreGrid(x=7, y=10),
-                        overwrite_per_core_k=10,
+                        overwrite_per_core_k=2,
                     )
                 # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
                 if seq_len < 4096:
@@ -648,7 +648,7 @@ class TtQwenModelArgs(TtModelArgs):
 
             self.model_config["WO_PREFILL_PROGCFG"] = (
                 lambda seq_len: self.matmul_1d_config(
-                    seq_len, 1024, 1280, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=16
+                    seq_len, 1024, 1280, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=8
                 )
                 if seq_len == 128
                 else (
@@ -813,7 +813,7 @@ class TtQwenModelArgs(TtModelArgs):
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.model_config["XQKV_PREFILL_PROGCFG"] = (
                 lambda seq_len: self.matmul_1d_config(
-                    seq_len, 1280, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=10
+                    seq_len, 1280, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=8
                 )
                 if seq_len == 128
                 else (
