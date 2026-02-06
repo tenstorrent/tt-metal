@@ -3,25 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ============================================================================
-// TRUE FLASH SwiGLU COMPUTE KERNEL with rt_dim=2 optimization
+// TRUE FLASH SwiGLU COMPUTE KERNEL with rt_dim=2 and X Row Caching (Phase 3)
 //
 // This kernel processes 2 rows at a time using matmul_block with rt_dim=2.
 // This doubles throughput by computing both rows in a single matmul operation.
+//
+// Phase 3 optimization: X Row Caching
+//   - Full X row(s) are cached in CB at the start of each row pair
+//   - X is reused across all k_blocks (K_blocks × fewer DRAM reads)
+//   - CB holds rt_dim × Wt tiles = 2 × Wt tiles
 //
 // Key optimization: matmul_block(rt_dim=2, ct_dim=2)
 //   - DST layout: [row0_k0, row0_k1, row1_k0, row1_k1] (4 tiles)
 //   - Process k-dimension in 2 chunks: k=0,1 then k=2,3
 //
-// Algorithm:
+// Algorithm with X caching:
 //   for r in 0..rows step 2:           # Process row pairs
+//     wait for X[r:r+2, :] (full row cached in CB)
 //     for k_block in K_blocks:
 //       for p_block in P_blocks:
-//         # Two matmul_block calls per p: one for k=0,1, one for k=2,3
+//         # Read X[r:r+2, p_block] from CACHED CB (not DRAM!)
 //         matmul_block(X[r:r+2, p], W1[p, k=0:2], rt_dim=2, ct_dim=2)
 //         matmul_block(X[r:r+2, p], W1[p, k=2:4], rt_dim=2, ct_dim=2)
 //       M[r:r+2, k_block] = SiLU(XW1[r:r+2]) * XW3[r:r+2]
 //       for c_block in C_blocks:
 //         Y[r:r+2, c_block] += M[r:r+2] @ W2[k_block, c_block]
+//     pop X (once per row pair)
 // ============================================================================
 
 #include <compute_kernel_api/eltwise_binary_sfpu.h>
@@ -52,7 +59,7 @@ constexpr uint32_t rt_dim = 2;
 constexpr uint32_t ct_dim = block_size / rt_dim;  // = 2 when block_size=4, rt_dim=2
 
 // CBs with input data
-constexpr auto cb_input_idx = tt::CBIndex::c_0;  // X[r:r+rt_dim, p_block] - rt_dim rows × block_size tiles
+constexpr auto cb_input_idx = tt::CBIndex::c_0;  // X[r:r+rt_dim, :] - FULL cached row (rt_dim × Wt tiles)
 constexpr auto cb_w1_idx = tt::CBIndex::c_1;     // W1[p_block, k_block]
 constexpr auto cb_w2_idx = tt::CBIndex::c_2;     // W2[k_block, c_block]
 constexpr auto cb_w3_idx = tt::CBIndex::c_3;     // W3[p_block, k_block]
@@ -68,10 +75,16 @@ constexpr auto cb_y_idx = tt::CBIndex::c_10;           // Final Y[r:r+rt_dim, c_
 // ============================================================================
 // Accumulate XW result for one k_block across p_blocks (rt_dim=2 version)
 //
+// Phase 3: X is cached in CB for full row. x_p_block_offset tells us where
+// in the cached X to read for this p_block.
+//
 // With rt_dim=2, ct_dim=2:
 // - Process 2 rows × 2 k-columns per matmul_block call
 // - Need 2 calls per p to cover all 4 k-columns (k=0,1 and k=2,3)
 // - DST layout after each call: [r0_k0, r0_k1, r1_k0, r1_k1]
+//
+// X CB layout (cached full rows): [r0_p0, r0_p1, ..., r0_pWt-1, r1_p0, r1_p1, ..., r1_pWt-1]
+// For p_block starting at p_block_start: read from offset p_block_start
 //
 // Output CB layout (row-major): [r0_k0, r0_k1, r0_k2, r0_k3, r1_k0, r1_k1, r1_k2, r1_k3]
 // Total: rt_dim × block_size = 2 × 4 = 8 tiles
@@ -81,6 +94,7 @@ inline void accumulate_XW_for_k_block_rt2(
     const tt::CBIndex cb_w_idx,
     const tt::CBIndex cb_partial_idx,
     const tt::CBIndex cb_final_idx,
+    const uint32_t x_p_block_offset,  // Offset into cached X row for this p_block
     const uint32_t p_block_size,
     const uint32_t k_block_size,
     const uint32_t actual_rows,  // 1 or 2 (for handling odd total rows)
@@ -124,15 +138,18 @@ inline void accumulate_XW_for_k_block_rt2(
         /*rt_dim=*/rt_dim,
         /*kt_dim=*/p_block_size);
 
-    // X layout in CB: row-major [r0_p0, r0_p1, r0_p2, r0_p3, r1_p0, r1_p1, r1_p2, r1_p3]
-    // For rt_dim=2: in0 reads 2 consecutive tiles (r0_p, r1_p) per inner iteration
+    // Phase 3: X is cached as full rows in CB
+    // X layout in CB: [r0_p0, r0_p1, ..., r0_pWt-1, r1_p0, r1_p1, ..., r1_pWt-1]
+    // For this p_block: X[r0, p] at x_p_block_offset + p, X[r1, p] at Wt + x_p_block_offset + p
+    // For rt_dim=2: in0 reads tiles at in0_index (r0) and in0_index + Wt (r1)
 
     // --- First k-half: k=0,1 ---
     // DST output positions: [0,1,2,3] = [r0_k0, r0_k1, r1_k0, r1_k1]
     for (uint32_t p = 0; p < p_block_size; ++p) {
-        // in0_index: X tile for this p (r0 and r1 are adjacent in CB)
-        // For rt_dim=2, hardware reads in0_index and in0_index+1 (strided by rt_dim)
-        const uint32_t in0_index = p;  // X[r0, p] at p, X[r1, p] at p + block_size
+        // in0_index: X tile for this p within the cached row
+        // X[r0, p_block_start + p] at (x_p_block_offset + p)
+        // X[r1, p_block_start + p] at (Wt + x_p_block_offset + p)
+        const uint32_t in0_index = x_p_block_offset + p;
         // in1_index: W[p, k=0] - first k-half
         const uint32_t in1_index = p * block_size + 0;  // W row p, cols 0,1
         matmul_block(
@@ -167,7 +184,8 @@ inline void accumulate_XW_for_k_block_rt2(
     // Need to rearrange before packing, or adjust the pack order
 
     for (uint32_t p = 0; p < p_block_size; ++p) {
-        const uint32_t in0_index = p;
+        // Phase 3: Use cached X offset
+        const uint32_t in0_index = x_p_block_offset + p;
         const uint32_t in1_index = p * block_size + ct_dim;  // W row p, cols 2,3
         matmul_block(
             cb_x_idx,
@@ -311,7 +329,7 @@ inline void accumulate_Y_for_c_block_rt2(
 }
 
 // ============================================================================
-// TRUE FLASH MAIN KERNEL with rt_dim=2
+// TRUE FLASH MAIN KERNEL with rt_dim=2 and X Row Caching (Phase 3)
 // ============================================================================
 void kernel_main() {
     init_sfpu(cb_input_idx, cb_y_idx);
@@ -320,6 +338,9 @@ void kernel_main() {
     const uint32_t num_k_blocks = (hidden_Wt + block_size - 1) / block_size;
     const uint32_t num_p_blocks = (Wt + block_size - 1) / block_size;
     const uint32_t num_c_blocks = (Wt + block_size - 1) / block_size;
+
+    // X CB now holds full cached rows: rt_dim × Wt tiles
+    constexpr uint32_t x_cache_tiles = rt_dim * Wt;
 
     // Process rows in pairs (rt_dim=2)
     for (uint32_t r = 0; r < max_rows_for_sync; r += rt_dim) {
@@ -331,6 +352,10 @@ void kernel_main() {
         }
         const bool is_padding_pair = (actual_rows == 0);
 
+        // ---- Phase 3: Wait for FULL X rows (cached in CB) ----
+        // X is read once per row pair and reused for all k_blocks
+        cb_wait_front(cb_input_idx, x_cache_tiles);
+
         for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx) {
             const uint32_t k_block_start = k_block_idx * block_size;
             const uint32_t k_block_size =
@@ -339,20 +364,20 @@ void kernel_main() {
             const bool last_k_block = (k_block_idx == num_k_blocks - 1);
 
             // ---- Phase A: Compute XW1 and XW3 for rt_dim rows ----
+            // X is already cached - iterate through p_blocks reading from cache
             for (uint32_t p_block_idx = 0; p_block_idx < num_p_blocks; ++p_block_idx) {
                 const uint32_t p_block_start = p_block_idx * block_size;
                 const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
                 const bool first_p_block = (p_block_idx == 0);
                 const bool last_p_block = (p_block_idx == num_p_blocks - 1);
 
-                // X has rt_dim rows × block_size tiles
-                cb_wait_front(cb_input_idx, rt_dim * block_size);
-
+                // X is cached - use p_block_start as offset into cached row
                 accumulate_XW_for_k_block_rt2(
                     cb_input_idx,
                     cb_w1_idx,
                     cb_xw1_partial_idx,
                     cb_xw1_idx,
+                    p_block_start,  // Offset into cached X row
                     p_block_size,
                     k_block_size,
                     actual_rows > 0 ? actual_rows : rt_dim,
@@ -364,13 +389,14 @@ void kernel_main() {
                     cb_w3_idx,
                     cb_xw3_partial_idx,
                     cb_xw3_idx,
+                    p_block_start,  // Offset into cached X row
                     p_block_size,
                     k_block_size,
                     actual_rows > 0 ? actual_rows : rt_dim,
                     first_p_block,
                     last_p_block);
 
-                cb_pop_front(cb_input_idx, rt_dim * block_size);
+                // NOTE: Don't pop X here - it's reused for all k_blocks!
             }
 
             // ---- Phase B: Compute M = SiLU(XW1) * XW3 ----
@@ -397,5 +423,8 @@ void kernel_main() {
 
             cb_pop_front(cb_m_idx, m_tiles);
         }
+
+        // ---- Pop cached X once after all k_blocks are done ----
+        cb_pop_front(cb_input_idx, x_cache_tiles);
     }
 }

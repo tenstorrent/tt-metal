@@ -3,8 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ============================================================================
-// Reader kernel (sender) with rt_dim=2 support
-// Reads 2 rows of X at a time to match compute kernel's rt_dim=2 processing
+// Reader kernel (sender) with rt_dim=2 support and X Row Caching (Phase 3)
+//
+// Phase 3 optimization: Cache full X row in L1 to avoid re-reading from DRAM
+// for each k_block iteration. This reduces X reads by K_blocks factor.
+//
+// Flow per row pair:
+//   1. Read full X[r:r+2, :] into CB (rt_dim × Wt tiles)
+//   2. For each k_block:
+//      - For each p_block: mcast W1[p_block, k_block], W3[p_block, k_block]
+//      - Compute reuses cached X for all p_blocks
+//   3. For each c_block, k_block: mcast W2[k_block, c_block]
 // ============================================================================
 
 #include "api/dataflow/dataflow_api.h"
@@ -12,7 +21,7 @@
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 // CBs
-constexpr auto cb_input_idx = tt::CBIndex::c_0;  // X[r:r+2, p_block] - 2 rows
+constexpr auto cb_input_idx = tt::CBIndex::c_0;  // X[r:r+2, :] - full row cache
 constexpr auto cb_w1_idx = tt::CBIndex::c_1;
 constexpr auto cb_w2_idx = tt::CBIndex::c_2;
 constexpr auto cb_w3_idx = tt::CBIndex::c_3;
@@ -68,27 +77,26 @@ void kernel_main() {
 
     // Process rows in pairs (rt_dim=2)
     for (uint32_t r = start_row; r < end_row_for_sync; r += rt_dim) {
-        // ---- Phase A: Read 2 rows of X per p_block, mcast W1/W3 ----
-        for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
-            const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
-
-            // Read rt_dim rows of X (2 rows × block_size tiles = 8 tiles)
-            // For padding or last odd row, read valid rows + duplicate last valid row
-            for (uint32_t row_offset = 0; row_offset < rt_dim; ++row_offset) {
-                uint32_t x_row = r + row_offset;
-                // Clamp to valid row range
-                if (x_row >= end_row) {
-                    x_row = end_row - 1;  // Duplicate last valid row for padding
-                }
-                const uint32_t x_tile_start = x_row * Wt + p_block_start;
-                read_tiles_by_row(
-                    cb_input_idx, x_address_generator, x_tile_start, p_block_size, tile_bytes, block_size);
+        // ---- Phase 3: Read FULL X rows once (cache in L1) ----
+        // Read rt_dim full rows of X (2 rows × Wt tiles = 2*Wt tiles)
+        for (uint32_t row_offset = 0; row_offset < rt_dim; ++row_offset) {
+            uint32_t x_row = r + row_offset;
+            // Clamp to valid row range for padding iterations
+            if (x_row >= end_row) {
+                x_row = end_row - 1;  // Duplicate last valid row for padding
             }
+            // Read full row of X (Wt tiles)
+            const uint32_t x_tile_start = x_row * Wt;
+            read_tiles_by_row(cb_input_idx, x_address_generator, x_tile_start, Wt, tile_bytes, Wt);
+        }
 
-            // Mcast W1 and W3 for all k_blocks
-            for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
-                const uint32_t k_block_size =
-                    (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
+        // ---- Phase A: Mcast W1/W3 for all k_blocks (X already cached) ----
+        for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
+            const uint32_t k_block_size =
+                (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
+
+            for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
+                const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
 
                 // Batched mcast W1
                 const uint32_t w1_first_row_tile_start = p_block_start * hidden_Wt + k_block_start;
@@ -132,14 +140,10 @@ void kernel_main() {
                     mcast_dest_noc_end_y,
                     num_receivers_excluding_self);
             }
-        }
 
-        // ---- Phase C: Mcast W2 for all c_blocks ----
-        for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
-            const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : Wt - c_block_start;
-            for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
-                const uint32_t k_block_size =
-                    (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
+            // ---- Phase C: Mcast W2 for all c_blocks (for this k_block) ----
+            for (uint32_t c_block_start = 0; c_block_start < Wt; c_block_start += block_size) {
+                const uint32_t c_block_size = (c_block_start + block_size <= Wt) ? block_size : Wt - c_block_start;
 
                 const uint32_t w2_first_col_start = k_block_start * Wt + c_block_start;
                 mcast_sender_read_batched_cols_and_send_loopback(

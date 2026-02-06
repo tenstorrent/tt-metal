@@ -28,21 +28,25 @@ bool should_use_true_flash(const tensor_args_t& tensor_args) {
     const uint32_t available_L1 =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
-    // Calculate True Flash memory requirements
-    const uint32_t twice_block_size = 2U * block_size;
-    const uint64_t input_mem = twice_block_size * bfloat16_tile_size;
-    const uint64_t w_mem = 3U * (2U * block_size * block_size) * bfloat16_tile_size;  // W1, W2, W3
-    const uint64_t intermediate_mem = 5U * block_size * bfloat16_tile_size;           // XW1/XW3 partial/final, M
-    const uint64_t y_mem = 2U * Wt * bfloat16_tile_size;                              // Y_partial + Y
+    // Calculate True Flash memory requirements (Phase 3: X Row Caching)
+    // X CB caches full row(s): rt_dim=2 rows × Wt tiles per row
+    constexpr uint32_t kRtDim = 2U;
+    const uint32_t rt_dim_tiles = kRtDim * block_size;                                // 2 × 4 = 8 tiles
+    const uint64_t input_mem = kRtDim * Wt * bfloat16_tile_size;                      // Phase 3: full X row caching
+    const uint64_t w_mem = 3U * (2U * block_size * block_size) * bfloat16_tile_size;  // W1, W2, W3 (batched mcast)
+    const uint64_t intermediate_mem = 5U * rt_dim_tiles * bfloat16_tile_size;         // XW1/XW3 partial/final, M
+    const uint64_t y_mem = 2U * rt_dim_tiles * bfloat16_tile_size;                    // Y_partial + Y
 
     const uint64_t true_flash_total = input_mem + w_mem + intermediate_mem + y_mem;
 
-    // Calculate original algorithm memory requirements
+    // Calculate original algorithm memory requirements (uses small block-based X CB)
+    const uint32_t twice_block_size = 2U * block_size;
     const uint32_t hidden_Wt_rounded = ((hidden_Wt + block_size - 1U) / block_size) * block_size;
+    const uint64_t original_input_mem = twice_block_size * bfloat16_tile_size;  // Original: small X CB
     const uint64_t original_intermediate_mem =
         5U * hidden_Wt_rounded * bfloat16_tile_size;                             // XW1/XW3 partial/final, M (full rows)
     const uint64_t original_y_mem = 2U * twice_block_size * bfloat16_tile_size;  // Y_partial + Y (block_size)
-    const uint64_t original_total = input_mem + w_mem + original_intermediate_mem + original_y_mem;
+    const uint64_t original_total = original_input_mem + w_mem + original_intermediate_mem + original_y_mem;
 
     // Use True Flash if:
     // 1. It fits in L1
