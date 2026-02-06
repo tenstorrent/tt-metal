@@ -13,8 +13,12 @@ from torch.nn import functional as F
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from ttnn.model_preprocessing import preprocess_linear_weight
-from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after
-from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearSilu, TTNNLinearLLama
+from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.modules.linear import (
+    TTNNLinearSilu,
+    TTNNLinearLLamaIColShardedWRowSharded,
+    TTNNLinearIColShardedWRowSharded,
+)
 
 
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
@@ -427,32 +431,42 @@ class Glm4MoeMoE(torch.nn.Module):
 class Glm4MoeNaiveMoeHybrid(nn.Module):
     """Collection of expert weights stored as 3D tensors."""
 
-    def __init__(self, old_layer):
+    def __init__(self, old_layer, num_experts_off_chip: int = 20):
         super().__init__()
         self.num_experts = old_layer.num_experts
         self.hidden_dim = old_layer.hidden_dim
         self.intermediate_dim = old_layer.intermediate_dim
         self.gate_layers = {
             i: TTNNLinearSilu.from_parameters(
-                old_layer.gate_up_proj[i, : self.intermediate_dim, :], linear_class=TTNNLinearLLama
+                old_layer.gate_up_proj[i, : self.intermediate_dim, :],
+                linear_class=TTNNLinearLLamaIColShardedWRowSharded
+                if i < num_experts_off_chip
+                else TTNNLinearIColShardedWRowSharded,
             )
             for i in range(self.num_experts)
         }
         self.up_layers = {
-            i: TTNNLinearLLama.from_parameters(old_layer.gate_up_proj[i, self.intermediate_dim :, :])
+            i: TTNNLinearLLamaIColShardedWRowSharded.from_parameters(
+                old_layer.gate_up_proj[i, self.intermediate_dim :, :]
+            )
+            if i < num_experts_off_chip
+            else TTNNLinearIColShardedWRowSharded.from_parameters(old_layer.gate_up_proj[i, self.intermediate_dim :, :])
             for i in range(self.num_experts)
         }
         del old_layer.gate_up_proj
         self.down_layers = {
-            i: TTNNLinearLLama.from_parameters(old_layer.down_proj[i, :, :]) for i in range(self.num_experts)
+            i: TTNNLinearLLamaIColShardedWRowSharded.from_parameters(old_layer.down_proj[i, :, :])
+            if i < num_experts_off_chip
+            else TTNNLinearIColShardedWRowSharded.from_parameters(old_layer.down_proj[i, :, :])
+            for i in range(self.num_experts)
         }
         del old_layer.down_proj
         assert old_layer.config.hidden_act == "silu", "Only SiLU activation is supported in naive MoE."
 
     @classmethod
-    def from_torch(cls, moe_module: Glm4MoeNaiveMoe) -> "TTNNGlm4MoeNaiveMoe":
+    def from_torch(cls, moe_module: Glm4MoeNaiveMoe, num_experts_off_chip: int = 20) -> "TTNNGlm4MoeNaiveMoe":
         """Create TTNNGlm4MoeNaiveMoe from PyTorch Glm4MoeNaiveMoe layer."""
-        new_moe = cls(moe_module)
+        new_moe = cls(moe_module, num_experts_off_chip=num_experts_off_chip)
         return new_moe
 
     def forward(
@@ -524,175 +538,10 @@ class TTNNGlm4MoeNaiveMoe(TTNNModule):
             TorchTTNNTensor(topk_experts_weights),
         ).to_ttnn
 
-    def forward_mesh(self, x, topk_experts_indices, topk_experts_weights):
-        ccl = self.device_state.ccl_manager
-        hidden_size = self.torch_layer.hidden_dim
-        moe_intermediate_size = self.torch_layer.intermediate_dim
-        assert len(x.shape) == 2  # Shape: [num_tokens, hidden_size]
-        x = ttnn.reshape(x, shape=(1, 1, x.shape[-2], x.shape[-1]))
-        x = ttnn.experimental.all_gather_async(
-            x,
-            **ccl.populate_all_gather_runtime_args(
-                {
-                    "mesh_device": self.device,
-                    "dim": -1,  # Last dimension
-                    "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                    "cluster_axis": 1,
-                    "topology": ttnn.Topology.Linear,
-                }
-            ),
-        )
 
-        seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
-        batch_size_per_device = x.shape[
-            -2
-        ]  # Input is expected to be DP. In prefill, this is equivalent to seq_len_per_device
-        batch_size = batch_size_per_device * self.device.shape[0]  # Global batch size
-
-        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x_rm = ttnn.reshape(x_rm, shape=(batch_size_per_device, 1, seq_len, hidden_size))
-        topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
-        topk_experts_indices = ttnn.typecast(topk_experts_indices, ttnn.uint16)
-        topk_experts_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_indices_rm = ttnn.reshape(
-            topk_experts_indices_rm,
-            shape=(batch_size_per_device, 1, seq_len, self.torch_layer.config.num_experts_per_tok),
-        )
-        all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
-            x_rm, topk_experts_indices_rm, self.expert_mapping_tensors, num_links=1
-        )
-        post_all_to_all_dispatch_output = ttnn.reshape(
-            all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, hidden_size)
-        )
-        post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
-        # repeat remap_topk_mask for the num_tokens known at runtime
-        remap_topk_mask = ttnn.repeat(self.remap_topk_mask, ttnn.Shape((1, batch_size_per_device, 1, 1)))
-        _, sparsity_t = ttnn.moe_expert_token_remap(
-            remap_topk_mask,
-            self.expert_mapping_tensors,
-            all_to_all_dispatch_metadata_tensors,
-            reduction_size=SPARSITY_BLOCK_SIZE,
-        )
-
-        ### START Expert computation
-        _, _, num_tokens, hidden_size = post_all_to_all_dispatch_output.shape
-        num_sparse_blocks = num_tokens // SPARSITY_BLOCK_SIZE
-        post_all_to_all_dispatch_output = ttnn.reshape(
-            post_all_to_all_dispatch_output, shape=(1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, hidden_size)
-        )
-
-        # Gate and up projections
-        w1_out = ttnn.sparse_matmul(
-            post_all_to_all_dispatch_output,
-            sparsity=sparsity_t,
-            is_input_a_sparse=False,
-            is_input_b_sparse=True,
-            # output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
-        )
-        w3_out = ttnn.sparse_matmul(
-            post_all_to_all_dispatch_output,
-            sparsity=sparsity_t,
-            is_input_a_sparse=False,
-            is_input_b_sparse=True,
-        )
-
-        # Apply activation and multiply
-        activated = ttnn.mul(
-            w1_out,
-            w3_out,
-            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-        )
-        ttnn.deallocate(w1_out)
-        ttnn.deallocate(w3_out)
-
-        # Reshape for down projection
-        # activated.shape = Shape([1, 4, 1, 8, 32, 2048])
-        activated = ttnn.squeeze(activated, 0)
-        activated = ttnn.squeeze(activated, 1)
-
-        # Down projection
-        output = ttnn.sparse_matmul(
-            activated,
-            sparsity=sparsity_t,
-            is_input_a_sparse=True,
-            is_input_b_sparse=False,
-        )
-        ttnn.deallocate(activated)
-
-        # Reshape for output
-        output = ttnn.permute(output, (1, 0, 2, 3))
-        experts_output = ttnn.reshape(output, shape=(1, self.num_experts_per_device, num_tokens, hidden_size))
-
-        ### END Expert computation
-
-        ttnn.deallocate(post_all_to_all_dispatch_output)
-        experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
-        experts_output = ttnn.reshape(
-            experts_output, shape=(self.num_experts_per_device, batch_size, seq_len, hidden_size)
-        )
-        all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
-            experts_output,
-            all_to_all_dispatch_metadata_tensors,
-            self.expert_mapping_tensors,
-            num_links=1,
-        )
-        post_combine_output_tensor = ttnn.reshape(
-            all_to_all_combine_output_tensors,
-            shape=(self.torch_layer.config.num_experts_per_tok, 1, batch_size_per_device * seq_len, hidden_size),
-        )
-        post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
-        topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, ttnn.Shape((hidden_size, 1, 1, 1)))
-        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
-        topk_experts_weights = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(topk_experts_weights_rm)
-        post_combine_output_tensor = ttnn.mul(
-            post_combine_output_tensor,
-            topk_experts_weights,
-        )
-        post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
-        post_combine_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
-            post_combine_output_tensor,
-            **ccl.populate_reduce_scatter_runtime_args(
-                {
-                    "dim": 3,  # Last dimension
-                    "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                    "cluster_axis": 1,
-                    "topology": ttnn.Topology.Linear,
-                }
-            ),
-        )
-        return post_combine_output_tensor
-
-
-class TTNNGlm4MoeTopkRouter(TTNNModule):
-    def preprocess_weights_impl(self):
-        """Preprocess linear weights for TTNN."""
-        self.tt_weight_host = preprocess_linear_weight(
-            self.torch_layer.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-        )
-        self.e_score_correction_bias = self.torch_layer.e_score_correction_bias
-
-    def move_weights_to_device_impl(self):
-        """Move weights to TTNN device."""
-        self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
-
-    def deallocate_weights_impl(self):
-        """Deallocate weights from device."""
-        ttnn.deallocate(self.tt_weight)
-        super().deallocate_weights_impl()
-
-    @deallocate_weights_after
+class TTNNGlm4MoeTopkRouter(TTNNLinearIColShardedWRowSharded):
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """Forward pass through linear layer."""
-        if input_tensor.layout != ttnn.TILE_LAYOUT:
-            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        input_tensor_shape = list(input_tensor.shape)
-        input_shape = list(input_tensor_shape)
-        while len(input_shape) < 4:
-            input_shape.insert(0, 1)  # Add batch dimensions if needed
-        input_tensor = ttnn.reshape(input_tensor, input_shape)
-        tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_output = super().forward(input_tensor)
         tt_output = ttnn.reshape(tt_output, [-1] + [tt_output.shape[-1]])
         return tt_output
 
@@ -703,9 +552,11 @@ class TTNNGlm4MoeMLP(TTNNModule):
         """Create a TTNNGlm4MoeMLP from a PyTorch Glm4MoeMLP layer."""
         tt_module = cls()
         tt_module._fallback_torch_layer = torch_layer
-        tt_module.gate_proj = TTNNLinearSilu.from_torch(torch_layer.gate_proj)
-        tt_module.up_proj = TTNNLinear.from_torch(torch_layer.up_proj)
-        tt_module.down_proj = TTNNLinear.from_torch(torch_layer.down_proj)
+        tt_module.gate_proj = TTNNLinearSilu.from_torch(
+            torch_layer.gate_proj, linear_class=TTNNLinearIColShardedWRowSharded
+        )
+        tt_module.up_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.up_proj)
+        tt_module.down_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.down_proj)
         return tt_module
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -870,8 +721,10 @@ class TTNNGlm4MoeMoE(TTNNModule):
     def from_torch(cls, torch_module: Glm4MoeMoE) -> "TTNNGlm4MoeMoE":
         ttnn_module = cls()
         ttnn_module._fallback_torch_layer = torch_module
-        ttnn_module.experts = Glm4MoeNaiveMoeHybrid.from_torch(torch_module.experts)
-        ttnn_module.gate = TTNNGlm4MoeTopkRouter.from_torch(torch_module.gate)
+        ttnn_module.experts = Glm4MoeNaiveMoeHybrid.from_torch(torch_module.experts, num_experts_off_chip=32)
+        ttnn_module.gate = TTNNGlm4MoeTopkRouter.from_parameters(
+            torch_module.gate.weight, torch_module.gate.e_score_correction_bias
+        )
         ttnn_module.shared_experts = TTNNGlm4MoeMLP.from_torch(torch_module.shared_experts)
         ttnn_module.route_tokens_to_experts = TTNNGlm4MoeRouteTokenToExperts.from_torch(
             Glm4MoeRouteTokenToExperts(
@@ -886,15 +739,15 @@ class TTNNGlm4MoeMoE(TTNNModule):
         )
         return ttnn_module
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, hidden_states):
         hidden_states = TorchTTNNTensor(hidden_states)
         residuals = hidden_states
-        orig_shape = hidden_states.shape
+        orig_shape = list(hidden_states.shape)
         router_logits = self.gate(hidden_states)
         topk_indices, topk_weights = self.torch_layer.route_tokens_to_experts(router_logits)
-        hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
-        if self.device_state is not None:
-            hidden_states.set_distributed_config(self.device_state.tensor_config)
+        hidden_states = hidden_states.view(-1, hidden_states.shape[-1] * 8)
+        orig_shape[-1] = -1
         hidden_states = self.experts(hidden_states, topk_indices.to(dtype=torch.int64), topk_weights).view(*orig_shape)
         hidden_states = hidden_states + self.shared_experts(residuals)
         return hidden_states.to_ttnn
