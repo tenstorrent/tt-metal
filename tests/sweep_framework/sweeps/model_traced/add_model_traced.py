@@ -130,10 +130,12 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
 
-    # Check if this is a scalar add operation (shape_b is None and scalar is provided)
-    if shape_b is None and scalar is not None:
+    # Check if this is a scalar add operation (shape_b is None or scalar is provided)
+    if shape_b is None or scalar is not None:
         # Tensor-scalar add: use the scalar value directly
-        torch_output_tensor = torch.add(torch_input_tensor_a, scalar)
+        # If scalar is None but shape_b is None, default to scalar=1.0
+        scalar_value = scalar if scalar is not None else 1.0
+        torch_output_tensor = torch.add(torch_input_tensor_a, scalar_value)
         is_scalar_add = True
     else:
         # Tensor-tensor add: generate second tensor
@@ -152,9 +154,9 @@ def run(
             # Use mesh with placement
             input_tensor_a = create_tensor_on_mesh(
                 torch_input_tensor_a,
+                device,
                 input_a_dtype,
                 input_a_layout,
-                device,
                 input_a_memory_config,
                 input_a_tensor_placement,
             )
@@ -175,7 +177,8 @@ def run(
 
     if is_scalar_add:
         # Tensor-scalar add: pass scalar directly
-        output_tensor = ttnn.add(input_tensor_a, scalar, memory_config=output_memory_config)
+        scalar_value = scalar if scalar is not None else 1.0
+        output_tensor = ttnn.add(input_tensor_a, scalar_value, memory_config=output_memory_config)
     else:
         # Tensor-tensor add: convert second tensor and add
         if not is_host:
@@ -183,9 +186,9 @@ def run(
                 # Use mesh with placement for second tensor
                 input_tensor_b = create_tensor_on_mesh(
                     torch_input_tensor_b,
+                    device,
                     input_b_dtype,
                     input_b_layout,
-                    device,
                     input_b_memory_config,
                     input_b_tensor_placement,
                 )

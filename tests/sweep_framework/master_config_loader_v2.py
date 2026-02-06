@@ -782,6 +782,7 @@ class MasterConfigLoader:
             # Add metadata
             config_dict["traced_source"] = source
             config_dict["traced_machine_info"] = machine_info
+            config_dict["config_id"] = config_id
 
             traced_config_list.append(config_dict)
 
