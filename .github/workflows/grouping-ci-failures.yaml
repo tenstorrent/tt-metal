@@ -1,4 +1,4 @@
-name: Analyze ND Failures
+name: Grouping CI Failures
 
 on:
   schedule:
@@ -24,7 +24,7 @@ on:
         default: ""
 
 jobs:
-  analyze-nd-failures:
+  grouping-ci-failures:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -51,8 +51,8 @@ jobs:
           echo "start_date=$START_DATE" >> $GITHUB_OUTPUT
           echo "Using calculated start date: $START_DATE"
 
-      - name: Run analyze nd failures
-        uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@ebanerjee/optimizing
+      - name: Run grouping ci failures
+        uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@main
         with:
           # TODO: Configure these secrets in repository settings -> Secrets and variables -> Actions
           # github_token: Personal Access Token for creating/updating GitHub issues
