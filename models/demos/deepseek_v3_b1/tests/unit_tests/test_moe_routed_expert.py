@@ -136,7 +136,8 @@ def create_expert_matmul_tensors(
     return weights_tensor, output_tensor, expert_weights_for_validation, expert_tensors
 
 
-def test_moe_routed_expert(device):
+@pytest.mark.parametrize("use_hardcoded_expert_index", [True, False])
+def test_moe_routed_expert(device, use_hardcoded_expert_index):
     """Test MoE routed expert fused operation"""
 
     # MoE router: [1, 7168] x [7168, 256] with 8 cores
@@ -150,8 +151,7 @@ def test_moe_routed_expert(device):
     gate_proj_K = K  # Same K as routing matmul (7168)
     gate_proj_N = 2048  # Expert output width
 
-    # Testing mode: when True, hardcode expert index 0 and create only 1 expert
-    use_hardcoded_expert_index = False
+    # num_experts: 1 for hardcoded (only expert 0), 256 for dynamic
     num_experts = 1 if use_hardcoded_expert_index else 256
 
     # Tile definitions
@@ -567,32 +567,36 @@ def test_moe_routed_expert(device):
     )
 
     # Run fused operation
-    logger.info("Running MoE routed expert fused operation...")
-    ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeRoutedExpert.op(
-        ttnn_input,
-        ttnn_mcast_output,
-        ttnn_gate_mm_weights,
-        ttnn_gate_mm_output,
-        ttnn_gate_input,
-        ttnn_gate_bias,
-        ttnn_gate_indices,
-        gate_output_scores_tensor,
-        gate_output_indices_tensor,
-        expert_index_tensor,
-        expert_scale_tensor,
-        gate_proj_weights,
-        gate_proj_output,
-        up_proj_weights,
-        up_proj_mm_out_tensor,
-        fused_output_tensor,
-        down_proj_gather_output_tensor,
-        down_proj_mcast_output_tensor,
-        down_proj_weights,
-        down_proj_output,
-        fused_add_tensor,
-        final_output_tensor,
-        use_hardcoded_expert_index=use_hardcoded_expert_index,
-    )
+    num_iterations = 100
+    logger.info(f"Running MoE routed expert fused operation for {num_iterations} iterations...")
+    for iteration in range(num_iterations):
+        ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeRoutedExpert.op(
+            ttnn_input,
+            ttnn_mcast_output,
+            ttnn_gate_mm_weights,
+            ttnn_gate_mm_output,
+            ttnn_gate_input,
+            ttnn_gate_bias,
+            ttnn_gate_indices,
+            gate_output_scores_tensor,
+            gate_output_indices_tensor,
+            expert_index_tensor,
+            expert_scale_tensor,
+            gate_proj_weights,
+            gate_proj_output,
+            up_proj_weights,
+            up_proj_mm_out_tensor,
+            fused_output_tensor,
+            down_proj_gather_output_tensor,
+            down_proj_mcast_output_tensor,
+            down_proj_weights,
+            down_proj_output,
+            fused_add_tensor,
+            final_output_tensor,
+            use_hardcoded_expert_index=use_hardcoded_expert_index,
+        )
+    ttnn.synchronize_device(device)
+    logger.info(f"All {num_iterations} iterations completed")
 
     # Convert back to torch for comparison
     output_scores_torch = ttnn.to_torch(ttnn_result_scores)
@@ -700,7 +704,8 @@ def test_moe_routed_expert(device):
 
 
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
-def test_moe_routed_expert_mesh(mesh_device):
+@pytest.mark.parametrize("use_hardcoded_expert_index", [True, False])
+def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
     """
     Test MoE routed expert fused operation on 8-chip mesh.
 
@@ -726,11 +731,8 @@ def test_moe_routed_expert_mesh(mesh_device):
     gate_proj_K = K
     gate_proj_N = 2048
 
-    # Toggle between test modes:
-    # - False: gate selects expert dynamically (all devices use same expert)
-    # - True: each device uses mesh_chip_id as expert index
-    use_hardcoded_expert_index = False
-    num_experts = 256 if not use_hardcoded_expert_index else 8
+    # num_experts: 8 for hardcoded (one per device), 256 for dynamic
+    num_experts = 8 if use_hardcoded_expert_index else 256
 
     # Tile definitions
     tile_1x32 = ttnn.Tile([1, 32])
@@ -1080,33 +1082,36 @@ def test_moe_routed_expert_mesh(mesh_device):
     )
 
     # ========== Run Operation ==========
-    logger.info("Running MoE routed expert on mesh...")
-    ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeRoutedExpert.op(
-        ttnn_input,
-        ttnn_mcast_output,
-        ttnn_gate_mm_weights,
-        ttnn_gate_mm_output,
-        ttnn_gate_input,
-        ttnn_gate_bias,
-        ttnn_gate_indices,
-        gate_output_scores_tensor,
-        gate_output_indices_tensor,
-        expert_index_tensor,
-        expert_scale_tensor,
-        gate_proj_weights,
-        gate_proj_output,
-        up_proj_weights,
-        up_proj_mm_out_tensor,
-        fused_output_tensor,
-        down_proj_gather_output_tensor,
-        down_proj_mcast_output_tensor,
-        down_proj_weights,
-        down_proj_output,
-        fused_add_tensor,
-        final_output_tensor,
-        use_hardcoded_expert_index=use_hardcoded_expert_index,
-    )
+    num_iterations = 100
+    logger.info(f"Running MoE routed expert on mesh for {num_iterations} iterations...")
+    for iteration in range(num_iterations):
+        ttnn_result_scores, ttnn_result_indices, ttnn_result_final = MoeRoutedExpert.op(
+            ttnn_input,
+            ttnn_mcast_output,
+            ttnn_gate_mm_weights,
+            ttnn_gate_mm_output,
+            ttnn_gate_input,
+            ttnn_gate_bias,
+            ttnn_gate_indices,
+            gate_output_scores_tensor,
+            gate_output_indices_tensor,
+            expert_index_tensor,
+            expert_scale_tensor,
+            gate_proj_weights,
+            gate_proj_output,
+            up_proj_weights,
+            up_proj_mm_out_tensor,
+            fused_output_tensor,
+            down_proj_gather_output_tensor,
+            down_proj_mcast_output_tensor,
+            down_proj_weights,
+            down_proj_output,
+            fused_add_tensor,
+            final_output_tensor,
+            use_hardcoded_expert_index=use_hardcoded_expert_index,
+        )
     ttnn.synchronize_device(submesh)
+    logger.info(f"All {num_iterations} iterations completed")
 
     # Get actual gate output indices and scores from device
     device_gate_indices = ttnn.to_torch(
@@ -1131,9 +1136,14 @@ def test_moe_routed_expert_mesh(mesh_device):
     for device_idx in range(num_devices):
         chip_id = device_idx  # Row-major order matches
 
-        # Use device's actual gate output at position chip_id
-        actual_expert_idx = int(device_gate_indices[0].flatten()[chip_id].item())
-        actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
+        if use_hardcoded_expert_index:
+            # Hardcoded mode: kernel uses chip_id directly as expert index
+            actual_expert_idx = chip_id
+            actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
+        else:
+            # Dynamic mode: kernel uses gate output indices at position chip_id
+            actual_expert_idx = int(device_gate_indices[0].flatten()[chip_id].item())
+            actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
 
         torch_expected_scores, torch_expected_indices, torch_expected_final = MoeRoutedExpert.golden(
             torch_input,
