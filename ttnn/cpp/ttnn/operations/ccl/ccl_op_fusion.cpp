@@ -186,6 +186,23 @@ void ReduceScatterFusedOpSignaler::push_reduce_scatter_fused_op_rt_args(std::vec
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
 }
 
+// MinimalMatmulStridedReduceScatterFusedOpSignaler stubs
+void MinimalMatmulStridedReduceScatterFusedOpSignaler::init_fused_op(
+    [[maybe_unused]] const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
+    [[maybe_unused]] const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
+    [[maybe_unused]] FusedOpSignalerMode fused_op_signaler_mode) {}
+
+void MinimalMatmulStridedReduceScatterFusedOpSignaler::init_matmul(
+    [[maybe_unused]] Program& program,
+    [[maybe_unused]] const IDevice* device,
+    [[maybe_unused]] const CoreRangeSet& matmul_workers,
+    [[maybe_unused]] std::vector<CoreCoord>& matmul_worker_cores) {}
+
+void MinimalMatmulStridedReduceScatterFusedOpSignaler::push_matmul_fused_op_rt_args(
+    [[maybe_unused]] std::vector<uint32_t>& out_rt_args,
+    [[maybe_unused]] uint32_t num_workers_to_sync,
+    [[maybe_unused]] uint32_t curr_worker_index) {}
+
 // Used to propagate semaphore information from matmul to all_gather in all_gather_matmul op
 void MatmulFusedOpSignaler::init_all_gather(
     uint32_t num_transfers,
@@ -525,5 +542,19 @@ void MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[2]));
 }
+
+// StridedReduceScatterFusedOpSignaler stubs
+void StridedReduceScatterFusedOpSignaler::init_minimal_matmul() {}
+
+void StridedReduceScatterFusedOpSignaler::init_fused_op(
+    [[maybe_unused]] Program& program,
+    [[maybe_unused]] const IDevice* device,
+    [[maybe_unused]] const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+    [[maybe_unused]] FusedOpSignalerMode fused_op_signaler_mode) {}
+
+void StridedReduceScatterFusedOpSignaler::push_strided_reduce_scatter_fused_op_rt_args(
+    [[maybe_unused]] std::vector<uint32_t>& out_rt_args,
+    [[maybe_unused]] uint32_t k_num_blocks,
+    [[maybe_unused]] uint32_t k_block_tiles) {}
 
 }  // namespace ttnn::experimental::ccl

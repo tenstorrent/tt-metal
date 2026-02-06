@@ -99,6 +99,43 @@ struct StridedAllGatherFusedOpSignaler {
         uint32_t all_gather_direction);
 };
 
+struct MinimalMatmulStridedReduceScatterFusedOpSignaler {
+    /* Strided Reduce Scatter specific */
+    uint32_t num_fused_op_cores_to_signal = 0;                  // same device srs workers count
+    std::vector<CoreCoord> fused_op_receiver_cores_noc;         // same device srs workers
+    std::vector<uint32_t> fused_op_receiver_signal_semaphores;  // same device srs semaphores
+    FusedOpSignalerMode fused_op_signaler_mode =
+        FusedOpSignalerMode::MULTI;  // not sure -- one semaphore would be enough
+
+    /* Matmul specific */
+    std::vector<CoreCoord> matmul_worker_cores_noc;
+    uint32_t matmul_worker_sync_semaphore = 0;
+
+    bool initialized_fused_op = false;
+    bool initialized_matmul = false;
+
+    MinimalMatmulStridedReduceScatterFusedOpSignaler() = default;
+
+    void init_fused_op(
+        // fused op is the strided reduce scatter op
+        const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
+        const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
+        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
+
+    void init_matmul(
+        tt::tt_metal::Program& program,
+        const tt::tt_metal::IDevice* device,
+
+        const CoreRangeSet& matmul_workers,
+        std::vector<CoreCoord>& matmul_worker_cores);
+
+    void push_matmul_fused_op_rt_args(
+        std::vector<uint32_t>& out_rt_args,
+
+        uint32_t num_workers_to_sync,
+        uint32_t curr_worker_index);
+};
+
 // Used to propagate semaphore information from matmul to reduce scatter in matmul_reduce_scatter op
 struct ReduceScatterFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 1;
@@ -271,6 +308,36 @@ struct MinimalMatmulFusedOpSignaler {
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
     void push_matmul_fused_op_rt_args(
+        std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
+};
+
+// Used to propagate semaphore information from strided reduce scatter to minimal matmul
+struct StridedReduceScatterFusedOpSignaler {
+    /* Strided Reduce Scatter info for Minimal Matmul */
+    uint32_t num_fused_op_cores_to_signal = 0;
+    std::vector<CoreCoord> fused_op_receiver_cores_noc;         // same device srs workers
+    std::vector<uint32_t> fused_op_receiver_signal_semaphores;  // same device srs semaphores
+    FusedOpSignalerMode fused_op_signaler_mode =
+        FusedOpSignalerMode::MULTI;  // not sure -- one semaphore would be enough
+
+    /* Minimal Matmul specs */
+    // not sure what is needed -- the sync must happen after each chunk is produces and those
+    // are ordered so semaphores just need to be incremented (confirm)
+
+    bool initialized_all_gather = false;
+    bool initialized_fused_op = false;
+
+    StridedReduceScatterFusedOpSignaler() = default;
+
+    void init_minimal_matmul();
+
+    void init_fused_op(  // not sure what exactly is needed yet.
+        tt::tt_metal::Program& program,
+        const tt::tt_metal::IDevice* device,
+        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
+
+    void push_strided_reduce_scatter_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t k_num_blocks, uint32_t k_block_tiles);
 };
 
