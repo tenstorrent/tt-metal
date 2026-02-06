@@ -719,7 +719,7 @@ class Attention1D(LightweightModule):
             self._rotary_embed_decode = self._rotary_embed_decode_fused
             self._kv_update_decode = self._kv_update_decode_fused
         else:
-            self._rotary_embed_decode = self._rotary_embed_decode_separate
+            self._rotary_embed_decode = self._rotary_embed_decode_nonfused
             self._kv_update_decode = self._kv_update_decode_nonfused
 
     # =========================================================================
@@ -853,7 +853,7 @@ class Attention1D(LightweightModule):
             q_heads_pre_rot, k_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_decode
         )
 
-    def _rotary_embed_decode_separate(
+    def _rotary_embed_decode_nonfused(
         self, q_heads_pre_rot: ttnn.Tensor, k_heads_pre_rot: ttnn.Tensor, rot_mats: tuple[ttnn.Tensor, ttnn.Tensor]
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Separate rotary embedding - independent kernels for Q and K."""
