@@ -192,7 +192,8 @@ These regressions will also run after every pushed commit to the GitHub repo.
 ```
 # Build directly with CMake for full control or run the provided script for building all tests.
 ./build_metal.sh --build-tests
-./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
+./tests/scripts/run_python_api_unit_tests.sh
+./tests/scripts/run_cpp_unit_tests.sh
 ```
 
 If changes affect `tensor` or `tt_dnn` libraries, run this suite of pytests
@@ -224,13 +225,13 @@ on model tests.
 If you are using a machine with virtual machine specs, please use
 
 ```
-./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_performance_virtual_machine
+pytest models/ -m models_performance_virtual_machine
 ```
 
 If you are using a machine with bare metal machine specs, please use
 
 ```
-./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_performance_bare_metal
+pytest models/ -m models_performance_bare_metal
 ```
 
 ### Running C++ Integration Tests (Legacy)
