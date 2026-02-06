@@ -166,6 +166,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // Create tensix builder if needed
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_opt;
     if (will_create_tensix_builder) {
+        // Note: control_plane is non-const reference but we need it for the builder
+        auto& control_plane_ref =
+            const_cast<tt::tt_fabric::ControlPlane&>(tt::tt_metal::MetalContext::instance().get_control_plane());
         tensix_builder_opt = FabricTensixDatamoverBuilder::build(
             device,
             program,
@@ -173,7 +176,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
             location.remote_node,
             location.eth_chan,
             eth_direction,
-            std::move(tensix_injection_flags));
+            std::move(tensix_injection_flags),
+            control_plane_ref,
+            fabric_tensix_config);
     }
 
     // Use unique_ptr constructor directly since ComputeMeshRouterBuilder constructor is private

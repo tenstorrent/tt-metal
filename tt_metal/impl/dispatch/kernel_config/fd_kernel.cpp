@@ -17,16 +17,17 @@
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "prefetch.hpp"
-#include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/debug/dprint_server.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
 
-ChipId FDKernel::GetUpstreamDeviceId(ChipId device_id) {
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    for (auto tunnel :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
+ChipId FDKernel::GetUpstreamDeviceId(ChipId device_id) const {
+    ChipId mmio_device_id = ctx().cluster.get_associated_mmio_device(device_id);
+    for (auto tunnel : ctx().cluster.get_tunnels_from_mmio_device(mmio_device_id)) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 // MMIO device doesn't have an upsream, just return itself
@@ -38,9 +39,9 @@ ChipId FDKernel::GetUpstreamDeviceId(ChipId device_id) {
     return device_id;
 }
 
-ChipId FDKernel::GetDownstreamDeviceId(ChipId device_id, int tunnel) {
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    auto tunnels = tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+ChipId FDKernel::GetDownstreamDeviceId(ChipId device_id, int tunnel) const {
+    ChipId mmio_device_id = ctx().cluster.get_associated_mmio_device(device_id);
+    auto tunnels = ctx().cluster.get_tunnels_from_mmio_device(mmio_device_id);
     if (tunnel < -1 || tunnel >= static_cast<int>(tunnels.size())) {
         TT_THROW("Tunnel {} is out of range. {} tunnels exist", tunnel, tunnels.size());
     }
@@ -63,10 +64,9 @@ ChipId FDKernel::GetDownstreamDeviceId(ChipId device_id, int tunnel) {
     return device_id;
 }
 
-uint32_t FDKernel::GetTunnelStop(ChipId device_id) {
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    for (auto tunnel :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
+uint32_t FDKernel::GetTunnelStop(ChipId device_id) const {
+    ChipId mmio_device_id = ctx().cluster.get_associated_mmio_device(device_id);
+    for (auto tunnel : ctx().cluster.get_tunnels_from_mmio_device(mmio_device_id)) {
         for (uint32_t idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 return idx;
@@ -109,27 +109,29 @@ FDKernel* FDKernel::Generate(
     }
 }
 
-uint32_t FDKernel::get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core) {
+tt::CoreType FDKernel::GetCoreType() const { return ctx().dispatch_core_mgr.get_dispatch_core_type(); }
+
+tt_cxy_pair FDKernel::GetVirtualCore() const {
+    return ctx().cluster.get_virtual_coordinate_from_logical_coordinates(logical_core_, GetCoreType());
+}
+
+uint32_t FDKernel::get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core) const {
     // TODO(#22895): Too many core types. Consolidate programmable_core_type_index with ProgrammableCoreType and
     // CoreType
     uint32_t programmable_core_type_index;
     if (dispatch_core_type == CoreType::WORKER) {
-        programmable_core_type_index =
-            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        programmable_core_type_index = ctx().hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     } else if (is_active_eth_core) {
-        programmable_core_type_index =
-            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        programmable_core_type_index = ctx().hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
     } else {
-        programmable_core_type_index =
-            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+        programmable_core_type_index = ctx().hal.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
     }
 
     return programmable_core_type_index;
 }
 
-CoreCoord FDKernel::get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const CoreType& core_type) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    return cluster.get_virtual_coordinate_from_logical_coordinates(logical_cxy, core_type);
+CoreCoord FDKernel::get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const CoreType& core_type) const {
+    return ctx().cluster.get_virtual_coordinate_from_logical_coordinates(logical_cxy, core_type);
 }
 
 KernelHandle FDKernel::configure_kernel_variant(
@@ -149,16 +151,15 @@ KernelHandle FDKernel::configure_kernel_variant(
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
     }
-    auto& rt_options = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& rt_options = ctx().rtoptions;
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (!(MetalContext::instance().dprint_server() and
-          MetalContext::instance().dprint_server()->reads_dispatch_cores(device_->id()))) {
+    if (!(ctx().dprint_server and ctx().dprint_server->reads_dispatch_cores(device_->id()))) {
         defines["FORCE_DPRINT_OFF"] = "1";
     }
     defines.insert(defines_in.begin(), defines_in.end());
-    if (MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+    if (ctx().cluster.is_galaxy_cluster()) {
         // TG specific fabric routing
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
         defines["GALAXY_CLUSTER"] = "1";

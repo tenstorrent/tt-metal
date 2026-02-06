@@ -105,7 +105,9 @@ public:
     static uint32_t get_dispatch_link_index(
         tt::tt_fabric::FabricNodeId src_fabric_node_id,
         tt::tt_fabric::FabricNodeId dst_fabric_node_id,
-        IDevice* device);
+        IDevice* device,
+        const tt::Cluster& cluster,
+        const tt::tt_fabric::ControlPlane& control_plane);
 };
 
 // Helper function to assemble the dispatch_fabric_mux_client_config args
@@ -117,12 +119,15 @@ void assemble_fabric_mux_client_config_args(
 
 // Helper function to calculate number of hops from a mmio device to downstream device
 // The two devices must be along the same tunnel.
-int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id);
+int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id, const tt::Cluster& cluster);
 
 // Helper function to assemble args specific to the 2D fabric header
 template <typename Configuration>
-void assemble_2d_fabric_packet_header_args(Configuration& config, int my_device_id, int destination_device_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+void assemble_2d_fabric_packet_header_args(
+    Configuration& config,
+    int my_device_id,
+    int destination_device_id,
+    const tt::tt_fabric::ControlPlane& control_plane) {
     const auto& src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(my_device_id);
     const auto& dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(destination_device_id);
     const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);

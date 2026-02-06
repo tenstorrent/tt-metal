@@ -24,6 +24,9 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/topology.hpp"
 #include "dispatch/system_memory_manager.hpp"
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
+#include <impl/dispatch/dispatch_query_manager.hpp>
 
 #include <tt_metal_profiler.hpp>
 #include "profiler/profiler_state.hpp"
@@ -432,25 +435,38 @@ void DeviceManager::configure_and_load_fast_dispatch_kernels() {
     }
 
     const auto& active_devices = this->get_all_active_devices();
+
+    // Create the dispatch initialization context
+    auto& metal_ctx = tt::tt_metal::MetalContext::instance();
+    DispatchInitContext dispatch_ctx{
+        .cluster = metal_ctx.get_cluster(),
+        .dispatch_core_mgr = metal_ctx.get_dispatch_core_manager(),
+        .hal = metal_ctx.hal(),
+        .dispatch_mem_map = metal_ctx.dispatch_mem_map(metal_ctx.get_dispatch_core_manager().get_dispatch_core_type()),
+        .dispatch_query_mgr = metal_ctx.get_dispatch_query_manager(),
+        .control_plane = metal_ctx.get_control_plane(),
+        .device_manager = *this,
+        .rtoptions = metal_ctx.rtoptions(),
+        .dprint_server = metal_ctx.dprint_server().get(),
+    };
+
     // Generate static args
     for (auto* dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
-        const auto& mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
+        const auto& mmio_device_id = metal_ctx.get_cluster().get_associated_mmio_device(dev->id());
         if (mmio_device_id != dev->id()) {
             continue;
         }
 
-        auto tunnels_from_mmio =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-        populate_cq_static_args(dev);
+        auto tunnels_from_mmio = metal_ctx.get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+        populate_cq_static_args(dev, dispatch_ctx);
         if (not this->skip_remote_devices_) {
             for (const auto& tunnel : tunnels_from_mmio) {
                 // Need to create devices from farthest to the closest.
                 for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnel[ts];
                     auto* device = get_device(mmio_controlled_device_id);
-                    populate_cq_static_args(device);
+                    populate_cq_static_args(device, dispatch_ctx);
                 }
             }
         }
@@ -459,22 +475,20 @@ void DeviceManager::configure_and_load_fast_dispatch_kernels() {
     // Create command queue programs
     for (auto* dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
-        const auto& mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
+        const auto& mmio_device_id = metal_ctx.get_cluster().get_associated_mmio_device(dev->id());
         if (mmio_device_id != dev->id()) {
             continue;
         }
 
-        create_cq_program(dev);
-        auto tunnels_from_mmio =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+        create_cq_program(dev, dispatch_ctx);
+        auto tunnels_from_mmio = metal_ctx.get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
         if (not this->skip_remote_devices_) {
             for (const auto& tunnel : tunnels_from_mmio) {
                 // Need to create devices from farthest to the closest.
                 for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnel[ts];
                     auto* device = get_device(mmio_controlled_device_id);
-                    create_cq_program(device);
+                    create_cq_program(device, dispatch_ctx);
                 }
             }
         }
@@ -663,7 +677,11 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     }
 
     if (this->using_fast_dispatch_ && !devices_to_activate.empty()) {
-        populate_fd_kernels(devices_to_activate, this->num_hw_cqs_);
+        populate_fd_kernels(
+            devices_to_activate,
+            this->num_hw_cqs_,
+            MetalContext::instance().get_cluster(),
+            MetalContext::instance().get_dispatch_core_manager());
     }
 }
 

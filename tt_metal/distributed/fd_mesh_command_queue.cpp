@@ -23,6 +23,7 @@
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -38,6 +39,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "trace/trace_buffer.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"

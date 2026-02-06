@@ -137,7 +137,7 @@ public:
     }
 
     // ============ Tensix Config ============
-    void initialize_tensix_config();
+    void initialize_tensix_config(const FabricTensixInitContext& ctx);
     FabricTensixDatamoverConfig& get_tensix_config() const;
     bool has_tensix_config() const { return tensix_config_ != nullptr; }
 

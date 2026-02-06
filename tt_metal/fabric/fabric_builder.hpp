@@ -12,6 +12,11 @@
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+
+namespace tt {
+class Cluster;
+}  // namespace tt
 
 namespace tt::tt_metal {
 class IDevice;
@@ -20,6 +25,7 @@ class Program;
 
 namespace tt::tt_fabric {
 
+class ControlPlane;
 class FabricContext;
 class FabricBuilderContext;
 
@@ -37,7 +43,13 @@ class FabricBuilderContext;
  */
 class FabricBuilder {
 public:
-    FabricBuilder(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, FabricContext& fabric_context);
+    FabricBuilder(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& program,
+        FabricContext& fabric_context,
+        ControlPlane& control_plane,
+        const tt::Cluster& cluster,
+        FabricTensixConfig fabric_tensix_config);
 
     /**
      * Discover active ethernet channels and neighbors for this device.
@@ -121,6 +133,9 @@ private:
     tt::tt_metal::Program& program_;
     FabricContext& fabric_context_;
     FabricBuilderContext& builder_context_;
+    ControlPlane& control_plane_;
+    const tt::Cluster& cluster_;
+    FabricTensixConfig fabric_tensix_config_;
 
     // Fabric node ID for this device (derived from device_->id())
     FabricNodeId local_node_;

@@ -31,6 +31,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_coord.hpp"
 #include "compressed_direction_table.hpp"
+#include "fabric_tensix_builder.hpp"
 #include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
@@ -2035,9 +2036,9 @@ void ControlPlane::clear_fabric_context() {
     asic_id_to_fabric_node_cache_.clear();
 }
 
-void ControlPlane::initialize_fabric_tensix_datamover_config() {
+void ControlPlane::initialize_fabric_tensix_datamover_config(const FabricTensixInitContext& ctx) {
     TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized first");
-    this->fabric_context_->get_builder_context().initialize_tensix_config();
+    this->fabric_context_->get_builder_context().initialize_tensix_config(ctx);
 }
 
 bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const {

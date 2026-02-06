@@ -45,6 +45,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
@@ -219,7 +220,12 @@ void Device::configure_command_queue_programs() {
     }
 
     // Write device-side cq pointers
-    configure_dispatch_cores(this);
+    configure_dispatch_cores(
+        this,
+        MetalContext::instance().get_cluster(),
+        MetalContext::instance().get_dispatch_core_manager(),
+        MetalContext::instance().dispatch_mem_map(),
+        *MetalContext::instance().device_manager());
 
     // Run the cq program
     command_queue_program.impl().finalize_offsets(this);
@@ -349,7 +355,14 @@ void Device::init_command_queue_device() {
 }
 
 bool Device::compile_fabric() {
-    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
+    auto& metal_ctx = MetalContext::instance();
+    auto fabric_config = metal_ctx.get_fabric_config();
+    auto& control_plane = metal_ctx.get_control_plane();
+    auto& cluster = metal_ctx.get_cluster();
+    auto fabric_tensix_config = metal_ctx.get_fabric_tensix_config();
+    bool fast_dispatch = metal_ctx.rtoptions().get_fast_dispatch();
+    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(
+        this, fabric_config, control_plane, cluster, fabric_tensix_config, fast_dispatch);
     return fabric_program_ != nullptr;
 }
 
@@ -358,7 +371,9 @@ void Device::configure_fabric() {
         return;
     }
 
-    tt::tt_fabric::configure_fabric_cores(this);
+    auto& cluster = MetalContext::instance().get_cluster();
+    auto& control_plane = MetalContext::instance().get_control_plane();
+    tt::tt_fabric::configure_fabric_cores(this, cluster, control_plane);
 
     fabric_program_->impl().finalize_offsets(this);
 

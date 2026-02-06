@@ -9,24 +9,53 @@
 #include <stdint.h>
 #include <map>
 #include <string>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
-#include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt_stl/tt_stl/reflection.hpp>
-#include <impl/dispatch/dispatch_core_manager.hpp>
-#include <llrt/tt_cluster.hpp>
+
+namespace tt {
+class Cluster;
+namespace llrt {
+class RunTimeOptions;
+}
+}  // namespace tt
+
+namespace tt::tt_fabric {
+class ControlPlane;
+}  // namespace tt::tt_fabric
 
 namespace tt::tt_metal {
 
 class IDevice;
 class Program;
+class Hal;
+class dispatch_core_manager;
+class DispatchMemMap;
+class DispatchQueryManager;
+class DeviceManager;
+class DPrintServer;
 enum DispatchWorkerType : uint32_t;
 enum NOC : uint8_t;
+
+// Context struct holding all dependencies needed for dispatch kernel initialization.
+// This decouples the kernel config classes from MetalContext.
+struct DispatchInitContext {
+    tt::Cluster& cluster;
+    dispatch_core_manager& dispatch_core_mgr;
+    const Hal& hal;
+    const DispatchMemMap& dispatch_mem_map;
+    DispatchQueryManager& dispatch_query_mgr;
+    tt::tt_fabric::ControlPlane& control_plane;
+    DeviceManager& device_manager;
+    llrt::RunTimeOptions& rtoptions;
+    DPrintServer* dprint_server;
+};
 
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
 #define UNUSED_SEM_ID 0
@@ -121,27 +150,22 @@ public:
         int tunnel_index = -1);
 
     // Translate DispatchCoreType to programmable core type index
-    static uint32_t get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core = false);
+    uint32_t get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core = false) const;
 
     // Translate core coord using the chip_id from the logical_cxy
     //
     // IDevice::virtual_core_from_logical_core uses the chip_id of the device instance whereas this function uses the
     // chip_id specified in the logical coordinate.
-    static CoreCoord get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const CoreType& core_type);
+    CoreCoord get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const CoreType& core_type) const;
 
     // Register another kernel as upstream/downstream of this one
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
     void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
 
-    virtual CoreType GetCoreType() const {
-        return tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    }
+    virtual CoreType GetCoreType() const;
     FDKernelType GetKernelType() const { return kernel_type_; }
     tt_cxy_pair GetLogicalCore() const { return logical_core_; }
-    tt_cxy_pair GetVirtualCore() const {
-        return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            logical_core_, GetCoreType());
-    }
+    tt_cxy_pair GetVirtualCore() const;
     ChipId GetDeviceId() const { return device_id_; }  // Since this->device may not exist yet
     int GetNodeId() const { return node_id_; }
     virtual std::optional<tt::tt_metal::TerminationInfo> GetTerminationInfo() const { return std::nullopt; }
@@ -151,6 +175,11 @@ public:
     int GetDownstreamPort(FDKernel* other) const { return GetPort(other, this->downstream_kernels_); }
     void AddDevice(tt::tt_metal::IDevice* device) { device_ = device; }
     void AddProgram(tt::tt_metal::Program* program) { program_ = program; }
+    void SetContext(DispatchInitContext* ctx) { ctx_ = ctx; }
+    DispatchInitContext& ctx() const {
+        TT_ASSERT(ctx_ != nullptr, "DispatchInitContext not set");
+        return *ctx_;
+    }
 
 protected:
     // Attributes for an EDM client to connect to the router
@@ -179,14 +208,16 @@ protected:
     }
 
     // Helper function to get upstream device in the tunnel from current device, not valid for mmio
-    static ChipId GetUpstreamDeviceId(ChipId device_id);
+    ChipId GetUpstreamDeviceId(ChipId device_id) const;
     // Helper function to get downstream device in the tunnel from current device
-    static ChipId GetDownstreamDeviceId(ChipId device_id, int tunnel = -1);
+    ChipId GetDownstreamDeviceId(ChipId device_id, int tunnel = -1) const;
     // Helper function to get the tunnel stop index of current device
-    static uint32_t GetTunnelStop(ChipId device_id);
+    uint32_t GetTunnelStop(ChipId device_id) const;
     // Create and populate semaphores for the EDM connection
     void create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes);
-    IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
+
+    DispatchInitContext* ctx_ = nullptr;  // Set by SetContext(), must be set before GenerateStaticConfigs()
+    IDevice* device_ = nullptr;           // Set at configuration time by AddDeviceAndProgram()
     Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
     FDKernelType kernel_type_ = FDKernelType::UNSET;

@@ -12,7 +12,6 @@
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "fd_kernel.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
@@ -117,6 +116,8 @@ public:
     const dispatch_static_config_t& GetStaticConfig() { return static_config_; }
 
 private:
+    void SetLogicalCore();
+
     dispatch_static_config_t static_config_;
     dispatch_dependent_config_t dependent_config_;
     FDKernelEdmConnectionAttributes edm_connection_attributes_;

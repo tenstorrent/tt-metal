@@ -10,7 +10,6 @@
 #include "core_coord.hpp"
 #include "fd_kernel.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
@@ -112,6 +111,8 @@ public:
     const prefetch_static_config_t& GetStaticConfig() { return static_config_; }
 
 private:
+    void SetLogicalCore();
+
     prefetch_static_config_t static_config_;
     prefetch_dependent_config_t dependent_config_;
     FDKernelEdmConnectionAttributes edm_connection_attributes_;

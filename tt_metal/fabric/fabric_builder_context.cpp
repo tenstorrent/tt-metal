@@ -177,14 +177,13 @@ FabricTensixDatamoverConfig& FabricBuilderContext::get_tensix_config() const {
     return *tensix_config_;
 }
 
-void FabricBuilderContext::initialize_tensix_config() {
+void FabricBuilderContext::initialize_tensix_config(const FabricTensixInitContext& ctx) {
     TT_FATAL(tensix_config_ == nullptr, "Trying to re-initialize fabric tensix config");
 
-    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    if (fabric_tensix_config != FabricTensixConfig::DISABLED) {
+    if (ctx.fabric_tensix_config != FabricTensixConfig::DISABLED) {
         // Now it's safe to call get_active_fabric_eth_channels() because
         // configure_routing_tables_for_fabric_ethernet_channels() has already run
-        tensix_config_ = std::make_unique<FabricTensixDatamoverConfig>();
+        tensix_config_ = std::make_unique<FabricTensixDatamoverConfig>(ctx);
     }
 }
 

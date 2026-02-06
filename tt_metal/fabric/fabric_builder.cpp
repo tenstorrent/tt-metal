@@ -7,48 +7,53 @@
 #include "tt_metal/fabric/compute_mesh_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <llrt/tt_cluster.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include <set>
 
 namespace tt::tt_fabric {
 
 FabricBuilder::FabricBuilder(
-    tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, FabricContext& fabric_context) :
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::Program& program,
+    FabricContext& fabric_context,
+    ControlPlane& control_plane,
+    const tt::Cluster& cluster,
+    FabricTensixConfig fabric_tensix_config) :
     device_(device),
     program_(program),
     fabric_context_(fabric_context),
     builder_context_(fabric_context.get_builder_context()),
-    local_node_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-        device->id())),
+    control_plane_(control_plane),
+    cluster_(cluster),
+    fabric_tensix_config_(fabric_tensix_config),
+    local_node_(control_plane_.get_fabric_node_id_from_physical_chip_id(device->id())),
     wrap_around_mesh_(fabric_context_.is_wrap_around_mesh(local_node_.mesh_id)) {
     // Determine if this device has tunneling dispatch
-    auto mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
-    auto tunnels_from_mmio =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
+    auto mmio_device_id = cluster_.get_associated_mmio_device(device_->id());
+    auto tunnels_from_mmio = cluster_.get_devices_controlled_by_mmio_device(mmio_device_id);
     TT_ASSERT(!tunnels_from_mmio.empty());
     device_has_dispatch_tunnel_ = (tunnels_from_mmio.size() - 1) > 0;
 }
 
 void FabricBuilder::discover_channels() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
 
     auto is_dispatch_link = [&](chan_id_t eth_chan, uint32_t dispatch_link_idx) {
-        auto link_idx = control_plane.get_routing_plane_id(local_node_, eth_chan);
+        auto link_idx = control_plane_.get_routing_plane_id(local_node_, eth_chan);
         return device_has_dispatch_tunnel_ && link_idx == dispatch_link_idx;
     };
 
     // Discover active channels and neighbors
     for (const auto& direction : FabricContext::routing_directions) {
-        auto active_eth_chans = control_plane.get_active_fabric_eth_routing_planes_in_direction(local_node_, direction);
+        auto active_eth_chans =
+            control_plane_.get_active_fabric_eth_routing_planes_in_direction(local_node_, direction);
         if (active_eth_chans.empty()) {
             continue;
         }
 
-        auto neighbors = control_plane.get_chip_neighbors(local_node_, direction);
+        auto neighbors = control_plane_.get_chip_neighbors(local_node_, direction);
         auto intra_chip_neighbors = neighbors.find(local_node_.mesh_id);
 
         TT_FATAL(neighbors.size() == 1, "Multiple neighbor meshes per direction is unsupported");
@@ -68,8 +73,8 @@ void FabricBuilder::discover_channels() {
         channels_by_direction_[direction] = active_eth_chans;
 
         // Identify and cache dispatch links
-        uint32_t dispatch_link_idx =
-            tt::tt_metal::RelayMux::get_dispatch_link_index(local_node_, neighbor_fabric_node_id, device_);
+        uint32_t dispatch_link_idx = tt::tt_metal::RelayMux::get_dispatch_link_index(
+            local_node_, neighbor_fabric_node_id, device_, cluster_, control_plane_);
         for (const auto& eth_chan : active_eth_chans) {
             if (is_dispatch_link(eth_chan, dispatch_link_idx)) {
                 dispatch_links_.insert(eth_chan);
@@ -177,7 +182,7 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
 
 void FabricBuilder::connect_routers() {
     const auto topology = fabric_context_.get_fabric_topology();
-    const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
+    const bool is_galaxy = cluster_.is_ubb_galaxy();
 
     // If NeighborExchange topology is used, message forwarding is not supported, and thus there is no need to connect
     // routers on the same device together
@@ -233,8 +238,7 @@ void FabricBuilder::compile_ancillary_kernels() {
 
 void FabricBuilder::compile_kernels_for_missing_directions() {
     // Only applicable in UDM mode
-    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    if (fabric_tensix_config != FabricTensixConfig::UDM) {
+    if (fabric_tensix_config_ != FabricTensixConfig::UDM) {
         return;
     }
 
@@ -255,7 +259,7 @@ void FabricBuilder::compile_kernels_for_missing_directions() {
 
         // Build and compile tensix builder for this missing (routing_plane_id, direction) pair
         auto tensix_builder = FabricTensixDatamoverBuilder::build_for_missing_direction(
-            device_, program_, local_node_, routing_plane_id, missing_dir);
+            device_, program_, local_node_, routing_plane_id, missing_dir, control_plane_, fabric_tensix_config_);
         tensix_builder.create_and_compile(program_);
     }
 }

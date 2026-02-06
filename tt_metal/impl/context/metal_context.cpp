@@ -37,6 +37,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/mock_device.hpp>
 #include "device/device_manager.hpp"
+#include "fabric/fabric_tensix_builder.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
 
@@ -869,7 +870,17 @@ void MetalContext::initialize_fabric_tensix_datamover_config() {
     // Initialize fabric tensix config after routing tables are configured and devices are available
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
         auto& control_plane = this->get_control_plane();
-        control_plane.initialize_fabric_tensix_datamover_config();
+
+        // Create the context with all required dependencies
+        tt_fabric::FabricTensixInitContext ctx{
+            .cluster = *cluster_,
+            .control_plane = control_plane,
+            .hal = hal(),
+            .dispatch_core_mgr = this->get_dispatch_core_manager(),
+            .device_manager = *device_manager_,
+            .fabric_tensix_config = this->get_fabric_tensix_config()};
+
+        control_plane.initialize_fabric_tensix_datamover_config(ctx);
     }
 }
 

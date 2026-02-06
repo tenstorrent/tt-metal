@@ -9,8 +9,8 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_builder.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "impl/context/metal_context.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
+#include <llrt/tt_cluster.hpp>
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -20,14 +20,18 @@ bool isFabricUnitTest() { return false; }
 
 namespace tt::tt_fabric {
 
-std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::tt_metal::IDevice* device) {
+std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(
+    tt::tt_metal::IDevice* device,
+    ControlPlane& control_plane,
+    const tt::Cluster& cluster,
+    FabricTensixConfig fabric_tensix_config,
+    bool fast_dispatch) {
     auto fabric_program_ptr = std::make_unique<tt::tt_metal::Program>();
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto& fabric_context = control_plane.get_fabric_context();
 
     // Use FabricBuilder to coordinate the build phases
-    FabricBuilder builder(device, *fabric_program_ptr, fabric_context);
+    FabricBuilder builder(device, *fabric_program_ptr, fabric_context, control_plane, cluster, fabric_tensix_config);
 
     // Execute build phases
     builder.discover_channels();
@@ -41,23 +45,27 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     builder.create_kernels();
 
     // Compile the program
-    tt::tt_metal::detail::CompileProgram(
-        device, *fabric_program_ptr, tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
+    tt::tt_metal::detail::CompileProgram(device, *fabric_program_ptr, fast_dispatch);
 
     return fabric_program_ptr;
 }
 
-std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_metal::IDevice* device) {
-    auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(
+    tt::tt_metal::IDevice* device,
+    FabricConfig fabric_config,
+    ControlPlane& control_plane,
+    const tt::Cluster& cluster,
+    FabricTensixConfig fabric_tensix_config,
+    bool fast_dispatch) {
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
-        return create_and_compile_tt_fabric_program(device);
+        return create_and_compile_tt_fabric_program(
+            device, control_plane, cluster, fabric_tensix_config, fast_dispatch);
     }
     return nullptr;
 }
 
-void configure_fabric_cores(tt::tt_metal::IDevice* device) {
-    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+void configure_fabric_cores(tt::tt_metal::IDevice* device, const tt::Cluster& cluster, ControlPlane& control_plane) {
+    const auto& soc_desc = cluster.get_soc_desc(device->id());
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
     const auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
     const auto& fabric_context = control_plane.get_fabric_context();

@@ -6,7 +6,6 @@
 #include <optional>
 
 #include "fd_kernel.hpp"
-#include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
@@ -44,6 +43,8 @@ public:
     const dispatch_s_static_config_t& GetStaticConfig() { return static_config_; }
 
 private:
+    void SetLogicalCore();
+
     dispatch_s_static_config_t static_config_;
     dispatch_s_dependent_config_t dependent_config_;
 };

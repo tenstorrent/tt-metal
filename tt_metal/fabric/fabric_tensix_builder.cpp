@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fabric_tensix_builder.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
 #include "fabric_tensix_builder_impl.hpp"
 
 #include <tt_stl/assert.hpp>
@@ -10,7 +11,8 @@
 #include <tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "impl/context/metal_context.hpp"
+#include <llrt/tt_cluster.hpp>
+#include <tt-metalium/hal.hpp>
 #include "llrt/core_descriptor.hpp"
 #include "impl/device/device_manager.hpp"
 #include "fabric_context.hpp"
@@ -24,10 +26,9 @@
 namespace tt::tt_fabric {
 
 namespace {
-bool device_has_dispatch_tunnel(ChipId device_id) {
-    auto mmio_device_id = tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    auto tunnels_from_mmio =
-        tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
+bool device_has_dispatch_tunnel(ChipId device_id, const tt::Cluster& cluster) {
+    auto mmio_device_id = cluster.get_associated_mmio_device(device_id);
+    auto tunnels_from_mmio = cluster.get_devices_controlled_by_mmio_device(mmio_device_id);
     // results are inclusive of the mmio_device_id so they will never be zero
     TT_FATAL(!tunnels_from_mmio.empty(), "must have at least one mmio device");
     return (tunnels_from_mmio.size() - 1) > 0;
@@ -43,22 +44,21 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
     num_non_dispatch_routing_planes_ = 0;
 
     auto device_id = all_active_devices.front()->id();
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
-    has_dispatch_tunnel_ = device_has_dispatch_tunnel(device_id);
+    has_dispatch_tunnel_ = device_has_dispatch_tunnel(device_id, cluster_);
 
     for (const auto& device : all_active_devices) {
         std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
         std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors;
 
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+        auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(device->id());
 
         for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
             auto active_eth_chans =
-                control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, direction);
+                control_plane_.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, direction);
             if (active_eth_chans.empty()) {
                 continue;
             }
-            auto neighbors = control_plane.get_chip_neighbors(fabric_node_id, direction);
+            auto neighbors = control_plane_.get_chip_neighbors(fabric_node_id, direction);
 
             // assume same neighbor per direction
             TT_FATAL(neighbors.size() == 1, "Multiple neighbor meshes per direction is unsupported");
@@ -75,11 +75,11 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
         std::vector<chan_id_t> non_dispatch_active_channels;
         std::set<routing_plane_id_t> non_dispatch_routing_planes;
         for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
-            dispatch_link_idx_ =
-                tt_metal::RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
+            dispatch_link_idx_ = tt_metal::RelayMux::get_dispatch_link_index(
+                fabric_node_id, remote_fabric_node_id, device, cluster_, control_plane_);
 
             for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
-                auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
+                auto link_idx = control_plane_.get_routing_plane_id(fabric_node_id, eth_chan);
 
                 if (!(has_dispatch_tunnel_ && link_idx == dispatch_link_idx_)) {
                     non_dispatch_active_channels.push_back(eth_chan);
@@ -107,15 +107,12 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
 
 void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
     const std::vector<tt_metal::IDevice*>& all_active_devices) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
-
     // Create per-device channel mappings using real ethernet channel IDs
     for (const auto& device : all_active_devices) {
         auto dev_id = device->id();
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+        auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev_id);
         // Get all active ethernet channels for this device
-        auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+        auto active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
 
         // Initialize per-device mappings
         eth_chan_to_core_index_[dev_id] = std::unordered_map<size_t, size_t>();
@@ -125,7 +122,7 @@ void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
         // Skip dispatch link channels - they don't get tensix builders
         size_t channel_index = 0;
         for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
-            routing_plane_id_t routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan_id);
+            routing_plane_id_t routing_plane_id = control_plane_.get_routing_plane_id(fabric_node_id, eth_chan_id);
             eth_chan_to_core_index_[dev_id][eth_chan_id] = channel_index;
 
             // Also populate direction_to_core_index_ for active directions
@@ -142,7 +139,7 @@ void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
         }
 
         // In UDM mode, track missing directions for inter-mux communication
-        if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+        if (fabric_tensix_config_ == tt::tt_fabric::FabricTensixConfig::UDM) {
             track_missing_directions_for_udm(device, fabric_node_id, active_channels, channel_index);
         }
     }
@@ -150,21 +147,19 @@ void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
 
 void FabricTensixDatamoverConfig::build_fabric_tensix_noc_coords_map(
     const std::vector<tt_metal::IDevice*>& all_active_devices) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
-
     // Build the fabric_router_noc_coords_map_ to track which routers/tensix exist in each direction
     // for each fabric node and routing plane (link index)
     for (const auto& device : all_active_devices) {
         auto dev_id = device->id();
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+        auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev_id);
 
         // Get all active ethernet channels for this device
-        auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+        auto active_channels = control_plane_.get_active_fabric_eth_channels(fabric_node_id);
 
         // For each active ethernet channel, record its direction info in the map
         // By looping through all channels, we naturally cover all directions that have active routers
         for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
-            routing_plane_id_t routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan_id);
+            routing_plane_id_t routing_plane_id = control_plane_.get_routing_plane_id(fabric_node_id, eth_chan_id);
 
             // Get the tensix NOC coordinates for this channel
             auto [noc_x, noc_y] = get_noc_xy(device, eth_chan_id);
@@ -177,7 +172,13 @@ void FabricTensixDatamoverConfig::build_fabric_tensix_noc_coords_map(
     }
 }
 
-FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
+FabricTensixDatamoverConfig::FabricTensixDatamoverConfig(const FabricTensixInitContext& ctx) :
+    cluster_(ctx.cluster),
+    control_plane_(ctx.control_plane),
+    hal_(ctx.hal),
+    dispatch_core_mgr_(ctx.dispatch_core_mgr),
+    device_manager_(ctx.device_manager),
+    fabric_tensix_config_(ctx.fabric_tensix_config) {
     // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
     if (!initialize_channel_mappings()) {
         return;
@@ -191,7 +192,6 @@ void FabricTensixDatamoverConfig::track_missing_directions_for_udm(
     const FabricNodeId& fabric_node_id,
     const std::set<std::pair<chan_id_t, eth_chan_directions>>& active_channels,
     size_t& channel_index) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
     ChipId dev_id = device->id();
 
     // Collect all active (routing_plane_id, direction) pairs from active_channels
@@ -199,7 +199,7 @@ void FabricTensixDatamoverConfig::track_missing_directions_for_udm(
     std::set<std::pair<routing_plane_id_t, eth_chan_directions>> active_plane_directions;
     std::set<routing_plane_id_t> active_routing_planes;
     for (const auto& [eth_chan_id, eth_chan_dir] : active_channels) {
-        routing_plane_id_t routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan_id);
+        routing_plane_id_t routing_plane_id = control_plane_.get_routing_plane_id(fabric_node_id, eth_chan_id);
 
         // Skip dispatch routing plane
         if (has_dispatch_tunnel_ && routing_plane_id == dispatch_link_idx_) {
@@ -286,11 +286,10 @@ void FabricTensixDatamoverConfig::track_missing_directions_for_udm(
 
 bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     // Get logical fabric mux cores from the first available device (same for all devices), except for TG
-    const bool is_TG =
-        (tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt_metal::ClusterType::TG);
+    const bool is_TG = (cluster_.get_cluster_type() == tt_metal::ClusterType::TG);
     TT_FATAL(!is_TG, "Fabric with tensix extension is not supported for TG");
 
-    const auto& all_active_devices = tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
+    const auto& all_active_devices = device_manager_.get_all_active_devices();
     TT_FATAL(!all_active_devices.empty(), "No active devices found in DeviceManager");
 
     // Calculate and cache min/max ethernet channels once for later use
@@ -298,9 +297,8 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
 
     auto device_id = all_active_devices.front()->id();
 
-    auto num_hw_cqs = tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
-    tt_metal::DispatchCoreConfig dispatch_core_config =
-        tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+    auto num_hw_cqs = dispatch_core_mgr_.get_num_hw_cqs();
+    tt_metal::DispatchCoreConfig dispatch_core_config = dispatch_core_mgr_.get_dispatch_core_config();
     logical_fabric_mux_cores_ = tt::get_logical_fabric_mux_cores(device_id, num_hw_cqs, dispatch_core_config);
     // TODO: once we merge the mux cores from dispatch to fabric, we can remove this.
     logical_dispatch_mux_cores_ = tt::get_logical_dispatch_cores(device_id, num_hw_cqs, dispatch_core_config);
@@ -308,7 +306,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "No logical fabric mux cores found for device {}", device_id);
 
     // Initialize translated mux cores (coordinates should be same across devices)
-    auto* device = tt_metal::MetalContext::instance().device_manager()->get_active_device(device_id);
+    auto* device = device_manager_.get_active_device(device_id);
     TT_FATAL(device != nullptr, "Device {} not found in DeviceManager", device_id);
     for (const auto& logical_core : logical_fabric_mux_cores_) {
         CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
@@ -339,8 +337,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
 
     // Set num_used_riscs_per_tensix based on mode
     // This determines how many core types we use on each tensix core
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    switch (fabric_tensix_config) {
+    switch (fabric_tensix_config_) {
         case tt::tt_fabric::FabricTensixConfig::MUX:
             // MUX mode: only 1 core type (MUX on BRISC) is used per tensix core
             num_used_riscs_per_tensix_ = 1;
@@ -350,7 +347,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
             num_used_riscs_per_tensix_ = 2;
             break;
         case tt::tt_fabric::FabricTensixConfig::DISABLED: num_used_riscs_per_tensix_ = 0; break;
-        default: TT_THROW("Unsupported FabricTensixConfig mode: {}", static_cast<int>(fabric_tensix_config));
+        default: TT_THROW("Unsupported FabricTensixConfig mode: {}", static_cast<int>(fabric_tensix_config_));
     }
 
     // Second pass: create per-device channel mappings
@@ -385,8 +382,7 @@ std::vector<CoreCoord> FabricTensixDatamoverConfig::build_workers_by_column(tt_m
 
 // UDM mode helper: gets unique tensix cores for worker assignment
 std::vector<CoreCoord> FabricTensixDatamoverConfig::get_tensix_cores_for_workers(tt_metal::IDevice* device) const {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
-    auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+    auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(device->id());
 
     const auto& node_map = fabric_tensix_noc_coords_map_.at(fabric_node_id);
 
@@ -432,9 +428,7 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
     const std::vector<tt_metal::IDevice*>& all_active_devices) {
     std::map<ChannelTypes, uint32_t> channel_counts;
 
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
-
-    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+    if (fabric_tensix_config_ == tt::tt_fabric::FabricTensixConfig::UDM) {
         // UDM mode: calculate channels based on compute grid
         // UDM has WORKER_CHANNEL, RELAY_TO_MUX_CHANNEL, MUX_TO_MUX_CHANNEL (NO ROUTER_CHANNEL)
 
@@ -477,7 +471,7 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
     } else {
         // Legacy MUX mode: use topology-based channel count
         // Legacy has ROUTER_CHANNEL and WORKER_CHANNEL
-        const auto& fabric_context = tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        const auto& fabric_context = control_plane_.get_fabric_context();
         bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
         // Router channel count: 1 for 1D topologies, 3 for 2D topologies
@@ -489,9 +483,8 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
 }
 
 void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
-    const auto& hal = tt_metal::MetalContext::instance().hal();
-    const auto& fabric_context = tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& all_active_devices = tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
+    const auto& fabric_context = control_plane_.get_fabric_context();
+    const auto& all_active_devices = device_manager_.get_all_active_devices();
 
     // Get buffer size from fabric context
     buffer_size_bytes_full_size_channel_ =
@@ -499,12 +492,12 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     // Calculate available L1 space for tensix cores
     uint32_t l1_base =
-        hal.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+        hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
     uint32_t l1_size =
-        hal.get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+        hal_.get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     // Get L1 alignment requirement
-    size_t l1_alignment = hal.get_alignment(tt_metal::HalMemType::L1);
+    size_t l1_alignment = hal_.get_alignment(tt_metal::HalMemType::L1);
 
     // Reserve space for both core types with proper alignment
     space_per_risc_ = l1_size / num_used_riscs_per_tensix_;             // Split between MUX and RELAY
@@ -589,9 +582,7 @@ std::shared_ptr<FabricTensixDatamoverRelayConfig> FabricTensixDatamoverConfig::c
 
 void FabricTensixDatamoverConfig::create_configs() {
     // Get the fabric tensix config mode
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
-
-    switch (fabric_tensix_config) {
+    switch (fabric_tensix_config_) {
         case tt::tt_fabric::FabricTensixConfig::MUX:
             // MUX mode: only create mux config for MUX core type
             configs_[FabricTensixCoreType::MUX] = create_mux_config(FabricTensixCoreType::MUX);
@@ -911,11 +902,11 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
     uint32_t ethernet_channel_id,
     eth_chan_directions direction,
-    std::vector<bool>&& sender_channel_injection_flags) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    std::vector<bool>&& sender_channel_injection_flags,
+    ControlPlane& control_plane,
+    FabricTensixConfig fabric_tensix_config) {
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
 
     // Get core for this ethernet channel
     CoreCoord my_core_logical = tensix_config.get_core_for_channel(device->id(), ethernet_channel_id);
@@ -981,11 +972,11 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build_for_missing_dir
     tt_metal::Program& /*program*/,
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     routing_plane_id_t routing_plane_id,
-    eth_chan_directions direction) {
-    const auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    eth_chan_directions direction,
+    ControlPlane& control_plane,
+    FabricTensixConfig fabric_tensix_config) {
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
-    auto fabric_tensix_config = tt_metal::MetalContext::instance().get_fabric_tensix_config();
 
     // This method is only valid for UDM mode
     TT_FATAL(

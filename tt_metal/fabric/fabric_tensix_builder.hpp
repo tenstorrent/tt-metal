@@ -21,6 +21,16 @@
 #include "tt_metal/fabric/fabric_tensix_builder_impl.hpp"
 #include "core_coord.hpp"
 
+namespace tt {
+class Cluster;
+}  // namespace tt
+
+namespace tt::tt_metal {
+class Hal;
+class DeviceManager;
+class dispatch_core_manager;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
 // Core type enum for fabric tensix datamover (identifies MUX vs RELAY cores)
@@ -41,9 +51,19 @@ struct hash<tt::tt_fabric::FabricTensixCoreType> {
 
 namespace tt::tt_fabric {
 
+// Context struct holding dependencies for FabricTensixDatamoverConfig initialization
+struct FabricTensixInitContext {
+    const tt::Cluster& cluster;
+    ControlPlane& control_plane;
+    const tt::tt_metal::Hal& hal;
+    tt::tt_metal::dispatch_core_manager& dispatch_core_mgr;
+    tt::tt_metal::DeviceManager& device_manager;
+    FabricTensixConfig fabric_tensix_config;
+};
+
 class FabricTensixDatamoverConfig {
 public:
-    FabricTensixDatamoverConfig();
+    explicit FabricTensixDatamoverConfig(const FabricTensixInitContext& ctx);
 
     // Getters for core and channel configuration
     size_t get_num_configs_per_core() const { return num_configs_per_core_; }
@@ -141,6 +161,14 @@ public:
     WorkerTensixInfo get_worker_tensix_info(ChipId device_id, const CoreCoord& worker_coord) const;
 
 private:
+    // Stored context references
+    const tt::Cluster& cluster_;
+    ControlPlane& control_plane_;
+    const tt::tt_metal::Hal& hal_;
+    tt::tt_metal::dispatch_core_manager& dispatch_core_mgr_;
+    tt::tt_metal::DeviceManager& device_manager_;
+    FabricTensixConfig fabric_tensix_config_;
+
     std::vector<CoreCoord> logical_fabric_mux_cores_;
     std::vector<CoreCoord> logical_dispatch_mux_cores_;
     std::unordered_set<CoreCoord> translated_fabric_mux_cores_;
@@ -305,7 +333,9 @@ public:
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
         eth_chan_directions direction,
-        std::vector<bool>&& sender_channel_injection_flags);
+        std::vector<bool>&& sender_channel_injection_flags,
+        ControlPlane& control_plane,
+        FabricTensixConfig fabric_tensix_config);
 
     // Static builder method for missing directions (UDM mode only)
     // Creates a tensix builder for a direction that doesn't have an active eth channel
@@ -316,7 +346,9 @@ public:
         tt::tt_metal::Program& program,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         routing_plane_id_t routing_plane_id,
-        eth_chan_directions direction);
+        eth_chan_directions direction,
+        ControlPlane& control_plane,
+        FabricTensixConfig fabric_tensix_config);
 
     // Create and compile the kernel(s) based on mode
     void create_and_compile(tt::tt_metal::Program& program);

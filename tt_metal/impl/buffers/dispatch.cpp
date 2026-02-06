@@ -14,6 +14,7 @@
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
 #include "dispatch.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -23,6 +24,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "tt_align.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
