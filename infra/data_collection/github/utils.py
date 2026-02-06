@@ -381,20 +381,23 @@ def get_github_runner_environment():
     }
 
 
-def _get_device_type_from_runner_environment() -> str:
+def _get_device_type_from_runner_environment(sku_from_test: Optional[str] = None) -> str:
     """
     Infer device/card type (wormhole_b0, blackhole) from runner environment.
     RUNNER_NAME is a GitHub Actions env var that must be set.
+
+    When sku_from_test is provided (e.g. from workflow), look up sku_config for that SKU's
+    runs_on labels; if any label contains "blackhole" or "wormhole", return the arch.
     """
     assert "RUNNER_NAME" in os.environ, "RUNNER_NAME must be set (GitHub Actions env var)"
     runner_name = os.environ["RUNNER_NAME"]
+    runner_lower = runner_name.lower()
 
     # This assumes all CIv2 runner names start with tt-ubuntu
-    if runner_name.startswith("tt-ubuntu"):
-        r = runner_name.lower()
-        if "blackhole" in r or "bh-" in r or "p100" in r or "p150" in r:
+    if runner_lower.startswith("tt-ubuntu"):
+        if "blackhole" in runner_lower or "bh-" in runner_lower or "p100" in runner_lower or "p150" in runner_lower:
             return "blackhole"
-        if "n150" in r or "n300" in r or "wormhole" in r:
+        if "n150" in runner_lower or "n300" in runner_lower or "wormhole" in runner_lower:
             return "wormhole_b0"
         return "unknown"
 
@@ -403,16 +406,17 @@ def _get_device_type_from_runner_environment() -> str:
     if sku_config_path.exists():
         with open(sku_config_path) as f:
             config = yaml.safe_load(f)
-        for sku_name, sku_data in (config.get("skus") or {}).items():
-            runs_on = sku_data.get("runs_on") or []
+        skus = config.get("skus") or {}
+
+        if sku_from_test and sku_from_test in skus:
+            # Use sku_from_test from workflow: get runs_on labels for this SKU
+            runs_on = skus[sku_from_test].get("runs_on") or []
             for label in runs_on:
                 label_lower = label.lower()
-                if "arch-wormhole" in label_lower or "wormhole" in label_lower:
-                    if label in runner_name or "wormhole" in runner_name.lower():
-                        return "wormhole_b0"
-                if "arch-blackhole" in label_lower or "blackhole" in label_lower:
-                    if label in runner_name or "blackhole" in runner_name.lower():
-                        return "blackhole"
+                if "blackhole" in label_lower:
+                    return "blackhole"
+                if "wormhole" in label_lower:
+                    return "wormhole_b0"
 
     # Failed to parse from CIv2 runner name and failed to parse from sku_config:
     # Fallback to using ARCH_NAME env var
@@ -428,7 +432,9 @@ def _get_device_type_from_runner_environment() -> str:
     return "unknown"
 
 
-def create_json_with_github_benchmark_environment(github_partial_benchmark_data_filename):
+def create_json_with_github_benchmark_environment(
+    github_partial_benchmark_data_filename, sku_from_test: Optional[str] = None
+):
     assert "GITHUB_REPOSITORY" in os.environ
     git_repo_name = os.environ["GITHUB_REPOSITORY"]
 
@@ -461,7 +467,7 @@ def create_json_with_github_benchmark_environment(github_partial_benchmark_data_
     logger.warning("Hardcoded null for device_ip")
     device_ip = ""
 
-    device_type = _get_device_type_from_runner_environment()
+    device_type = _get_device_type_from_runner_environment(sku_from_test=sku_from_test)
 
     logger.warning("Hardcoded null for device_memory_size")
     device_memory_size = ""
