@@ -1289,7 +1289,8 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    @lru_cache(maxsize=None)
+    # NOTE: Cannot use @lru_cache here because tensor parameter would cause memory leak
+    # by keeping references to all tensors passed to this function
     def get_mlp_ff2_all_reduce_mem_config(self, mode: Mode, tensor: ttnn.Tensor):
         if mode == Mode.DECODE:
             if self.is_galaxy:
@@ -1677,6 +1678,7 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    @lru_cache(maxsize=None)
     def get_attn_concat_heads_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for attention concat_heads output before WO matmul."""
         if mode == Mode.DECODE:

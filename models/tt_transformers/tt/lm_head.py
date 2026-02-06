@@ -160,18 +160,17 @@ class LMHead(LightweightModule):
                 dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
                 sub_device_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
             )
-            output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
-            # output = ttnn.to_memory_config(
-            #     output,
-            #     memory_config=self.args.get_lm_head_sharded_output_mem_config(
-            #         self.prefetcher if use_prefetcher else None
-            #     ),
-            # )
+            output = ttnn.to_memory_config(
+                output,
+                memory_config=self.args.get_lm_head_sharded_output_mem_config(
+                    self.prefetcher if use_prefetcher else None
+                ),
+            )
 
             outputs.append(output)
 
         ttnn.deallocate(x)
-        # Number of shards along width 126 must not exceed number of cores 32
+
         # Concatenate the outputs
         # outputs shape: a list of tensors, each tensor is 1,1,32,size_per_device per device
         output = ttnn.concat(
@@ -182,7 +181,6 @@ class LMHead(LightweightModule):
         )
 
         # Only use reshard mem config for decode mode
-        # Prefill has different tensor widths (32064 vs 32768) so use L1_MEMORY_CONFIG
         if use_prefetcher:
             output = ttnn.to_memory_config(
                 output,
