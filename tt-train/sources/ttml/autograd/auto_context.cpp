@@ -129,4 +129,48 @@ void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket
     return *m_socket_manager;
 }
 
+ParallelismContext::ParallelismContext(
+    const ttnn::distributed::MeshDevice& mesh_device, const DistributedConfig& config) {
+    TT_FATAL(
+        (uint32_t)config.enable_ddp + (uint32_t)config.enable_tp == mesh_device.shape().dims(),
+        "The number of parallelization axes must be equal to the number of mesh shape dimensions");
+
+    uint32_t axis = 0;
+    if (config.enable_ddp) {
+        m_ddp_axis = axis++;
+        m_num_ddp_devices = mesh_device.shape()[m_ddp_axis.value()];
+    }
+    if (config.enable_tp) {
+        m_tp_axis = axis++;
+        m_num_tp_devices = mesh_device.shape()[m_tp_axis.value()];
+    }
+}
+[[nodiscard]] const ParallelismContext& AutoContext::get_parallelism_context() const {
+    if (!m_parallelism_context) {
+        throw std::runtime_error("ParallelismContext is not initialized.");
+    }
+    return *m_parallelism_context;
+}
+
+void AutoContext::initialize_parallelism_context(const DistributedConfig& config) {
+    if (m_parallelism_context) {
+        throw std::runtime_error("ParallelismContext is already initialized.");
+    }
+    m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), config);
+}
+
+const uint32_t ParallelismContext::get_ddp_size() const {
+    if (!m_ddp_axis.has_value()) {
+        return 1U;
+    }
+    return m_num_ddp_devices;
+}
+
+const uint32_t ParallelismContext::get_tp_size() const {
+    if (!m_tp_axis.has_value()) {
+        return 1U;
+    }
+    return m_num_tp_devices;
+}
+
 }  // namespace ttml::autograd

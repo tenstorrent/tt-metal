@@ -207,4 +207,4 @@ hidden = run_vision_encoder_layer_sharded(
 
 - [OWL-ViT Paper](https://arxiv.org/abs/2205.06230)
 - [HuggingFace Model Card](https://huggingface.co/google/owlvit-base-patch32)
-- [CLIP Encoder Implementation](../../experimental/tt_dit/encoders/clip/model_clip.py)
+- [CLIP Encoder Implementation](../../tt_dit/encoders/clip/model_clip.py)

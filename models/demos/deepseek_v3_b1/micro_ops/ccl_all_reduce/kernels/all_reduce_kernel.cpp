@@ -44,8 +44,8 @@ void kernel_main() {
         using WriterCTArgs = Sender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         Sender::RTArgs args{};
-        args.tensor_address = get_arg_val<uint32_t>(0);
-        size_t fabric_arg_idx = 1;
+        args.tensor_address = get_common_arg_val<uint32_t>(0);
+        size_t fabric_arg_idx = 0;
 
         Sender::Op<ReaderCTArgs, WriterCTArgs> op;
         op(args, fabric_arg_idx);
@@ -68,8 +68,8 @@ void kernel_main() {
         using ComputeCTArgs = Receiver::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0>;
 
         Receiver::RTArgs args{};
-        args.sender_semaphore_addr = get_arg_val<uint32_t>(0);
-        size_t fabric_arg_idx = 1;
+        args.sender_semaphore_addr = get_common_arg_val<uint32_t>(0);
+        size_t fabric_arg_idx = 0;
 
         Receiver::Op<ReaderCTArgs, ComputeCTArgs> op;
         op(args, fabric_arg_idx);
@@ -101,9 +101,9 @@ void kernel_main() {
             get_named_compile_time_arg_val("using_persistent_buffer")>;
 
         Sender::RTArgs args{};
-        args.receiver_base_address = get_arg_val<uint32_t>(0);
-        args.receive_semaphore_addr = get_arg_val<uint32_t>(1);
-        size_t fabric_arg_idx = 2;
+        args.receiver_base_address = get_common_arg_val<uint32_t>(0);
+        args.receive_semaphore_addr = get_common_arg_val<uint32_t>(1);
+        size_t fabric_arg_idx = 0;
 
         Sender::Op<ReaderCTArgs, WriterCTArgs> op;
         op(args, fabric_arg_idx);
