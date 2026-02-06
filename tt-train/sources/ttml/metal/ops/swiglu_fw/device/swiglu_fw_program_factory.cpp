@@ -383,6 +383,32 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // Each CB holds rt_dim rows worth of block_size tiles
     const uint32_t rt_dim_tiles = kRtDim * block_size;  // 2 × 4 = 8 tiles for rt_dim=2
 
+    // X CB sizing for Phase 3: X Row Caching
+    // Cache full X row(s) in L1 to avoid re-reading from DRAM for each k_block
+    // This reduces X reads from K_blocks × P_blocks to just P_blocks per row pair
+    const uint32_t x_row_tiles = kRtDim * Wt;  // 2 rows × Wt tiles per row
+
+    // Validate X row caching fits in L1
+    // Calculate total CB memory requirements for True Flash rt_dim=2 with X row caching
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t x_cb_memory = x_row_tiles * bfloat16_single_tile_size_bytes;
+    const uint64_t w_cb_memory = 2U * w1_w3_cb_tiles * bfloat16_single_tile_size_bytes +  // W1 + W3
+                                 w2_cb_tiles * bfloat16_single_tile_size_bytes;           // W2
+    const uint64_t intermediate_cb_memory =
+        5U * rt_dim_tiles * bfloat16_single_tile_size_bytes;                           // XW1/XW3 partial/final, M
+    const uint64_t y_cb_memory = 2U * rt_dim_tiles * bfloat16_single_tile_size_bytes;  // Y_partial + Y
+    const uint64_t total_cb_memory = x_cb_memory + w_cb_memory + intermediate_cb_memory + y_cb_memory;
+
+    TT_FATAL(
+        total_cb_memory <= available_L1,
+        "True Flash X Row Caching requires {} bytes but only {} bytes available in L1. "
+        "X row tiles={} (Wt={}). Consider using smaller embed_dim or ORIGINAL algorithm.",
+        total_cb_memory,
+        available_L1,
+        x_row_tiles,
+        Wt);
+
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
     // NOTE(maciek):
@@ -392,9 +418,10 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // - Matmul runs on FPU; with fp32_dest_acc_en, accumulation is fp32.
     // - Using all CBs as fp32 showed no observable precision improvement in tests.
 
-    // Input CB: rt_dim rows × block_size tiles = 8 tiles (double-buffered → 16 tiles)
+    // Input CB: Phase 3 X Row Caching - cache full X row(s) in L1
+    // Size = rt_dim rows × Wt tiles per row (NOT double-buffered - read once, reuse for all k_blocks)
     [[maybe_unused]] auto cb_input = create_circular_buffer(
-        program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2U * rt_dim_tiles);
+        program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, x_row_tiles);
     // W1/W3 CBs use larger size when batching is enabled for reduced mcast overhead
     [[maybe_unused]] auto cb_w1 = create_circular_buffer(
         program, all_cores, kW1CbIndex, data_format, bfloat16_single_tile_size_bytes, w1_w3_cb_tiles);
