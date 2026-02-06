@@ -49,6 +49,9 @@ struct DramNeighbourConfig {
           core_dram_map(core_dram_map_) {}
 };
 
+void print_detailed_comparision(const vector<uint32_t>& packed_golden, const vector<uint32_t>& packed_output);
+
+
 /// @brief Reads from DRAM to L1 with each core reading only its adjacent bank
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test
@@ -59,10 +62,13 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 
     uint32_t num_pages = test_config.num_banks * test_config.pages_per_bank;
     const size_t total_size_bytes = num_pages * test_config.page_size_bytes;
+    const unordered_map<uint32_t, uint32_t>& core_dram_map = test_config.core_dram_map.get();
 
-    // DRAM coords: y=0, x=[0, num_banks-1]
-    CoreRange dram_bank_range({0, 0}, {test_config.num_banks - 1, 0});
-    std::vector<CoreCoord> dram_cores = corerange_to_cores(dram_bank_range);
+    std::vector<CoreCoord> dram_cores;
+    for(const auto& [key, value] : core_dram_map) {
+        dram_cores.push_back(CoreCoord{static_cast<uint16_t>(value), 0});
+        log_info(tt::LogTest, "line 67: dram_cores vector - DRAM bank {}", value);
+    }
 
     // Buffer sharding: each bank's data to corresponding core
     BufferDistributionSpec shard_spec = BufferDistributionSpec(
@@ -89,7 +95,10 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     uint32_t input_buffer_address = mesh_buffer->address(); // need to read from different dram starting point
 
     // Generate input
-    vector<uint32_t> packed_input = generate_packed_constant_vector<uint32_t, bfloat16>(100.0f, total_size_bytes / sizeof(bfloat16));
+    // vector<uint32_t> packed_input = generate_packed_constant_vector<uint32_t, bfloat16>(100.0f, total_size_bytes / sizeof(bfloat16));
+
+    vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        1.0f, 100.0f, total_size_bytes / sizeof(bfloat16), chrono::system_clock::now().time_since_epoch().count());
 
     vector<uint32_t> packed_golden = packed_input;
 
@@ -102,11 +111,10 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 
     // Worker cores
     vector<CoreCoord> worker_cores;
-    const unordered_map<uint32_t, uint32_t>& core_dram_map = test_config.core_dram_map.get();
     for(const auto [key, value] : core_dram_map) {
         CoreCoord core{static_cast<uint16_t>(key >> 16), static_cast<uint16_t>(key & 0xFFFF)};
         worker_cores.push_back(core);
-        log_info(tt::LogTest, "line 111: Core ({}, {}) assigned to DRAM bank {}", core.x, core.y, value);
+        log_info(tt::LogTest, "line 114: worker_cores vector - Core ({}, {})", core.x, core.y);
     }
 
     CoreRangeSet core_range_set(worker_cores);
@@ -155,24 +163,34 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
 
 
     vector<uint32_t> packed_output;
-    bool is_equal = false;
-    uint32_t count = 0;
+    vector<uint32_t> cur_output;
 
     for (uint32_t i = 0; i < worker_cores.size(); i++) {
-        detail::ReadFromDeviceL1(device, worker_cores[i], l1_addr[i], total_size_bytes, packed_output);
+        detail::ReadFromDeviceL1(device, worker_cores[i], l1_addr[i], total_size_bytes, cur_output);
+        log_info(tt::LogTest, "line 170: Read from L1 of Core ({}, {})", worker_cores[i].x, worker_cores[i].y);
+        packed_output.insert(packed_output.end(), cur_output.begin(), cur_output.end());
+        cur_output.clear();
+    }
 
-        // Verify results
-        is_equal = (packed_output == packed_golden);
-        if (!is_equal) {
-            log_error(tt::LogTest, "Equality Check failed");
-            log_info(tt::LogTest, "Golden vector");
-            print_vector(unpack_vector<bfloat16, uint32_t>(packed_golden));
-            log_info(tt::LogTest, "Output vector");
-            print_vector(unpack_vector<bfloat16, uint32_t>(packed_output));
-            return is_equal;
-        }
+    // erase zeros
+    packed_output.erase(remove(packed_output.begin(), packed_output.end(), 0), packed_output.end());
 
-        log_info(tt::LogTest, "Passed {} \n", count++);
+    // Verify results
+    bool is_equal = (packed_output == packed_golden);
+    if (!is_equal) {
+        log_error(tt::LogTest, "Equality Check failed");
+        log_info(tt::LogTest, "Golden vector");
+        print_vector(unpack_vector<bfloat16, uint32_t>(packed_golden));
+        log_info(tt::LogTest, "Output vector");
+        print_vector(unpack_vector<bfloat16, uint32_t>(packed_output));
+
+        unit_tests::dm::dram_neighbour::print_detailed_comparision(packed_golden, packed_output);
+        return is_equal;
+    } else{
+        log_info(tt::LogTest, "Golden vector");
+        print_vector(unpack_vector<bfloat16, uint32_t>(packed_golden));
+        log_info(tt::LogTest, "Output vector");
+        print_vector(unpack_vector<bfloat16, uint32_t>(packed_output));
 
     }
 
@@ -186,7 +204,7 @@ unordered_map<uint32_t, uint32_t> core_dram_mapping_ideal(const shared_ptr<distr
             tt::tt_metal::NOC::RISCV_0_default); 
     
     for(uint32_t i = 0; i < dram_bank2core_coords.size(); i++) {
-        if(i==1) break;
+        if(i==3) break;
         const CoreCoord& coord = dram_bank2core_coords[i];
         uint32_t key = (static_cast<uint32_t>(coord.x) << 16) | static_cast<uint32_t>(coord.y);
         mapping[key] = i;
@@ -194,6 +212,18 @@ unordered_map<uint32_t, uint32_t> core_dram_mapping_ideal(const shared_ptr<distr
 
     return mapping;
 }
+
+void print_detailed_comparision(const vector<uint32_t>& packed_golden, const vector<uint32_t>& packed_output) {
+    log_info(tt::LogTest, "\n\nDetailed Comparison:");
+    log_info(tt::LogTest, "Total elements in Golden: {}, Total elements in Output: {}", packed_golden.size(), packed_output.size());
+    size_t min_size = min(packed_golden.size(), packed_output.size());
+    for (size_t i = 0; i < min_size; i++) {
+        if (packed_golden[i] != packed_output[i]) {
+            log_info(tt::LogTest, "Index {}: Golden = {}, Output = {}", i, packed_golden[i], packed_output[i]);
+        }
+    }
+}
+
 
 }  // namespace unit_tests::dm::dram_neighbour
 
@@ -262,7 +292,7 @@ TEST_F(GenericMeshDeviceFixture, idealTest) {
 
     uint32_t test_id = 110;
     uint32_t num_of_transactions = 1;
-    uint32_t num_banks = 1;
+    uint32_t num_banks = 3;
     uint32_t pages_per_bank = 1;
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
