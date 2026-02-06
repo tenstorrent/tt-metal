@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     maybe_skip_long_seq,
     measure_perf_us,
 )
+from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -68,39 +69,46 @@ def ds_mul_ttnn(
     w1_out: ttnn.Tensor,
     w3_out: ttnn.Tensor,
     cfg: dict,
+    mode: str,
     output_mem_config: ttnn.MemoryConfig = None,
 ) -> ttnn.Tensor:
     """
     TTNN implementation for the mul fused op with SILU activation.
 
-    This performs: silu(w1_out) * w3_out using ttnn.mul with input_tensor_a_activations=[SILU]
+    This performs: silu(w1_out) * w3_out
+    - For prefill: Uses fused activation in ttnn.mul
+    - For decode: Applies MLP._silu_workaround before calling the wrapper
 
     Args:
         w1_out: Input tensor that will have SILU applied
         w3_out: Input tensor to multiply with
         cfg: Configuration dictionary containing mul config
+        mode: "decode" or "prefill"
         output_mem_config: Optional override for output memory config (useful for unit tests)
 
     Returns:
-        Output tensor after fused silu+mul
+        Output tensor after silu+mul
     """
     mul_cfg = dict(cfg["mul"])
 
     # Allow test to override memory_config if needed (e.g., when inputs are in DRAM)
     if output_mem_config is not None:
         mul_cfg["memory_config"] = output_mem_config
-        # When using DRAM output, we need to apply SILU separately since the fused
-        # activation path may expect L1 sharded inputs
+        # When using DRAM output, we need to apply SILU separately
         if output_mem_config == ttnn.DRAM_MEMORY_CONFIG:
-            # Remove fused activation and apply separately
             mul_cfg.pop("input_tensor_a_activations", None)
-            w1_activated = ttnn.silu(w1_out, memory_config=output_mem_config)
-            activated = ttnn.mul(w1_activated, w3_out, **mul_cfg)
-            ttnn.deallocate(w1_activated)
-            return activated
+            # Apply SILU before mul for DRAM output
+            if mode == "decode":
+                w1_out = MLP._silu_workaround(w1_out)
+            else:  # prefill
+                w1_out = ttnn.silu(w1_out, memory_config=output_mem_config)
+    else:
+        # For non-DRAM output in decode mode, apply the workaround before calling the wrapper
+        if mode == "decode":
+            w1_out = MLP._silu_workaround(w1_out)
 
-    activated = ttnn.mul(w1_out, w3_out, **mul_cfg)
-    return activated
+    # Call the MLP wrapper
+    return MLP._fwd_mul(w1_out, w3_out, mul_cfg)
 
 
 def _run_ds_mul_test(
@@ -133,7 +141,7 @@ def _run_ds_mul_test(
 
     # Use DRAM output since inputs are in DRAM (unit test simplification)
     # In actual MLP forward, inputs would be L1_WIDTH_SHARDED from linear ops
-    tt_output = ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_output = ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, mode, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # Collect output from all devices and compare
     tt_output_torch = ttnn.to_torch(
@@ -163,7 +171,7 @@ def _run_ds_mul_test(
         perf_profiler.start(step_name)
 
         def op_fn():
-            return ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
+            return ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, mode, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
 
         perf_us = measure_perf_us(
             mesh_device,
@@ -218,7 +226,7 @@ def _run_ds_mul_test(
         from tracy import signpost
 
         def op_fn():
-            return ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
+            return ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, mode, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
 
         for _ in range(PERF_WARMUP_ITERS):
             output = op_fn()

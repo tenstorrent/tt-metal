@@ -79,21 +79,13 @@ def ds_ff1_3_reference(
 def ds_ff1_3_ttnn(
     x: ttnn.Tensor, cfg: dict, mode: Literal["decode", "prefill"], seq_len: int
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """
-    TTNN implementation for FF1/3 fused op (gate + up projections only).
-
-    Returns:
-        Tuple of (w1_out, w3_out) tensors.
-    """
+    """TTNN implementation for FF1/3 op (gate + up projections)."""
+    # Compute program config for prefill if needed
+    program_config = None
     if mode == "prefill":
-        pc = MLP._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"])
-        w1_out = ttnn.linear(x, program_config=pc, **cfg["w1"])
-        w3_out = ttnn.linear(x, program_config=pc, **cfg["w3"])
-    else:
-        w1_out = ttnn.linear(x, **cfg["w1"])
-        w3_out = ttnn.linear(x, **cfg["w3"])
+        program_config = MLP._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"])
 
-    return w1_out, w3_out
+    return MLP._fwd_ff1_3(x, cfg["w1"], cfg["w3"], program_config=program_config)
 
 
 def _run_ds_ff1_3_test(

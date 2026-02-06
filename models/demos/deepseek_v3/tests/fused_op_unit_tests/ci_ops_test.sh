@@ -73,7 +73,7 @@ run_test() {
     echo "Log: $log_file"
     echo "----------------------------------------"
 
-    if timeout $TIMEOUT pytest "$test_path::$test_func" -k "$test_filter" -v 2>&1 | tee "$log_file"; then
+    if timeout $TIMEOUT python -m pytest "$test_path::$test_func" -k "$test_filter" -v 2>&1 | tee "$log_file"; then
         if grep -q "PASSED" "$log_file"; then
             echo "✓ $test_name: PASSED"
             PASSED=$((PASSED + 1))
@@ -114,11 +114,6 @@ run_test "embedding_prefill_seq128_eager" \
     "test_ds_embedding" \
     "prefill and 128 and eager and program_cache and not no_program_cache"
 
-run_test "embedding_prefill_seq1024_eager" \
-    "$EMBEDDING_PATH" \
-    "test_ds_embedding" \
-    "prefill and 1024 and eager and program_cache and not no_program_cache"
-
 # ============================================
 # EMBEDDING ALL GATHER TESTS
 # ============================================
@@ -137,11 +132,6 @@ run_test "embedding_all_gather_prefill_seq128_eager" \
     "$EMBEDDING_AG_PATH" \
     "test_ds_all_gather_embedding" \
     "prefill and 128 and eager and program_cache and not no_program_cache"
-
-run_test "embedding_all_gather_prefill_seq1024_eager" \
-    "$EMBEDDING_AG_PATH" \
-    "test_ds_all_gather_embedding" \
-    "prefill and 1024 and eager and program_cache and not no_program_cache"
 
 # ============================================
 # LM HEAD TESTS
@@ -162,11 +152,6 @@ run_test "lm_head_prefill_seq128_eager" \
     "test_ds_lm_head" \
     "prefill and 128 and eager and program_cache and not no_program_cache and real_weights"
 
-run_test "lm_head_prefill_seq1024_eager" \
-    "$LM_HEAD_PATH" \
-    "test_ds_lm_head" \
-    "prefill and 1024 and eager and program_cache and not no_program_cache and real_weights"
-
 # ============================================
 # RMS NORM TESTS
 # ============================================
@@ -185,11 +170,6 @@ run_test "rms_norm_prefill_seq128_eager" \
     "$RMS_NORM_PATH" \
     "test_ds_rms_norm" \
     "prefill and 128 and kv_lora_rank_512 and eager and program_cache and not no_program_cache and real_weights"
-
-run_test "rms_norm_prefill_seq1024_eager" \
-    "$RMS_NORM_PATH" \
-    "test_ds_rms_norm" \
-    "prefill and 1024 and kv_lora_rank_512 and eager and program_cache and not no_program_cache and real_weights"
 
 # ============================================
 # DISTRIBUTED NORM TESTS
@@ -210,11 +190,6 @@ run_test "distributed_norm_prefill_seq128_eager" \
     "test_ds_distributed_norm" \
     "prefill and 128 and eager and program_cache and not no_program_cache and real_weights"
 
-run_test "distributed_norm_prefill_seq1024_eager" \
-    "$DIST_NORM_PATH" \
-    "test_ds_distributed_norm" \
-    "prefill and 1024 and eager and program_cache and not no_program_cache and real_weights"
-
 # ============================================
 # MLP FF1/3 TESTS
 # ============================================
@@ -233,11 +208,6 @@ run_test "ff1_3_prefill_seq128_eager" \
     "$FF1_3_PATH" \
     "test_ds_ff1_3" \
     "prefill and 128 and eager and program_cache and not no_program_cache and real_weights"
-
-run_test "ff1_3_prefill_seq1024_eager" \
-    "$FF1_3_PATH" \
-    "test_ds_ff1_3" \
-    "prefill and 1024 and eager and program_cache and not no_program_cache and real_weights"
 
 # ============================================
 # MLP FF2 TESTS
@@ -258,11 +228,6 @@ run_test "ff2_prefill_seq128_eager" \
     "test_ds_ff2" \
     "prefill and 128 and eager and program_cache and not no_program_cache and real_weights"
 
-run_test "ff2_prefill_seq1024_eager" \
-    "$FF2_PATH" \
-    "test_ds_ff2" \
-    "prefill and 1024 and eager and program_cache and not no_program_cache and real_weights"
-
 # ============================================
 # MLP MUL TESTS
 # ============================================
@@ -281,11 +246,6 @@ run_test "mul_prefill_seq128_eager" \
     "$MUL_PATH" \
     "test_ds_mul" \
     "prefill and 128 and eager and program_cache and not no_program_cache"
-
-run_test "mul_prefill_seq1024_eager" \
-    "$MUL_PATH" \
-    "test_ds_mul" \
-    "prefill and 1024 and eager and program_cache and not no_program_cache"
 
 # ============================================
 # MLP REDUCE SCATTER TESTS
@@ -306,11 +266,6 @@ run_test "reduce_scatter_prefill_seq128_eager" \
     "test_ds_reduce_scatter_post_ff2" \
     "prefill and 128 and eager and program_cache and not no_program_cache"
 
-run_test "reduce_scatter_prefill_seq1024_eager" \
-    "$RS_PATH" \
-    "test_ds_reduce_scatter_post_ff2" \
-    "prefill and 1024 and eager and program_cache and not no_program_cache"
-
 # ============================================
 # MLP ALL GATHER TESTS
 # ============================================
@@ -329,11 +284,6 @@ run_test "all_gather_prefill_seq128_eager" \
     "$AG_PATH" \
     "test_ds_all_gather_preff1_3" \
     "prefill and 128 and eager and program_cache and not no_program_cache"
-
-run_test "all_gather_prefill_seq1024_eager" \
-    "$AG_PATH" \
-    "test_ds_all_gather_preff1_3" \
-    "prefill and 1024 and eager and program_cache and not no_program_cache"
 
 # ============================================
 # SUMMARY

@@ -103,21 +103,14 @@ def ds_distributed_norm_ttnn(
     program_config = DistributedRMSNorm._get_pc(x.memory_config())
 
     # Step 1: Compute local statistics
-    tt_stats = ttnn.rms_norm_pre_all_gather(x, program_config=program_config, **cfg["rms_norm_pre_all_gather"])
+    tt_stats = DistributedRMSNorm._fwd_rms_norm_pre_all_gather(x, cfg, program_config)
 
     # Step 2: AllGather stats across devices
-    tt_gathered_stats = ttnn.experimental.all_gather_async(
-        tt_stats, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
-    )
+    tt_gathered_stats = DistributedRMSNorm._fwd_all_gather_stats(tt_stats, cfg, ccl)
     ttnn.deallocate(tt_stats)
 
     # Step 3: Apply normalization with gathered stats
-    tt_out = ttnn.rms_norm_post_all_gather(
-        x,
-        tt_gathered_stats,
-        program_config=program_config,
-        **cfg["rms_norm_post_all_gather"],
-    )
+    tt_out = DistributedRMSNorm._fwd_rms_norm_post_all_gather(x, tt_gathered_stats, cfg, program_config)
     ttnn.deallocate(tt_gathered_stats)
 
     return tt_out

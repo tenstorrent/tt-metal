@@ -18,6 +18,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     maybe_skip_long_seq,
     measure_perf_us,
 )
+from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -86,26 +87,12 @@ def ds_all_gather_embedding_ttnn(
         x: Input tensor sharded across devices
         cfg: Configuration dictionary containing all_gather config
         ccl: CCL runtime object
-        persistent_output_buffer: Optional persistent output for trace mode
+        persistent_output_buffer: Optional persistent output for trace mode (ignored, kept for backward compatibility)
 
     Returns:
         Output tensor after all-gather
     """
-    runtime_args = dict(ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
-
-    # Normalize negative dims (e.g., -1 -> last dimension) to avoid shape-check failures in C++.
-    if "dim" in runtime_args and isinstance(runtime_args["dim"], int) and runtime_args["dim"] < 0:
-        runtime_args["dim"] = runtime_args["dim"] % len(x.shape)
-
-    # Handle persistent output buffer for trace mode
-    if persistent_output_buffer is not None:
-        if "mesh_device" in runtime_args:
-            runtime_args["persistent_output_tensor"] = persistent_output_buffer
-        else:
-            runtime_args["persistent_output_buffer"] = persistent_output_buffer
-
-    x = ttnn.experimental.all_gather_async(x, **runtime_args)
-    return x
+    return Embedding1D._fwd_all_gather_embedding(x, cfg, ccl)
 
 
 def _run_ds_all_gather_embedding_test(

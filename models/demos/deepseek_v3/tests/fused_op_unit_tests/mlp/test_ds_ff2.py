@@ -84,43 +84,16 @@ def ds_ff2_ttnn(
     output_mem_config: ttnn.MemoryConfig | None = None,
     dram_interleaved_weight: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
+    """TTNN implementation for FF2 op (down projection).
+
+    Note: output_mem_config and dram_interleaved_weight kept for backward compatibility but ignored.
     """
-    TTNN implementation for FF2 fused op (down projection).
-
-    This performs the down projection: w2(activated)
-
-    Args:
-        x: Input tensor (activated) from the mul operation.
-        cfg: Configuration dictionary containing w2 config.
-        mode: "decode" or "prefill" mode.
-        seq_len: Sequence length (used for prefill program config).
-        output_mem_config: Optional override for output memory config (useful for trace mode).
-        dram_interleaved_weight: Optional DRAM-interleaved weight tensor for unit testing.
-            When provided, this bypasses the DRAM-sharded weight config and uses standard matmul.
-            This is needed because the production config uses MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
-            which requires L1-sharded inputs, but unit tests use DRAM-interleaved inputs.
-
-    Returns:
-        w2_out tensor after down projection.
-    """
-    w2_cfg = dict(cfg["w2"])
-
-    if dram_interleaved_weight is not None:
-        # Unit test mode: use DRAM interleaved weight instead of DRAM-sharded weight
-        # This allows testing with DRAM interleaved inputs (standard matmul)
-        w2_cfg["input_tensor_b"] = dram_interleaved_weight
-        w2_cfg["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
-        w2_cfg.pop("program_config", None)  # Use default matmul, not DRAM-sharded config
-    elif output_mem_config is not None:
-        w2_cfg["memory_config"] = output_mem_config
-
+    # Compute program config for prefill if needed
+    program_config = None
     if mode == "prefill":
-        pc = MLP._get_prefill_pc(seq_len=seq_len, is_w2=True, **cfg["linear_pc_gen"])
-        w2_out = ttnn.linear(x, program_config=pc, **w2_cfg)
-    else:
-        w2_out = ttnn.linear(x, **w2_cfg)
+        program_config = MLP._get_prefill_pc(seq_len=seq_len, is_w2=True, **cfg["linear_pc_gen"])
 
-    return w2_out
+    return MLP._fwd_ff2(x, cfg["w2"], program_config=program_config)
 
 
 def _run_ds_ff2_test(

@@ -104,7 +104,8 @@ def ds_rms_norm_ttnn(
     Returns:
         Normalized output tensor (same shape as input)
     """
-    return ttnn.rms_norm(x, program_config=RMSNorm._get_pc(x.memory_config()), **cfg)
+    program_config = RMSNorm._get_pc(x.memory_config())
+    return RMSNorm._fwd_rms_norm(x, cfg, program_config)
 
 
 def _run_ds_rms_norm_test(

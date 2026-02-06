@@ -104,7 +104,7 @@ def ds_lm_head_ttnn_decode(
     Returns:
         Output tensor (WIDTH_SHARDED L1)
     """
-    output = ttnn.linear(x, **cfg["linear"])
+    output = LMHead._fwd_linear(x, cfg)
     return output
 
 
@@ -127,17 +127,13 @@ def ds_lm_head_ttnn_prefill(
     Returns:
         Output tensor (DRAM INTERLEAVED)
     """
-    # Generate program config based on sequence length
-    pc_gen = cfg["linear_pc_gen"]
-    program_config = LMHead._get_prefill_pc(
-        seq_len=seq_len,
-        hidden_dim=pc_gen.hidden_dim,
-        vocab_size=pc_gen.vocab_size,
-        num_devices=pc_gen.num_devices,
-        core_grid_size=pc_gen.core_grid_size,
-    )
+    # Use effective sequence length (chunk size) for program config to avoid L1 overflow
+    effective_seq_len = min(seq_len, cfg.get("max_rows", seq_len))
 
-    output = ttnn.linear(x, program_config=program_config, **cfg["linear"])
+    # Generate program config based on effective sequence length
+    program_config = LMHead._get_prefill_pc(seq_len=effective_seq_len, **cfg["linear_pc_gen"])
+
+    output = LMHead._fwd_linear(x, cfg, program_config=program_config)
     return output
 
 

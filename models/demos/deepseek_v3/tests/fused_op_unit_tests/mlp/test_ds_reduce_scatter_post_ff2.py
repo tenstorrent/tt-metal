@@ -106,39 +106,12 @@ def ds_reduce_scatter_post_ff2_ttnn(
     mode: Literal["decode", "prefill"],
     persistent_output_buffer: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
+    """TTNN implementation for ReduceScatter_post_ff2.
+
+    Note: persistent_output_buffer kept for backward compatibility but ignored.
+          The wrapper matches forward_decode which doesn't do DRAM conversion.
     """
-    TTNN implementation for ReduceScatter_post_ff2.
-
-    This performs the reduce_scatter operation after the w2 (down projection) linear layer.
-    For decode mode, it first converts to DRAM memory config before the reduce_scatter.
-
-    Args:
-        x: Input tensor (output of w2 linear layer)
-        cfg: Configuration dictionary containing reduce_scatter config
-        ccl: CCL runtime object
-        mode: "decode" or "prefill"
-        persistent_output_buffer: Optional pre-allocated output buffer for trace mode
-
-    Returns:
-        Output tensor after reduce_scatter
-    """
-    if mode == "decode":
-        # Decode mode: convert to DRAM first (as in MLP.forward_decode)
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-
-    # Get runtime args from CCL
-    runtime_args = dict(ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"]))
-
-    # Normalize negative dims
-    if "dim" in runtime_args and isinstance(runtime_args["dim"], int) and runtime_args["dim"] < 0:
-        runtime_args["dim"] = runtime_args["dim"] % len(x.shape)
-
-    # Handle persistent output buffer for trace mode
-    if persistent_output_buffer is not None:
-        runtime_args["persistent_output_buffers"] = persistent_output_buffer
-
-    output = ttnn.experimental.reduce_scatter_minimal_async(x, **runtime_args)
-    return output
+    return MLP._fwd_reduce_scatter_post_ff2(x, cfg, ccl)
 
 
 def _measure_perf_us(

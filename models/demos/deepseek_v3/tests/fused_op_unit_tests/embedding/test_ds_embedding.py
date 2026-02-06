@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     maybe_skip_long_seq,
     measure_perf_us,
 )
+from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -83,14 +84,7 @@ def ds_embedding_ttnn(
     Returns:
         Output tensor after embedding lookup
     """
-    if original_seq_len % ttnn.TILE_SIZE == 0:
-        embeddings = ttnn.embedding(input_ids, **cfg["embedding"])
-    else:
-        x_padded = ttnn.pad(input_ids, [(0, 0), (0, 0), (0, ttnn.TILE_SIZE - original_seq_len % ttnn.TILE_SIZE)], 0)
-        embeddings = ttnn.embedding(x_padded, **cfg["embedding"])
-        ttnn.deallocate(x_padded)
-
-    return embeddings
+    return Embedding1D._fwd_embedding(input_ids, cfg, original_seq_len)
 
 
 def _run_ds_embedding_test(
