@@ -57,6 +57,7 @@ struct TensorShape2D {
     uint32_t logical_d1;
     uint32_t padded_d0;
     uint32_t padded_d1;
+    // Constructor to initialize with 2D shape
     TensorShape2D(uint32_t _d0, uint32_t _d1, uint32_t _padded_d0, uint32_t _padded_d1) :
         logical_d0(_d0), logical_d1(_d1), padded_d0(_padded_d0), padded_d1(_padded_d1) {
         ASSERT(_d0 > 0);
@@ -230,7 +231,7 @@ void read_ternary_blocks_sync(
     uint32_t ternary_a_write_ptr = get_write_ptr(ternary_a_cb);
     for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
         if (n_tile_id >= shape.logical_d1) {
-            break;
+            break;  // Don't write tiles if out of bound
         }
 
         noc_async_read_tile(n_tile_id, ternary_a_accessor, ternary_a_write_ptr);
@@ -248,8 +249,7 @@ void read_ternary_blocks_sync(
         uint32_t ternary_b_write_ptr = get_write_ptr(ternary_b_cb);
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
-                // ternary_b_write_ptr += tile_size_bytes;
-                break;
+                break;  // Don't write tiles if out of bound
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
