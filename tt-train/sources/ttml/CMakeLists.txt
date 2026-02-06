@@ -180,6 +180,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/weight_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/weight_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer_trainer.cpp

@@ -13,13 +13,14 @@
 #include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
 #include "serialization/safetensors.hpp"
+#include "serialization/weight_utils.hpp"
 
 // Import shared weight loading utilities
-using ttml::models::common::transformer::pad_and_resize_flat;
-using ttml::models::common::transformer::strict_copy_linear;
-using ttml::models::common::transformer::transpose_flat;
-using ttml::models::common::transformer::unpermute_norm_weights;
-using ttml::models::common::transformer::unpermute_proj_rows;
+using ttml::serialization::pad_and_resize_flat;
+using ttml::serialization::strict_copy_linear;
+using ttml::serialization::transpose_flat;
+using ttml::serialization::unpermute_norm_weights;
+using ttml::serialization::unpermute_proj_rows;
 
 namespace ttml::models::qwen3 {
 
