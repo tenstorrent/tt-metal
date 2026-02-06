@@ -58,6 +58,15 @@ from models.common.utility_functions import is_blackhole, nearest_32
 
 MAX_QKV_MM_SEQ_LEN = 2048  # Maximum sequence length for single QKV matmul
 
+# Maximum sequence length for WO matmul operation on Wormhole/Blackhole.
+# Sequences longer than this are reshaped to [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, dim]
+# to fit on device and parallelize computation. After matmul, reshaped back.
+# Source: TTTv1 model_config.py "MAX_MM_SEQ_LEN": 1024
+MAX_MM_SEQ_LEN = 1024
+
+# Total tokens in KV cache must fit in device DRAM. The 128K limit is a hardware
+# constraint for Wormhole devices (by 12GB DRAM per chip) - exceeding it causes OOM based on previous tests.
+MAX_TOTAL_TOKENS = 128 * 1024  # 131072 tokens
 
 # =============================================================================
 # Attention1DConfig dataclass
@@ -233,8 +242,9 @@ class Attention1D(LightweightModule):
     """
     Attention for 1D mesh topologies (N150, N300, T3K).
 
-    Simple API (90% of users) - requires weights and model dimensions:
-        attn = Attention1D(wqkv, wo, n_heads=32, n_kv_heads=8, head_dim=128)
+    Simple API (90% of users) - requires weights, model dimensions, and memory bounds:
+        attn = Attention1D(wqkv, wo, n_heads=32, n_kv_heads=8, head_dim=128,
+                           max_batch_size=1, max_seq_len=2048)
 
     Power API (10% of users) - full customization via config:
         config = Attention1DConfig(wqkv, wo, n_heads=32, n_kv_heads=8, head_dim=128,
@@ -264,9 +274,11 @@ class Attention1D(LightweightModule):
         n_heads: int,
         n_kv_heads: int,
         head_dim: int,
+        max_batch_size: int,
+        max_seq_len: int,
     ):
         """
-        Simple API for 90% of users - requires only weights and model dimensions.
+        Simple API for 90% of users - requires weights, model dimensions, and memory bounds.
 
         Args:
             wqkv: Combined QKV projection weight, sharded on dim=-1
@@ -274,12 +286,15 @@ class Attention1D(LightweightModule):
             n_heads: Number of attention heads (from model config)
             n_kv_heads: Number of key/value heads for GQA (from model config)
             head_dim: Dimension per head (from model config)
+            max_batch_size: Maximum batch size for KV cache allocation
+            max_seq_len: Maximum sequence length for KV cache allocation
 
         Other settings (mesh_device, topology, program configs, etc.) are derived
         automatically. Use from_config() for full customization.
 
         Example:
-            attn = Attention1D(wqkv, wo, n_heads=32, n_kv_heads=8, head_dim=128)
+            attn = Attention1D(wqkv, wo, n_heads=32, n_kv_heads=8, head_dim=128,
+                               max_batch_size=1, max_seq_len=2048)
         """
         super().__init__()
         self.config = _resolve_attention1d_config(
@@ -289,9 +304,12 @@ class Attention1D(LightweightModule):
                 n_heads=n_heads,
                 n_kv_heads=n_kv_heads,
                 head_dim=head_dim,
+                max_batch_size=max_batch_size,
+                max_seq_len=max_seq_len,
             )
         )
         self._device_weights_loaded = False
+        self._bind_forward_methods()
 
     @classmethod
     def from_config(cls, config: Attention1DConfig):
@@ -306,226 +324,8 @@ class Attention1D(LightweightModule):
         super(Attention1D, instance).__init__()
         instance.config = _resolve_attention1d_config(config)
         instance._device_weights_loaded = False
+        instance._bind_forward_methods()
         return instance
-
-    def load_device_weights(self):
-        """Load weights to device lazily."""
-        if self._device_weights_loaded:
-            return
-
-        assert self.config.is_resolved(), "config must be resolved before loading device weights!"
-
-        cfg = self.config
-        self.wqkv = cfg.wqkv.get_device_weight()
-        self.wo = cfg.wo.get_device_weight()
-
-        # Initialize Q/K norm RMSNorm1D instances if configs present
-        if cfg.q_norm_config is not None:
-            self.q_norm = RMSNorm1D.from_config(cfg.q_norm_config)
-            self.q_norm.load_device_weights()
-        else:
-            self.q_norm = None
-
-        if cfg.k_norm_config is not None:
-            self.k_norm = RMSNorm1D.from_config(cfg.k_norm_config)
-            self.k_norm.load_device_weights()
-        else:
-            self.k_norm = None
-
-        # Materialize bias LazyWeights
-        if cfg._wqkv_bias_decode is not None:
-            self.wqkv_bias_decode = [bias.get_device_weight() for bias in cfg._wqkv_bias_decode]
-        else:
-            self.wqkv_bias_decode = None
-        if cfg._wqkv_bias_prefill is not None:
-            self.wqkv_bias_prefill = cfg._wqkv_bias_prefill.get_device_weight()
-        else:
-            self.wqkv_bias_prefill = None
-
-        # Resolve kv_cache from config (may be LazyWeight or ttnn.Tensor)
-        if cfg.kv_cache is not None:
-            keys, values = cfg.kv_cache
-            if isinstance(keys, LazyWeight):
-                keys = keys.get_device_weight()
-            if isinstance(values, LazyWeight):
-                values = values.get_device_weight()
-            self.kv_cache = (keys, values)
-        else:
-            self.kv_cache = None
-
-        self._device_weights_loaded = True
-
-    def decode_forward(
-        self,
-        x: ttnn.Tensor | LazyWeight,
-        current_pos: ttnn.Tensor,
-        rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
-        page_table: ttnn.Tensor | None = None,
-    ) -> ttnn.Tensor:
-        """
-        Decode forward - single token per user.
-
-        Args:
-            x: Input tensor (seq_len, 1, batch, dim)
-            current_pos: Current position tensor (batch_size,)
-            rot_mats: Tuple of (cos, sin) rotation matrices for rotary embedding
-            page_table: Page table for paged attention (optional)
-
-        Returns:
-            Output tensor with same shape as input
-        """
-        self.load_device_weights()
-        x = _load_input_device_tensor(x, self.config, mode="decode")
-        cfg = self.config
-
-        num_devices = cfg.mesh_device.get_num_devices()
-        n_local_heads = cfg.n_heads // num_devices
-        n_local_kv_heads = cfg.n_kv_heads // num_devices
-
-        # --- STAGE 1: QKV Matmul ---
-        # All 1D topologies use DRAM-sharded matmul with L1_WIDTH_SHARDED output (matches TTTv1)
-        xqkv_fused_sharded = ttnn.linear(
-            x,
-            self.wqkv,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            program_config=cfg.decode_xqkv_prg_config,
-            compute_kernel_config=cfg.li_qkv_decode_compute_kernel_cfg,
-            dtype=cfg.activation_dtype or ttnn.bfloat16,
-        )
-
-        # Add bias if present
-        if self.wqkv_bias_decode:
-            num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / TILE_SIZE))
-            xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
-
-        ttnn.deallocate(x)
-
-        # --- STAGE 2: Convert QKV from sharded to interleaved (matches TTTv1) ---
-        xqkv_fused = self._all_reduce_qkv_decode(xqkv_fused_sharded)
-        ttnn.deallocate(xqkv_fused_sharded)
-
-        # Reshape for create_qkv_heads
-        fqkv_shape = xqkv_fused.shape
-        xqkv_fused = ttnn.reshape(xqkv_fused, (1, 1, cfg.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
-
-        # --- STAGE 3: Create QKV Heads ---
-        q_heads_pre_rot, k_heads_pre_rot, v_heads = ttnn.experimental.nlp_create_qkv_heads_decode(
-            xqkv_fused,
-            num_heads=n_local_heads,
-            num_kv_heads=n_local_kv_heads,
-            memory_config=cfg.decode_create_qkv_head_memcfg,
-        )
-        ttnn.deallocate(xqkv_fused)
-
-        # --- STAGE 4: Q/K Normalization (optional) ---
-        # Workaround: RMSNorm doesn't support HEIGHT_SHARDED inputs (TTTv1 norm_reshard pattern)
-        if self.q_norm is not None:
-            q_mem_cfg = q_heads_pre_rot.memory_config()
-            q_heads_pre_rot = ttnn.to_memory_config(q_heads_pre_rot, ttnn.L1_MEMORY_CONFIG, dtype=q_heads_pre_rot.dtype)
-            q_heads_pre_rot = self.q_norm.decode_forward(q_heads_pre_rot)
-            q_heads_pre_rot = ttnn.to_memory_config(q_heads_pre_rot, q_mem_cfg, dtype=q_heads_pre_rot.dtype)
-        if self.k_norm is not None:
-            k_mem_cfg = k_heads_pre_rot.memory_config()
-            k_heads_pre_rot = ttnn.to_memory_config(k_heads_pre_rot, ttnn.L1_MEMORY_CONFIG, dtype=k_heads_pre_rot.dtype)
-            k_heads_pre_rot = self.k_norm.decode_forward(k_heads_pre_rot)
-            k_heads_pre_rot = ttnn.to_memory_config(k_heads_pre_rot, k_mem_cfg, dtype=k_heads_pre_rot.dtype)
-
-        # --- STAGE 5: Rotary Embedding ---
-        if cfg.use_qk_fused:
-            q_heads_pre_rot, k_heads_pre_rot = self._to_qk_fused_memory_config(q_heads_pre_rot, k_heads_pre_rot)
-            q_heads, k_heads = ttnn.experimental.rotary_embedding_llama_fused_qk(
-                q_heads_pre_rot, k_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_decode
-            )
-        else:
-            q_heads = ttnn.experimental.rotary_embedding_llama(
-                q_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_decode, is_decode_mode=True
-            )
-            k_heads = ttnn.experimental.rotary_embedding_llama(
-                k_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_decode, is_decode_mode=True
-            )
-        ttnn.deallocate(q_heads_pre_rot)
-        ttnn.deallocate(k_heads_pre_rot)
-
-        # --- STAGE 6: KV Cache Update ---
-        keys, values = self.kv_cache
-        if cfg.use_qk_fused:
-            ttnn.experimental.paged_fused_update_cache(
-                keys, k_heads, values, v_heads, update_idxs_tensor=current_pos, page_table=page_table
-            )
-        else:
-            ttnn.experimental.paged_update_cache(keys, k_heads, update_idxs_tensor=current_pos, page_table=page_table)
-            ttnn.experimental.paged_update_cache(values, v_heads, update_idxs_tensor=current_pos, page_table=page_table)
-        ttnn.deallocate(k_heads)
-        ttnn.deallocate(v_heads)
-
-        # --- STAGE 7: SDPA ---
-        # todo)) prefer paged but do want to test both! --> PagedAttention1D and Attention1D
-        # todo)) this needs to be refactored as page_table is static config
-        if page_table is not None:
-            attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                q_heads,
-                keys,
-                values,
-                page_table_tensor=page_table,
-                cur_pos_tensor=current_pos,
-                scale=cfg.scale,
-                sliding_window_size=cfg.sliding_window,
-                program_config=cfg.decode_sdpa_prg_config,
-                compute_kernel_config=cfg.sdpa_decode_compute_kernel_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        else:
-            attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
-                q_heads,
-                keys,
-                values,
-                cur_pos_tensor=current_pos,
-                scale=cfg.scale,
-                sliding_window_size=cfg.sliding_window,
-                program_config=cfg.decode_sdpa_prg_config,
-                compute_kernel_config=cfg.sdpa_decode_compute_kernel_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-        ttnn.deallocate(q_heads)
-
-        # --- STAGE 8: Reshape for concat heads ---
-        attn_output_sharded = ttnn.to_memory_config(
-            attn_output, memory_config=cfg.decode_scores_memcfg(cfg.max_batch_size)
-        )
-
-        # --- STAGE 9: Concat Heads ---
-        attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(attn_output_sharded, num_heads=n_local_heads)
-        ttnn.deallocate(attn_output_sharded)
-        ttnn.deallocate(attn_output)
-
-        # --- STAGE 10: All-Gather + WO Matmul ---
-        if cfg.use_fused_all_gather_matmul and cfg.topology == ttnn.Topology.Ring:
-            dense_out = self._fused_all_gather_wo_decode(attn_output_cat)
-        else:
-            dense_out = self._separate_all_gather_wo_decode(attn_output_cat)
-
-        ttnn.deallocate(attn_output_cat)
-
-        # --- STAGE 11: Final All-Reduce (only for non-fused path) ---
-        # Fused path already has full output from all_gather_matmul_async, no reduction needed.
-        # Non-fused path has partial sums that need reduce-scatter.
-        if cfg.use_fused_all_gather_matmul and cfg.topology == ttnn.Topology.Ring:
-            # Fused path: output is already in correct memory config (set in _fused_all_gather_wo_decode)
-            return dense_out
-        else:
-            # Non-fused path: reduce-scatter the partial sums
-            dense_out_reduced = self._all_reduce_output_decode(dense_out)
-
-            # Only deallocate if a new tensor was created (multi-device case).
-            # For single device, _all_reduce_output_decode returns input unchanged.
-            if cfg.mesh_device.get_num_devices() > 1:
-                ttnn.deallocate(dense_out)
-
-            # --- STAGE 12: Final Memory Config ---
-            dense_out_reduced = ttnn.to_memory_config(dense_out_reduced, cfg.decode_residual_memcfg)
-
-            return dense_out_reduced
 
     def prefill_forward(
         self,
@@ -645,21 +445,12 @@ class Attention1D(LightweightModule):
             v_fill = v_heads_cache_dtype
 
         # --- STAGE 9: KV Cache Fill ---
-        if page_table is not None:
-            block_size = keys.shape[2]
-            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
-            page_len = fill_page_table.shape[1] * block_size
+        # Method bound at construction based on paged_attention_config (see _bind_forward_methods)
+        self._kv_fill_prefill(keys, values, k_fill, v_fill, user_id, page_table, chunk_page_table)
 
-            k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
-            v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
-
-            ttnn.experimental.paged_fill_cache(keys, k_fill_sliced, fill_page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values, v_fill_sliced, fill_page_table, batch_idx=user_id)
-        else:
-            ttnn.fill_cache(keys, k_fill, user_id % cfg.max_batch_size)
-            ttnn.fill_cache(values, v_fill, user_id % cfg.max_batch_size)
-
-        if seq_len >= cfg.min_kv_prefill_shard_seqlen and page_table is None:
+        # Deallocate sharded k_fill/v_fill only in non-paged mode (paged mode uses sliced views)
+        is_paged = cfg.paged_attention_config is not None
+        if seq_len >= cfg.min_kv_prefill_shard_seqlen and not is_paged:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 
@@ -705,25 +496,13 @@ class Attention1D(LightweightModule):
         attn_output_concat = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
 
-        # --- STAGE 12: Reshape for long sequences ---
-        if seq_len > 1024:
-            attn_output_concat = ttnn.reshape(attn_output_concat, [1, seq_len // 1024, 1024, -1])
+        # --- STAGE 12: Reshape for long sequences (to fit WO matmul on device) ---
+        if seq_len > MAX_MM_SEQ_LEN:
+            attn_output_concat = ttnn.reshape(attn_output_concat, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
         # --- STAGE 13: All-Gather for Ring topology ---
-        if cfg.use_fused_all_gather_matmul:
-            attn_output_concat = ttnn.experimental.all_gather_async(
-                attn_output_concat,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                topology=cfg.topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
+        # Method bound at construction based on use_fused_all_gather_matmul (see _bind_forward_methods)
+        attn_output_concat = self._all_gather_before_wo_prefill(attn_output_concat)
 
         # --- STAGE 14: WO Matmul ---
         output = ttnn.linear(
@@ -735,17 +514,134 @@ class Attention1D(LightweightModule):
             program_config=cfg.prefill_wo_prg_config(seq_len),
         )
 
-        # --- STAGE 15: Reshape back ---
-        if seq_len > 1024:
+        # --- STAGE 15: Reshape back (undo long sequence reshape) ---
+        if seq_len > MAX_MM_SEQ_LEN:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
 
         ttnn.deallocate(attn_output_concat)
 
-        # --- STAGE 16: All-Reduce output (when not using fused all-gather) ---
-        if not cfg.use_fused_all_gather_matmul:
-            output = self._all_reduce_output_prefill(output)
+        # --- STAGE 16: All-Reduce output ---
+        # Method bound at construction based on use_fused_all_gather_matmul (see _bind_forward_methods)
+        output = self._reduce_after_wo_prefill(output)
 
         return output
+
+    def decode_forward(
+        self,
+        x: ttnn.Tensor | LazyWeight,
+        current_pos: ttnn.Tensor,
+        rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
+        page_table: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """
+        Decode forward - single token per user.
+
+        Args:
+            x: Input tensor (seq_len, 1, batch, dim)
+            current_pos: Current position tensor (batch_size,)
+            rot_mats: Tuple of (cos, sin) rotation matrices for rotary embedding
+            page_table: Page table for paged attention (optional)
+
+        Returns:
+            Output tensor with same shape as input
+        """
+        self.load_device_weights()
+        x = _load_input_device_tensor(x, self.config, mode="decode")
+        cfg = self.config
+
+        num_devices = cfg.mesh_device.get_num_devices()
+        n_local_heads = cfg.n_heads // num_devices
+        n_local_kv_heads = cfg.n_kv_heads // num_devices
+
+        # --- STAGE 1: QKV Matmul ---
+        # All 1D topologies use DRAM-sharded matmul with L1_WIDTH_SHARDED output (matches TTTv1)
+        xqkv_fused_sharded = ttnn.linear(
+            x,
+            self.wqkv,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=cfg.decode_xqkv_prg_config,
+            compute_kernel_config=cfg.li_qkv_decode_compute_kernel_cfg,
+            dtype=cfg.activation_dtype or ttnn.bfloat16,
+        )
+
+        # Add bias if present
+        if self.wqkv_bias_decode:
+            num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / TILE_SIZE))
+            xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
+
+        ttnn.deallocate(x)
+
+        # --- STAGE 2: Convert QKV from sharded to interleaved (matches TTTv1) ---
+        xqkv_fused = self._all_reduce_qkv_decode(xqkv_fused_sharded)
+        ttnn.deallocate(xqkv_fused_sharded)
+
+        # Reshape for create_qkv_heads
+        fqkv_shape = xqkv_fused.shape
+        xqkv_fused = ttnn.reshape(xqkv_fused, (1, 1, cfg.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
+
+        # --- STAGE 3: Create QKV Heads ---
+        q_heads_pre_rot, k_heads_pre_rot, v_heads = ttnn.experimental.nlp_create_qkv_heads_decode(
+            xqkv_fused,
+            num_heads=n_local_heads,
+            num_kv_heads=n_local_kv_heads,
+            overlap_qk_coregrid=self._decode_overlap_qk_coregrid,
+            memory_config=cfg.decode_create_qkv_head_memcfg,
+        )
+        ttnn.deallocate(xqkv_fused)
+
+        # --- STAGE 4: Q/K Normalization (optional) ---
+        # Workaround: RMSNorm doesn't support HEIGHT_SHARDED inputs (TTTv1 norm_reshard pattern)
+        if self.q_norm is not None:
+            q_mem_cfg = q_heads_pre_rot.memory_config()
+            q_heads_pre_rot = ttnn.to_memory_config(q_heads_pre_rot, ttnn.L1_MEMORY_CONFIG, dtype=q_heads_pre_rot.dtype)
+            q_heads_pre_rot = self.q_norm.decode_forward(q_heads_pre_rot)
+            q_heads_pre_rot = ttnn.to_memory_config(q_heads_pre_rot, q_mem_cfg, dtype=q_heads_pre_rot.dtype)
+        if self.k_norm is not None:
+            k_mem_cfg = k_heads_pre_rot.memory_config()
+            k_heads_pre_rot = ttnn.to_memory_config(k_heads_pre_rot, ttnn.L1_MEMORY_CONFIG, dtype=k_heads_pre_rot.dtype)
+            k_heads_pre_rot = self.k_norm.decode_forward(k_heads_pre_rot)
+            k_heads_pre_rot = ttnn.to_memory_config(k_heads_pre_rot, k_mem_cfg, dtype=k_heads_pre_rot.dtype)
+
+        # --- STAGE 5: Rotary Embedding ---
+        # Method bound at construction based on use_qk_fused (see _bind_forward_methods)
+        q_heads, k_heads = self._rotary_embed_decode(q_heads_pre_rot, k_heads_pre_rot, rot_mats)
+        ttnn.deallocate(q_heads_pre_rot)
+        ttnn.deallocate(k_heads_pre_rot)
+
+        # --- STAGE 6: KV Cache Update ---
+        # Method bound at construction based on use_qk_fused (see _bind_forward_methods)
+        keys, values = self.kv_cache
+        self._kv_update_decode(keys, values, k_heads, v_heads, current_pos, page_table)
+        ttnn.deallocate(k_heads)
+        ttnn.deallocate(v_heads)
+
+        # --- STAGE 7: SDPA ---
+        # Method bound at construction based on paged_attention_config (see _bind_forward_methods)
+        attn_output = self._sdpa_decode(q_heads, keys, values, current_pos, page_table)
+
+        ttnn.deallocate(q_heads)
+
+        # --- STAGE 8: Reshape for concat heads ---
+        attn_output_sharded = ttnn.to_memory_config(
+            attn_output, memory_config=cfg.decode_scores_memcfg(cfg.max_batch_size)
+        )
+
+        # --- STAGE 9: Concat Heads ---
+        attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(attn_output_sharded, num_heads=n_local_heads)
+        ttnn.deallocate(attn_output_sharded)
+        ttnn.deallocate(attn_output)
+
+        # --- STAGE 10: All-Gather + WO Matmul ---
+        # Method bound at construction based on use_fused_all_gather_matmul (see _bind_forward_methods)
+        dense_out = self._all_gather_wo_decode(attn_output_cat)
+
+        ttnn.deallocate(attn_output_cat)
+
+        # --- STAGE 11: Finalize output ---
+        # Method bound at construction based on use_fused_all_gather_matmul (see _bind_forward_methods)
+        # Fused path: returns dense_out as-is
+        # Non-fused path: reduce-scatter + final memory config
+        return self._finalize_decode_output(dense_out)
 
     def forward(
         self,
@@ -775,6 +671,278 @@ class Attention1D(LightweightModule):
                 rot_mats,
                 page_table=page_table,
             )
+
+    def _bind_forward_methods(self):
+        """
+        Bind forward method variants based on static config.
+
+        This eliminates runtime if-statements in the hot path by pre-binding:
+        - _sdpa_decode: paged or non-paged SDPA for decode
+        - _kv_fill_prefill: paged or non-paged KV cache fill for prefill
+        - _all_gather_before_wo_prefill: fused all-gather or no-op
+        - _reduce_after_wo_prefill: reduce-scatter or no-op
+        - _all_gather_wo_decode: fused or separate all-gather + WO matmul
+        - _finalize_decode_output: fused (direct return) or non-fused (reduce + memcfg)
+        - _rotary_embed_decode: fused QK or separate rotary embedding
+        - _kv_update_decode: fused or separate KV cache update
+
+        Note: page_table is still passed as a forward argument for vLLM compatibility
+        (vLLM dynamically manages page tables), but the method binding is static.
+        """
+        cfg = self.config
+        is_paged = cfg.paged_attention_config is not None
+
+        # Bind paged vs non-paged methods
+        if is_paged:
+            self._sdpa_decode = self._sdpa_decode_paged
+            self._kv_fill_prefill = self._kv_fill_prefill_paged
+        else:
+            self._sdpa_decode = self._sdpa_decode_non_paged
+            self._kv_fill_prefill = self._kv_fill_prefill_non_paged
+
+        # Bind fused all-gather methods (based on use_fused_all_gather_matmul + topology)
+        use_fused = cfg.use_fused_all_gather_matmul and cfg.topology == ttnn.Topology.Ring
+        if use_fused:
+            self._all_gather_before_wo_prefill = self._all_gather_before_wo_prefill_fused
+            self._reduce_after_wo_prefill = self._reduce_after_wo_prefill_fused
+            self._all_gather_wo_decode = self._fused_all_gather_wo_decode
+            self._finalize_decode_output = self._finalize_decode_output_fused
+        else:
+            self._all_gather_before_wo_prefill = self._all_gather_before_wo_prefill_noop
+            self._reduce_after_wo_prefill = self._reduce_after_wo_prefill_non_fused
+            self._all_gather_wo_decode = self._separate_all_gather_wo_decode
+            self._finalize_decode_output = self._finalize_decode_output_non_fused
+
+        # Bind fused QK methods (rotary embedding and KV cache update)
+        self._decode_overlap_qk_coregrid = not cfg.use_qk_fused
+        if cfg.use_qk_fused:
+            self._rotary_embed_decode = self._rotary_embed_decode_fused
+            self._kv_update_decode = self._kv_update_decode_fused
+        else:
+            self._rotary_embed_decode = self._rotary_embed_decode_separate
+            self._kv_update_decode = self._kv_update_decode_separate
+
+    # =========================================================================
+    # Bound SDPA Decode Methods (paged vs non-paged)
+    # =========================================================================
+
+    def _sdpa_decode_paged(self, q_heads, keys, values, current_pos, page_table) -> ttnn.Tensor:
+        """Paged SDPA decode - uses page_table for KV cache lookup."""
+        cfg = self.config
+        return ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q_heads,
+            keys,
+            values,
+            page_table_tensor=page_table,
+            cur_pos_tensor=current_pos,
+            scale=cfg.scale,
+            sliding_window_size=cfg.sliding_window,
+            program_config=cfg.decode_sdpa_prg_config,
+            compute_kernel_config=cfg.sdpa_decode_compute_kernel_cfg,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _sdpa_decode_non_paged(self, q_heads, keys, values, current_pos, page_table) -> ttnn.Tensor:
+        """Non-paged SDPA decode - contiguous KV cache (page_table ignored)."""
+        cfg = self.config
+        return ttnn.transformer.scaled_dot_product_attention_decode(
+            q_heads,
+            keys,
+            values,
+            cur_pos_tensor=current_pos,
+            scale=cfg.scale,
+            sliding_window_size=cfg.sliding_window,
+            program_config=cfg.decode_sdpa_prg_config,
+            compute_kernel_config=cfg.sdpa_decode_compute_kernel_cfg,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # =========================================================================
+    # Bound KV Fill Prefill Methods (paged vs non-paged)
+    # =========================================================================
+
+    def _kv_fill_prefill_paged(self, keys, values, k_fill, v_fill, user_id, page_table, chunk_page_table) -> None:
+        """Paged KV cache fill for prefill - uses page_table for block allocation."""
+        block_size = keys.shape[2]
+        fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+        page_len = fill_page_table.shape[1] * block_size
+
+        k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
+        v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
+
+        ttnn.experimental.paged_fill_cache(keys, k_fill_sliced, fill_page_table, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(values, v_fill_sliced, fill_page_table, batch_idx=user_id)
+
+    def _kv_fill_prefill_non_paged(self, keys, values, k_fill, v_fill, user_id, page_table, chunk_page_table) -> None:
+        """Non-paged KV cache fill for prefill - contiguous cache (page_table ignored)."""
+        cfg = self.config
+        ttnn.fill_cache(keys, k_fill, user_id % cfg.max_batch_size)
+        ttnn.fill_cache(values, v_fill, user_id % cfg.max_batch_size)
+
+    # =========================================================================
+    # Bound All-Gather/Reduce Methods for Prefill (fused vs non-fused)
+    # =========================================================================
+
+    def _all_gather_before_wo_prefill_fused(self, attn_output_concat: ttnn.Tensor) -> ttnn.Tensor:
+        """Fused path: all-gather before WO matmul (Ring topology)."""
+        cfg = self.config
+        return ttnn.experimental.all_gather_async(
+            attn_output_concat,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=1,
+            topology=cfg.topology,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+
+    def _all_gather_before_wo_prefill_noop(self, attn_output_concat: ttnn.Tensor) -> ttnn.Tensor:
+        """Non-fused path: no all-gather before WO matmul."""
+        return attn_output_concat
+
+    def _reduce_after_wo_prefill_fused(self, output: ttnn.Tensor) -> ttnn.Tensor:
+        """Fused path: no reduce after WO matmul (already complete from all-gather)."""
+        return output
+
+    def _reduce_after_wo_prefill_non_fused(self, output: ttnn.Tensor) -> ttnn.Tensor:
+        """Non-fused path: reduce-scatter after WO matmul."""
+        return self._all_reduce_output_prefill(output)
+
+    # =========================================================================
+    # Bound Finalize Methods for Decode (fused vs non-fused)
+    # =========================================================================
+
+    def _finalize_decode_output_fused(self, dense_out: ttnn.Tensor) -> ttnn.Tensor:
+        """Fused path: output is already complete, return as-is."""
+        return dense_out
+
+    def _finalize_decode_output_non_fused(self, dense_out: ttnn.Tensor) -> ttnn.Tensor:
+        """Non-fused path: reduce-scatter and apply final memory config."""
+        cfg = self.config
+
+        dense_out_reduced = self._all_reduce_output_decode(dense_out)
+
+        # Only deallocate if a new tensor was created (multi-device case).
+        # For single device, _all_reduce_output_decode returns input unchanged.
+        if cfg.mesh_device.get_num_devices() > 1:
+            ttnn.deallocate(dense_out)
+
+        return ttnn.to_memory_config(dense_out_reduced, cfg.decode_residual_memcfg)
+
+    # =========================================================================
+    # Bound Rotary Embedding Methods for Decode (fused QK vs separate)
+    # =========================================================================
+
+    def _rotary_embed_decode_fused(
+        self, q_heads_pre_rot: ttnn.Tensor, k_heads_pre_rot: ttnn.Tensor, rot_mats: tuple[ttnn.Tensor, ttnn.Tensor]
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Fused QK rotary embedding - single kernel for both Q and K.
+
+        The fused kernel requires Q and K on non-overlapping core grids.
+        After create_qkv_heads_decode with interleaved input, Q is already on the
+        correct cores (first batch cores), so only K needs resharding to a
+        non-overlapping grid — saving 1 dispatch vs the original 2-reshard approach.
+        """
+        cfg = self.config
+        k_heads_pre_rot = self._reshard_k_for_fused(k_heads_pre_rot, q_heads_pre_rot.shape[1])
+        return ttnn.experimental.rotary_embedding_llama_fused_qk(
+            q_heads_pre_rot, k_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_decode
+        )
+
+    def _rotary_embed_decode_separate(
+        self, q_heads_pre_rot: ttnn.Tensor, k_heads_pre_rot: ttnn.Tensor, rot_mats: tuple[ttnn.Tensor, ttnn.Tensor]
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Separate rotary embedding - independent kernels for Q and K."""
+        cfg = self.config
+        q_heads = ttnn.experimental.rotary_embedding_llama(
+            q_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_decode, is_decode_mode=True
+        )
+        k_heads = ttnn.experimental.rotary_embedding_llama(
+            k_heads_pre_rot, rot_mats[0], rot_mats[1], cfg.transformation_mat_decode, is_decode_mode=True
+        )
+        return q_heads, k_heads
+
+    # =========================================================================
+    # Bound KV Cache Update Methods for Decode (fused vs separate)
+    # =========================================================================
+
+    def _kv_update_decode_fused(
+        self,
+        keys: ttnn.Tensor,
+        values: ttnn.Tensor,
+        k_heads: ttnn.Tensor,
+        v_heads: ttnn.Tensor,
+        current_pos: ttnn.Tensor,
+        page_table: ttnn.Tensor | None,
+    ) -> None:
+        """Fused KV cache update - single kernel for both K and V."""
+        ttnn.experimental.paged_fused_update_cache(
+            keys, k_heads, values, v_heads, update_idxs_tensor=current_pos, page_table=page_table
+        )
+
+    def _kv_update_decode_separate(
+        self,
+        keys: ttnn.Tensor,
+        values: ttnn.Tensor,
+        k_heads: ttnn.Tensor,
+        v_heads: ttnn.Tensor,
+        current_pos: ttnn.Tensor,
+        page_table: ttnn.Tensor | None,
+    ) -> None:
+        """Separate KV cache update - independent kernels for K and V."""
+        ttnn.experimental.paged_update_cache(keys, k_heads, update_idxs_tensor=current_pos, page_table=page_table)
+        ttnn.experimental.paged_update_cache(values, v_heads, update_idxs_tensor=current_pos, page_table=page_table)
+
+    def load_device_weights(self):
+        """Load weights to device lazily."""
+        if self._device_weights_loaded:
+            return
+
+        assert self.config.is_resolved(), "config must be resolved before loading device weights!"
+
+        cfg = self.config
+        self.wqkv = cfg.wqkv.get_device_weight()
+        self.wo = cfg.wo.get_device_weight()
+
+        # Initialize Q/K norm RMSNorm1D instances if configs present
+        if cfg.q_norm_config is not None:
+            self.q_norm = RMSNorm1D.from_config(cfg.q_norm_config)
+            self.q_norm.load_device_weights()
+        else:
+            self.q_norm = None
+
+        if cfg.k_norm_config is not None:
+            self.k_norm = RMSNorm1D.from_config(cfg.k_norm_config)
+            self.k_norm.load_device_weights()
+        else:
+            self.k_norm = None
+
+        # Materialize bias LazyWeights
+        if cfg._wqkv_bias_decode is not None:
+            self.wqkv_bias_decode = [bias.get_device_weight() for bias in cfg._wqkv_bias_decode]
+        else:
+            self.wqkv_bias_decode = None
+        if cfg._wqkv_bias_prefill is not None:
+            self.wqkv_bias_prefill = cfg._wqkv_bias_prefill.get_device_weight()
+        else:
+            self.wqkv_bias_prefill = None
+
+        # Resolve kv_cache from config (may be LazyWeight or ttnn.Tensor)
+        if cfg.kv_cache is not None:
+            keys, values = cfg.kv_cache
+            if isinstance(keys, LazyWeight):
+                keys = keys.get_device_weight()
+            if isinstance(values, LazyWeight):
+                values = values.get_device_weight()
+            self.kv_cache = (keys, values)
+        else:
+            self.kv_cache = None
+
+        self._device_weights_loaded = True
 
     # =========================================================================
     # Internal CCL methods
@@ -913,27 +1081,18 @@ class Attention1D(LightweightModule):
 
         return dense_out
 
-    def _to_qk_fused_memory_config(
-        self, q_tensor: ttnn.Tensor, k_tensor: ttnn.Tensor
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Convert Q and K tensors to height-sharded memory layouts for fused QK ops."""
-        n_q_heads = q_tensor.shape[2]
-        n_kv_heads = k_tensor.shape[2]
-        q_batch = q_tensor.shape[1]
+    def _reshard_k_for_fused(self, k_tensor: ttnn.Tensor, q_batch: int) -> ttnn.Tensor:
+        """Move K tensor to non-overlapping core grid for fused QK rotary embedding.
 
+        After create_qkv_heads_decode with interleaved input, Q and K share the
+        same core grid.  The fused rotary kernel requires non-overlapping grids.
+        Q's grid (first ``q_batch`` cores) is already correct, so we only move K
+        to the next ``q_batch`` cores — one dispatch instead of two.
+        """
+        n_kv_heads = k_tensor.shape[2]
         row_size = 8
         k_start_core = ttnn.CoreCoord(q_batch % row_size, q_batch // row_size)
-
-        q_core_grid = ttnn.CoreRangeSet({_num_to_corerange(q_batch)})
         k_core_grid = ttnn.CoreRangeSet({_num_to_corerange(q_batch, start_core=k_start_core)})
-
-        q_mem_config = ttnn.create_sharded_memory_config(
-            shape=(nearest_32(n_q_heads), self.config.head_dim),
-            core_grid=q_core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
         k_mem_config = ttnn.create_sharded_memory_config(
             shape=(nearest_32(n_kv_heads), self.config.head_dim),
             core_grid=k_core_grid,
@@ -941,10 +1100,7 @@ class Attention1D(LightweightModule):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-
-        q_tensor = ttnn.to_memory_config(q_tensor, q_mem_config)
-        k_tensor = ttnn.to_memory_config(k_tensor, k_mem_config)
-        return q_tensor, k_tensor
+        return ttnn.to_memory_config(k_tensor, k_mem_config)
 
     # =========================================================================
     # Factory method for backward compatibility
@@ -1257,6 +1413,16 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             "Typically: head_dim = hidden_size // num_attention_heads."
         )
 
+    # --- Phase 1b: Token budget validation (fail-fast for memory) ---
+    total_tokens = config.max_batch_size * config.max_seq_len
+    if total_tokens > MAX_TOTAL_TOKENS:
+        raise ValueError(
+            f"Total token budget exceeded: max_batch_size ({config.max_batch_size}) × "
+            f"max_seq_len ({config.max_seq_len}) = {total_tokens:,} tokens, "
+            f"but maximum is {MAX_TOTAL_TOKENS:,} tokens (128K). "
+            f"Reduce max_batch_size or max_seq_len to fit in device DRAM."
+        )
+
     # --- Phase 2: Device and foundational fields ---
 
     # Derive mesh_device
@@ -1462,13 +1628,13 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             to_set["use_fused_all_gather_matmul"] = use_fused
 
         k_dim = (n_heads * head_dim) // num_devices
-        n_dim = 1024 if use_fused and 1024 % (dim // num_devices) == 0 else dim
+        n_dim = MAX_MM_SEQ_LEN if use_fused and MAX_MM_SEQ_LEN % (dim // num_devices) == 0 else dim
         dram_shard_grid_width = 8
         prefill_rows = 8
 
         @lru_cache
         def wo_prefill_prg_config(seq_len: int):
-            num_rows = min(seq_len, 1024)
+            num_rows = min(seq_len, MAX_MM_SEQ_LEN)
             grid_size = _find_prefill_grid(prefill_rows, k_dim // tile_size)
             return _matmul_config(
                 m=num_rows,
@@ -1476,7 +1642,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
                 n=n_dim,
                 grid_size=grid_size,
                 in0_block_w=1,
-                fuse_batch=seq_len <= 1024,
+                fuse_batch=seq_len <= MAX_MM_SEQ_LEN,
                 per_core_n=math.ceil(n_dim / (tile_size * dram_shard_grid_width)) if not use_fused else None,
             )
 
@@ -1746,6 +1912,26 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
                 mesh_shape_override=ttnn.MeshShape([num_devices]),
             ),
         )
+
+        # Validate paged attention has enough blocks for the specified token budget
+        if config.paged_attention_config is not None:
+            paged_cfg = config.paged_attention_config
+            block_size = paged_cfg.block_size
+            max_num_blocks = paged_cfg.max_num_blocks
+            # Each user needs ceil(max_seq_len / block_size) blocks
+            blocks_per_user = (config.max_seq_len + block_size - 1) // block_size
+            required_blocks = blocks_per_user * config.max_batch_size
+            paged_cache_max_seq_len = (block_size * max_num_blocks) // config.max_batch_size
+
+            if required_blocks > max_num_blocks:
+                raise ValueError(
+                    f"Paged attention block budget exceeded: "
+                    f"max_batch_size ({config.max_batch_size}) × "
+                    f"ceil(max_seq_len ({config.max_seq_len}) / block_size ({block_size})) = "
+                    f"{required_blocks} blocks required, but max_num_blocks is only {max_num_blocks}. "
+                    f"With current config, max supported seq_len is {paged_cache_max_seq_len}. "
+                    f"Either increase max_num_blocks or reduce max_seq_len/max_batch_size."
+                )
 
         if config.kv_cache is None:
             # Create default kv_cache LazyWeights
