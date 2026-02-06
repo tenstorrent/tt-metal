@@ -494,7 +494,7 @@ public:
             // Generate payload
             std::vector<uint32_t> payload = payload_generator_->generate_payload_with_core(fw, xfer_size_bytes);
             TT_FATAL(
-                payload.size() > 0,
+                !payload.empty(),
                 "Generated payload size is 0, xfer_size_bytes: {}, prev_xfer_size_bytes: {}",
                 xfer_size_bytes,
                 prev_xfer_size_bytes);
