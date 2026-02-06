@@ -1170,71 +1170,112 @@ class MoeRoutedExpert:
         add_cb_in1_descriptor = add_params["cb_in1_descriptor"]
         add_cb_out_descriptor = add_params["cb_out_descriptor"]
 
-        # Named compile-time args for NCRISC (mcast receiver + matmul reader + gather sender + index mcast receiver)
-        ncrisc_named_compile_time_args = [
-            # Mcast sender sharded buffer setup (for sender core)
-            ("mcast_src_cb", input_mcast_params["src_cb"]),
-            ("mcast_src_num_pages", input_mcast_params["src_num_pages"]),
-            # Mcast receiver args
-            ("mcast_data_receiver_semaphore", input_mcast_params["receiver_semaphore_id"]),
-            ("mcast_dst_cb", input_mcast_params["dst_cb"]),
-            ("mcast_dst_num_pages", input_mcast_params["dst_num_pages"]),
-            # Matmul reader args (for sharded buffer setup)
-            ("gate_mm_in0", gate_mm_params["in0_cb"]),
-            ("gate_mm_in1", gate_mm_params["in1_cb"]),
-            ("gate_mm_k_num_tiles", gate_mm_params["k_num_tiles"]),
-            ("gate_mm_out_w", gate_mm_params["out_w"]),
-            # Gather sender args (compute cores send to sender core)
-            ("gather_dest_noc_x", gate_mm_gather_params["dest_noc_x"]),
-            ("gather_dest_noc_y", gate_mm_gather_params["dest_noc_y"]),
-            ("gather_data_size_bytes", gate_mm_gather_params["data_size_bytes"]),
-            ("gather_receiver_semaphore_id", gate_mm_gather_params["receiver_semaphore_id"]),
-            ("gather_src_cb", gate_mm_gather_params["src_cb"]),
-            ("gather_src_num_pages", gate_mm_gather_params["src_num_pages"]),
-            ("gather_sender_grid_start_x", gate_mm_gather_params["sender_grid_start_x"]),
-            ("gather_sender_grid_start_y", gate_mm_gather_params["sender_grid_start_y"]),
-            ("gather_sender_grid_end_x", gate_mm_gather_params["sender_grid_end_x"]),
-            ("gather_sender_grid_end_y", gate_mm_gather_params["sender_grid_end_y"]),
-            ("gather_row_major", gate_mm_gather_params["row_major"]),
-            ("gather_receiver_data_addr", gate_mm_gather_params["receiver_data_addr"]),
-            # Gate reader args (sender core)
-            ("gate_input_cb", gate_params["input_cb"]),
-            ("gate_bias_cb", gate_params["bias_cb"]),
-            ("gate_input_indices_cb", gate_params["indices_cb"]),
-            # Index mcast receiver args (compute cores)
-            ("index_mcast_receiver_semaphore", index_mcast_receiver_semaphore_id),
-            ("gate_proj_cb_index", gate_proj_cb_index),
-            ("index_mcast_num_pages", index_mcast_num_pages),
-            # Expert scale mcast receiver args (compute cores)
-            ("expert_scale_mcast_receiver_semaphore", expert_scale_mcast_receiver_semaphore_id),
-            ("mul_cb_scalar_src", mul_cb_scalar_src),
-            ("expert_scale_mcast_num_pages", expert_scale_mcast_num_pages),
-            # Mul reader args (setup mul_in1 buffer)
-            ("mul_cb_in1", mul_cb_in1),
-            ("mul_num_tiles", mul_num_tiles),
-            # down_proj_gather sender args (gate_proj cores send fused output to sender core)
-            ("down_proj_gather_dest_noc_x", down_proj_gather_params["dest_noc_x"]),
-            ("down_proj_gather_dest_noc_y", down_proj_gather_params["dest_noc_y"]),
-            ("down_proj_gather_data_size_bytes", down_proj_gather_params["data_size_bytes"]),
-            ("down_proj_gather_receiver_semaphore_id", down_proj_gather_params["receiver_semaphore_id"]),
-            ("down_proj_gather_src_cb", down_proj_gather_params["src_cb"]),
-            ("down_proj_gather_src_num_pages", down_proj_gather_params["src_num_pages"]),
-            ("down_proj_gather_sender_grid_start_x", down_proj_gather_params["sender_grid_start_x"]),
-            ("down_proj_gather_sender_grid_start_y", down_proj_gather_params["sender_grid_start_y"]),
-            ("down_proj_gather_sender_grid_end_x", down_proj_gather_params["sender_grid_end_x"]),
-            ("down_proj_gather_sender_grid_end_y", down_proj_gather_params["sender_grid_end_y"]),
-            ("down_proj_gather_row_major", down_proj_gather_params["row_major"]),
-            ("down_proj_gather_receiver_data_addr", down_proj_gather_params["receiver_data_addr"]),
-            # down_proj_mcast receiver args (compute cores)
-            ("down_proj_mcast_receiver_semaphore", down_proj_mcast_params["receiver_semaphore_id"]),
-            ("down_proj_mcast_dst_cb", down_proj_mcast_params["dst_cb"]),
-            ("down_proj_mcast_dst_num_pages", down_proj_mcast_params["dst_num_pages"]),
-            # Eltwise add args (CB indices and wait tiles for setup_sharded_buffer)
-            ("add_cb_in0", add_cb_in0),
-            ("add_cb_in1", add_cb_in1),
-            ("add_cb_in0_wait_tiles", add_params["cb_in0_wait_tiles"]),
-            ("add_cb_in1_wait_tiles", add_params["cb_in1_wait_tiles"]),
-        ]
+        # Helper to create NCRISC compile-time args with chip-specific mesh_chip_id
+        def create_ncrisc_compile_time_args(mesh_chip_id: int) -> list:
+            return [
+                # Mcast sender sharded buffer setup (for sender core)
+                ("mcast_src_cb", input_mcast_params["src_cb"]),
+                ("mcast_src_num_pages", input_mcast_params["src_num_pages"]),
+                # Mcast receiver args
+                ("mcast_data_receiver_semaphore", input_mcast_params["receiver_semaphore_id"]),
+                ("mcast_dst_cb", input_mcast_params["dst_cb"]),
+                ("mcast_dst_num_pages", input_mcast_params["dst_num_pages"]),
+                # Matmul reader args (for sharded buffer setup)
+                ("gate_mm_in0", gate_mm_params["in0_cb"]),
+                ("gate_mm_in1", gate_mm_params["in1_cb"]),
+                ("gate_mm_k_num_tiles", gate_mm_params["k_num_tiles"]),
+                ("gate_mm_out_w", gate_mm_params["out_w"]),
+                # Gather sender args (compute cores send to sender core)
+                ("gather_dest_noc_x", gate_mm_gather_params["dest_noc_x"]),
+                ("gather_dest_noc_y", gate_mm_gather_params["dest_noc_y"]),
+                ("gather_data_size_bytes", gate_mm_gather_params["data_size_bytes"]),
+                ("gather_receiver_semaphore_id", gate_mm_gather_params["receiver_semaphore_id"]),
+                ("gather_src_cb", gate_mm_gather_params["src_cb"]),
+                ("gather_src_num_pages", gate_mm_gather_params["src_num_pages"]),
+                ("gather_sender_grid_start_x", gate_mm_gather_params["sender_grid_start_x"]),
+                ("gather_sender_grid_start_y", gate_mm_gather_params["sender_grid_start_y"]),
+                ("gather_sender_grid_end_x", gate_mm_gather_params["sender_grid_end_x"]),
+                ("gather_sender_grid_end_y", gate_mm_gather_params["sender_grid_end_y"]),
+                ("gather_row_major", gate_mm_gather_params["row_major"]),
+                ("gather_receiver_data_addr", gate_mm_gather_params["receiver_data_addr"]),
+                # Gate reader args (sender core)
+                ("gate_input_cb", gate_params["input_cb"]),
+                ("gate_bias_cb", gate_params["bias_cb"]),
+                ("gate_input_indices_cb", gate_params["indices_cb"]),
+                # Index mcast receiver args (compute cores)
+                ("index_mcast_receiver_semaphore", index_mcast_receiver_semaphore_id),
+                ("gate_proj_cb_index", gate_proj_cb_index),
+                ("index_mcast_num_pages", index_mcast_num_pages),
+                # Expert scale mcast receiver args (compute cores)
+                ("expert_scale_mcast_receiver_semaphore", expert_scale_mcast_receiver_semaphore_id),
+                ("mul_cb_scalar_src", mul_cb_scalar_src),
+                ("expert_scale_mcast_num_pages", expert_scale_mcast_num_pages),
+                # Mul reader args (setup mul_in1 buffer)
+                ("mul_cb_in1", mul_cb_in1),
+                ("mul_num_tiles", mul_num_tiles),
+                # down_proj_gather sender args (gate_proj cores send fused output to sender core)
+                ("down_proj_gather_dest_noc_x", down_proj_gather_params["dest_noc_x"]),
+                ("down_proj_gather_dest_noc_y", down_proj_gather_params["dest_noc_y"]),
+                ("down_proj_gather_data_size_bytes", down_proj_gather_params["data_size_bytes"]),
+                ("down_proj_gather_receiver_semaphore_id", down_proj_gather_params["receiver_semaphore_id"]),
+                ("down_proj_gather_src_cb", down_proj_gather_params["src_cb"]),
+                ("down_proj_gather_src_num_pages", down_proj_gather_params["src_num_pages"]),
+                ("down_proj_gather_sender_grid_start_x", down_proj_gather_params["sender_grid_start_x"]),
+                ("down_proj_gather_sender_grid_start_y", down_proj_gather_params["sender_grid_start_y"]),
+                ("down_proj_gather_sender_grid_end_x", down_proj_gather_params["sender_grid_end_x"]),
+                ("down_proj_gather_sender_grid_end_y", down_proj_gather_params["sender_grid_end_y"]),
+                ("down_proj_gather_row_major", down_proj_gather_params["row_major"]),
+                ("down_proj_gather_receiver_data_addr", down_proj_gather_params["receiver_data_addr"]),
+                # down_proj_mcast receiver args (compute cores)
+                ("down_proj_mcast_receiver_semaphore", down_proj_mcast_params["receiver_semaphore_id"]),
+                ("down_proj_mcast_dst_cb", down_proj_mcast_params["dst_cb"]),
+                ("down_proj_mcast_dst_num_pages", down_proj_mcast_params["dst_num_pages"]),
+                # Eltwise add args (CB indices and wait tiles for setup_sharded_buffer)
+                ("add_cb_in0", add_cb_in0),
+                ("add_cb_in1", add_cb_in1),
+                ("add_cb_in0_wait_tiles", add_params["cb_in0_wait_tiles"]),
+                ("add_cb_in1_wait_tiles", add_params["cb_in1_wait_tiles"]),
+                # DRAM streaming matmul reader args (compute cores) - uses NOC_0
+                ("gate_proj_cb_in1", gate_proj_cb_in1),
+                ("gate_proj_cb_out", gate_proj_cb_out),
+                ("gate_proj_in1_tensor_addr", gate_proj_params["in1_tensor_addr"]),
+                ("gate_proj_in1_page_size", gate_proj_params["in1_page_size"]),
+                ("gate_proj_in1_num_pages", gate_proj_params["in1_num_pages"]),
+                ("gate_proj_subblock_k", gate_proj_params["subblock_k"]),
+                ("gate_proj_per_core_n", gate_proj_params["per_core_n"]),
+                ("gate_proj_in1_block_size_bytes", gate_proj_params["in1_block_size_bytes"]),
+                ("gate_proj_out_num_tiles", gate_proj_params["out_num_tiles"]),
+                ("gate_proj_num_subblocks_k", gate_proj_params["num_subblocks_k"]),
+                ("gate_proj_index_offset", mesh_chip_id),  # Index offset (chip_id for mesh mode)
+                # up_proj matmul reader args (compute cores) - writes to intermediate CB
+                ("up_proj_cb_in1", up_proj_cb_in1),
+                ("up_proj_in1_tensor_addr", up_proj_params["in1_tensor_addr"]),
+                ("up_proj_in1_page_size", up_proj_params["in1_page_size"]),
+                ("up_proj_in1_num_pages", up_proj_params["in1_num_pages"]),
+                ("up_proj_subblock_k", up_proj_params["subblock_k"]),
+                ("up_proj_per_core_n", up_proj_params["per_core_n"]),
+                ("up_proj_in1_block_size_bytes", up_proj_params["in1_block_size_bytes"]),
+                ("up_proj_out_num_tiles", up_proj_params["out_num_tiles"]),
+                ("up_proj_num_subblocks_k", up_proj_params["num_subblocks_k"]),
+                ("up_proj_cb_index", gate_proj_cb_index),  # Reuses same index CB as gate_proj
+                ("up_proj_index_offset", mesh_chip_id),  # Index offset (chip_id for mesh mode)
+                ("up_proj_cb_mm_out", up_proj_cb_mm_out),  # Intermediate output for up_proj (before mul)
+                # down_proj DRAM matmul reader args (compute cores)
+                ("down_proj_cb_in1", down_proj_cb_in1),
+                ("down_proj_cb_out", down_proj_cb_out),
+                ("down_proj_in1_tensor_addr", down_proj_params["in1_tensor_addr"]),
+                ("down_proj_in1_page_size", down_proj_params["in1_page_size"]),
+                ("down_proj_in1_num_pages", down_proj_params["in1_num_pages"]),
+                ("down_proj_subblock_k", down_proj_params["subblock_k"]),
+                ("down_proj_per_core_n", down_proj_params["per_core_n"]),
+                ("down_proj_in1_block_size_bytes", down_proj_params["in1_block_size_bytes"]),
+                ("down_proj_out_num_tiles", down_proj_params["out_num_tiles"]),
+                ("down_proj_num_subblocks_k", down_proj_params["num_subblocks_k"]),
+                ("down_proj_cb_index", gate_proj_cb_index),  # Reuses same index CB
+                ("down_proj_index_offset", mesh_chip_id),  # Index offset (chip_id for mesh mode)
+                # Testing flag: use hardcoded expert index instead of gate output
+                ("use_hardcoded_expert_index", 1 if use_hardcoded_expert_index else 0),
+            ]
 
         # Helper to create BRISC compile-time args with chip-specific mesh_chip_id
         def create_brisc_compile_time_args(mesh_chip_id: int) -> list:
@@ -1279,31 +1320,6 @@ class MoeRoutedExpert:
                     "mul_scalar_index_offset",
                     mesh_chip_id,
                 ),  # Index into scalar source tensor (offset by chip_id for mesh mode)
-                # DRAM streaming matmul writer args (compute cores)
-                ("gate_proj_cb_in1", gate_proj_cb_in1),
-                ("gate_proj_cb_out", gate_proj_cb_out),
-                ("gate_proj_in1_tensor_addr", gate_proj_params["in1_tensor_addr"]),
-                ("gate_proj_in1_page_size", gate_proj_params["in1_page_size"]),
-                ("gate_proj_in1_num_pages", gate_proj_params["in1_num_pages"]),
-                ("gate_proj_subblock_k", gate_proj_params["subblock_k"]),
-                ("gate_proj_per_core_n", gate_proj_params["per_core_n"]),
-                ("gate_proj_in1_block_size_bytes", gate_proj_params["in1_block_size_bytes"]),
-                ("gate_proj_out_num_tiles", gate_proj_params["out_num_tiles"]),
-                ("gate_proj_num_subblocks_k", gate_proj_params["num_subblocks_k"]),
-                ("gate_proj_index_offset", mesh_chip_id),  # Index offset (chip_id for mesh mode)
-                # up_proj matmul writer args (compute cores) - writes to intermediate CB
-                ("up_proj_cb_in1", up_proj_cb_in1),
-                ("up_proj_in1_tensor_addr", up_proj_params["in1_tensor_addr"]),
-                ("up_proj_in1_page_size", up_proj_params["in1_page_size"]),
-                ("up_proj_in1_num_pages", up_proj_params["in1_num_pages"]),
-                ("up_proj_subblock_k", up_proj_params["subblock_k"]),
-                ("up_proj_per_core_n", up_proj_params["per_core_n"]),
-                ("up_proj_in1_block_size_bytes", up_proj_params["in1_block_size_bytes"]),
-                ("up_proj_out_num_tiles", up_proj_params["out_num_tiles"]),
-                ("up_proj_num_subblocks_k", up_proj_params["num_subblocks_k"]),
-                ("up_proj_cb_index", gate_proj_cb_index),  # Reuses same index CB as gate_proj
-                ("up_proj_index_offset", mesh_chip_id),  # Index offset (chip_id for mesh mode)
-                ("up_proj_cb_mm_out", up_proj_cb_mm_out),  # Intermediate output for up_proj (before mul)
                 # Mul writer args (waits for final output)
                 ("mul_cb_out", mul_cb_out),
                 ("mul_num_tiles", mul_num_tiles),
@@ -1321,21 +1337,6 @@ class MoeRoutedExpert:
                 ("down_proj_mcast_src_cb", down_proj_mcast_params["src_cb"]),
                 ("down_proj_mcast_dst_cb", down_proj_mcast_params["dst_cb"]),
                 ("down_proj_mcast_src_num_pages", down_proj_mcast_params["src_num_pages"]),
-                # down_proj DRAM matmul writer args (compute cores)
-                ("down_proj_cb_in1", down_proj_cb_in1),
-                ("down_proj_cb_out", down_proj_cb_out),
-                ("down_proj_in1_tensor_addr", down_proj_params["in1_tensor_addr"]),
-                ("down_proj_in1_page_size", down_proj_params["in1_page_size"]),
-                ("down_proj_in1_num_pages", down_proj_params["in1_num_pages"]),
-                ("down_proj_subblock_k", down_proj_params["subblock_k"]),
-                ("down_proj_per_core_n", down_proj_params["per_core_n"]),
-                ("down_proj_in1_block_size_bytes", down_proj_params["in1_block_size_bytes"]),
-                ("down_proj_out_num_tiles", down_proj_params["out_num_tiles"]),
-                ("down_proj_num_subblocks_k", down_proj_params["num_subblocks_k"]),
-                ("down_proj_cb_index", gate_proj_cb_index),  # Reuses same index CB
-                ("down_proj_index_offset", mesh_chip_id),  # Index offset (chip_id for mesh mode)
-                # Testing flag: use hardcoded expert index instead of gate output
-                ("use_hardcoded_expert_index", 1 if use_hardcoded_expert_index else 0),
             ]
 
         # Named compile-time args for TRISC (matmul + sigmoid compute + gate compute + dram matmul compute)
@@ -1462,9 +1463,17 @@ class MoeRoutedExpert:
         bank_id_core_values = []
         vc_core_values = []
         sender_idx_core_values = []  # For down_proj_gather sender idx
+        bank_ids = []
         for idx, core in enumerate(gate_proj_optimal_workers):
             bank_id = core_to_bank_id[(core.x, core.y)]
+            # VC conflict resolution - avoid NOC contention for cores on same row
             vc = bank_id & 0x3
+            for j in range(idx):
+                prev_core = gate_proj_optimal_workers[j]
+                if prev_core.y == core.y and (bank_ids[j] & 0x3) == (bank_id & 0x3):
+                    vc = (vc + 1) & 0x3
+                    break
+            bank_ids.append(bank_id)
             bank_id_core_values.append((core, bank_id))
             vc_core_values.append((core, vc))
             sender_idx_core_values.append((core, idx))  # Explicit sender idx
@@ -1619,7 +1628,7 @@ class MoeRoutedExpert:
                 chip_unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/moe_routed_expert/moe_routed_expert_kernel.cpp",
                     core_ranges=full_device_grid,
-                    ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+                    ncrisc_named_compile_time_args=create_ncrisc_compile_time_args(chip_id),
                     brisc_named_compile_time_args=create_brisc_compile_time_args(chip_id),
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
