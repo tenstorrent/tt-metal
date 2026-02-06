@@ -11,21 +11,17 @@
 
 namespace {
 
-// rt_dim=2 optimized kernels (process 2 rows at a time)
 constexpr auto kWriterKernelPath =
-    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/writer_swiglu_fw_interleaved_start_id_rt2.cpp";
+    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/writer_swiglu_fw_interleaved_start_id.cpp";
 
 constexpr auto kReaderW1SenderKernelPath =
-    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/reader_swiglu_fw_sender_rt2.cpp";
+    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/reader_swiglu_fw_sender.cpp";
 
 constexpr auto kReaderW1ReceiverKernelPath =
-    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/reader_swiglu_fw_receiver_rt2.cpp";
+    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/dataflow/reader_swiglu_fw_receiver.cpp";
 
 constexpr auto kComputeKernelPath =
-    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/compute/swiglu_fw_true_flash_kernel_rt2.cpp";
-
-// rt_dim for kernel: process this many rows at a time
-constexpr uint32_t kRtDim = 2;
+    "tt-train/sources/ttml/metal/ops/swiglu_fw/device/kernels/compute/swiglu_fw_kernel.cpp";
 
 // Reader buffer indices (sender kernel has W1/W2/W3, receiver gets all weights via multicast)
 constexpr uint32_t kInputBufferIdx = 0;
@@ -50,6 +46,8 @@ constexpr auto kMCbIndex = tt::CBIndex::c_8;           // keeps track of M[r, k]
 constexpr auto kYPartialCbIndex = tt::CBIndex::c_9;    // keeps track of partial Y[r, c]
 // CB with output data
 constexpr auto kYCbIndex = tt::CBIndex::c_10;  // keeps track of final Y[r, c]
+
+const std::string kRowOfMFitsInL1DefineKey = "ROW_OF_M_FITS_IN_L1";
 
 }  // namespace
 
@@ -346,30 +344,51 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // -------------------------------------------------------------------------
     // 1.5) Calculate max rows for multicast synchronization
     // -------------------------------------------------------------------------
-    // SINGLE-SENDER MULTICAST SYNCHRONIZATION with rt_dim=2:
+    // SINGLE-SENDER MULTICAST SYNCHRONIZATION:
     // Core (0,0) reads weights from DRAM and multicasts to ALL other cores.
-    // With rt_dim=2, we process row pairs, so sync counts must be even.
+    // This requires all cores to participate in the same number of multicast operations.
     //
-    // All cores loop for max_rows_across_all_cores iterations (in pairs):
-    // 1. Sender (0,0) reads X for current row pair, then reads+multicasts W1/W2/W3
-    // 2. All receivers read X for their current row pair, wait for W1/W2/W3 multicast
+    // All cores loop for max_rows_across_all_cores iterations:
+    // 1. Sender (0,0) reads X for its current row, then reads+multicasts W1/W2/W3
+    // 2. All receivers read X for their current row, wait for W1/W2/W3 multicast
     // 3. Cores with fewer actual rows use padding iterations (read last valid row)
     // 4. Compute/Writer only process actual rows (num_rows_per_core)
     //
     // This enables single-point DRAM reads for weights → massive bandwidth savings.
     bool use_multicast = (num_cores > 1);
-    // Round up to even for rt_dim=2 processing
-    uint32_t max_rows_across_all_cores = ((num_rows_per_core_group_1 + kRtDim - 1) / kRtDim) * kRtDim;
+    uint32_t max_rows_across_all_cores = num_rows_per_core_group_1;  // group_1 always has >= group_2 rows
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
-    // True Flash algorithm with rt_dim=2:
-    // - Processes M in small k_block chunks (block_size tiles at a time)
-    // - No full row caching required → works for any hidden_dim
-    // - L1 usage is O(block_size) instead of O(hidden_Wt)
+    const uint32_t twice_block_size = 2U * block_size;
+
+    // Check if row of M fits in L1 - required for the optimized algorithm.
+    // The M-fits-L1 algorithm caches XW1[r,:], XW3[r,:], and M[r,:] in L1 for flash-attention
+    // optimization. This requires approximately 3 × hidden_Wt × tile_bytes of L1.
     //
-    // Note: The old row_of_m_fits_in_l1_check is no longer needed.
+    // L1 threshold analysis (Wormhole B0, ~1.46 MB available L1):
+    //   Max hidden_dim ≈ 6,848 elements (214 tiles)
+    //
+    // With tensor parallelism (TP), hidden_dim is sharded across devices:
+    //   - Llama-7B  (hidden=11008): fits with TP≥2
+    //   - Llama-13B (hidden=13824): fits with TP≥4
+    //   - Llama-70B (hidden=28672): fits with TP≥8
+    //   - Llama-405B (hidden=53248): fits with TP≥8
+    //
+    // In all practical distributed training scenarios, M will fit in L1.
+    // If this limit is exceeded, consider using composite ops (matmul + silu + mul + matmul)
+    // as a fallback, though this would be ~2x slower.
+    const bool row_of_m_fits_in_l1 =
+        row_of_m_fits_in_l1_check(hidden_Wt, block_size, bfloat16_single_tile_size_bytes, device);
+
+    TT_FATAL(
+        row_of_m_fits_in_l1,
+        "SwiGLU fused kernel requires M row to fit in L1. hidden_dim={} tiles ({} elements) exceeds L1 capacity. "
+        "For large models, use tensor parallelism (TP) to shard hidden_dim across devices. "
+        "Alternatively, use composite ops: matmul(silu(matmul(x,w1)) * matmul(x,w3), w2).",
+        hidden_Wt,
+        hidden_Wt * 32);
 
     // W1/W3 CB size: use batched mcast (block_size rows × block_size tiles per batch)
     // Plus double-buffering: 2 × block_size^2 = 32 tiles for block_size=4
@@ -379,35 +398,10 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     // Same size as W1/W3 for consistency
     const uint32_t w2_cb_tiles = 2U * block_size * block_size;
 
-    // CB sizing for rt_dim=2 True Flash algorithm
-    // Each CB holds rt_dim rows worth of block_size tiles
-    const uint32_t rt_dim_tiles = kRtDim * block_size;  // 2 × 4 = 8 tiles for rt_dim=2
-
-    // X CB sizing for Phase 3: X Row Caching
-    // Cache full X row(s) in L1 to avoid re-reading from DRAM for each k_block
-    // This reduces X reads from K_blocks × P_blocks to just P_blocks per row pair
-    const uint32_t x_row_tiles = kRtDim * Wt;  // 2 rows × Wt tiles per row
-
-    // Validate X row caching fits in L1
-    // Calculate total CB memory requirements for True Flash rt_dim=2 with X row caching
-    const uint32_t available_L1 =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint64_t x_cb_memory = x_row_tiles * bfloat16_single_tile_size_bytes;
-    const uint64_t w_cb_memory = 2U * w1_w3_cb_tiles * bfloat16_single_tile_size_bytes +  // W1 + W3
-                                 w2_cb_tiles * bfloat16_single_tile_size_bytes;           // W2
-    const uint64_t intermediate_cb_memory =
-        5U * rt_dim_tiles * bfloat16_single_tile_size_bytes;                           // XW1/XW3 partial/final, M
-    const uint64_t y_cb_memory = 2U * rt_dim_tiles * bfloat16_single_tile_size_bytes;  // Y_partial + Y
-    const uint64_t total_cb_memory = x_cb_memory + w_cb_memory + intermediate_cb_memory + y_cb_memory;
-
-    TT_FATAL(
-        total_cb_memory <= available_L1,
-        "True Flash X Row Caching requires {} bytes but only {} bytes available in L1. "
-        "X row tiles={} (Wt={}). Consider using smaller embed_dim or ORIGINAL algorithm.",
-        total_cb_memory,
-        available_L1,
-        x_row_tiles,
-        Wt);
+    // CB sizing for M-fits-L1 algorithm (full row caching)
+    const uint32_t num_tiles_xw1 = ((hidden_Wt + block_size - 1U) / block_size) * block_size;
+    const uint32_t num_tiles_xw3 = num_tiles_xw1;
+    const uint32_t num_tiles_m = num_tiles_xw1;
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
@@ -417,11 +411,8 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     //   TODO(maciek): make minimal repro and report if this is a bug. See tracking issue #32529.
     // - Matmul runs on FPU; with fp32_dest_acc_en, accumulation is fp32.
     // - Using all CBs as fp32 showed no observable precision improvement in tests.
-
-    // Input CB: Phase 3 X Row Caching - cache full X row(s) in L1
-    // Size = rt_dim rows × Wt tiles per row (NOT double-buffered - read once, reuse for all k_blocks)
     [[maybe_unused]] auto cb_input = create_circular_buffer(
-        program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, x_row_tiles);
+        program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     // W1/W3 CBs use larger size when batching is enabled for reduced mcast overhead
     [[maybe_unused]] auto cb_w1 = create_circular_buffer(
         program, all_cores, kW1CbIndex, data_format, bfloat16_single_tile_size_bytes, w1_w3_cb_tiles);
@@ -430,23 +421,22 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         program, all_cores, kW2CbIndex, data_format, bfloat16_single_tile_size_bytes, w2_cb_tiles);
     [[maybe_unused]] auto cb_w3 = create_circular_buffer(
         program, all_cores, kW3CbIndex, data_format, bfloat16_single_tile_size_bytes, w1_w3_cb_tiles);
-    // Partial CBs for True Flash (rt_dim rows × block_size tiles)
+    // Partial CBs for flash-attention optimization (accumulate XW1/XW3 across p_blocks)
     [[maybe_unused]] auto cb_x_w1_partial = create_circular_buffer(
-        program, all_cores, kXW1PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, rt_dim_tiles);
+        program, all_cores, kXW1PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw1);
     [[maybe_unused]] auto cb_x_w3_partial = create_circular_buffer(
-        program, all_cores, kXW3PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, rt_dim_tiles);
-    // XW1, XW3, and M CBs for rt_dim rows
+        program, all_cores, kXW3PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw3);
+    // XW1, XW3, and M CBs for full row caching
     [[maybe_unused]] auto cb_x_w1 = create_circular_buffer(
-        program, all_cores, kXW1CbIndex, data_format, bfloat16_single_tile_size_bytes, rt_dim_tiles);
+        program, all_cores, kXW1CbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw1);
     [[maybe_unused]] auto cb_x_w3 = create_circular_buffer(
-        program, all_cores, kXW3CbIndex, data_format, bfloat16_single_tile_size_bytes, rt_dim_tiles);
+        program, all_cores, kXW3CbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw3);
     [[maybe_unused]] auto cb_m = create_circular_buffer(
-        program, all_cores, kMCbIndex, data_format, bfloat16_single_tile_size_bytes, rt_dim_tiles);
-    // Y partial and final: rt_dim rows × block_size (one c_block at a time)
+        program, all_cores, kMCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_m);
     [[maybe_unused]] auto cb_y_partial = create_circular_buffer(
-        program, all_cores, kYPartialCbIndex, data_format, bfloat16_single_tile_size_bytes, rt_dim_tiles);
+        program, all_cores, kYPartialCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_y = create_circular_buffer(
-        program, all_cores, kYCbIndex, data_format, bfloat16_single_tile_size_bytes, rt_dim_tiles);
+        program, all_cores, kYCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -481,8 +471,9 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         "SwiGLU buffer must be in DRAM. SwiGLU buffer of type {}",
         enchantum::to_string(swiglu_buffer->buffer_type()));
 
-    // True Flash rt_dim=2 algorithm - no special defines needed
+    // M-fits-L1 algorithm uses flash-attention optimization with full row caching
     std::map<std::string, std::string> defines;
+    defines[kRowOfMFitsInL1DefineKey] = "1";
 
     // -------------------------------------------------------------------------
     // 3.1) Split cores into single sender (0,0) and all receivers
@@ -572,13 +563,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     };
 
     kernels.compute_group_1 = create_compute_kernel(
-        program,
-        core_group_1,
-        compute_group_1_args,
-        defines,
-        kComputeKernelPath,
-        /*fp32_dest_acc_en=*/true,
-        /*packer_l1_acc=*/true);
+        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -591,13 +576,7 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         };
 
         kernels.compute_group_2 = create_compute_kernel(
-            program,
-            core_group_2,
-            compute_group_2_args,
-            defines,
-            kComputeKernelPath,
-            /*fp32_dest_acc_en=*/true,
-            /*packer_l1_acc=*/true);
+            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
 
     // -------------------------------------------------------------------------
