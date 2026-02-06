@@ -1220,7 +1220,8 @@ public:
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_id,
         const RoutingDirection& direction) const override {
-        return tt::tt_fabric::get_forwarding_link_indices_in_direction(src_node_id, dst_node_id, direction);
+        return tt::tt_fabric::get_forwarding_link_indices_in_direction(
+            tt::tt_metal::MetalContext::instance().get_control_plane(), src_node_id, dst_node_id, direction);
     }
 
     std::optional<FabricNodeId> get_neighbor_node_id_or_nullopt(

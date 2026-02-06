@@ -869,13 +869,12 @@ bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
  */
 
 MeshGraph MeshGraph::generate_mesh_graph_of_shape(
-    const tt::Cluster& cluster,
     MeshShape mesh_shape,
     tt::tt_fabric::FabricType fabric_type,
     tt::tt_fabric::FabricReliabilityMode reliability_mode,
     tt::ARCH arch,
     std::uint32_t num_connections_per_direction) {
-    MeshGraph mesh_graph(cluster);
+    MeshGraph mesh_graph;
 
     // Use the provided num_connections_per_direction
     std::uint32_t num_eth_ports_per_direction = num_connections_per_direction;

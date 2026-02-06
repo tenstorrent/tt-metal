@@ -160,7 +160,6 @@ public:
 
     // Generate a mesh graph of a specific shape (used by topology mapper)
     static MeshGraph generate_mesh_graph_of_shape(
-        const tt::Cluster& cluster,
         MeshShape mesh_shape,
         tt::tt_fabric::FabricType fabric_type,
         tt::tt_fabric::FabricReliabilityMode reliability_mode,
@@ -196,7 +195,7 @@ public:
     std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const { return mesh_graph_desc_file_path_; }
 
 private:
-    MeshGraph(const tt::Cluster& cluster) : cluster_(cluster) {}
+    MeshGraph() = default;
 
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<ChipId, RouterEdge> get_valid_connections(

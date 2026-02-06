@@ -125,9 +125,10 @@ uint32_t compute_max_2d_hops(const std::vector<MeshShape>& mesh_shapes) {
 }
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
+    const ControlPlane& control_plane,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    RoutingDirection direction) {
     const std::vector<chan_id_t>& fabric_channels =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
 
