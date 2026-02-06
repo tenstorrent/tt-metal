@@ -434,6 +434,10 @@ class Generator:
             self.model.switch_mode("decode")
             reset_inputs = True
 
+        # Update PAGED_SDPA_DECODE_PROGCFG based on actual ISL
+        isl = max(start_pos) if isinstance(start_pos, list) else start_pos.max().item()
+        self.model_args.update_paged_sdpa_config_for_isl(isl)
+
         kv_cache = kv_cache[0]
         decode_kwargs = {
             "current_pos": start_pos,

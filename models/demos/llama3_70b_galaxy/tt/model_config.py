@@ -2240,7 +2240,7 @@ class TtModelArgs:
             # Only applies to TG (32 devices)
             return
 
-        # 7000 since 8k isl has length 7558
+        # 7000 since 8k isl has actual length 7558
         if isl >= 7000:
             num_cores = 48
             grid_size = (8, 6)
