@@ -759,9 +759,6 @@ def test_demo_text(
 
         max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
 
-        # Update PAGED_SDPA_DECODE_PROGCFG based on actual ISL
-        model_args.update_paged_sdpa_config_for_isl(max_encoded_prompt_len)
-
         # Load reference outputs for PCC check
         if pcc_check:
             vocab_size = 128256
