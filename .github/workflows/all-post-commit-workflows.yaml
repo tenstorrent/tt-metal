@@ -28,11 +28,36 @@ on:
         type: boolean
         default: true
         description: "Force test everything regardless of file changes"
-      tests-to-run:
+      run-ttnn-unit-tests:
         required: false
-        type: string
-        default: "ttnn-unit-tests,models-unit-tests,tt-train-cpp-unit-tests,run-profiler-regression,t3000-apc-fast-tests,ops-unit-tests"
-        description: "Comma-separated list of tests to run (default: all tests)"
+        type: boolean
+        default: true
+        description: "Run TTNN unit tests"
+      run-models-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run model unit tests"
+      run-tt-train-cpp-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TT-Train C++ unit tests"
+      run-profiler-regression:
+        required: false
+        type: boolean
+        default: true
+        description: "Run profiler regression tests"
+      run-t3000-apc-fast-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run T3000 APC fast tests"
+      run-ops-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run ops unit tests"
       enable-watcher:
         required: false
         type: boolean
@@ -86,11 +111,36 @@ on:
         default: false
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
-      tests-to-run:
+      run-ttnn-unit-tests:
         required: false
-        type: string
-        default: "ttnn-unit-tests,models-unit-tests,tt-train-cpp-unit-tests,run-profiler-regression,t3000-apc-fast-tests,ops-unit-tests"
-        description: "Comma-separated list of tests to run (default: all tests)"
+        default: true
+        type: boolean
+        description: "Run TTNN unit tests"
+      run-models-unit-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run model unit tests"
+      run-tt-train-cpp-unit-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run TT-Train C++ unit tests"
+      run-profiler-regression:
+        required: false
+        default: true
+        type: boolean
+        description: "Run profiler regression tests"
+      run-t3000-apc-fast-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run T3000 APC fast tests"
+      run-ops-unit-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run ops unit tests"
       enable-watcher:
         required: false
         default: false
@@ -151,54 +201,12 @@ jobs:
       t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}
       ops-unit-tests: ${{ steps.set-ops-unit-tests.outputs.should-run }}
     steps:
-      - name: Validate tests-to-run input
-        run: |
-          VALID_TESTS="ttnn-unit-tests,models-unit-tests,tt-train-cpp-unit-tests,run-profiler-regression,t3000-apc-fast-tests,ops-unit-tests"
-          TESTS_TO_RUN="${{ inputs.tests-to-run }}"
-
-          echo "Valid tests: $VALID_TESTS"
-          echo "Tests to run: $TESTS_TO_RUN"
-
-          # Split comma-separated lists into arrays
-          IFS=',' read -ra VALID_ARRAY <<< "$VALID_TESTS"
-          IFS=',' read -ra INPUT_ARRAY <<< "$TESTS_TO_RUN"
-
-          # Check each test in tests-to-run
-          INVALID_TESTS=()
-          for test in "${INPUT_ARRAY[@]}"; do
-            test=$(echo "$test" | xargs)  # Trim whitespace
-            if [[ -n "$test" ]]; then
-              FOUND=false
-              for valid in "${VALID_ARRAY[@]}"; do
-                valid=$(echo "$valid" | xargs)
-                if [[ "$test" == "$valid" ]]; then
-                  FOUND=true
-                  break
-                fi
-              done
-              if [[ "$FOUND" == "false" ]]; then
-                INVALID_TESTS+=("$test")
-              fi
-            fi
-          done
-
-          # Report results
-          if [[ ${#INVALID_TESTS[@]} -gt 0 ]]; then
-            echo "ERROR: Invalid test names found in tests-to-run:"
-            printf '  - %s\n' "${INVALID_TESTS[@]}"
-            echo ""
-            echo "Valid test names are:"
-            printf '  - %s\n' "${VALID_ARRAY[@]}"
-            exit 1
-          else
-            echo "All test names are valid"
-          fi
       - id: find-changes
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@blozano-apc-savior
       - id: set-ttnn-unit-tests
         run: |
-          echo "should-run=${{ contains(inputs.tests-to-run, 'ttnn-unit-tests') ||
-                               (inputs.force-test-everything && (
+          echo "should-run=${{ inputs.run-ttnn-unit-tests && (
+                               inputs.force-test-everything == false || (
                                  github.event_name != 'workflow_dispatch' ||
                                  (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
                                  steps.find-changes.outputs['cmake-changed'] == 'true' ||
@@ -210,16 +218,16 @@ jobs:
                                )) }}" >> "$GITHUB_OUTPUT"
       - id: set-models-unit-tests
         run: |
-          echo "should-run=${{ contains(inputs.tests-to-run, 'models-unit-tests') ||
-                               (inputs.force-test-everything && (
+          echo "should-run=${{ inputs.run-models-unit-tests && (
+                               inputs.force-test-everything == false || (
                                  github.event_name != 'workflow_dispatch' ||
                                  (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
                                  steps.find-changes.outputs['any-code-changed'] == 'true'
                                )) }}" >> "$GITHUB_OUTPUT"
       - id: set-tt-train-cpp-unit-tests
         run: |
-          echo "should-run=${{ contains(inputs.tests-to-run, 'tt-train-cpp-unit-tests') ||
-                               (inputs.force-test-everything && (
+          echo "should-run=${{ inputs.run-tt-train-cpp-unit-tests && (
+                               inputs.force-test-everything == false || (
                                  github.event_name != 'workflow_dispatch' ||
                                  (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
                                  steps.find-changes.outputs['cmake-changed'] == 'true' ||
@@ -232,24 +240,24 @@ jobs:
                                )) }}" >> "$GITHUB_OUTPUT"
       - id: set-run-profiler-regression
         run: |
-          echo "should-run=${{ contains(inputs.tests-to-run, 'run-profiler-regression') ||
-                               (inputs.force-test-everything && (
+          echo "should-run=${{ inputs.run-profiler-regression && (
+                               inputs.force-test-everything == false || (
                                  github.event_name != 'workflow_dispatch' ||
                                  (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
                                  steps.find-changes.outputs['any-code-changed'] == 'true'
                                )) }}" >> "$GITHUB_OUTPUT"
       - id: set-t3000-apc-fast-tests
         run: |
-          echo "should-run=${{ contains(inputs.tests-to-run, 't3000-apc-fast-tests') ||
-                               (inputs.force-test-everything && (
+          echo "should-run=${{ inputs.run-t3000-apc-fast-tests && (
+                               inputs.force-test-everything == false || (
                                  github.event_name != 'workflow_dispatch' ||
                                  (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
                                  steps.find-changes.outputs['any-code-changed'] == 'true'
                                )) }}" >> "$GITHUB_OUTPUT"
       - id: set-ops-unit-tests
         run: |
-          echo "should-run=${{ contains(inputs.tests-to-run, 'ops-unit-tests') ||
-                               (inputs.force-test-everything && (
+          echo "should-run=${{ inputs.run-ops-unit-tests && (
+                               inputs.force-test-everything == false || (
                                  github.event_name != 'workflow_dispatch' ||
                                  (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
                                  steps.find-changes.outputs['any-code-changed'] == 'true'
