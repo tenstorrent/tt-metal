@@ -45,7 +45,7 @@ All multi-Galaxy topologies use **2D Torus** connectivity (wrap-around on both X
 
 One Galaxy (32 chips) as a self-contained mesh. Used for single-host development and testing.
 
-<img src="8x4_cabling.png" width="700"/>
+<img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/8x4_cabling.png?raw=true" width="700"/>
 
 *Cabling web tool view of a single Galaxy (8×4). Shows 1 host (node_0) with 4 trays (T1–T4) and internal torus connections (orange curves) wrapping between trays.*
 
@@ -55,11 +55,11 @@ One Galaxy (32 chips) as a self-contained mesh. Used for single-host development
 
 Four Galaxies arranged in a horizontal line, forming an elongated 32-column × 4-row mesh. Optimized for 1D data flow: pipeline parallelism, ring allreduce, video generation (Wan2.1/2.2), and low-latency decode (Blitz, DeepSeek).
 
-<img src="4x32_topology.png" width="700"/>
+<img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/4x32_topology.png?raw=true" width="700"/>
 
 *Chip-level topology: 4 Galaxy chassis side by side, which can form full 32×4 mesh.*
 
-<img src="4x32_cabling.png" width="700"/>
+<img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/4x32_cabling.png?raw=true" width="700"/>
 
 *Cabling web tool view: 4 Galaxies across 2 racks. Blue lines are inter-Galaxy mesh connections, green lines are torus wrap-around connections.*
 
@@ -69,11 +69,11 @@ Four Galaxies arranged in a horizontal line, forming an elongated 32-column × 4
 
 Four Galaxies arranged in a 2×2 grid. Optimized for 2D data flow: all-to-all collectives and 2D tensor parallelism.
 
-<img src="8x16_topology.png" width="500"/>
+<img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/8x16_topology.png?raw=true" width="500"/>
 
 *Chip-level topology: 4 Galaxy chassis in a 2×2 grid arrangement.*
 
-<img src="8x16_cabling.png" width="700"/>
+<img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/8x16_cabling.png?raw=true" width="700"/>
 
 *Cabling web tool view: 4 Galaxies across 2 racks with inter-Galaxy cables crossing between racks in a distributed pattern.*
 
@@ -83,11 +83,11 @@ Four Galaxies arranged in a 2×2 grid. Optimized for 2D data flow: all-to-all co
 
 Four Galaxies stacked vertically in a single column. An alternative orientation to 8×16, using the same 4 Galaxies but with a different cabling pattern and host layout.
 
-<img src="16x8_topology.png" width="400"/>
+<img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/16x8_topology.png?raw=true" width="400"/>
 
 *Host layout: 4 Galaxy chassis stacked vertically (no inter-Galaxy cabling shown — see cabling web tool view below).*
 
-<img src="16x8_cabling.png" width="700"/>
+<img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/16x8_cabling.png?raw=true" width="700"/>
 
 *Cabling web tool view: 4 Galaxies across 2 racks with a different inter-Galaxy cable pattern than 8×16.*
 
@@ -97,7 +97,7 @@ Four Galaxies stacked vertically in a single column. An alternative orientation 
 
 Multiple pods can be connected into a SuperPod. The image below shows 4 pods in 4×32 topology (16 Galaxies total) in an exploded view — pods are spread apart to make inter-pod cables visible; in a physical deployment they are racked together.
 
-<img src="4_pods_4x32_topology.png" width="700"/>
+<img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/4_pods_4x32_topology.png" width="700"/>
 
 *Exploded view of 4 pods (16 Galaxies). Each pod is 4 Galaxies in a line. Inter-pod cables are shown between the separated pods for clarity.*
 
