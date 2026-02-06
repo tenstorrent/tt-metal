@@ -15,6 +15,8 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
+#include "impl/context/metal_context.hpp"
+
 using namespace tt::tt_fabric;
 
 // Helper functions for hierarchy testing
@@ -1485,9 +1487,10 @@ TEST(MeshGraphDescriptorTests, AssignZDirectionInMeshGraph) {
         file << text_proto;
     }
 
-    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(test_file.string()));
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(cluster, test_file.string()));
 
-    tt::tt_fabric::MeshGraph mesh_graph(test_file.string());
+    tt::tt_fabric::MeshGraph mesh_graph(cluster, test_file.string());
 
     // Test should_assign_z_direction method
     tt::tt_fabric::MeshId mesh_0(0);
@@ -1548,9 +1551,10 @@ TEST(MeshGraphDescriptorTests, AssignZDirectionGraphTopologyInMeshGraph) {
         file << text_proto;
     }
 
-    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(test_file.string()));
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(cluster, test_file.string()));
 
-    tt::tt_fabric::MeshGraph mesh_graph(test_file.string());
+    tt::tt_fabric::MeshGraph mesh_graph(cluster, test_file.string());
 
     // Test should_assign_z_direction method for all mesh pairs
     tt::tt_fabric::MeshId mesh_0(0);
