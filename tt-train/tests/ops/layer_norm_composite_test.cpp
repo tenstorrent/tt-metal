@@ -9,6 +9,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/layernorm_op.hpp"
 #include "ops/losses.hpp"
@@ -76,6 +77,8 @@ TEST_F(LayerNormOpTest, CompositeLayerNormOp_0) {
 }
 
 TEST_F(LayerNormOpTest, CompositeLayerNormOp_backward) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     uint32_t batch_size = 1;

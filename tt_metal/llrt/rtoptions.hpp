@@ -162,6 +162,8 @@ class RunTimeOptions {
 
     bool enable_llk_asserts = false;
 
+    bool disable_sfploadmacro = false;
+
     // Fabric profiling settings
     struct FabricProfilingSettings {
         bool enable_rx_ch_fwd = false;
@@ -383,6 +385,8 @@ public:
 
     bool get_llk_asserts() const { return enable_llk_asserts; }
     void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
+
+    bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.

@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random, is_blackhole, is_wormhole_b0
+from models.common.utility_functions import torch_random, is_blackhole, is_wormhole_b0, is_watcher_enabled
 
 
 @pytest.mark.parametrize("batch_size", [1])
@@ -74,6 +74,11 @@ def test_transformer_attention_softmax_(
     *,
     device,
 ):
+    if is_watcher_enabled() and (
+        (sequence_size == 384 and target_sequence_size == 384)
+        or (sequence_size == 1024 and target_sequence_size == 384)
+    ):
+        pytest.skip("Skipping with watcher enabled due to github issue #37098")
     torch.manual_seed(0)
 
     input_shape = (batch_size, num_heads, sequence_size, target_sequence_size)
