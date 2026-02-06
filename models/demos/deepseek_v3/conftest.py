@@ -145,12 +145,16 @@ def mesh_device(request, device_params):
 
 @pytest.fixture(scope="session")
 def model_path():
-    return Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
+    """Get model path and resolve symlinks to ensure all operations can find files."""
+    path = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
+    # Resolve symlinks to ensure AutoConfig and other operations can find config.json and other files
+    return path.resolve()
 
 
 @pytest.fixture(scope="session")
 def hf_config(model_path):
     """Load DeepSeek config for testing"""
+    # model_path is already resolved in the fixture
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     return config
 
