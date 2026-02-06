@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -49,7 +50,9 @@ struct LocalDFBInterfaceHost {
     std::array<uint32_t, 4> limit = {0};
     std::array<::experimental::PackedTileCounter, 4> packed_tile_counter = {0};
     uint8_t num_tcs_to_rr = 1;
+    uint8_t remapper_pair_index = 0;
     bool should_init_tc = false;
+    uint32_t consumer_tcs = 0;
 };
 
 struct DFBRiscConfig {
@@ -73,7 +76,7 @@ struct DataflowBufferImpl {
     std::array<uint8_t, 4> txn_ids = {0};
     uint8_t num_entries_per_txn_id = 0;
     uint8_t num_entries_per_txn_id_per_tc = 0;
-    uint8_t remapper_pair_index = 0xFF;
+    uint8_t remapper_consumer_mask = 0;
     uint8_t num_txn_ids = 0;
 
     std::optional<uint32_t> allocated_address;
@@ -86,10 +89,19 @@ struct DataflowBufferImpl {
 class TileCounterAllocator {
 public:
     ::experimental::PackedTileCounter allocate(uint8_t tensix_id);
-    void reset() { next_tc_id_ = 0; }
+    void reset() { next_tc_id_.fill(0); }
 
 private:
-    uint8_t next_tc_id_ = 0;
+    std::array<uint8_t, 4> next_tc_id_ = {0};
+};
+
+class RemapperIndexAllocator {
+public:
+    uint8_t allocate(const CoreCoord& core_coord);
+    void reset();
+
+private:
+    std::unordered_map<CoreCoord, uint8_t> next_index_;
 };
 
 uint32_t finalize_dfbs(
