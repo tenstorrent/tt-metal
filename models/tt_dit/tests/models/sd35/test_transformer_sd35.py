@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
 import time
 
 import pytest
@@ -16,7 +15,7 @@ import ttnn
 from ....models.transformers.transformer_sd35 import SD35Transformer2DModel, SD35TransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
-from ....utils.cache import get_and_create_cache_path, get_cache_path, load_cache_dict, save_cache_dict
+from ....utils import cache
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
@@ -268,19 +267,20 @@ def test_sd35_transformer2d_model(
         padding_config=padding_config,
     )
     if load_cache:
-        cache_path = get_cache_path(
-            model_name="stable-diffusion-3.5-large",
-            subfolder="transformer",
-            parallel_config=parallel_config,
-            mesh_shape=tuple(mesh_device.shape),
-            dtype="bf16",
-        )
-        assert os.path.exists(
-            cache_path
-        ), "Cache path does not exist. Run test_sd35_transformer_model_caching first with the desired parallel config."
         start = time.time()
-        cache_dict = load_cache_dict(cache_path)
-        tt_model.from_cached_state_dict(cache_dict)
+
+        try:
+            cache.load_model(
+                tt_model,
+                model_name="stable-diffusion-3.5-large",
+                subfolder="transformer",
+                parallel_config=parallel_config,
+                mesh_shape=tuple(mesh_device.shape),
+            )
+        except cache.MissingCacheError as err:
+            msg = "Cache path does not exist. Run test_sd35_transformer_model_caching first with the desired parallel config."
+            raise RuntimeError(msg) from err
+
         end = time.time()
         logger.info(f"Time taken to load cached state dict: {end - start} seconds")
     else:
@@ -428,12 +428,11 @@ def test_sd35_transformer_model_caching(
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
 
-    cache_path = get_and_create_cache_path(
+    cache_dir = cache.model_cache_dir(
         model_name="stable-diffusion-3.5-large",
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
-        dtype="bf16",
     )
 
     # Create padding config if needed for tensor parallelism
@@ -466,8 +465,7 @@ def test_sd35_transformer_model_caching(
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 
     start = time.time()
-    cache_dict = tt_model.to_cached_state_dict(cache_path)
-    save_cache_dict(cache_dict, cache_path)
+    tt_model.save(cache_dir)
     end = time.time()
     logger.info(f"Time taken to cache state dict: {end - start} seconds")
 
@@ -492,7 +490,6 @@ def test_sd35_transformer_model_caching(
         parallel_config=parallel_config,
         padding_config=padding_config,
     )
-    loaded_cache_dict = load_cache_dict(cache_path)
-    cache_model.from_cached_state_dict(loaded_cache_dict)
+    cache_model.load(cache_dir)
     end = time.time()
     logger.info(f"Time taken to load cached state dict: {end - start} seconds")

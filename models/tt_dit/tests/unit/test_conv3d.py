@@ -35,7 +35,8 @@ def create_random_models(
     reference_model = RefContextParallelConv3d(**model_args)
 
     # Create TT model
-    tt_model = TtContextParallelConv3d(mesh_device=mesh_device, torch_ref=reference_model, **model_args)
+    tt_model = TtContextParallelConv3d(mesh_device=mesh_device, **model_args)
+    tt_model.load_torch_state_dict(reference_model.state_dict())
 
     return reference_model, tt_model
 

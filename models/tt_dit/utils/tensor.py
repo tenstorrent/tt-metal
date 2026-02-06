@@ -125,6 +125,9 @@ def to_torch(
     Strips away redundant data returned by calling ttnn.to_torch on a replicated tensor. If the
     tensor is distributed and not on device, composer_device must be provided.
     """
+    if x.tensor_topology().distribution_shape().mesh_size() == 1:
+        return ttnn.to_torch(x)
+
     if mesh_axes is None:
         mesh_axes = (None,) * len(x.shape)
 

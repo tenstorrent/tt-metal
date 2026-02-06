@@ -26,45 +26,43 @@ def stack_cos_sin(cos, sin):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links",
+    ("mesh_device", "sp_axis", "tp_axis", "num_links"),
     [
-        [(1, 1), 0, 1, 1],
-        [(1, 2), 0, 1, 1],
-        [(1, 2), 1, 0, 1],
-        [(2, 1), 0, 1, 1],
-        [(2, 1), 1, 0, 1],
-        [(2, 2), 0, 1, 1],
-        [(2, 2), 1, 0, 1],
-        [(2, 4), 0, 1, 1],
-        [(2, 4), 1, 0, 1],
-        [(4, 8), 0, 1, 4],
-        [(4, 8), 1, 0, 4],
-    ],
-    ids=[
-        "1x1sp0tp1",
-        "1x2sp0tp1",
-        "1x2sp1tp0",
-        "2x1sp0tp1",
-        "2x1sp1tp0",
-        "2x2sp0tp1",
-        "2x2sp1tp0",
-        "2x4sp0tp1",
-        "2x4sp1tp0",
-        "4x8sp0tp1",
-        "4x8sp1tp0",
+        pytest.param((1, 1), 0, 1, 1, id="1x1sp0tp1"),
+        pytest.param((1, 2), 0, 1, 1, id="1x2sp0tp1"),
+        pytest.param((1, 2), 1, 0, 1, id="1x2sp1tp0"),
+        pytest.param((2, 1), 0, 1, 1, id="2x1sp0tp1"),
+        pytest.param((2, 1), 1, 0, 1, id="2x1sp1tp0"),
+        pytest.param((2, 2), 0, 1, 1, id="2x2sp0tp1"),
+        pytest.param((2, 2), 1, 0, 1, id="2x2sp1tp0"),
+        pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),
+        pytest.param((2, 4), 1, 0, 1, id="2x4sp1tp0"),
+        pytest.param((4, 8), 0, 1, 4, id="4x8sp0tp1"),
+        pytest.param((4, 8), 1, 0, 4, id="4x8sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    ("B, spatial_seq_len, prompt_seq_len"),
+    ("B", "spatial_seq_len", "prompt_seq_len"),
     [
-        (1, 4000, 118),  # Similar to SD3.5 config
-        (1, 44520, 118),  # Similar to SD3.5 config
+        pytest.param(1, 4000, 118, id="short_seq"),  # Similar to SD3.5 config
+        pytest.param(1, 44520, 118, id="long_seq"),  # Similar to SD3.5 config
     ],
-    ids=["short_seq", "long_seq"],
 )
-@pytest.mark.parametrize("is_fsdp", [True, False], ids=["yes_fsdp", "no_fsdp"])
-@pytest.mark.parametrize("context_pre_only", [True, False], ids=["yes_context_pre", "no_context_pre"])
+@pytest.mark.parametrize(
+    "is_fsdp",
+    [
+        pytest.param(True, id="yes_fsdp"),
+        pytest.param(False, id="no_fsdp"),
+    ],
+)
+@pytest.mark.parametrize(
+    "context_pre_only",
+    [
+        pytest.param(True, id="yes_context_pre"),
+        pytest.param(False, id="no_context_pre"),
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mochi_attention(
     mesh_device: ttnn.MeshDevice,

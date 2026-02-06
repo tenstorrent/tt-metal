@@ -216,6 +216,7 @@ class StableDiffusion3Pipeline:
             layer_norm_eps=self._text_encoder_1.config.layer_norm_eps,
             attention_dropout=self._text_encoder_1.config.attention_dropout,
             hidden_act=self._text_encoder_1.config.hidden_act,
+            projection_dim=self._text_encoder_1.config.projection_dim,
         )
 
         # Create CLIP config for encoder 2
@@ -229,6 +230,7 @@ class StableDiffusion3Pipeline:
             layer_norm_eps=self._text_encoder_2.config.layer_norm_eps,
             attention_dropout=self._text_encoder_2.config.attention_dropout,
             hidden_act=self._text_encoder_2.config.hidden_act,
+            projection_dim=self._text_encoder_2.config.projection_dim,
         )
 
         # Store original state dicts before creating new encoders
@@ -1015,7 +1017,6 @@ def _get_clip_prompt_embeds(
     encoder_output, projected_output = text_encoder(
         prompt_tokenized=tt_text_input_ids,
         mesh_device=ttnn_device,
-        with_projection=True,
     )
 
     # Handle clip_skip by selecting the appropriate hidden state layer

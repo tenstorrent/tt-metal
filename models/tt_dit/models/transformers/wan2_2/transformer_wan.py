@@ -2,6 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+from pathlib import Path
+
 import torch
 from diffusers.models.transformers.transformer_wan import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
 from diffusers.models.transformers.transformer_wan import WanTimeTextImageEmbedding as TorchWanTimeTextImageEmbedding
@@ -12,10 +16,13 @@ import ttnn
 from ....layers.embeddings import WanPatchEmbed
 from ....layers.feedforward import ParallelFeedForward
 from ....layers.linear import Linear
+from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import DistributedLayerNorm
+from ....parallel.config import DiTParallelConfig
+from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
-from ....utils.substate import substate
+from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .attention_wan import WanAttention
 
@@ -56,19 +63,22 @@ TorchWanTimeTextImageEmbedding.forward_timestep = _forward_timestep
 TorchWanTimeTextImageEmbedding.forward_text = _forward_text
 
 
-class WanTransformerBlock:
+class WanTransformerBlock(Module):
     def __init__(
         self,
+        *,
         dim: int,
         ffn_dim: int,
         num_heads: int,
         cross_attention_norm: bool = True,
         eps: float = 1e-6,
-        mesh_device=None,
-        ccl_manager=None,
-        parallel_config=None,
-        is_fsdp=False,
-    ):
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager | None = None,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool = False,
+    ) -> None:
+        super().__init__()
+
         self.dim = dim
         self.ffn_dim = ffn_dim
         self.num_heads = num_heads
@@ -124,7 +134,7 @@ class WanTransformerBlock:
             else None
         )
 
-        self.ff = ParallelFeedForward(
+        self.ffn = ParallelFeedForward(
             dim,
             inner_dim=ffn_dim,
             activation_fn="gelu",
@@ -145,7 +155,11 @@ class WanTransformerBlock:
             ccl_manager=ccl_manager,
         )
 
-        self.scale_shift_table = None
+        self.scale_shift_table = Parameter(
+            total_shape=[1, 1, 6, dim],
+            mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
+            device=mesh_device,
+        )
 
         self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -158,70 +172,23 @@ class WanTransformerBlock:
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
-    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
-        cache_dict = {}
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "ffn.net.0.proj", "ffn.ff1")
+        rename_substate(state, "ffn.net.2", "ffn.ff2")
 
-        # Cache linear layers
-        norm1_cache = self.norm1.to_cached_state_dict(path_prefix + "norm1.")
-        attn1_cache = self.attn1.to_cached_state_dict(path_prefix + "attn1.")
-        attn2_cache = self.attn2.to_cached_state_dict(path_prefix + "attn2.")
-        norm2_cache = self.norm2.to_cached_state_dict(path_prefix + "norm2.")
-        ff_cache = self.ff.to_cached_state_dict(path_prefix + "ff.")
-        norm3_cache = self.norm3.to_cached_state_dict(path_prefix + "norm3.")
-        ttnn.dump_tensor(path_prefix + "scale_shift_table" + path_suffix, self.scale_shift_table_11TD)
+        if "scale_shift_table" in state:
+            state["scale_shift_table"] = state["scale_shift_table"].unsqueeze(0)
 
-        # Add prefixes for linear layers
-        for key, value in norm1_cache.items():
-            cache_dict[f"norm1.{key}"] = value
-        for key, value in attn1_cache.items():
-            cache_dict[f"attn1.{key}"] = value
-        for key, value in attn2_cache.items():
-            cache_dict[f"attn2.{key}"] = value
-        for key, value in norm2_cache.items():
-            cache_dict[f"norm2.{key}"] = value
-        for key, value in ff_cache.items():
-            cache_dict[f"ff.{key}"] = value
-        for key, value in norm3_cache.items():
-            cache_dict[f"norm3.{key}"] = value
-        cache_dict["scale_shift_table"] = path_prefix + "scale_shift_table" + path_suffix
-
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.norm1.from_cached_state_dict(substate(cache_dict, "norm1"))
-        self.attn1.from_cached_state_dict(substate(cache_dict, "attn1"))
-        self.attn2.from_cached_state_dict(substate(cache_dict, "attn2"))
-        self.norm2.from_cached_state_dict(substate(cache_dict, "norm2"))
-        self.ff.from_cached_state_dict(substate(cache_dict, "ff"))
-        self.norm3.from_cached_state_dict(substate(cache_dict, "norm3"))
-        self.scale_shift_table_11TD = ttnn.load_tensor(cache_dict["scale_shift_table"], device=self.mesh_device)
-
-    def load_state_dict(self, state_dict):
-        self.norm1.load_state_dict(substate(state_dict, "norm1"))
-        self.attn1.load_state_dict(substate(state_dict, "attn1"))
-        self.attn2.load_state_dict(substate(state_dict, "attn2"))
-        self.norm2.load_state_dict(substate(state_dict, "norm2"))
-
-        def rename_ff_state(state):
-            out_state = {
-                f"{replacement}{k[len(prefix):]}": v
-                for k, v in state.items()
-                for prefix, replacement in [("net.0.proj", "ff1"), ("net.2", "ff2")]
-                if prefix in k
-            }
-            return out_state
-
-        self.ff.load_state_dict(rename_ff_state(substate(state_dict, "ffn")))
-        self.norm3.load_state_dict(substate(state_dict, "norm3"))
-
-        self.scale_shift_table_11TD = bf16_tensor(
-            state_dict["scale_shift_table"].unsqueeze(0),
-            device=self.mesh_device,
-            shard_dim=-1,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-        )
-
-    def __call__(self, spatial_1BND, prompt_1BLP, temb_1BTD, N, rope_cos, rope_sin, trans_mat):
+    def forward(
+        self,
+        spatial_1BND: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        temb_1BTD: ttnn.Tensor,
+        N: int,
+        rope_cos: ttnn.Tensor,
+        rope_sin: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+    ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured D on TP
         prompt_1BLP: replicated on SP, replicated D on TP
@@ -237,7 +204,7 @@ class WanTransformerBlock:
 
         assert temb_1BTD.shape[2] == 6, "wan2.2 14b expects 6 chunks in timestep embedding"
 
-        shifted_temb_1BTD = self.scale_shift_table_11TD + temb_1BTD
+        shifted_temb_1BTD = self.scale_shift_table.data + temb_1BTD
         shift_msa_1B1D, scale_msa_1B1D, gate_msa_1B1D, c_shift_msa_1B1D, c_scale_msa_1B1D, c_gate_msa_1B1D = ttnn.chunk(
             shifted_temb_1BTD, 6, dim=2
         )
@@ -280,7 +247,7 @@ class WanTransformerBlock:
                 spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        spatial_ff_1BND = self.ff(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
+        spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
 
         # spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
         # NOTE: higher precision compute config in addcmul may be needed for correctness
@@ -289,9 +256,10 @@ class WanTransformerBlock:
         return spatial_1BND
 
 
-class WanTransformer3DModel:
+class WanTransformer3DModel(Module):
     def __init__(
         self,
+        *,
         patch_size: tuple = (1, 2, 2),
         num_heads: int = 40,
         dim: int = 5120,
@@ -304,12 +272,14 @@ class WanTransformer3DModel:
         cross_attn_norm: bool = True,
         eps: float = 1e-6,
         rope_max_seq_len: int = 1024,
-        mesh_device=None,
-        ccl_manager=None,
-        parallel_config=None,
-        is_fsdp=True,
-        model_type="t2v",
-    ):
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager | None = None,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool = True,
+        model_type: str = "t2v",
+    ) -> None:
+        super().__init__()
+
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
@@ -335,7 +305,7 @@ class WanTransformer3DModel:
             rope_max_seq_len,
         )
 
-        self.patch_embed = WanPatchEmbed(
+        self.patch_embedding = WanPatchEmbed(
             patch_size=patch_size,
             in_channels=in_channels,
             embed_dim=dim,
@@ -353,7 +323,7 @@ class WanTransformer3DModel:
             pos_embed_seq_len=None,
         )
 
-        self.blocks = [
+        self.blocks = ModuleList(
             WanTransformerBlock(
                 dim=dim,
                 ffn_dim=ffn_dim,
@@ -366,7 +336,7 @@ class WanTransformer3DModel:
                 is_fsdp=is_fsdp,
             )
             for i in range(num_layers)
-        ]
+        )
 
         self.norm_out = DistributedLayerNorm(
             dim,
@@ -385,7 +355,7 @@ class WanTransformer3DModel:
             mesh_device=mesh_device,
         )
 
-        self.scale_shift_table = None
+        self.scale_shift_table = Parameter(total_shape=[1, 2, dim], device=mesh_device)
 
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -398,64 +368,28 @@ class WanTransformer3DModel:
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
-    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
-        cache_dict = {}
+    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        super().save(directory, prefix=prefix)
 
-        # Cache patch embedding
-        patch_embed_cache = self.patch_embed.to_cached_state_dict(path_prefix + "patch_embed.")
-        for key, value in patch_embed_cache.items():
-            cache_dict[f"patch_embed.{key}"] = value
-
-        # Cache transformer blocks
-        for i, block in enumerate(self.blocks):
-            block_cache = block.to_cached_state_dict(path_prefix + f"blocks.{i}.")
-            for key, value in block_cache.items():
-                cache_dict[f"blocks.{i}.{key}"] = value
-
-        # Cache norm out layers
-        norm_out_cache = self.norm_out.to_cached_state_dict(path_prefix + "norm_out.")
-        proj_out_cache = self.proj_out.to_cached_state_dict(path_prefix + "proj_out.")
-
-        for key, value in norm_out_cache.items():
-            cache_dict[f"norm_out.{key}"] = value
-        for key, value in proj_out_cache.items():
-            cache_dict[f"proj_out.{key}"] = value
-
-        ttnn.dump_tensor(path_prefix + "scale_shift_table" + path_suffix, self.scale_shift_table)
-        cache_dict["scale_shift_table"] = path_prefix + "scale_shift_table" + path_suffix
+        directory = Path(directory)
 
         # Torch fallbacks
-        torch.save(self.rope.state_dict(), path_prefix + "rope.pt")
-        torch.save(self.condition_embedder.state_dict(), path_prefix + "condition_embedder.pt")
-        cache_dict["condition_embedder"] = path_prefix + "condition_embedder.pt"
-        cache_dict["rope"] = path_prefix + "rope.pt"
+        torch.save(self.rope.state_dict(), directory / f"{prefix}rope.pt")
+        torch.save(self.condition_embedder.state_dict(), directory / f"{prefix}condition_embedder.pt")
 
-        return cache_dict
+    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        super().load(directory, prefix=prefix)
 
-    def from_cached_state_dict(self, cache_dict):
-        self.patch_embed.from_cached_state_dict(substate(cache_dict, "patch_embed"))
-
-        for i, block in enumerate(self.blocks):
-            block.from_cached_state_dict(substate(cache_dict, f"blocks.{i}"))
-
-        self.norm_out.from_cached_state_dict(substate(cache_dict, "norm_out"))
-        self.proj_out.from_cached_state_dict(substate(cache_dict, "proj_out"))
-        self.scale_shift_table = ttnn.load_tensor(cache_dict["scale_shift_table"], device=self.mesh_device)
+        directory = Path(directory)
 
         # Torch fallbacks
-        self.rope.load_state_dict(torch.load(cache_dict["rope"]))
-        self.condition_embedder.load_state_dict(torch.load(cache_dict["condition_embedder"]))
+        self.rope.load_state_dict(torch.load(directory / f"{prefix}rope.pt"))
+        self.condition_embedder.load_state_dict(torch.load(directory / f"{prefix}condition_embedder.pt"))
 
-    def load_torch_state_dict(self, state_dict):
-        self.rope.load_state_dict(substate(state_dict, "rope"))
-        self.patch_embed.load_torch_state_dict(substate(state_dict, "patch_embedding"))
-        self.condition_embedder.load_state_dict(substate(state_dict, "condition_embedder"))
-        for i, block in enumerate(self.blocks):
-            block.load_state_dict(substate(state_dict, f"blocks.{i}"))
-        self.norm_out.load_torch_state_dict(substate(state_dict, "norm_out"))
-        self.proj_out.load_torch_state_dict(substate(state_dict, "proj_out"))
-
-        self.scale_shift_table = bf16_tensor(state_dict["scale_shift_table"], device=self.mesh_device)
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # Torch fallbacks
+        self.rope.load_state_dict(pop_substate(state, "rope"))
+        self.condition_embedder.load_state_dict(pop_substate(state, "condition_embedder"))
 
     def prepare_rope_features(self, hidden_states):
         """
@@ -618,7 +552,13 @@ class WanTransformer3DModel:
         spatial_BCFHW = self.postprocess_spatial_output_host(spatial_1BND, F, H, W, N)
         return spatial_BCFHW
 
-    def __call__(self, spatial, prompt, timestep, y=None):
+    def forward(
+        self,
+        spatial: torch.Tensor,
+        prompt: torch.Tensor,
+        timestep: torch.Tensor,
+        y: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """
         Inputs are all torch tensors
             y is an optional argument for image-to-video generation.
@@ -645,7 +585,7 @@ class WanTransformer3DModel:
 
         spatial_1BNI, N = self.preprocess_spatial_input(spatial)
 
-        spatial_1BND = self.patch_embed(spatial_1BNI)
+        spatial_1BND = self.patch_embedding(spatial_1BNI)
 
         for idx, block in enumerate(self.blocks):
             spatial_1BND = block(
@@ -658,7 +598,7 @@ class WanTransformer3DModel:
                 trans_mat=trans_mat,
             )
 
-        scale_shift_1BSD = self.scale_shift_table + temb_11BD
+        scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
         shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
 
         spatial_norm_1BND = self.norm_out(spatial_1BND)
@@ -698,7 +638,7 @@ class WanTransformer3DModel:
         )
         temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep_torch)
 
-        spatial_1BND = self.patch_embed(spatial_1BNI)
+        spatial_1BND = self.patch_embedding(spatial_1BNI)
 
         for idx, block in enumerate(self.blocks):
             spatial_1BND = block(
@@ -711,7 +651,7 @@ class WanTransformer3DModel:
                 trans_mat=trans_mat,
             )
 
-        scale_shift_1BSD = self.scale_shift_table + temb_11BD
+        scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
         shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
 
         spatial_norm_1BND = self.norm_out(spatial_1BND)

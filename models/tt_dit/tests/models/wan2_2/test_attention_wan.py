@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
 import pytest
 import torch
 from diffusers import WanTransformer3DModel
@@ -21,36 +20,39 @@ from ....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology",
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
     [
-        [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
-        [(2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear],
-        [(4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring],
-        [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
-        [(4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear],
-        [(4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear],
-    ],
-    ids=[
-        "2x4sp0tp1",
-        "2x4sp1tp0",
-        "wh_4x8sp0tp1",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp0tp1",
-        "bh_4x8sp1tp0",
+        pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, id="2x4sp0tp1"),
+        pytest.param((2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, id="2x4sp1tp0"),
+        pytest.param((4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring, id="wh_4x8sp0tp1"),
+        pytest.param((4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, id="wh_4x8sp1tp0"),
+        pytest.param((4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear, id="bh_4x8sp0tp1"),
+        pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    "T, H, W",
+    ("T", "H", "W"),
     [
-        (31, 40, 80),
-        (21, 60, 104),
-        (21, 90, 160),
+        pytest.param(31, 40, 80, id="5b-720p"),
+        pytest.param(21, 60, 104, id="14b-480p"),
+        pytest.param(21, 90, 160, id="14b-720p"),
     ],
-    ids=["5b-720p", "14b-480p", "14b-720p"],
 )
-@pytest.mark.parametrize("prompt_seq_len", [None, 26, 126], ids=["no_prompt", "short_prompt", "long_prompt"])
-@pytest.mark.parametrize("is_fsdp", [True], ids=["yes_fsdp"])
+@pytest.mark.parametrize(
+    "prompt_seq_len",
+    [
+        pytest.param(None, id="no_prompt"),
+        pytest.param(26, id="short_prompt"),
+        pytest.param(126, id="long_prompt"),
+    ],
+)
+@pytest.mark.parametrize(
+    "is_fsdp",
+    [
+        pytest.param(True, id="yes_fsdp"),
+    ],
+)
 def test_wan_attention(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,

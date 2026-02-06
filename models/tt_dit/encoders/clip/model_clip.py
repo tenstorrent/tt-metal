@@ -11,11 +11,10 @@ import ttnn
 
 from ...layers.feedforward import FeedForward, ParallelFeedForward
 from ...layers.linear import ColParallelLinear, Linear
-from ...layers.module import Module
+from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.substate import indexed_substates, substate
-from ...utils.tensor import bf16_tensor
+from ...utils.substate import rename_substate
 
 
 class CLIPConfig:
@@ -57,6 +56,7 @@ class CLIPConfig:
         layer_norm_eps: float = 1e-05,
         attention_dropout: float = 0.0,
         hidden_act: str = "quick_gelu",
+        projection_dim: int | None = None,
     ):
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim
@@ -66,6 +66,7 @@ class CLIPConfig:
         self.max_prompt_length = max_prompt_length
         self.layer_norm_eps = layer_norm_eps
         self.attention_dropout = attention_dropout
+        self.projection_dim = projection_dim
         if hidden_act == "gelu":
             self.hidden_act = "decomposed_gelu"
         else:
@@ -97,36 +98,33 @@ class CLIPEncoder(Module):
         self.embeddings = TextEmbeddings(config, mesh_device)
         self.eos_token_id = eos_token_id
         self.encoder = CLIPStack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
-        self.text_projection = None
 
-    def load_torch_state_dict(self, state_dict):
-        self.embeddings.load_torch_state_dict(substate(state_dict, "text_model.embeddings"))
-        self.encoder.load_torch_state_dict(substate(state_dict, "text_model.encoder"))
+        self.final_layer_norm = Parameter(total_shape=[config.embed_dim], device=mesh_device)
+        self.final_layer_norm_bias = Parameter(total_shape=[config.embed_dim], device=mesh_device)
+        self.text_projection = (
+            Parameter(total_shape=[config.embed_dim, config.projection_dim], device=mesh_device)
+            if config.projection_dim is not None
+            else None
+        )
 
-        self.final_layer_norm = bf16_tensor(
-            state_dict["text_model.final_layer_norm.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-        )
-        self.final_layer_norm_bias = bf16_tensor(
-            state_dict["text_model.final_layer_norm.bias"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-        )
-        if "text_projection.weight" in state_dict:
-            self.text_projection = bf16_tensor(
-                state_dict["text_projection.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-            )
-        else:
-            self.text_projection = None
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "text_model.embeddings", "embeddings")
+        rename_substate(state, "text_model.encoder", "encoder")
+
+        if "text_model.final_layer_norm.weight" in state:
+            state["final_layer_norm"] = state.pop("text_model.final_layer_norm.weight")
+        if "text_model.final_layer_norm.bias" in state:
+            state["final_layer_norm_bias"] = state.pop("text_model.final_layer_norm.bias")
+        if "text_projection.weight" in state:
+            state["text_projection"] = state.pop("text_projection.weight")
 
     def forward(
         self,
         prompt_tokenized: ttnn.Tensor,
         mesh_device: ttnn.Device,
         *,
-        with_projection: bool | None = None,
         return_normalized_state: bool = False,
     ) -> tuple[ttnn.Tensor, ...]:
-        if with_projection is None:
-            with_projection = self.text_projection is not None
-
         hidden_states = self.embeddings(prompt_tokenized, mesh_device)
 
         causal_attention_mask = create_4d_causal_attention_mask(
@@ -142,8 +140,8 @@ class CLIPEncoder(Module):
         final_hidden_layer = encoder_output[-1]  # final hidden layer
         normalized_final_state = ttnn.layer_norm(  # final layer norm
             final_hidden_layer,
-            weight=self.final_layer_norm,
-            bias=self.final_layer_norm_bias,
+            weight=self.final_layer_norm.data,
+            bias=self.final_layer_norm_bias.data,
             epsilon=self.config.layer_norm_eps,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -160,11 +158,8 @@ class CLIPEncoder(Module):
             ccl_manager=self.ccl_manager,
         )
 
-        # apply text projection if specified
-        if with_projection:
-            if self.text_projection is None:
-                raise ValueError("projection weights are not loaded")
-            text_projection_transposed = ttnn.transpose(self.text_projection, -2, -1)
+        if self.text_projection is not None:
+            text_projection_transposed = ttnn.transpose(self.text_projection.data, -2, -1)
             pooled_output = ttnn.matmul(
                 pooled_output, text_projection_transposed, compute_kernel_config=self.compute_kernel_config
             )
@@ -253,14 +248,9 @@ class CLIPStack(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.layers = [
+        self.layers = ModuleList(
             CLIPEncoderLayer(config, mesh_device, ccl_manager, parallel_config) for _ in range(config.num_hidden_layers)
-        ]
-
-    def load_torch_state_dict(self, state_dict):
-        layer_states = indexed_substates(state_dict, "layers")
-        for layer, layer_state in zip(self.layers, layer_states):
-            layer.load_torch_state_dict(layer_state)
+        )
 
     def forward(
         self,
@@ -298,8 +288,6 @@ class CLIPEncoderLayer(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.layer_norm1 = None
-        self.layer_norm2 = None
         self.layer_norm_eps = config.layer_norm_eps
         self.self_attn = CLIPAttention(config, mesh_device, ccl_manager, parallel_config)
         self.parallel_config = parallel_config
@@ -321,31 +309,23 @@ class CLIPEncoderLayer(Module):
             )
         self.ccl_manager = ccl_manager
 
-    def load_torch_state_dict(self, state_dict):
-        self.layer_norm1 = bf16_tensor(
-            state_dict["layer_norm1.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-        )
-        self.layer_norm1_bias = bf16_tensor(
-            state_dict["layer_norm1.bias"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-        )
-        self.layer_norm2 = bf16_tensor(
-            state_dict["layer_norm2.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-        )
-        self.layer_norm2_bias = bf16_tensor(
-            state_dict["layer_norm2.bias"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-        )
+        self.layer_norm1 = Parameter(total_shape=[config.embed_dim], device=mesh_device)
+        self.layer_norm1_bias = Parameter(total_shape=[config.embed_dim], device=mesh_device)
+        self.layer_norm2 = Parameter(total_shape=[config.embed_dim], device=mesh_device)
+        self.layer_norm2_bias = Parameter(total_shape=[config.embed_dim], device=mesh_device)
 
-        self.self_attn.load_torch_state_dict(substate(state_dict, "self_attn"))
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "layer_norm1.weight" in state:
+            state["layer_norm1"] = state.pop("layer_norm1.weight")
+        if "layer_norm1.bias" in state:
+            state["layer_norm1_bias"] = state.pop("layer_norm1.bias")
+        if "layer_norm2.weight" in state:
+            state["layer_norm2"] = state.pop("layer_norm2.weight")
+        if "layer_norm2.bias" in state:
+            state["layer_norm2_bias"] = state.pop("layer_norm2.bias")
 
-        # remap MLP keys from fc1/fc2 to ff1/ff2 format
-        mlp_state = substate(state_dict, "mlp")
-        remapped_mlp_state = {
-            "ff1.weight": mlp_state["fc1.weight"],
-            "ff1.bias": mlp_state["fc1.bias"],
-            "ff2.weight": mlp_state["fc2.weight"],
-            "ff2.bias": mlp_state["fc2.bias"],
-        }
-        self.mlp.load_torch_state_dict(remapped_mlp_state)
+        rename_substate(state, "mlp.fc1", "mlp.ff1")
+        rename_substate(state, "mlp.fc2", "mlp.ff2")
 
     def forward(
         self,
@@ -357,8 +337,8 @@ class CLIPEncoderLayer(Module):
         residual = hidden_states
         hidden_states = ttnn.layer_norm(
             hidden_states,
-            weight=self.layer_norm1,
-            bias=self.layer_norm1_bias,
+            weight=self.layer_norm1.data,
+            bias=self.layer_norm1_bias.data,
             epsilon=self.layer_norm_eps,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -368,8 +348,8 @@ class CLIPEncoderLayer(Module):
         residual = hidden_states
         hidden_states = ttnn.layer_norm(
             hidden_states,
-            weight=self.layer_norm2,
-            bias=self.layer_norm2_bias,
+            weight=self.layer_norm2.data,
+            bias=self.layer_norm2_bias.data,
             epsilon=self.layer_norm_eps,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -467,11 +447,8 @@ class CLIPAttention(Module):
             self.v_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
             self.o_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
 
-    def load_torch_state_dict(self, state_dict):
-        self.q_proj.load_torch_state_dict(substate(state_dict, "q_proj"))
-        self.k_proj.load_torch_state_dict(substate(state_dict, "k_proj"))
-        self.v_proj.load_torch_state_dict(substate(state_dict, "v_proj"))
-        self.o_proj.load_torch_state_dict(substate(state_dict, "out_proj"))
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "out_proj", "o_proj")
 
     def forward(self, hidden_states, causal_attention_mask):
         batch_size, seq_length, _ = hidden_states.shape
@@ -570,32 +547,22 @@ class TextEmbeddings(Module):
         self.config = config
         self.mesh_device = mesh_device
 
-        self.token_embedding = None
-        self.position_embedding = None
-
-    def load_torch_state_dict(self, state_dict):
-        self.token_embedding = bf16_tensor(
-            state_dict["token_embedding.weight"], device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+        self.token_embedding = Parameter(
+            total_shape=[config.vocab_size, config.embed_dim],
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        self.position_embedding = bf16_tensor(
-            state_dict["position_embedding.weight"], device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+        self.position_embedding = Parameter(
+            total_shape=[config.max_prompt_length, config.embed_dim],
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-    # TODO: Move to parameters to reuse module functionality
-    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
-        cache_dict = {}
-        token_embedding_weights_path = path_prefix + "token_embedding_weights" + path_suffix
-        position_embedding_weights_path = path_prefix + "position_embedding_weights" + path_suffix
-        ttnn.dump_tensor(token_embedding_weights_path, self.token_embedding)
-        ttnn.dump_tensor(position_embedding_weights_path, self.position_embedding)
-        cache_dict["token_embedding"] = token_embedding_weights_path
-        cache_dict["position_embedding"] = position_embedding_weights_path
-
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.token_embedding = ttnn.load_tensor(cache_dict["token_embedding"], device=self.mesh_device)
-        self.position_embedding = ttnn.load_tensor(cache_dict["position_embedding"], device=self.mesh_device)
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "token_embedding.weight" in state:
+            state["token_embedding"] = state.pop("token_embedding.weight")
+        if "position_embedding.weight" in state:
+            state["position_embedding"] = state.pop("position_embedding.weight")
 
     def forward(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
         seq_len = prompt.shape[-1]
@@ -604,11 +571,11 @@ class TextEmbeddings(Module):
             prompt = prompt[:, : self.config.max_prompt_length]
             seq_len = self.config.max_prompt_length
 
-        input_embeddings = ttnn.embedding(prompt, self.token_embedding, layout=ttnn.TILE_LAYOUT)
+        input_embeddings = ttnn.embedding(prompt, self.token_embedding.data, layout=ttnn.TILE_LAYOUT)
 
         position_ids = torch.arange(seq_len).expand((1, -1))  # shape: (1, seq_len)
         position_ids_ttnn = ttnn.from_torch(position_ids, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
-        position_embeddings = ttnn.embedding(position_ids_ttnn, self.position_embedding, layout=ttnn.TILE_LAYOUT)
+        position_embeddings = ttnn.embedding(position_ids_ttnn, self.position_embedding.data, layout=ttnn.TILE_LAYOUT)
 
         return input_embeddings + position_embeddings
 

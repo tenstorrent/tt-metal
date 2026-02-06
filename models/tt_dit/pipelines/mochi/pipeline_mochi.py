@@ -164,6 +164,13 @@ class MochiPipeline(DiffusionPipeline):
         self.num_links = num_links
         self.reload_dit_model = self.mesh_device.get_num_devices() <= 8  # Only required if VAE is memory-constrained.
 
+        if self.reload_dit_model and not cache.cache_dir_is_set():
+            msg = (
+                "Cache must be enabled when DiT model reloading is enabled (reload_dit_model=True). "
+                "Please set TT_DIT_CACHE_DIR environment variable to enable caching."
+            )
+            raise RuntimeError(msg)
+
         # Create CCL manager
         self.ccl_manager = CCLManager(
             mesh_device=mesh_device,
@@ -219,21 +226,14 @@ class MochiPipeline(DiffusionPipeline):
         )
 
         # Load state dict into TT transformer
-        if not cache.initialize_from_cache(
+        cache.load_model(
             self.transformer,
-            torch_transformer.state_dict(),
-            "mochi-1-preview",
-            "transformer",
-            self.parallel_config,
-            tuple(self.mesh_device.shape),
-        ):
-            if self.reload_dit_model:
-                raise NotImplementedError(
-                    "Cache must be enabled when DiT model reloading is enabled (reload_dit_model=True). Please set TT_DIT_CACHE_DIR environment variable to enable caching."
-                )
-            else:
-                logger.info("Loading transformer weights from PyTorch state dict")
-                self.transformer.load_torch_state_dict(torch_transformer.state_dict())
+            model_name="mochi-1-preview",
+            subfolder="transformer",
+            parallel_config=self.parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=lambda: torch_transformer.state_dict(),
+        )
 
         # Load pretrained VAE (Torch)
         torch_vae = AutoencoderKLMochi.from_pretrained(model_name, subfolder="vae", torch_dtype=torch.float32)
@@ -246,7 +246,6 @@ class MochiPipeline(DiffusionPipeline):
 
             self.vae = MochiVAEDecoder(
                 mesh_device=self.mesh_device,
-                torch_ref=torch_vae.decoder,
                 parallel_config=vae_parallel_config,
                 ccl_manager=self.vae_ccl_manager,
                 out_channels=torch_vae.config.out_channels,
@@ -266,6 +265,7 @@ class MochiPipeline(DiffusionPipeline):
                 latents_std=torch_vae.config.latents_std,
                 scaling_factor=torch_vae.config.scaling_factor,
             )
+            self.vae.load_torch_state_dict(torch_vae.decoder.state_dict())
 
             # Reshape the device mesh back to the DiT mesh shape:
             if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
@@ -711,13 +711,12 @@ class MochiPipeline(DiffusionPipeline):
             # Load state dict into TT transformer
             logger.info("Loading MochiTransformer3DModel state_dict")
 
-            cache.initialize_from_cache(
+            cache.load_model(
                 self.transformer,
-                None,  # state_dict is not needed here
-                "mochi-1-preview",
-                "transformer",
-                self.parallel_config,
-                tuple(self.mesh_device.shape),
+                model_name="mochi-1-preview",
+                subfolder="transformer",
+                parallel_config=self.parallel_config,
+                mesh_shape=tuple(self.mesh_device.shape),
             )
 
         # 4. Prepare latent variables
