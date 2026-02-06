@@ -282,3 +282,49 @@ def test_addcmul_with_int32_inputs(device):
     golden_tensor = golden_fn(in_data1, in_data2, in_data3, value=value)
 
     assert_equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+    ],
+)
+@pytest.mark.parametrize("value", [0.5, 1.0, 7.7, 22.42, 107.6])
+@pytest.mark.parametrize(
+    "in_data1_shape, in_data2_shape, in_data3_shape",
+    [
+        ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 32, 32)),
+        ((1, 1, 1, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),
+        ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1)),
+        ((1, 1, 1, 1), (1, 1, 1024, 1024), (1, 1, 1, 1)),
+    ],
+)
+def test_addcdiv(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data2_shape, in_data3_shape):
+    torch.manual_seed(10)
+    in_data1 = torch.empty(in_data1_shape, dtype=torch_dtype).uniform_(-100, 100)
+    in_data2 = torch.empty(in_data2_shape, dtype=torch_dtype).uniform_(-100, 100)
+    in_data3 = torch.empty(in_data3_shape, dtype=torch_dtype).uniform_(-100, 100)
+
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor3 = ttnn.from_torch(in_data3, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.addcdiv(input_tensor1, input_tensor2, input_tensor3, value=value)
+    output_tensor = ttnn.to_torch(output_tensor)
+    golden_fn = ttnn.get_golden_function(ttnn.addcdiv)
+    golden_tensor = golden_fn(in_data1, in_data2, in_data3, value=value)
+
+    # Normalize: if input3 is zero and golden is nan and ttnn output is inf, change ttnn output to nan
+    zero_mask = in_data3 == 0
+    golden_nan_mask = torch.isnan(golden_tensor)
+    output_inf_mask = torch.isinf(output_tensor)
+    normalize_mask = zero_mask & golden_nan_mask & output_inf_mask
+    if normalize_mask.any():
+        output_tensor = torch.where(
+            normalize_mask,
+            torch.tensor(float("nan"), dtype=output_tensor.dtype, device=output_tensor.device),
+            output_tensor,
+        )
+
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1, allow_nonfinite=True)
