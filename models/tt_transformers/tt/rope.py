@@ -728,6 +728,7 @@ class HfRotarySetup(LightweightModule):
         datatype: ttnn.DataType = ttnn.bfloat16,
         shard_batch_to_mesh_dim: Optional[int] = 1,  # Those are kept for API compatibility with RotarySetup
         prefetcher: Optional[Prefetcher] = None,
+
     ) -> None:
         super().__init__()
         if use_qk_fused:
