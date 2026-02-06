@@ -407,12 +407,21 @@ class DRAMStreamingMatmul:
 
         # Create per-core compile-time args for bank_id and vc
         # Each core gets a unique bank_id based on its position in all_worker_cores
+        # VC conflict resolution: avoid NOC contention for cores on same row
         num_dram_banks = len(all_worker_cores)
         bank_id_core_values = []
         vc_core_values = []
+        bank_ids = []
         for idx, core in enumerate(all_worker_cores):
             bank_id = idx % num_dram_banks
+            # VC conflict resolution - avoid NOC contention for cores on same row
             vc = bank_id & 0x3
+            for j in range(idx):
+                prev_core = all_worker_cores[j]
+                if prev_core.y == core.y and (bank_ids[j] & 0x3) == (bank_id & 0x3):
+                    vc = (vc + 1) & 0x3
+                    break
+            bank_ids.append(bank_id)
             bank_id_core_values.append((core, bank_id))
             vc_core_values.append((core, vc))
 
@@ -431,24 +440,12 @@ class DRAMStreamingMatmul:
         else:
             mul_num_tiles = 0
 
-        # Named compile-time args for NCRISC (in0 reader)
+        # Named compile-time args for NCRISC (DRAM streaming - uses NOC_0)
         ncrisc_named_compile_time_args = [
+            # Sharded buffer setup args
             ("dram_mm_cb_in0", cb_id_in0),
             ("dram_mm_num_tiles_k", Kt),
-            # Expert indexing parameters
-            ("dram_mm_enable_indexing", 1 if enable_indexing else 0),
-            ("dram_mm_cb_index", cb_id_index if enable_indexing else 0),
-            # Mul parameters
-            ("dram_mm_enable_mul", 1 if enable_mul else 0),
-            ("dram_mm_cb_mul_in1", cb_id_mul_in1),
-            ("dram_mm_mul_num_tiles", mul_num_tiles),
-            # Scalar mul parameters (NCRISC sets up scalar source CB)
-            ("dram_mm_enable_scalar_mul", 1 if enable_scalar_mul else 0),
-            ("dram_mm_cb_scalar_src", cb_id_scalar_src if enable_scalar_mul else 0),
-        ]
-
-        # Named compile-time args for BRISC (in1 reader / DRAM streaming)
-        brisc_named_compile_time_args = [
+            # DRAM streaming args
             ("dram_mm_cb_in1", cb_id_in1),
             ("dram_mm_cb_out", cb_id_mm_out),  # matmul output CB (4 or 8)
             ("dram_mm_in1_tensor_addr", in1_buffer_addr),
@@ -463,6 +460,17 @@ class DRAMStreamingMatmul:
             ("dram_mm_enable_indexing", 1 if enable_indexing else 0),
             ("dram_mm_cb_index", cb_id_index if enable_indexing else 0),
             ("dram_mm_index_offset", 0),  # TODO: make configurable, offset into index tensor
+            # Mul parameters
+            ("dram_mm_enable_mul", 1 if enable_mul else 0),
+            ("dram_mm_cb_mul_in1", cb_id_mul_in1),
+            ("dram_mm_mul_num_tiles", mul_num_tiles),
+            # Scalar mul parameters (NCRISC sets up scalar source CB)
+            ("dram_mm_enable_scalar_mul", 1 if enable_scalar_mul else 0),
+            ("dram_mm_cb_scalar_src", cb_id_scalar_src if enable_scalar_mul else 0),
+        ]
+
+        # Named compile-time args for BRISC (no-op for DRAM streaming, handles mul)
+        brisc_named_compile_time_args = [
             # Mul parameters
             ("dram_mm_enable_mul", 1 if enable_mul else 0),
             ("dram_mm_cb_mul_in0", cb_id_mul_in0),

@@ -32,8 +32,8 @@ namespace deepseek_b1_ops {
 // Computes: output[1,N] = in0[1,K] @ in1[K,N] with in1 streamed from DRAM
 //
 // CB States:
-//   NCRISC: No-op (in0 and index CB setup done externally via setup_sharded_buffer)
-//   BRISC: Streams in1 from DRAM with pipelining, waits for output
+//   NCRISC: Streams in1 from DRAM with pipelining (uses NOC_0), waits for output
+//   BRISC: No-op (in0 and index CB setup done externally via setup_sharded_buffer)
 //   TRISC (Compute):
 //     - Waits: in0 (K tiles), in1 (subblock_k tiles streamed)
 //     - Reserves/Pushes: out (subblock_w tiles at a time)
@@ -44,10 +44,7 @@ struct DRAMStreamingMatmul {
     // Compile-time args structs
     // ========================================================================
 
-    // Reader CTArgs (NCRISC) - empty, sharded buffer setup done in kernel file
-    struct ReaderCTArgs {};
-
-    // Writer CTArgs (BRISC)
+    // Reader CTArgs (NCRISC) - DRAM streaming (uses NOC_0)
     template <
         uint32_t cb_in1_,
         uint32_t cb_out_,
@@ -65,7 +62,7 @@ struct DRAMStreamingMatmul {
         uint32_t cb_index_ = 0,
         uint32_t index_offset_ = 0,
         uint32_t use_hardcoded_expert_index_ = 0>
-    struct WriterCTArgs {
+    struct ReaderCTArgs {
         static constexpr uint32_t cb_in1 = cb_in1_;
         static constexpr uint32_t cb_out = cb_out_;
         static constexpr uint32_t in1_tensor_addr = in1_tensor_addr_;
@@ -85,6 +82,9 @@ struct DRAMStreamingMatmul {
             index_offset_;  // offset into index tensor (or expert index when hardcoded)
         static constexpr bool use_hardcoded_expert_index = use_hardcoded_expert_index_ == 1;  // For testing/mesh mode
     };
+
+    // Writer CTArgs (BRISC) - empty, BRISC is no-op for DRAM streaming
+    struct WriterCTArgs {};
 
     // Compute CTArgs (TRISC)
     template <
@@ -129,12 +129,7 @@ struct DRAMStreamingMatmul {
         void impl() {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
-            // NCRISC: No-op - sharded buffer setup done in kernel file
-            // ================================================================
-
-#elif defined(COMPILE_FOR_BRISC)
-            // ================================================================
-            // BRISC: Stream in1 from DRAM with pipelining
+            // NCRISC: Stream in1 from DRAM with pipelining (uses NOC_0)
             // ================================================================
             constexpr uint32_t num_iterations = CTArgs::num_subblocks_k * CTArgs::per_core_n;
 
@@ -224,9 +219,6 @@ struct DRAMStreamingMatmul {
                 cb_push_back(CTArgs::cb_in1, CTArgs::subblock_k);
                 block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
             }
-
-            // Wait for compute to finish
-            cb_wait_front(CTArgs::cb_out, CTArgs::out_num_tiles);
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
