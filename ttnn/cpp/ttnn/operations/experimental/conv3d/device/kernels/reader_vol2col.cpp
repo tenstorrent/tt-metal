@@ -33,6 +33,7 @@ inline void zeroPad(uint32_t cb_write_addr) {
 }
 
 void kernel_main() {
+    DeviceZoneScopedN("CONV3D-READER");
     constexpr uint32_t cb_vol2col = get_compile_time_arg_val(0);
     constexpr uint32_t N = get_compile_time_arg_val(1);
     constexpr uint32_t T_in = get_compile_time_arg_val(2);
@@ -158,7 +159,9 @@ void kernel_main() {
                                     }
                                 }
                             }
+                            { DeviceZoneScopedN("CONV3D-RD-BARRIER");
                             noc_async_read_barrier();
+                            }
                             cb_push_back(cb_vol2col, num_patches);
                             // End of w_block
                         }

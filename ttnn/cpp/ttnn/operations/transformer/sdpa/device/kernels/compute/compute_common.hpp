@@ -1521,6 +1521,7 @@ void sdpa_inner_loop(
              *
              * matmul_blocks internally waits on both inputs
              */
+            { DeviceZoneScopedN("SDPA-QK-MATMUL");
             pack_reconfig_data_format(cb_qk_im);
             matmul_blocks(
                 cb_q_in,
@@ -1536,6 +1537,7 @@ void sdpa_inner_loop(
                 qk_subblock_h,
                 qk_subblock_w,
                 true /*transpose*/);
+            }
 
             /**
              * Note
@@ -1571,6 +1573,7 @@ void sdpa_inner_loop(
 
             if (apply_mask) {
                 /* QK += MASK */
+                DeviceZoneScopedN("SDPA-ADD-MASK");
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
             }
@@ -1582,9 +1585,11 @@ void sdpa_inner_loop(
              * else:
              *  cur_max = max(qk, dim=-1)
              */
+            { DeviceZoneScopedN("SDPA-REDUCE-MAX");
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
                 alias_cur_max, alias_prev_max, processed_k_chunks > 0);
+            }
 
             /**
              * sub_exp fuses a few operations.
@@ -1596,10 +1601,13 @@ void sdpa_inner_loop(
              * Partial reduce_sum is used to push the final row_reduction within a tile
              * outside of the loop over K chunks.
              */
+            { DeviceZoneScopedN("SDPA-SOFTMAX");
             sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
                 alias_cur_max, alias_cur_sum, Sk_chunk_t);
+            }
 
             /* OUT_IM = QK @ V_CHUNK */
+            { DeviceZoneScopedN("SDPA-OUT-MATMUL");
             matmul_blocks(
                 cb_qk_im,
                 cb_v_in,
@@ -1614,12 +1622,14 @@ void sdpa_inner_loop(
                 out_subblock_h,
                 out_subblock_w,
                 false /*transpose*/);
+            }
 
             cb_pop_front(cb_qk_im, qk_chunk_tiles);
             reconfig_data_format(alias_prev_max, alias_cur_max);
 
             /* OUT_ACC += OUT_IM */
             if (processed_k_chunks > 0) {
+                DeviceZoneScopedN("SDPA-RESCALE");
                 /**
                  * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.

@@ -8,6 +8,7 @@
 #include "dataflow_common.hpp"
 
 void kernel_main() {
+    DeviceZoneScopedN("SDPA-WRITER");
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
@@ -130,6 +131,7 @@ void kernel_main() {
                     const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
                     const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
                     uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+                    { DeviceZoneScopedN("SDPA-WR-OUT");
                     write_block(
                         out_writer,
                         cb_out,
@@ -139,6 +141,7 @@ void kernel_main() {
                         out_tile_id,
                         tile_bytes,
                         barrier_threshold);
+                    }
                 }
             }
         }

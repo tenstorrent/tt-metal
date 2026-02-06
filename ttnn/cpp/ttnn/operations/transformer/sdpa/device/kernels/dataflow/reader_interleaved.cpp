@@ -7,6 +7,7 @@
 #include "dataflow_common.hpp"
 
 void kernel_main() {
+    DeviceZoneScopedN("SDPA-READER");
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
@@ -226,8 +227,10 @@ void kernel_main() {
                     const uint32_t q_row_end_tile = std::min(q_row_start_tile + Sq_chunk_t, valid_Sqt);
                     const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
                     const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, read_offset + q_row_start_tile, 0);
+                    { DeviceZoneScopedN("SDPA-RD-Q");
                     read_chunk_with_padding<q_tile_bytes>(
                         q_reader, cb_q_in, q_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                    }
                     q_chunk = chunked_q_chunk_offset + q_chunk;
                     uint32_t q_low_idx =
                         q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
@@ -250,6 +253,7 @@ void kernel_main() {
                         const uint32_t k_row_tile_count = k_row_end_tile - k_row_start_tile;
                         const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
 
+                        { DeviceZoneScopedN("SDPA-RD-K");
                         if constexpr (is_chunked) {
                             // Use page table to read K chunk
                             const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
@@ -280,8 +284,10 @@ void kernel_main() {
                                 true  // transpose=true for K reads
                             );
                         }
+                        }
 
                         if constexpr (use_provided_mask) {
+                            DeviceZoneScopedN("SDPA-RD-MASK");
                             cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                             uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
                             barrier_count = 0;
@@ -319,6 +325,7 @@ void kernel_main() {
                             cb_push_back(cb_mask_in, mask_chunk_tiles);
                         }
 
+                        { DeviceZoneScopedN("SDPA-RD-V");
                         if constexpr (is_chunked) {
                             // Use page table to read V chunk
                             const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
@@ -348,6 +355,7 @@ void kernel_main() {
                                 barrier_threshold,
                                 false,
                                 DHt - vDHt /* src_skip_cols */);
+                        }
                         }
                     }
                 }

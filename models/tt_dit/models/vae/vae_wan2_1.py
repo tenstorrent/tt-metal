@@ -1213,6 +1213,12 @@ class WanDecoder:
 
         output_BCTHW = None
         for i in range(T):
+
+            if i == 0:
+                from tracy import Profiler
+                profiler = Profiler()
+                profiler.enable()
+
             # Process one frame at a time
             self._conv_idx = [0]
             out_BTHWC, new_logical_h = self.decoder(
@@ -1226,6 +1232,10 @@ class WanDecoder:
                 output_BCTHW = out_BCTHW
             else:
                 output_BCTHW = ttnn.concat([output_BCTHW, out_BCTHW], dim=2)
+
+            if i == 0:
+                profiler.disable()
+            return (None, None)
 
         output_tile_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
         output_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
