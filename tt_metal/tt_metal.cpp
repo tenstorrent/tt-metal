@@ -1578,28 +1578,22 @@ std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
                 if (kernel_group != nullptr) {
                     for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
                         const auto kernel = program.impl().get_kernel(kernel_id);
-                        if (std::is_same_v<ProcessorClassType, DataMovementProcessor> &&
-                            kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
-                            const QuasarDataMovementConfig config =
-                                std::get<QuasarDataMovementConfig>(kernel->config());
-                            const uint32_t num_processors_in_use = config.num_threads_per_cluster;
-                            const uint32_t start_processor_type = kernel->get_kernel_processor_type(0);
-                            for (uint32_t i = start_processor_type; i < start_processor_type + num_processors_in_use;
-                                 i++) {
-                                TT_ASSERT(processors.contains(static_cast<ProcessorClassType>(i)));
-                                processors.erase(static_cast<ProcessorClassType>(i));
+                        if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
+                            if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
+                                const QuasarDataMovementConfig config =
+                                    std::get<QuasarDataMovementConfig>(kernel->config());
+                                const uint32_t num_processors_in_use = config.num_threads_per_cluster;
+                                const uint32_t start_processor_type = kernel->get_kernel_processor_type(0);
+                                for (uint32_t i = start_processor_type;
+                                     i < start_processor_type + num_processors_in_use;
+                                     i++) {
+                                    TT_ASSERT(processors.contains(static_cast<ProcessorClassType>(i)));
+                                    processors.erase(static_cast<ProcessorClassType>(i));
+                                }
                             }
-                        } else if (
-                            std::is_same_v<ProcessorClassType, QuasarComputeProcessor> &&
-                            kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
-                            const QuasarComputeConfig config = std::get<QuasarComputeConfig>(kernel->config());
-                            const uint32_t num_processors_in_use =
-                                config.num_threads_per_cluster * NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
-                            const uint32_t start_processor_type = kernel->get_kernel_processor_type(0);
-                            for (uint32_t i = start_processor_type; i < start_processor_type + num_processors_in_use;
-                                 i++) {
-                                TT_ASSERT(processors.contains(static_cast<ProcessorClassType>(i)));
-                                processors.erase(static_cast<ProcessorClassType>(i));
+                        } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
+                            if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+                                TT_THROW("In Quasar, each cluster can only have a single compute kernel.");
                             }
                         }
                     }
@@ -1612,14 +1606,14 @@ std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
         processors.erase(std::prev(processors.end()));
     }
 
-    if (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
+    if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
         TT_FATAL(
             processors.size() == num_processors_per_cluster,
             "Unable to reserve {} data movement processors per cluster as only {} data movement processors per cluster "
             "are available.",
             num_processors_per_cluster,
             processors.size());
-    } else if (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
+    } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
         TT_FATAL(
             processors.size() % NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE == 0,
             "Number of compute processors reserved per cluster must be a multiple of {}.",
