@@ -167,7 +167,7 @@ private:
     void notify_sender();
 
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
-    MeshCoreCoord sender_core_ = {};
+    MeshCoreCoord sender_core_;
     uint32_t fifo_size_ = 0;
     uint32_t page_size_ = 0;
     uint32_t bytes_acked_ = 0;
