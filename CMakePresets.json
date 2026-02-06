@@ -82,6 +82,21 @@
           "BUILD_TT_TRAIN": {"value": "OFF"}
         },
         "toolchainFile": "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
+      },
+      {
+        "name": "clang-tidy-kernels",
+        "inherits": "default",
+        "description": "Run Clang Tidy on kernel (device) code",
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/.build/clang-tidy-kernels",
+        "cacheVariables": {
+          "CMAKE_BUILD_TYPE": {"value": "Debug"},
+          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20"},
+          "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
+          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
+          "ENABLE_KERNEL_CLANG_TIDY": {"value": "TRUE"},
+          "BUILD_TT_TRAIN": {"value": "OFF"}
+        }
       }
     ],
     "buildPresets": [
@@ -127,6 +142,12 @@
         "configurePreset": "clang-tidy-fix-parallel",
         "configuration": "RelWithDebInfo",
         "targets": ["all", "all_verify_interface_header_sets"],
+        "nativeToolOptions": ["-k0"]
+      },
+      {
+        "name": "clang-tidy-kernels",
+        "configurePreset": "clang-tidy-kernels",
+        "targets": ["kernel_clang_tidy"],
         "nativeToolOptions": ["-k0"]
       }
     ]

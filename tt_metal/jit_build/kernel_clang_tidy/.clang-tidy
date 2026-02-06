@@ -1,0 +1,46 @@
+---
+# Clang-tidy configuration for kernel (device) code.
+#
+# Kernel code runs on Tenstorrent RISC-V cores and is compiled via JIT at
+# runtime.  When analysing with clang-tidy we use the host clang front-end
+# with stub defines, so many checks that apply to host code do not make
+# sense here.  We start with a conservative subset focused on bug-finding
+# and readability, and will expand over time.
+#
+# NOTE: Some checks are disabled because:
+#   • Kernel code uses macros (NAMESPACE, MAIN, SFPU_OP_CHAIN_*) that confuse
+#     certain checks.
+#   • Device code intentionally uses C-style patterns (reinterpret_cast,
+#     pointer arithmetic, etc.) for hardware register access.
+#   • Compile-time arguments are provided as dummy values during analysis,
+#     which may trigger false positives in some value-range checks.
+
+Checks: >
+  bugprone-*,
+  misc-*,
+  readability-braces-around-statements,
+  readability-else-after-return,
+  readability-simplify-boolean-expr,
+  performance-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-narrowing-conversions,
+  -bugprone-sizeof-expression,
+  -bugprone-unchecked-optional-access,
+  -misc-const-correctness,
+  -misc-include-cleaner,
+  -misc-no-recursion,
+  -misc-non-private-member-variables-in-classes,
+  -misc-use-anonymous-namespace,
+  -misc-use-internal-linkage,
+  -performance-avoid-endl,
+  -performance-enum-size,
+  -performance-no-int-to-ptr
+
+CheckOptions:
+  - key: readability-function-cognitive-complexity.IgnoreMacros
+    value: true
+
+FormatStyle: 'file'
+
+HeaderFilterRegex: '.*/tt_metal/kernels/.*|.*/ttnn/.*operations.*/kernels/.*'
