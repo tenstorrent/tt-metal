@@ -23,18 +23,19 @@ namespace ckernel {
 // ============================================================================
 
 /**
- * Full init for scalar broadcast multiply with FP32 accumulation
- * Includes all hw_configure calls needed when DST_ACCUM_MODE is false
+ * Hardware startup for scalar broadcast multiply with FP32 accumulation.
+ * Call once at kernel start. Same as compute_kernel_hw_startup() but hardcodes FP32=true.
  */
-ALWI void mul_tiles_bcast_scalar_init_fp32(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+ALWI void mul_tiles_bcast_scalar_hw_startup_fp32(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+    // Same as compute_kernel_hw_startup but with FP32 (true) hardcoded
     UNPACK((llk_unpack_hw_configure<true>(icb0, icb1)));
-    UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
+
     MATH((llk_math_pack_sync_init<true>()));
     MATH((llk_math_hw_configure<true>(icb0, icb1)));
-    MATH((llk_math_eltwise_binary_init_with_operands<ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(icb0, icb1)));
+
+    PACK((llk_pack_init<false, false, false>(ocb)));
     PACK((llk_pack_hw_configure<true>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<true, false>()));
+    PACK((llk_pack_dest_init<true, false>(ocb)));
 }
 
 /**

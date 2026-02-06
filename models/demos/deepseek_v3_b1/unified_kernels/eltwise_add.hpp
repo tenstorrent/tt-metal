@@ -14,6 +14,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/reconfig_data_format.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "compute_kernel_api.h"
 using namespace ckernel;
 #endif
@@ -136,12 +137,10 @@ struct EltwiseAdd {
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
 
             if constexpr (CTArgs::use_short_init) {
-                // Short init - minimal set needed for CB reconfiguration
-                UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1)));
-                MATH((llk_math_hw_configure<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1)));
-                PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(CTArgs::cb_out)));
-                PACK((llk_pack_init(CTArgs::cb_out)));
+                // Short init - call hw_startup then operation-specific init
+                compute_kernel_hw_startup(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             } else {
+                // Full init - includes hw_configure calls
                 binary_op_init_common(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             }
             // Initialize eltwise binary for addition
