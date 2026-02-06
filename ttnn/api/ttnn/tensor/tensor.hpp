@@ -16,6 +16,7 @@
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
+#include "ttnn/tensor/types.hpp"
 
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/buffer.hpp>
