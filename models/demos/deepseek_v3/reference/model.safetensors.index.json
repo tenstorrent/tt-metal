@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "total_size": 0
+  },
+  "weight_map": {
+    "model.layers.0.self_attn.q_a_proj.weight": "model-00001-of-00001.safetensors",
+    "model.layers.0.self_attn.q_a_proj.weight_scale_inv": "model-00001-of-00001.safetensors",
+    "model.layers.0.self_attn.q_b_proj.weight": "model-00001-of-00001.safetensors",
+    "model.layers.0.self_attn.q_b_proj.weight_scale_inv": "model-00001-of-00001.safetensors",
+    "model.layers.0.self_attn.kv_a_proj_with_mqa.weight": "model-00001-of-00001.safetensors",
+    "model.layers.0.self_attn.kv_a_proj_with_mqa.weight_scale_inv": "model-00001-of-00001.safetensors",
+    "model.layers.0.self_attn.kv_b_proj.weight": "model-00001-of-00001.safetensors",
+    "model.layers.0.self_attn.kv_b_proj.weight_scale_inv": "model-00001-of-00001.safetensors",
+    "model.layers.0.self_attn.o_proj.weight": "model-00001-of-00001.safetensors",
+    "model.layers.0.self_attn.o_proj.weight_scale_inv": "model-00001-of-00001.safetensors"
+  }
+}
