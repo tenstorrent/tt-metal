@@ -232,7 +232,7 @@ def run(
         # Model traced format - use defaults for multi-device setup
         if NUM_DEVICES < 2:
             logger.warning("Skipping all_gather_async test: requires multi-device setup (2+ devices)")
-            return [1.0, 0.0]
+            return [(True, "Skipped: requires 2+ devices"), 0.0]
 
         # Use defaults for model_traced
         mesh_shape = (2, 1)
