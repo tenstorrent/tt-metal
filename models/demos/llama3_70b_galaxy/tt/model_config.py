@@ -2257,9 +2257,6 @@ class TtModelArgs:
             q_chunk_size=0,
             k_chunk_size=0,
         )
-        logger.info(
-            f"Updated PAGED_SDPA_DECODE_PROGCFG for ISL={isl}: using {num_cores} cores with grid_size={grid_size}"
-        )
 
     def is_vision(self):
         return self.vision_chunk_size > 0
