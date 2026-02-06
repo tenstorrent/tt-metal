@@ -99,7 +99,7 @@ models:
   e2e:
     wh_llmbox: 120
   unit:
-    wh_llmbox: 287
+    wh_llmbox: 300
   integration:
     wh_llmbox: 422
   perf:
