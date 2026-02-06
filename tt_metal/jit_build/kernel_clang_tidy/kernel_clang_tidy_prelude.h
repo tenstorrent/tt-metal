@@ -121,6 +121,25 @@ constexpr uint16_t unpack_tile_size[32] = {
 };
 
 // ===========================================================================
+// 1b) Named compile-time argument support
+// ===========================================================================
+// In real JIT builds each kernel gets its own KERNEL_COMPILE_TIME_ARG_MAP
+// define that maps string names → indices into the compile-time args array.
+// The function get_named_compile_time_arg_val() in compile_time_args.h is
+// only declared when that macro is defined (#ifdef guard).
+//
+// For clang-tidy analysis we do NOT define KERNEL_COMPILE_TIME_ARG_MAP
+// (the string-map approach can't be made constexpr for arbitrary names).
+// Instead, we provide get_named_compile_time_arg_val as a function-like
+// macro that expands to a constexpr-compatible constant.  Because the
+// real function definition in compile_time_args.h is guarded by
+// #ifdef KERNEL_COMPILE_TIME_ARG_MAP, it is simply skipped — no conflict.
+#ifdef KERNEL_COMPILE_TIME_ARG_MAP
+#undef KERNEL_COMPILE_TIME_ARG_MAP
+#endif
+#define get_named_compile_time_arg_val(name) (static_cast<uint32_t>(1))
+
+// ===========================================================================
 // 2) Include the real firmware headers
 // ===========================================================================
 // This mirrors what the firmware wrappers (ncrisck.cc / brisck.cc) do.
