@@ -613,6 +613,7 @@ class TtLlamaAttention(LightweightModule):
             num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="QKV",
+            batch_size=batch_size,
         )
         ttnn.deallocate(xqkv)
 
@@ -752,7 +753,9 @@ class TtLlamaAttention(LightweightModule):
                 is_causal=True,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+                program_config=self.model_config["SDPA_PROGCFG"](
+                    seq_len // batch_size if seq_len // batch_size == 128 else seq_len
+                ),
             )
 
         # deallocate keys and values
@@ -806,7 +809,7 @@ class TtLlamaAttention(LightweightModule):
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
         ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if seq_len < 4096:
+        if seq_len < 4096 or batch_size > 1:
             output_11SH = ttnn.linear(
                 attn_output_11SH,
                 self.wo_interleaved,
@@ -829,15 +832,16 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # Reduce-scatter
-        output_11SH = self.tt_ccl.line_all_reduce(
+        output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
             num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="WO",
+            buffer_key="WO_AG" if seq_len <= 4096 else "WO",
         )
+        output_11SH.deallocate()
 
-        return output_11SH
+        return output_11SH_reduced
 
     def forward(
         self,
@@ -875,6 +879,6 @@ class TtLlamaAttention(LightweightModule):
         # Get every 4th tensor starting from user_id // 8
         single_column_tensors = tensors[user_id // self.batch_size_per_device_group :: 4]
         # Create multi-device tensor
-        multi_device_tensor = ttnn.combine_device_tensors(single_column_tensors)
+        multi_device_tensor = ttnn.combine_device_tensors(tensors=single_column_tensors)
 
         return multi_device_tensor
