@@ -6,6 +6,20 @@ from typing import Optional
 import ttnn
 
 # =============================================================================
+# CCL tuning defaults - shared across all TTTv2 modules
+# =============================================================================
+
+# Default number of chunks per synchronization barrier in CCL operations.
+# Higher values reduce sync overhead but increase latency per chunk.
+CCL_CHUNKS_PER_SYNC = 10
+
+# Default number of worker threads per Ethernet link for CCL operations.
+CCL_NUM_WORKERS_PER_LINK = 2
+
+# Default number of double-buffered channels per CCL link.
+CCL_NUM_BUFFERS_PER_CHANNEL = 2
+
+# =============================================================================
 # TT_CCL cache - one instance per mesh_device (semaphores are hardware resources)
 # =============================================================================
 

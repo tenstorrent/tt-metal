@@ -43,7 +43,14 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
-from models.common.modules.tt_ccl import TT_CCL, default_topology, get_tt_ccl
+from models.common.modules.tt_ccl import (
+    CCL_CHUNKS_PER_SYNC,
+    CCL_NUM_BUFFERS_PER_CHANNEL,
+    CCL_NUM_WORKERS_PER_LINK,
+    TT_CCL,
+    default_topology,
+    get_tt_ccl,
+)
 from models.common.tensor_utils import (
     TILE_SIZE,
     get_rot_transformation_mat,
@@ -795,9 +802,9 @@ class Attention1D(LightweightModule):
             topology=cfg.topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
 
     def _all_gather_before_wo_prefill_noop(self, attn_output_concat: ttnn.Tensor) -> ttnn.Tensor:
@@ -989,9 +996,9 @@ class Attention1D(LightweightModule):
             memory_config=cfg.decode_residual_memcfg,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=cfg.topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
         output_interleaved.deallocate(True)
 
@@ -1023,9 +1030,9 @@ class Attention1D(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=cfg.topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
         output.deallocate(True)
 
@@ -1050,9 +1057,9 @@ class Attention1D(LightweightModule):
             memory_config_mm=cfg.decode_residual_memcfg,
             program_config=cfg.decode_all_gather_matmul_prg_config,
             compute_kernel_config=cfg.li_o_decode_compute_kernel_cfg,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
         )
 
         return ttnn.to_memory_config(dense_out, cfg.decode_residual_memcfg)
@@ -1578,8 +1585,12 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
         to_set["decode_scores_memcfg"] = scores_memcfg
 
     # Prefill configs
+    # DRAM shard grid width: on Wormhole always 8 (despite 12 physical DRAM cores);
+    # on Blackhole use actual DRAM grid width (7 for P100, 8 for P150).
+    # Matching per_core_N to this width avoids silent PCC issues on P100.
+    dram_shard_grid_width = 8 if not is_blackhole() else mesh_device.dram_grid_size().x
+
     if config.prefill_xqkv_prg_config is None:
-        dram_shard_grid_width = 8
 
         @lru_cache
         def xqkv_prefill_prg_config(seq_len: int):
@@ -1630,7 +1641,6 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
 
         k_dim = (n_heads * head_dim) // num_devices
         n_dim = MAX_MM_SEQ_LEN if use_fused and MAX_MM_SEQ_LEN % (dim // num_devices) == 0 else dim
-        dram_shard_grid_width = 8
         prefill_rows = 8
 
         @lru_cache
