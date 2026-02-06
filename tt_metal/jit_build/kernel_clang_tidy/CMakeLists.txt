@@ -93,6 +93,17 @@ else()
     set(KCT_NUM_L1_BANKS 64)
 endif()
 
+# ── Strip inherited host compile options ────────────────────────────────────
+# The parent project adds host-specific flags via add_compile_options()
+# (e.g. -march=x86-64-v3, -Wall, -Werror) that conflict with our RISC-V
+# cross-compilation target.  Clear them; we set our own complete flag set
+# via target_compile_options() below.
+set_directory_properties(
+    PROPERTIES
+        COMPILE_OPTIONS
+            ""
+)
+
 # ── Create the OBJECT library ───────────────────────────────────────────────
 
 add_library(kernel_clang_tidy OBJECT EXCLUDE_FROM_ALL ${ALL_KERNEL_FILES})
@@ -221,6 +232,8 @@ target_compile_definitions(
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,\
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,\
 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1"
-        # Named compile-time args map (provides get_named_compile_time_arg_val)
-        "KERNEL_COMPILE_TIME_ARG_MAP={\"dummy\",0}"
+    # Named compile-time args: get_named_compile_time_arg_val() is provided
+    # as a macro in kernel_clang_tidy_prelude.h (force-included) — see that
+    # file for details.  We intentionally do NOT define
+    # KERNEL_COMPILE_TIME_ARG_MAP here.
 )
