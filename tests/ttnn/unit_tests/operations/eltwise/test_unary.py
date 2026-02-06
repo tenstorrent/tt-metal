@@ -682,6 +682,9 @@ def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dt
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # Cast to match golden dtype since to_torch returns unsigned types (e.g. uint16)
+    # which PyTorch cannot promote with Bool
+    output_tensor = output_tensor.to(golden_tensor.dtype)
     assert torch.equal(golden_tensor, output_tensor)
 
 
