@@ -8,6 +8,7 @@ import os
 import csv
 import sys
 import yaml
+import pytest
 from loguru import logger  # type: ignore
 from matplotlib.gridspec import GridSpec
 import itertools
@@ -92,6 +93,7 @@ def profile_dm_tests(verbose=False, gtest_filter=None):
     os.system(cmd)
 
 
+@pytest.mark.timeout(0)  # No timeout
 def test_data_movement(
     no_profile: bool,
     verbose_log: bool,

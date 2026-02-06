@@ -15,3 +15,33 @@ direct_write:
     "Same value": "same_value"
     "NoC Index": "noc_index"
     "Stateful": "stateful"
+noc_estimator:
+  attributes:
+    "Memory type": "memory_type"
+    "Mechanism": "mechanism"
+    "Pattern": "pattern"
+    "Same axis": "same_axis"
+    "Stateful": "stateful"
+    "Number of subordinates": "num_subordinates"
+    "NoC Index": "noc_index"
+  value_mappings:
+    "Memory type":
+      0: "L1"
+      1: "DRAM"
+    "Mechanism":
+      0: "unicast"
+      1: "multicast"
+      2: "multicast_linked"
+    "Pattern":
+      0: "one_to_one"
+      1: "one_from_one"
+      2: "one_to_all"
+      3: "one_from_all"
+      4: "all_to_all"
+      5: "all_from_all"
+    "Same axis":
+      0: false
+      1: true
+    "Stateful":
+      0: false
+      1: true

@@ -117,13 +117,16 @@ class StatsReporter:
                     "Number of Transactions",
                 ]
 
+                # Architecture is always included (known from the host side)
+                header.append("Architecture")
+
                 # Add metadata columns for NOC estimator consumption
                 # All metadata fields are automatically included (except 'name' and 'comment')
                 if test_metadata is not None:
                     # Standard metadata fields in specific order for csv_reader.cpp compatibility
                     standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
                     for field in standard_fields:
-                        if field in test_metadata:
+                        if field in test_metadata and field != "architecture":
                             column_name = self.metadata_loader.metadata_field_to_column_name(field)
                             header.append(column_name)
 
@@ -193,12 +196,15 @@ class StatsReporter:
                             run_stats.get("num_transactions"),
                         ]
 
+                        # Architecture is always included
+                        row.append(self.arch.lower())
+
                         # Add metadata columns
                         if test_metadata is not None:
                             # Standard metadata fields in specific order
                             standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
                             for field in standard_fields:
-                                if field in test_metadata:
+                                if field in test_metadata and field != "architecture":
                                     value = test_metadata[field]
                                     if field == "pattern" and test_has_both_riscv:
                                         value = self.transform_pattern_for_riscv(value, riscv)
@@ -211,11 +217,6 @@ class StatsReporter:
                             )
                             for field in optional_fields:
                                 value = test_metadata[field]
-                                # If we have profiled data and it's not set in the test_information
-                                if field == "num_subordinates" and value == "":
-                                    value = run_stats.get("num_subordinates", 0)
-                                if field == "same_axis" and value == "":
-                                    value = bool(run_stats.get("same_axis", 0))
                                 row.append(value)
                         row.extend(
                             [

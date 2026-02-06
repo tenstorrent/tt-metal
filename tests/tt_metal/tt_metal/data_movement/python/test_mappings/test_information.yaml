@@ -736,3 +736,19 @@ tests:
       covering all compute cores in the device.
       Important: Since the multicast is transferring a lot of data, the NoC gets congested quickly.
       Because of this, for larger number of transactions, the noc api latency is increasing.
+
+  # ============ NOC Estimator Tests (800+) ============
+  800:
+    name: "Noc Estimator - L1 One to One"
+  801:
+    name: "Noc Estimator - L1 One from One"
+  802:
+    name: "Noc Estimator - L1 One to All"
+  803:
+    name: "Noc Estimator - L1 One from All"
+  804:
+    name: "Noc Estimator - L1 All to All"
+  805:
+    name: "Noc Estimator - L1 All from All"
+  806:
+    name: "Noc Estimator - DRAM"

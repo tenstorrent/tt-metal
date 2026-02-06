@@ -23,6 +23,7 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/pcie_read_bw/test_pcie_read_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/atomics/test_atomic_semaphore_bandwidth.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/noc_api_latency/test_noc_api_latency.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/noc_estimator/test_noc_estimator.cpp
 )
 
 add_executable(unit_tests_data_movement ${UNIT_TESTS_DATA_MOVEMENT_SRC})
