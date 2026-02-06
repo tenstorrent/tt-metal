@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from pathlib import Path
 from typing import Sequence
 
@@ -572,6 +573,7 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            num_workers_per_link=1,
         )
         wq_kv_a_r_config = {
             "dims": [1],
@@ -590,7 +592,6 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             in_dim=2,
             out_dim=1,
-            topology=ttnn.Topology.Linear,
         )
 
         wq_a2a_reshard_out_mem_config = ttnn.create_sharded_memory_config(
@@ -626,7 +627,6 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             in_dim=1,
             out_dim=2,
-            topology=ttnn.Topology.Linear,
         )
 
         # WO

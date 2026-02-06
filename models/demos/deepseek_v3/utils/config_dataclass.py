@@ -130,6 +130,7 @@ class AllGatherAsyncConfig(OpConfigBase):
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     use_optimal_ccl_for_llama: bool | None = None
     barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    num_workers_per_link: int | None = None
 
 
 @dataclass
