@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,10 @@
 
 #include "models/base_transformer.hpp"
 #include "models/common/transformer_common.hpp"
+#include "modules/embedding_module.hpp"
+#include "modules/gpt_block.hpp"
+#include "modules/layer_norm_module.hpp"
+#include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 
 namespace ttml::models::gpt2 {
@@ -40,11 +44,11 @@ struct TransformerConfig {
 class Transformer : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
-    std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
+    std::shared_ptr<ttml::modules::Embedding> tok_emb;
     std::shared_ptr<ttml::modules::ModuleBase> pos_emb;
-    std::vector<std::shared_ptr<ttml::modules::ModuleBase>> blocks;
-    std::shared_ptr<ttml::modules::ModuleBase> ln_fc;
-    std::shared_ptr<ttml::modules::ModuleBase> fc;
+    std::vector<std::shared_ptr<ttml::modules::GPTBlock>> blocks;
+    std::shared_ptr<ttml::modules::LayerNormLayer> ln_fc;
+    std::shared_ptr<ttml::modules::LinearLayer> fc;
 
 public:
     explicit Transformer(const TransformerConfig& config);

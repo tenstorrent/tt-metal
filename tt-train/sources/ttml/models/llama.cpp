@@ -1,15 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "llama.hpp"
 
-#include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "modules/embedding_module.hpp"
-#include "modules/llama_block.hpp"
-#include "modules/rms_norm_module.hpp"
-#include "ops/rope_op.hpp"
 #include "serialization/safetensors.hpp"
 
 namespace {

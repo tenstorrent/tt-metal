@@ -153,18 +153,25 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
     m.def(
         "memory_efficient_runner",
-        [](nb::callable fw_callable, const ttml::autograd::TensorPtr& input, nb::args args, nb::kwargs kwargs) {
-            auto fw_impl = [fw_callable, args, kwargs](const ttml::autograd::TensorPtr& input) {
+        [](nb::typed<
+               nb::callable,
+               ttml::autograd::TensorPtr(const ttml::autograd::TensorPtr&, std::optional<ttml::autograd::TensorPtr>)>
+               fw_callable,
+           const ttml::autograd::TensorPtr& input,
+           std::optional<ttml::autograd::TensorPtr> mask) {
+            auto fw_impl = [fw_callable](
+                               const ttml::autograd::TensorPtr& model_input,
+                               std::optional<ttml::autograd::TensorPtr> model_mask) {
                 nb::gil_scoped_acquire guard;
-                nb::object tensor_obj = fw_callable(input, *args, **kwargs);
+                nb::object tensor_obj =
+                    model_mask.has_value() ? fw_callable(model_input, model_mask.value()) : fw_callable(model_input);
                 return nb::cast<autograd::TensorPtr>(tensor_obj);
             };
-            return models::common::transformer::memory_efficient_runner(fw_impl, input);
+            return models::common::transformer::memory_efficient_runner(fw_impl, input, mask);
         },
         nb::arg("forward_impl"),
         nb::arg("input"),
-        nb::arg("args") = nb::tuple(),
-        nb::arg("kwargs") = nb::dict(),
+        nb::arg("mask") = std::nullopt,
         "Memory-efficient forward/backward runner with gradient checkpointing.");
 
     {
