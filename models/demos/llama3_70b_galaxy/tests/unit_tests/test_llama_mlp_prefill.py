@@ -18,6 +18,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
 
 @torch.no_grad()
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "mesh_device",
     [

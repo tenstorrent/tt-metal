@@ -103,7 +103,7 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
         sub_device_id,
         reduce_scatter_fused_op_signaler,
         std::nullopt,
-        std::nullopt,
+        args.reduce_scatter_params.num_workers_per_link,
         std::nullopt,
         args.reduce_scatter_core_grid_offset);
 

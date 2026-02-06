@@ -695,6 +695,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     uint32_t slice_Ht = input_tensor_Ht;
     uint32_t slice_Wt = input_tensor_Wt;
 
+    std::map<std::string, std::string> reader_compute_defines;
+    std::map<std::string, std::string> writer_compute_defines;
+
     if (fuse_op && fused_op_signaler->is_minimal_matmul) {
         uint32_t N = input_tensor_shape[-1];
         uint32_t M = input_tensor.physical_volume() / N;
@@ -714,12 +717,25 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
         uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
         uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, fused_op_signaler->M_block_size);
+        reader_compute_defines["FUSED_MINIMAL_MATMUL_M_NUM_BLOCKS"] = std::to_string(M_blocks_per_core);
 
         slice_B = M_blocks_per_core;
+        while (M_tiles % slice_B != 0) {
+            slice_B++;
+        }
         input_tensor_B = slice_B;
-
         slice_Ht = M_tiles / slice_B;
         input_tensor_Ht = slice_Ht;
+
+        log_debug(
+            tt::LogOp,
+            "After Fused MinMatMul adjustment, MBlocks = {}, slice_B = {}, slice_Ht = {}, input_tensor_B = {}, "
+            "input_tensor_Ht = {}",
+            M_blocks_per_core,
+            slice_B,
+            slice_Ht,
+            input_tensor_B,
+            input_tensor_Ht);
     }
 
     if (normalized_dim == 0) {
@@ -735,6 +751,14 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             false, "reduce_scatter_minimal_async ring implementation only supports scattering on dim 0, 1, 2, or 3");
     }
 
+    log_debug(tt::LogOp, "slice_B: {}, slice_C: {}, slice_Ht: {}, slice_Wt: {}", slice_B, slice_C, slice_Ht, slice_Wt);
+    log_debug(
+        tt::LogOp,
+        "normalized_dim: {}, input_tensor_B = {}, input_tensor_Ht = {}",
+        normalized_dim,
+        input_tensor_B,
+        input_tensor_Ht);
+
     TT_FATAL(
         !(fuse_op && normalized_dim == 0),
         "reduce_scatter_minimal_async ring implementation can't be fused with matmul when scattering on dim 0");
@@ -746,6 +770,16 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
     const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
+    log_debug(
+        tt::LogOp,
+        "input_tensor_num_pages = {}, output_tensor_num_pages = {}, input_batch_num_pages = {}, output_batch_num_pages "
+        "= {}, input_channel_num_pages = {}, output_channel_num_pages = {}",
+        input_tensor_num_pages,
+        output_tensor_num_pages,
+        input_batch_num_pages,
+        output_batch_num_pages,
+        input_channel_num_pages,
+        output_channel_num_pages);
     // scatter-write currently only supports 2 distinct noc addresses
     uint32_t max_target_noc_addresses_per_packet = 2;
 
@@ -783,9 +817,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     bool input_is_sharded = input_tensor.is_sharded();
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
-
-    std::map<std::string, std::string> reader_compute_defines;
-    std::map<std::string, std::string> writer_compute_defines;
 
     if (input_is_sharded) {
         reader_compute_defines["INPUT_IS_SHARDED"] = "1";
@@ -1012,6 +1043,15 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         input_tensor_Wt,
                         normalized_dim);
 
+                log_trace(
+                    tt::LogOp,
+                    "Core = {},start_tiles_read = {}, start_tiles_to_read = {}, start_pages_read_in_row = {}, "
+                    "start_row_offset = {}",
+                    core,
+                    start_tiles_read,
+                    start_tiles_to_read,
+                    start_pages_read_in_row,
+                    start_row_offset);
                 // for dim 0 scatters we process each slice in batches
                 // for all other dims we process each slice in channels
                 uint32_t tiles_to_process_per_slice =

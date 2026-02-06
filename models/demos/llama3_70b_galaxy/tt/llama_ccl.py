@@ -104,7 +104,7 @@ class TT_CCL:
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
-            self.support_seqlens = [8192, 4096, 2048, 1024, 128]
+            self.support_seqlens = [32768, 8192, 4096, 2048, 1024, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -1029,7 +1029,7 @@ class TT_CCL:
         print(
             "Using minimal_matmul_reduce_scatter with input = ", matmul_input.shape, " weight = ", matmul_weight.shape
         )
-        matmul_config.compute_with_storage_grid_size = (4, 4)
+        matmul_config.compute_with_storage_grid_size = (7, 6)
         seqlen = matmul_input.shape[-2]
         persistent_buffers = (
             self.persistent_buffers[seqlen].get(buffer_key, None) if seqlen in self.persistent_buffers else None
@@ -1045,7 +1045,8 @@ class TT_CCL:
             dim=reduce_dim,
             multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            reduce_scatter_core_grid_offset=(0, 4),
+            reduce_scatter_core_grid_offset=(0, 6),
+            cluster_axis=cluster_axis,
             num_links=num_links,
             memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Ring,
@@ -1053,8 +1054,10 @@ class TT_CCL:
             memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
             program_config=matmul_config,
             compute_kernel_config=compute_kernel_config,
+            num_workers_per_link=2,
         )
-        return tt_reduce_scatter_output_tensor
+        # ttnn.device_synchronize(self.mesh_device)
+        return tt_reduce_scatter_output_tensor, tt_matmul_out_tensor
 
     def ring_reduce_scatter(
         self,

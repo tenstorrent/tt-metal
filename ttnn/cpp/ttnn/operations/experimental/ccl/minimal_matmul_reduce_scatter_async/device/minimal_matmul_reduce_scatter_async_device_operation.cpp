@@ -140,6 +140,8 @@ ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::
         const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
         const ttnn::ccl::Topology topology,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+        std::optional<uint32_t> cluster_axis,
+        std::optional<uint32_t> num_workers_per_link,
         const std::optional<ttnn::MemoryConfig>& memory_config_mm,
         const std::optional<const DataType> dtype,
         const std::optional<const ::ttnn::experimental::prim::MinimalMatmulConfig>& program_config,
@@ -170,7 +172,6 @@ ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::
     bool using_persistent_buffers = persistent_output_buffer.has_value();
 
     /* ReduceScatter setup */
-    constexpr uint32_t DEFAULT_WORKERS_PER_LINK = 1;
     ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::ReduceScatterMinimalAsyncParams
         reduce_scatter_params{
             .dim = dim,
@@ -185,7 +186,7 @@ ttnn::operations::experimental::ccl::minimal_matmul_reduce_scatter_async::
             .sub_device_id = sub_device_id,
             .cluster_axis = std::nullopt,
             .chunks_per_sync = std::nullopt,
-            .num_workers_per_link = DEFAULT_WORKERS_PER_LINK,
+            .num_workers_per_link = num_workers_per_link,
             .num_buffers_per_channel = std::nullopt,
         };
 

@@ -27,6 +27,8 @@ struct ExecuteMinimalMatmulReduceScatterAsync {
         const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs = std::nullopt,
         tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Ring,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+        std::optional<uint32_t> cluster_axis = std::nullopt,
+        std::optional<uint32_t> num_workers_per_link = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config_mm = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const ::ttnn::experimental::prim::MinimalMatmulConfig>& program_config = std::nullopt,

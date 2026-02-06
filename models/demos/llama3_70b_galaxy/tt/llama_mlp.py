@@ -231,17 +231,49 @@ class TtLlamaMLP(LightweightModule):
             )
             ttnn.deallocate(w1_out)
         else:
-            w1_out = self.tt_ccl.minimal_matmul_reduce_scatter(
+            # print("Runnign minimal mamtul")
+            # w1_out = ttnn.experimental.minimal_matmul(
+            #     input_tensor=x,
+            #     weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
+            #     config=minimal_pc_1_3,
+            #     compute_kernel_config=self.args.compute_kernel_config_lofi,
+            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # )
+
+            # w1_out_reduced_ref = self.tt_ccl.line_reduce_scatter(
+            #     w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
+            # )
+            # ttnn.deallocate(w1_out)
+            # ttnn.deallocate(w1_out_reduced_ref)
+            # torch_ref = ttnn.to_torch(
+            #     w1_out_reduced_ref,
+            #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape),
+            # )
+            # print("Read ref")
+            w1_out_reduced, matmul_out = self.tt_ccl.minimal_matmul_reduce_scatter(
                 matmul_input=x,
                 matmul_weight=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
                 cluster_axis=1,
-                num_links=3,
+                num_links=4,
                 reduce_dim=3,
                 buffer_key="FF1",
                 matmul_config=minimal_pc_1_3,
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
             )
-            breakpoint()
+            # print("Reading out")
+            # torch_out = ttnn.to_torch(
+            #     w1_out_reduced,
+            #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape),
+            # )
+            # # torch_matmul_out = ttnn.to_torch(
+            # #     matmul_out,
+            # #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape),
+            # # )
+            # # tt_mm_out = torch.sum(torch.stack(torch.chunk(torch_matmul_out, 4, 3)), dim=0)
+            # pcc_required = 0.99
+            # passing, pcc_message = comp_pcc(torch_ref, torch_out, pcc_required)
+            # assert passing, f"Minimal matmul reduce scatter failed PCC check: {pcc_message}"
+            # ttnn.deallocate(w1_out)
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096 or batch_size > 1:
@@ -258,10 +290,14 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            w3_out = ttnn.experimental.minimal_matmul(
-                input_tensor=x,
-                weight_tensor=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
-                config=minimal_pc_1_3,
+            w3_out_reduced, _ = self.tt_ccl.minimal_matmul_reduce_scatter(
+                matmul_input=x,
+                matmul_weight=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
+                cluster_axis=1,
+                num_links=4,
+                reduce_dim=3,
+                buffer_key="FF3",
+                matmul_config=minimal_pc_1_3,
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
