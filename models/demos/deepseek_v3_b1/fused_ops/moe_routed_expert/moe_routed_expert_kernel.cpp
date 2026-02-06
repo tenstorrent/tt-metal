@@ -349,7 +349,6 @@ void kernel_main() {
     using MulCTArgs = deepseek_b1_ops::EltwiseMul::WriterCTArgs<
         get_named_compile_time_arg_val("mul_cb_out"),
         get_named_compile_time_arg_val("mul_num_tiles"),
-        1,  // enable_scalar_mul = true
         get_named_compile_time_arg_val("mul_cb_scalar"),
         get_named_compile_time_arg_val("mul_cb_scalar_src"),
         get_named_compile_time_arg_val("mul_scalar_index_offset")>;
@@ -483,7 +482,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("mul_num_tiles"),       // number of 16x16 tiles
         get_named_compile_time_arg_val("up_proj_cb_mm_out"),   // wait on this CB before reading mul_cb_in0
         get_named_compile_time_arg_val("up_proj_per_core_n"),  // number of tiles in mm_out format
-        1,                                                     // enable_scalar_mul = true
         get_named_compile_time_arg_val("mul_cb_scalar")>;      // scalar CB for expert scale
 
     // ------------------------------------------------------------------------

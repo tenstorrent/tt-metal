@@ -45,18 +45,16 @@ struct EltwiseMul {
     // Reader CTArgs (NCRISC) - empty, no setup needed
     struct ReaderCTArgs {};
 
-    // Writer CTArgs (BRISC) - waits for output, optionally copies scalar
+    // Writer CTArgs (BRISC) - copies scalar from source CB to working CB
     template <
         uint32_t cb_out_,
         uint32_t num_tiles_,
-        uint32_t enable_scalar_mul_ = 0,
-        uint32_t cb_scalar_ = 0,
-        uint32_t cb_scalar_src_ = 0,
-        uint32_t scalar_index_offset_ = 0>
+        uint32_t cb_scalar_,
+        uint32_t cb_scalar_src_,
+        uint32_t scalar_index_offset_>
     struct WriterCTArgs {
         static constexpr uint32_t cb_out = cb_out_;
         static constexpr uint32_t num_tiles = num_tiles_;
-        static constexpr uint32_t enable_scalar_mul = enable_scalar_mul_;
         static constexpr uint32_t cb_scalar = cb_scalar_;
         static constexpr uint32_t cb_scalar_src = cb_scalar_src_;
         static constexpr uint32_t scalar_index_offset = scalar_index_offset_;  // offset into scalar source tensor
@@ -65,7 +63,6 @@ struct EltwiseMul {
     // Compute CTArgs (TRISC)
     // cb_in0_wait: CB to wait on for cb_in0's data (for CB aliasing, e.g., wait on 1x32 CB but read from 16x16 CB)
     // cb_in0_wait_tiles: number of tiles to wait for on cb_in0_wait
-    // enable_scalar_mul: if true, multiply result by scalar from cb_scalar after element-wise mul
     // cb_scalar: CB containing scalar tile (16x16 format, scalar at [0,0])
     template <
         uint32_t cb_in0_,
@@ -74,8 +71,7 @@ struct EltwiseMul {
         uint32_t num_tiles_,
         uint32_t cb_in0_wait_,
         uint32_t cb_in0_wait_tiles_,
-        uint32_t enable_scalar_mul_ = 0,
-        uint32_t cb_scalar_ = 0>
+        uint32_t cb_scalar_>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -83,7 +79,6 @@ struct EltwiseMul {
         static constexpr uint32_t num_tiles = num_tiles_;
         static constexpr uint32_t cb_in0_wait = cb_in0_wait_;
         static constexpr uint32_t cb_in0_wait_tiles = cb_in0_wait_tiles_;
-        static constexpr uint32_t enable_scalar_mul = enable_scalar_mul_;
         static constexpr uint32_t cb_scalar = cb_scalar_;
     };
 
@@ -110,25 +105,23 @@ struct EltwiseMul {
 
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
-            // BRISC: Copy scalar from source CB to working CB if enabled
+            // BRISC: Copy scalar from source CB to working CB
             // Write only 1 element - hardware will broadcast via BroadcastType::SCALAR
             // ================================================================
-            if constexpr (CTArgs::enable_scalar_mul == 1) {
-                // Wait for scalar source CB (set up by NCRISC)
-                cb_wait_front(CTArgs::cb_scalar_src, 1);
+            // Wait for scalar source CB (set up by NCRISC)
+            cb_wait_front(CTArgs::cb_scalar_src, 1);
 
-                // Read scalar value from source CB at index_offset (bfloat16 = 2 bytes)
-                uint32_t cb_read_addr = get_read_ptr(CTArgs::cb_scalar_src);
-                volatile tt_l1_ptr uint16_t* src_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_read_addr);
-                uint16_t scalar_val = src_ptr[CTArgs::scalar_index_offset];
+            // Read scalar value from source CB at index_offset (bfloat16 = 2 bytes)
+            uint32_t cb_read_addr = get_read_ptr(CTArgs::cb_scalar_src);
+            volatile tt_l1_ptr uint16_t* src_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_read_addr);
+            uint16_t scalar_val = src_ptr[CTArgs::scalar_index_offset];
 
-                // Write one value to destination CB (BroadcastType::SCALAR will broadcast)
-                cb_reserve_back(CTArgs::cb_scalar, 1);
-                uint32_t cb_write_addr = get_write_ptr(CTArgs::cb_scalar);
-                volatile tt_l1_ptr uint16_t* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_write_addr);
-                dst_ptr[0] = scalar_val;
-                cb_push_back(CTArgs::cb_scalar, 1);
-            }
+            // Write one value to destination CB (BroadcastType::SCALAR will broadcast)
+            cb_reserve_back(CTArgs::cb_scalar, 1);
+            uint32_t cb_write_addr = get_write_ptr(CTArgs::cb_scalar);
+            volatile tt_l1_ptr uint16_t* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_write_addr);
+            dst_ptr[0] = scalar_val;
+            cb_push_back(CTArgs::cb_scalar, 1);
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
@@ -136,7 +129,7 @@ struct EltwiseMul {
             // ================================================================
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
 
-            mul_tiles_bcast_scalar_init_fp32(CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
+            mul_tiles_bcast_scalar_hw_startup_fp32(CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
 
             // Wait for both inputs
             // cb_in0_wait allows waiting on a different CB (for CB aliasing)
@@ -146,52 +139,33 @@ struct EltwiseMul {
             // Reserve output space
             cb_reserve_back(CTArgs::cb_out, num_tiles);
 
-            // Process tiles - element-wise multiply with optional scalar
+            // Process tiles: cb_in0 * scalar -> dest, then dest * cb_in1 -> dest
             tile_regs_acquire();
 
-            if constexpr (CTArgs::enable_scalar_mul == 1) {
-                // Step 1: cb_in0 * scalar -> dest (using scalar broadcast)
-                cb_wait_front(CTArgs::cb_scalar, 1);
-                mul_tiles_bcast_scalar_init_short_fp32(CTArgs::cb_in0, CTArgs::cb_scalar);
-                for (uint32_t i = 0; i < num_tiles; i++) {
-                    mul_tiles_bcast_scalar_fp32(CTArgs::cb_in0, CTArgs::cb_scalar, i, 0, i);
-                }
-                // Step 2: dest * cb_in1 -> dest (using binary dest reuse)
-                binary_dest_reuse_tiles_init_fp32(CTArgs::cb_in1);
-                for (uint32_t i = 0; i < num_tiles; i++) {
-                    binary_dest_reuse_tiles_fp32(CTArgs::cb_in1, i, i);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < num_tiles; i++) {
-                    pack_tile(i, CTArgs::cb_out);
-                }
-                tile_regs_release();
-                cb_push_back(CTArgs::cb_out, num_tiles);
-            } else {
-                // Without scalar: cb_in0 * cb_in1 -> dest
-                mul_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
-                for (uint32_t i = 0; i < num_tiles; i++) {
-                    mul_tiles(CTArgs::cb_in0, CTArgs::cb_in1, i, i, i);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < num_tiles; i++) {
-                    pack_tile(i, CTArgs::cb_out);
-                }
-                tile_regs_release();
-                cb_push_back(CTArgs::cb_out, num_tiles);
+            // Step 1: cb_in0 * scalar -> dest (using scalar broadcast)
+            cb_wait_front(CTArgs::cb_scalar, 1);
+            mul_tiles_bcast_scalar_init_short_fp32(CTArgs::cb_in0, CTArgs::cb_scalar);
+            for (uint32_t i = 0; i < num_tiles; i++) {
+                mul_tiles_bcast_scalar_fp32(CTArgs::cb_in0, CTArgs::cb_scalar, i, 0, i);
             }
+            // Step 2: dest * cb_in1 -> dest (using binary dest reuse)
+            binary_dest_reuse_tiles_init_fp32(CTArgs::cb_in1);
+            for (uint32_t i = 0; i < num_tiles; i++) {
+                binary_dest_reuse_tiles_fp32(CTArgs::cb_in1, i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < num_tiles; i++) {
+                pack_tile(i, CTArgs::cb_out);
+            }
+            tile_regs_release();
+            cb_push_back(CTArgs::cb_out, num_tiles);
 
             // Pop inputs if requested
             // Pop from cb_in0_wait (not cb_in0) since that's where tiles were pushed
             if constexpr (PopInputs) {
                 cb_pop_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
                 cb_pop_front(CTArgs::cb_in1, num_tiles);
-            }
-
-            // Pop scalar CB if used
-            if constexpr (CTArgs::enable_scalar_mul == 1 && PopInputs) {
                 cb_pop_front(CTArgs::cb_scalar, 1);
             }
 #endif

@@ -50,7 +50,6 @@ void kernel_main() {
     constexpr uint32_t enable_mul = get_named_compile_time_arg_val("dram_mm_enable_mul");
     constexpr uint32_t cb_mul_in1 = get_named_compile_time_arg_val("dram_mm_cb_mul_in1");
     constexpr uint32_t mul_num_tiles = get_named_compile_time_arg_val("dram_mm_mul_num_tiles");
-    constexpr uint32_t enable_scalar_mul = get_named_compile_time_arg_val("dram_mm_enable_scalar_mul");
     constexpr uint32_t cb_scalar_src = get_named_compile_time_arg_val("dram_mm_cb_scalar_src");
 
     // Setup sharded persistent buffers
@@ -61,8 +60,6 @@ void kernel_main() {
         }
         if constexpr (enable_mul == 1) {
             unified_kernels::setup_sharded_buffer(cb_mul_in1, mul_num_tiles);
-        }
-        if constexpr (enable_scalar_mul == 1) {
             unified_kernels::setup_sharded_buffer(cb_scalar_src, 1);
         }
     }
@@ -78,13 +75,13 @@ void kernel_main() {
     constexpr uint32_t enable_mul = get_named_compile_time_arg_val("dram_mm_enable_mul");
 
     // MulCTArgs: waits for final output (cb_out after mul writes to it)
-    // Also handles scalar copy if enabled
+    // Copies scalar from source CB to working CB
     using MulCTArgs = deepseek_b1_ops::EltwiseMul::WriterCTArgs<
         get_named_compile_time_arg_val("dram_mm_cb_final_out"),
         get_named_compile_time_arg_val("dram_mm_mul_num_tiles"),
-        get_named_compile_time_arg_val("dram_mm_enable_scalar_mul"),
         get_named_compile_time_arg_val("dram_mm_cb_scalar"),
-        get_named_compile_time_arg_val("dram_mm_cb_scalar_src")>;
+        get_named_compile_time_arg_val("dram_mm_cb_scalar_src"),
+        0>;  // scalar_index_offset
 
 #elif defined(COMPILE_FOR_TRISC)
     // Matmul writes to dram_mm_cb_out (CB 4 when mul disabled, CB 8 when mul enabled)
@@ -103,7 +100,7 @@ void kernel_main() {
 
     // MulCTArgs: CB 7 * CB 6 -> CB 4 (all 16x16 tiles)
     // cb_in0_wait = dram_mm_cb_out (wait on matmul output before reading aliased CB 7)
-    // Optional scalar multiply: result * cb_scalar -> result
+    // Scalar multiply: result * cb_scalar -> result
     using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
         get_named_compile_time_arg_val("dram_mm_cb_mul_in0"),
         get_named_compile_time_arg_val("dram_mm_cb_mul_in1"),
@@ -111,7 +108,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_mul_num_tiles"),
         get_named_compile_time_arg_val("dram_mm_cb_out"),
         get_named_compile_time_arg_val("dram_mm_per_core_n"),
-        get_named_compile_time_arg_val("dram_mm_enable_scalar_mul"),
         get_named_compile_time_arg_val("dram_mm_cb_scalar")>;
 #endif
 
