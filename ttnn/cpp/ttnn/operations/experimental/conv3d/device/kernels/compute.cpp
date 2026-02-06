@@ -208,9 +208,13 @@ void kernel_main() {
                                 uint32_t current_patch_rows = patch_rows_left < tt::constants::TILE_HEIGHT
                                                                   ? patch_rows_left
                                                                   : tt::constants::TILE_HEIGHT;
+                                { DeviceZoneScopedN("CONV3D-TILIZE-WAIT");
                                 cb_wait_front(cb_vol2col_rm, current_patch_rows);
+                                }
                                 cb_reserve_back(cb_vol2col_tiled, matmul_K_t);
+                                { DeviceZoneScopedN("CONV3D-TILIZE-EXEC");
                                 tilize_block(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
+                                }
                                 cb_push_back(cb_vol2col_tiled, matmul_K_t);
                                 cb_pop_front(cb_vol2col_rm, current_patch_rows);
                                 patch_rows_left -= current_patch_rows;
