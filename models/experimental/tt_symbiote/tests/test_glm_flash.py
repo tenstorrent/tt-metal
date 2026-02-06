@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test for GLM4.5 Air model with TTNN backend."""
+"""Test for GLM 4.7 Flash model with TTNN backend."""
 
 import os
 
@@ -15,22 +15,14 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import ttnn
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
 )
-from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMoE
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
 import transformers
 
 assert transformers.__version__.startswith("5."), "This test requires transformers version 5.0.0.dev0"
-
-
-def get_naive_moe_mapping():
-    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeMoE as OriginalGlm4MoeMoE
-
-    return {OriginalGlm4MoeMoE: TTNNGlm4MoeMoE}
 
 
 @pytest.mark.parametrize(
@@ -59,10 +51,9 @@ def get_naive_moe_mapping():
 def test_glm(mesh_device):
     """Test GLM model with TTNN acceleration."""
     nn_to_ttnn = {nn.Linear: TTNNLinearIColShardedWRowSharded}  # TTNNLinearLLamaIColShardedWRowSharded,
-    nn_to_ttnn_naive_moe = get_naive_moe_mapping()
 
-    tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.5-Air")
-    model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.5-Air")
+    tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.7-Flash")
+    model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash")
     messages = [
         {
             "role": "user",
@@ -77,17 +68,13 @@ def test_glm(mesh_device):
         return_tensors="pt",
     ).to(model.device)
     persistent_weights = set()
-    modules1 = register_module_replacement_dict(model, nn_to_ttnn_naive_moe, model_config=None)
-    modules2 = register_module_replacement_dict(
-        model, nn_to_ttnn, model_config=None, exclude_replacement=persistent_weights
-    )
+    modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
     set_device(model, mesh_device)
-    all_modules = {**modules1, **modules2}
+    all_modules = {**modules1}
     print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
     for k, v in tqdm(all_modules.items()):
         v.preprocess_weights()
-        if not isinstance(v, TTNNLinearLLamaIColShardedWRowSharded):
-            v.move_weights_to_device()
+        v.move_weights_to_device()
     print("Running inference...")
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead

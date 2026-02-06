@@ -20,6 +20,7 @@ from models.experimental.tt_symbiote.core.utils import (
     torch_dtype_to_ttnn_dtype,
     ttnn_dtype_to_torch_dtype,
 )
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 @dataclass
@@ -37,19 +38,12 @@ class CCLManagerConfig:
             self.topology = ttnn.Topology.Linear
 
 
-class CCLManager:
-    def __init__(
-        self,
-        ccl_manager: CCLManagerConfig,
-    ):
-        self.ccl_manager = ccl_manager
-
-
 @dataclass
 class DistributedTensorConfig:
     """Configuration for distributed tensor operations."""
 
     mesh_mapper: Any
+    mesh_composer: Any
 
 
 @dataclass
@@ -61,10 +55,13 @@ class DistributedConfig:
     ccl_manager: Optional[Any] = None
 
     def __post_init__(self):
-        if self.tensor_config is None:
-            self.tensor_config = DistributedTensorConfig(mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device))
-        if self.ccl_manager is None:
-            self.ccl_manager = CCLManager(CCLManagerConfig(mesh_device=self.mesh_device))
+        if self.tensor_config is None and self.mesh_device.get_num_devices() > 1:
+            self.tensor_config = DistributedTensorConfig(
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, self.mesh_device.shape, (0, -1)),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, self.mesh_device.shape, (0, -1)),
+            )
+        if self.ccl_manager is None and self.mesh_device.get_num_devices() > 1:
+            self.ccl_manager = TT_CCL(self.mesh_device)
 
 
 @contextlib.contextmanager
@@ -362,6 +359,22 @@ def post_process_ttnn_module_output(self, result):
     return result
 
 
+def get_default_distributed_tensor_config(mesh_device=None):
+    from models.experimental.tt_symbiote.utils.device_management import DeviceInit
+
+    state = None
+    if mesh_device is not None:
+        assert (
+            DeviceInit.DEVICE_TO_STATE_DICT.get(mesh_device) is not None
+        ), f"Device {mesh_device} not found in DeviceInit.DEVICE_TO_STATE_DICT, cannot set distributed config for mesh device."
+        state = DeviceInit.DEVICE_TO_STATE_DICT[mesh_device]
+    elif DeviceInit.DEVICE_TO_STATE_DICT is not None and len(DeviceInit.DEVICE_TO_STATE_DICT) == 1:
+        state = next(iter(DeviceInit.DEVICE_TO_STATE_DICT.values()))
+    if state is None:
+        return None
+    return state.tensor_config
+
+
 class NormalRun:
     verbose = False
     signpost_mode = None
@@ -404,6 +417,8 @@ class NormalRun:
         # ...the real tensor is held as an element on the tensor.
         r.ttnn_tensor = ttnn_tensor  # Initialize ttnn_tensor
         r.elem = elem if not delete_elem else None
+        distributed_tensor_config = get_default_distributed_tensor_config()
+        r.set_distributed_tensor_config(distributed_tensor_config)
         assert isinstance(r.elem, torch.Tensor) or isinstance(
             ttnn_tensor, ttnn.Tensor
         ), f"elem must be a torch.Tensor (or None when ttnn.Tensor is defined), but got {type(r.elem)}"
@@ -448,10 +463,11 @@ class NormalRun:
             return self.elem
 
         def _to_torch(self):
-            is_mesh_device = self.ttnn_tensor.device().__class__.__name__ == "MeshDevice"
-            is_mesh_device = is_mesh_device and self.ttnn_tensor.device().get_num_devices() != 1
+            is_mesh_device = self.ttnn_distributed_tensor_config is not None
             if is_mesh_device:
-                result = to_torch_auto_compose(self.ttnn_tensor, device=self.ttnn_tensor.device())
+                result = ttnn.to_torch(
+                    self.ttnn_tensor, mesh_composer=self.ttnn_distributed_tensor_config.mesh_composer
+                ).to(self.device, self.dtype)
             else:
                 result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
             return result
@@ -496,10 +512,6 @@ class NormalRun:
             )
             return self.ttnn_tensor
         assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
-        # convert elem to ttnn tensor here
-        is_mesh_device = self.device.__class__.__name__ == "MeshDevice"
-        if self.ttnn_distributed_config is None and is_mesh_device:
-            self.set_distributed_config(DistributedTensorConfig(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)))
         if self.elem.device.type == "meta":
             raise RuntimeError(
                 "Cannot convert META tensor to TTNN tensor. Please ensure the tensor is on a real device before conversion."
@@ -509,7 +521,9 @@ class NormalRun:
         self.ttnn_tensor = ttnn.from_torch(
             self.elem.cpu(),
             dtype=torch_dtype_to_ttnn_dtype(self.elem.dtype),
-            mesh_mapper=self.ttnn_distributed_config.mesh_mapper if self.ttnn_distributed_config else None,
+            mesh_mapper=self.ttnn_distributed_tensor_config.mesh_mapper
+            if self.ttnn_distributed_tensor_config
+            else None,
             layout=ttnn.TILE_LAYOUT if self.dtype == torch.bool else None,
         )
         end = time.time()
@@ -558,39 +572,6 @@ class NormalRun:
         DispatchManager.set_current_module_name(None)
         return result
 
-    def module_run_mesh(self, *args, **kwds):
-        print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
-        assert self.device is not None, "Device must be set for TTNN module execution."
-        transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-        func_args = tree_map(transform, args)
-        # TODO: fix kwds not being passed correctly
-        other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
-        func_kwargs = tree_map(transform, other_kwargs)
-        func_kwargs.update({k: v for k, v in kwds.items() if "past_key_value" in k})
-        begin = time.time()
-        self.preprocess_weights()
-        end = time.time()
-        DispatchManager.set_current_module_name(self.module_name)
-        DispatchManager.record_timing(
-            "TTNN", self.module_name, self.__class__.__name__ + "_preprocess_weights", {}, end - begin
-        )
-        begin = time.time()
-        self.move_weights_to_device()
-        end = time.time()
-        DispatchManager.record_timing(
-            "TTNN", self.module_name, self.__class__.__name__ + "_move_weights_to_device", {}, end - begin
-        )
-        if NormalRun.signpost_mode is not None:
-            signpost(f"{self.module_name}", f"{self.__class__.__name__}")
-        begin = time.time()
-        result = post_process_ttnn_module_output(self, self.forward_mesh(*func_args, **func_kwargs))
-        end = time.time()
-        DispatchManager.record_timing(
-            "TTNN", self.module_name, self.__class__.__name__ + "_forward_mesh", {}, end - begin
-        )
-        DispatchManager.set_current_module_name(None)
-        return result
-
 
 class LightweightRun(NormalRun):
     @staticmethod
@@ -598,8 +579,7 @@ class LightweightRun(NormalRun):
         """Convert to PyTorch tensor."""
 
         def _to_torch(self):
-            is_mesh_device = self.ttnn_tensor.device().__class__.__name__ == "MeshDevice"
-            is_mesh_device = is_mesh_device and self.ttnn_tensor.device().get_num_devices() != 1
+            is_mesh_device = self.ttnn_distributed_tensor_config is not None
             if is_mesh_device:
                 result = to_torch_auto_compose(self.ttnn_tensor, device=self.ttnn_tensor.device())
             else:
@@ -622,9 +602,6 @@ class LightweightRun(NormalRun):
             return self.ttnn_tensor
         assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
         # convert elem to ttnn tensor here
-        is_mesh_device = self.device.__class__.__name__ == "MeshDevice"
-        if self.ttnn_distributed_config is None and is_mesh_device:
-            self.set_distributed_config(DistributedTensorConfig(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)))
         if self.elem.device.type == "meta":
             raise RuntimeError(
                 "Cannot convert META tensor to TTNN tensor. Please ensure the tensor is on a real device before conversion."
@@ -634,7 +611,9 @@ class LightweightRun(NormalRun):
         self.ttnn_tensor = ttnn.from_torch(
             self.elem.cpu(),
             dtype=torch_dtype_to_ttnn_dtype(self.elem.dtype),
-            mesh_mapper=self.ttnn_distributed_config.mesh_mapper if self.ttnn_distributed_config else None,
+            mesh_mapper=self.ttnn_distributed_tensor_config.mesh_mapper
+            if self.ttnn_distributed_tensor_config
+            else None,
             layout=ttnn.TILE_LAYOUT if self.dtype == torch.bool else None,
         )
         return self.ttnn_tensor

@@ -5,22 +5,29 @@
 """Base TTNNModule class for TTNN-accelerated neural network modules."""
 
 import functools
+import os
 from typing import Optional
 import torch
+from enum import Enum
+from functools import wraps
 
-from models.experimental.tt_symbiote.core.run_config import get_tensor_run_implementation, DistributedConfig
+from models.experimental.tt_symbiote.core.run_config import (
+    get_tensor_run_implementation,
+    DistributedTensorConfig,
+    DistributedConfig,
+)
 from torch.utils._pytree import tree_map
 
 TENSOR_RUN_IMPLEMENTATION = get_tensor_run_implementation()
 
 
-def set_distributed_config(distribute_config: DistributedConfig):
+def set_distributed_tensor_config(distribute_tensor_config: DistributedTensorConfig):
     def _set_distributed_config(e):
         from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
         res = e
         if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
-            res.set_distributed_config(distribute_config)
+            res.set_distributed_tensor_config(distribute_tensor_config)
         return res
 
     return _set_distributed_config
@@ -43,10 +50,6 @@ class TTNNModule:
         self._model_config = model_config if model_config is not None else {}
 
     def __call__(self, *args, **kwds):
-        if self.device_state is not None and "forward_mesh" not in self.__dir__():
-            print(f"Warning: Module {self.module_name} has device state set but no forward_mesh method.")
-        elif self.device_state is not None:
-            return TENSOR_RUN_IMPLEMENTATION.module_run_mesh(self, *args, **kwds)
         return TENSOR_RUN_IMPLEMENTATION.module_run(self, *args, **kwds)
 
     def preprocess_weights(self):
@@ -142,7 +145,7 @@ class TTNNModule:
         return self.set_output_tensors_config_impl(output_tensors)
 
     def set_output_tensors_config_impl(self, output_tensors):
-        return tree_map(set_distributed_config(self.device_state.tensor_config), output_tensors)
+        return tree_map(set_distributed_tensor_config(self.device_state.tensor_config), output_tensors)
 
     @property
     def module_name(self):
@@ -199,3 +202,77 @@ def deallocate_weights_after(func):
         return result
 
     return wrapper
+
+
+class DeviceArch(Enum):
+    """Supported device architectures."""
+
+    N150 = "n150"
+    N300 = "n300"
+    T3K = "t3k_wh"
+    TG = "gx_wh"
+    P150 = "p150"
+    P300 = "p300"
+    P150x4 = "p150x4"
+    P150x8 = "p150x8"
+    BHGLX = "bhglx"
+
+
+MeshShapeToDeviceArch = {
+    "N150": DeviceArch.N150,
+    "N300": DeviceArch.N300,
+    "T3K": DeviceArch.T3K,
+    "TG": DeviceArch.TG,
+    "P150": DeviceArch.P150,
+    "P300": DeviceArch.P300,
+    "P150x4": DeviceArch.P150x4,
+    "P150x8": DeviceArch.P150x8,
+    "BHGLX": DeviceArch.BHGLX,
+}
+
+
+def run_on_devices(*allowed_archs: DeviceArch):
+    """
+    Decorator to restrict module execution to specific device architectures.
+
+    Args:
+        *allowed_archs: DeviceArch enum values that the module can run on.
+
+    Raises:
+        RuntimeError: If the module's device architecture is not in the allowed list.
+
+    Example:
+        @run_on_devices(DeviceArch.N300, DeviceArch.T3K_WH)
+        def forward(self, input_tensor):
+            return ttnn.linear(input_tensor, self.tt_weight)
+    """
+    if not allowed_archs:
+        raise ValueError("Must specify at least one allowed device architecture")
+
+    allowed_set = frozenset(allowed_archs)
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if not hasattr(self, "device") or self.device is None:
+                raise RuntimeError(f"{self.__class__.__name__}: No device set. ")
+            mesh_device = MeshShapeToDeviceArch.get(os.environ.get("MESH_DEVICE"))
+            if mesh_device is None:
+                raise RuntimeError(
+                    f"{self.__class__.__name__}: Unable to determine device architecture from MESH_DEVICE environment variable."
+                )
+            if mesh_device not in MeshShapeToDeviceArch.values():
+                raise RuntimeError(
+                    f"{self.__class__.__name__}: Unrecognized device architecture {mesh_device} for device {self.device}. Possible options: {list(MeshShapeToDeviceArch.values())}"
+                )
+            if mesh_device not in allowed_set:
+                raise RuntimeError(
+                    f"{self.__class__.__name__}: Device architecture {mesh_device} for device {self.device} not supported. "
+                    f"Allowed architectures: {allowed_set}"
+                )
+
+            return func(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
