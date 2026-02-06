@@ -48,6 +48,12 @@
 #define NEW_DPRINT_DATA1(format, ...)
 #endif
 
+#if defined(KERNEL_BUILD)
+#define NEW_DPRINT_IS_KERNEL 1
+#else
+#define NEW_DPRINT_IS_KERNEL 0
+#endif
+
 #define NEW_DPRINT_GET_STRING_INDEX(variable_name, updated_format)                                           \
     {                                                                                                        \
         static const auto allocated_string __attribute__((section(NEW_DPRINT_STRINGS_SECTION_NAME), used)) = \
@@ -66,41 +72,55 @@
     }                                                                                                        \
     constexpr uint32_t variable_name = __COUNTER__;
 
-#define NEW_DPRINT(format, ...)                                                                      \
-    {                                                                                                \
-        /* Validate format string syntax */                                                          \
-        static_assert(                                                                               \
-            dprint_detail::checks::is_valid_format_string(format),                                   \
-            "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");        \
-        /* Validate placeholder format */                                                            \
-        static_assert(                                                                               \
-            !dprint_detail::checks::has_mixed_placeholders(format),                                  \
-            "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string"); \
-        /* For indexed placeholders, validate no index exceeds argument count */                     \
-        static_assert(                                                                               \
-            !dprint_detail::checks::has_indexed_placeholders(format) ||                              \
-                dprint_detail::checks::get_max_index(format) <                                       \
-                    static_cast<int>(dprint_detail::helpers::count_arguments(__VA_ARGS__)),          \
-            "Placeholder index exceeds number of arguments");                                        \
-        /* For indexed placeholders, validate all arguments are referenced */                        \
-        static_assert(                                                                               \
-            !dprint_detail::checks::has_indexed_placeholders(format) ||                              \
-                dprint_detail::checks::all_arguments_referenced(                                     \
-                    format, dprint_detail::helpers::count_arguments(__VA_ARGS__)),                   \
-            "All arguments must be referenced when using indexed placeholders");                     \
-        /* For non-indexed placeholders, count must match argument count */                          \
-        static_assert(                                                                               \
-            dprint_detail::checks::has_indexed_placeholders(format) ||                               \
-                dprint_detail::checks::count_placeholders(format) ==                                 \
-                    dprint_detail::helpers::count_arguments(__VA_ARGS__),                            \
-            "Number of {} placeholders must match number of arguments");                             \
-        /* Update format to include all necessary data */                                            \
-        constexpr auto updated_format =                                                              \
-            dprint_detail::formatting::update_format_string_from_args(format, ##__VA_ARGS__);        \
-        /* Store updated format string in a special section for dprint */                            \
-        NEW_DPRINT_GET_STRING_INDEX(dprint_info_index, updated_format);                              \
-        static_assert(dprint_info_index <= 1024, "Too many DPRINT calls, exceeds limit");            \
-        /* TODO: Write dprint message to dprint buffer */                                            \
+#define NEW_DPRINT(format, ...)                                                                                      \
+    {                                                                                                                \
+        /* Validate format string syntax */                                                                          \
+        static_assert(                                                                                               \
+            dprint_detail::checks::is_valid_format_string(format),                                                   \
+            "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");                        \
+        /* Validate placeholder format */                                                                            \
+        static_assert(                                                                                               \
+            !dprint_detail::checks::has_mixed_placeholders(format),                                                  \
+            "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string");                 \
+        /* For indexed placeholders, validate no index exceeds argument count */                                     \
+        static_assert(                                                                                               \
+            !dprint_detail::checks::has_indexed_placeholders(format) ||                                              \
+                dprint_detail::checks::get_max_index(format) <                                                       \
+                    static_cast<int>(dprint_detail::helpers::count_arguments(__VA_ARGS__)),                          \
+            "Placeholder index exceeds number of arguments");                                                        \
+        /* For indexed placeholders, validate all arguments are referenced */                                        \
+        static_assert(                                                                                               \
+            !dprint_detail::checks::has_indexed_placeholders(format) ||                                              \
+                dprint_detail::checks::all_arguments_referenced(                                                     \
+                    format, dprint_detail::helpers::count_arguments(__VA_ARGS__)),                                   \
+            "All arguments must be referenced when using indexed placeholders");                                     \
+        /* For non-indexed placeholders, count must match argument count */                                          \
+        static_assert(                                                                                               \
+            dprint_detail::checks::has_indexed_placeholders(format) ||                                               \
+                dprint_detail::checks::count_placeholders(format) ==                                                 \
+                    dprint_detail::helpers::count_arguments(__VA_ARGS__),                                            \
+            "Number of {} placeholders must match number of arguments");                                             \
+        /* TODO: In case we decide to optimize write into dprint buffer, we might want to reorder arguments. This */ \
+        /* will influence serialization and format update. Server side will remain the same.*/                       \
+        /* Update format to include all necessary data */                                                            \
+        constexpr auto updated_format =                                                                              \
+            dprint_detail::formatting::update_format_string_from_args(format, ##__VA_ARGS__);                        \
+        /* Store updated format string in a special section for dprint */                                            \
+        NEW_DPRINT_GET_STRING_INDEX(dprint_info_index, updated_format);                                              \
+        /* TODO: Get buffer lock (once we change to be single buffer per L1 instead of per risc)*/                   \
+        /* Generate dprint message header */                                                                         \
+        dprint_detail::structures::DPrintHeader header = {};                                                         \
+        header.is_kernel = NEW_DPRINT_IS_KERNEL;                                                                     \
+        header.risc_id = PROCESSOR_INDEX;                                                                            \
+        static_assert(                                                                                               \
+            dprint_info_index <= dprint_detail::structures::DPrintHeader::max_info_id_value,                         \
+            "Too many DPRINT calls, exceeds limit");                                                                 \
+        header.info_id = dprint_info_index;                                                                          \
+        uint16_t header_value = header.value;                                                                        \
+        /* TODO: Get buffer read and write pointers */                                                               \
+        /* TODO: Write dprint message header to dprint buffer */                                                     \
+        /* TODO: Write dprint message to dprint buffer */                                                            \
+        /* TODO: Release buffer lock */                                                                              \
     }
 
 namespace dprint_detail {
