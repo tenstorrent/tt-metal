@@ -7,12 +7,20 @@
 #include "api/compute/reduce.h"
 #include "experimental/circular_buffer.h"
 
+#if (MATH_ONLY == 1) && (defined(TRISC_UNPACK))
+#include "llk_unpack_AB_api.h"
+#endif
+
 void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
     reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
+
+#if (MATH_ONLY == 1)
+    UNPACK((llk_unpack_AB_reduce_init<REDUCE_DIM, BroadcastType::NONE, false>(tt::CBIndex::c_0, tt::CBIndex::c_2)));
+#endif
 
     experimental::CircularBuffer cb0(tt::CBIndex::c_0);
     experimental::CircularBuffer cb2(tt::CBIndex::c_2);
@@ -30,7 +38,7 @@ void kernel_main() {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 cb0.wait_front(onetile);
 #if (MATH_ONLY == 1)
-                UNPACK((llk_unpack_AB_reduce(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
+                UNPACK((llk_unpack_AB(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
                 // REDUCE_OP is expected to come from add_define
                 reduce_tile_math(reduce_dst_idx);
 #elif (MATH_ONLY == 0)
