@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import is_watcher_enabled
 
 
 @pytest.mark.parametrize(
@@ -108,6 +109,9 @@ def test_roll(device, input_tensor, shifts, dim, layout, dtype, memory_config):
     ],
 )
 def test_roll_without_dim(device, input_tensor, shifts):
+    if is_watcher_enabled():
+        pytest.skip("Skipping test with watcher enabled, see #37096")
+
     tensor = torch.tensor(input_tensor, dtype=torch.float32)
     ttnn_tensor = ttnn.from_torch(tensor)
     ttnn_tensor = ttnn.to_layout(ttnn_tensor, ttnn.ROW_MAJOR_LAYOUT)
