@@ -538,6 +538,133 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
 
 // clang-format off
 /**
+ * Fused scatter write + atomic increment (stateful): updates only masked fields, then submits the payload.
+ *
+ * Return value: None
+ *
+ * | Argument                                          | Description                       | Type                                                       | Required |
+ * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
+ * | client_interface                                  | Fabric sender interface           | tt_l1_ptr WorkerToFabricEdmSender*                          | True     |
+ * | packet_header                                     | Packet header to use              | volatile PACKET_HEADER_TYPE*                                | True     |
+ * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
+ * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header  | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | False  |
+ * | packet_size_bytes                                 | Payload size override if masked   | uint16_t                                                   | False    |
+ */
+// clang-format on
+template <
+    UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask = UnicastFusedScatterWriteAtomicIncUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+    populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(
+        packet_header, packet_size_bytes, noc_unicast_scatter_atomic_inc_fused_command_header);
+    client_interface->wait_for_empty_write_slot();
+    client_interface->send_payload_without_header_non_blocking_from_address(
+        src_addr, packet_header->payload_size_bytes);
+    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+}
+
+// clang-format off
+/**
+ * Fused scatter write + atomic increment (stateful, route variant): updates only masked fields for all headers.
+ *
+ * Return value: None
+ *
+ * | Argument                                          | Description                       | Type                                                       | Required |
+ * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
+ * | connection_manager                                | Routing plane connection manager  | RoutingPlaneConnectionManager&                             | True     |
+ * | route_id                                          | Route containing packet headers   | uint8_t                                                    | True     |
+ * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
+ * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | False  |
+ * | packet_size_bytes                                 | Payload size override if masked   | uint16_t                                                   | False    |
+ */
+// clang-format on
+template <
+    UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask = UnicastFusedScatterWriteAtomicIncUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& slot = connection_manager.get(i);
+        fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state<UpdateMask>(
+            &slot.sender,
+            packet_header,
+            src_addr,
+            noc_unicast_scatter_atomic_inc_fused_command_header,
+            packet_size_bytes);
+    });
+}
+
+// clang-format off
+/**
+ * Fused scatter write + atomic increment (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                             | Type                                                       | Required |
+ * |--------------------------------|-----------------------------------------|------------------------------------------------------------|----------|
+ * | packet_header                  | Packet header to use                    | volatile PACKET_HEADER_TYPE*                               | True     |
+ * | num_hops                       | Per-header unicast hop counts           | uint8_t                                                    | True     |
+ * | command_header                 | Template fused command header           | CommandHeaderT                                             | False    |
+ * | packet_size_bytes              | Payload size override if masked         | uint16_t                                                   | False    |
+ */
+// clang-format on
+template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t num_hops,
+    CommandHeaderT command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    static_assert(
+        UpdateMask == UnicastFusedScatterWriteAtomicIncUpdateMask::All,
+        "When setting state, all fields must be updated");
+    packet_header->to_chip_unicast(num_hops);
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
+    populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(
+        packet_header, packet_size_bytes, command_header);
+}
+
+// clang-format off
+/**
+ * Fused scatter write + atomic increment (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                             | Type                             | Required |
+ * |--------------------------------|-----------------------------------------|----------------------------------|----------|
+ * | connection_manager             | Routing plane connection manager        | RoutingPlaneConnectionManager&   | True     |
+ * | route_id                       | Route whose headers will be updated     | uint8_t                          | True     |
+ * | num_hops                       | Per-header unicast hop counts           | uint8_t*                         | True     |
+ * | command_header                 | Template fused command header           | CommandHeaderT                   | False    |
+ * | packet_size_bytes              | Payload size override if masked         | uint16_t                         | False    |
+ */
+// clang-format on
+template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint8_t* num_hops,
+    CommandHeaderT command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        fabric_set_unicast_route(connection_manager, packet_header, i);
+        fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state<UpdateMask>(
+            packet_header, num_hops[i], command_header, packet_size_bytes);
+    });
+}
+
+// clang-format off
+/**
  * Unicast scatter write (stateful): updates only fields selected by UpdateMask, then submits the payload.
  *
  * Return value: None
@@ -1863,6 +1990,137 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
             noc_unicast_scatter_atomic_inc_fused_command_header,
             start_distance[i],
             range[i]);
+    });
+}
+
+// clang-format off
+/**
+ * Multicast fused scatter write + atomic increment (stateful): updates only masked fields, then submits payload.
+ *
+ * Return value: None
+ *
+ * | Argument                                          | Description                       | Type                                                       | Required |
+ * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
+ * | client_interface                                  | Fabric sender interface           | tt_l1_ptr WorkerToFabricEdmSender*                         | True     |
+ * | packet_header                                     | Packet header to use              | volatile PACKET_HEADER_TYPE*                               | True     |
+ * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
+ * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | False  |
+ * | packet_size_bytes                                 | Payload size override if masked   | uint16_t                                                   | False    |
+ */
+// clang-format on
+template <
+    UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask = UnicastFusedScatterWriteAtomicIncUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+    populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(
+        packet_header, packet_size_bytes, noc_unicast_scatter_atomic_inc_fused_command_header);
+    client_interface->wait_for_empty_write_slot();
+    client_interface->send_payload_without_header_non_blocking_from_address(
+        src_addr, packet_header->payload_size_bytes);
+    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+}
+
+// clang-format off
+/**
+ * Multicast fused scatter write + atomic increment (stateful, route variant): updates only masked fields for all headers.
+ *
+ * Return value: None
+ *
+ * | Argument                                          | Description                       | Type                                                       | Required |
+ * |---------------------------------------------------|-----------------------------------|------------------------------------------------------------|----------|
+ * | connection_manager                                | Routing plane connection manager  | RoutingPlaneConnectionManager&                             | True     |
+ * | route_id                                          | Route containing packet headers   | uint8_t                                                    | True     |
+ * | src_addr                                          | Source L1 address                 | uint32_t                                                   | True     |
+ * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter+atomic inc header | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader | False  |
+ * | packet_size_bytes                                 | Payload size override if masked   | uint16_t                                                   | False    |
+ */
+// clang-format on
+template <
+    UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask = UnicastFusedScatterWriteAtomicIncUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_with_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& slot = connection_manager.get(i);
+        fabric_multicast_noc_fused_scatter_write_atomic_inc_with_state<UpdateMask>(
+            &slot.sender,
+            packet_header,
+            src_addr,
+            noc_unicast_scatter_atomic_inc_fused_command_header,
+            packet_size_bytes);
+    });
+}
+
+// clang-format off
+/**
+ * Multicast fused scatter write + atomic increment (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                             | Type                             | Required |
+ * |--------------------------------|-----------------------------------------|----------------------------------|----------|
+ * | packet_header                  | Packet header to use                    | volatile PACKET_HEADER_TYPE*     | True     |
+ * | start_distance                 | Per-header multicast start distance     | uint8_t                          | True     |
+ * | range                          | Per-header multicast range              | uint8_t                          | True     |
+ * | command_header                 | Template fused command header           | CommandHeaderT                   | False    |
+ * | packet_size_bytes              | Payload size override if masked         | uint16_t                         | False    |
+ */
+// clang-format on
+template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t start_distance,
+    uint8_t range,
+    CommandHeaderT command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    static_assert(
+        UpdateMask == UnicastFusedScatterWriteAtomicIncUpdateMask::All,
+        "When setting state, all fields must be updated");
+    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
+    populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(
+        packet_header, packet_size_bytes, command_header);
+}
+
+// clang-format off
+/**
+ * Multicast fused scatter write + atomic increment (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                             | Type                             | Required |
+ * |--------------------------------|-----------------------------------------|----------------------------------|----------|
+ * | connection_manager             | Routing plane connection manager        | RoutingPlaneConnectionManager&   | True     |
+ * | route_id                       | Route whose headers will be updated     | uint8_t                          | True     |
+ * | start_distance                  | Per-header multicast start distance     | uint8_t*                         | True     |
+ * | range                          | Per-header multicast range              | uint8_t*                         | True     |
+ * | command_header                 | Template fused command header           | CommandHeaderT                   | False    |
+ * | packet_size_bytes              | Payload size override if masked         | uint16_t                         | False    |
+ */
+// clang-format on
+template <UnicastFusedScatterWriteAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint8_t* start_distance,
+    uint8_t* range,
+    CommandHeaderT command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        fabric_set_mcast_route(connection_manager, packet_header, range, i);
+        fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state<UpdateMask>(
+            packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
     });
 }
 
