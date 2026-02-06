@@ -45,40 +45,18 @@ if model_traced_params:
 
 def invalidate_vector(test_vector) -> tuple:
     """
-    Validate test vector based on mesh shape filter.
-    If MESH_DEVICE_SHAPE env var is set, skip tests that don't match that mesh shape.
+    Validate test vector (non-mesh related checks).
+
+    Note: Mesh shape filtering happens at runtime in run() function,
+    not during vector generation, since MESH_DEVICE_SHAPE env var
+    is only set during test execution on specific runners.
 
     Returns:
         Tuple of (is_invalid: bool, reason: str or None)
-        - is_invalid=True means the vector should be skipped
-        - is_invalid=False means the vector is valid
     """
-    import os
-    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import get_mesh_shape, get_mesh_shape_from_machine_info
-
-    # Get target mesh shape from env var
-    target_mesh_shape = get_mesh_shape()
-
-    # If no env var set, accept all vectors
-    if target_mesh_shape is None:
-        return False, None  # Not invalid
-
-    # Get traced machine info from vector
-    traced_machine_info = test_vector.get("traced_machine_info")
-    if not traced_machine_info:
-        # No machine info in vector - skip it when mesh filter is active
-        return True, f"No mesh info, requested {target_mesh_shape}"
-
-    # Get mesh shape from traced config
-    traced_mesh_shape = get_mesh_shape_from_machine_info(traced_machine_info)
-    if not traced_mesh_shape:
-        traced_mesh_shape = (1, 1)  # Default to single device
-
-    # Check if mesh shapes match
-    if traced_mesh_shape != target_mesh_shape:
-        return True, f"Mesh shape mismatch: vector has {traced_mesh_shape}, requested {target_mesh_shape}"
-
-    return False, None  # Valid - not invalid
+    # Add any static validation logic here (e.g., parameter constraints)
+    # Mesh filtering is handled in run() function at execution time
+    return False, None
 
 
 def mesh_device_fixture():

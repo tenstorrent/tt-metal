@@ -47,22 +47,18 @@ if model_traced_params:
 
 
 def invalidate_vector(test_vector) -> tuple:
-    """Filter vectors by mesh shape if MESH_DEVICE_SHAPE env var is set"""
-    target_mesh_shape = get_mesh_shape()
-    if target_mesh_shape is None:
-        return False, None
+    """
+    Validate test vector (non-mesh related checks).
 
-    traced_machine_info = test_vector.get("traced_machine_info")
-    if not traced_machine_info:
-        return True, f"No mesh info, requested {target_mesh_shape}"
+    Note: Mesh shape filtering happens at runtime in run() function,
+    not during vector generation, since MESH_DEVICE_SHAPE env var
+    is only set during test execution on specific runners.
 
-    traced_mesh_shape = get_mesh_shape_from_machine_info(traced_machine_info)
-    if not traced_mesh_shape:
-        traced_mesh_shape = (1, 1)
-
-    if traced_mesh_shape != target_mesh_shape:
-        return True, f"Mesh shape mismatch: vector has {traced_mesh_shape}, requested {target_mesh_shape}"
-
+    Returns:
+        Tuple of (is_invalid: bool, reason: str or None)
+    """
+    # Add any static validation logic here (e.g., parameter constraints)
+    # Mesh filtering is handled in run() function at execution time
     return False, None
 
 
