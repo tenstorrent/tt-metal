@@ -86,7 +86,7 @@ void kernel_main() {
             "Sparse multicast has not been tested yet with atomic inc");
         if constexpr (fabric_packet_type == FabricPacketType::CHIP_MULTICAST) {
             switch (noc_packet_type) {
-                case NOC_UNICAST_ATOMIC_INC: {
+                case NocPacketType::NOC_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
                         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
@@ -103,7 +103,7 @@ void kernel_main() {
                             hop_info.mcast.range);
                     }
                 } break;
-                case NOC_FUSED_UNICAST_ATOMIC_INC: {
+                case NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
                         fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
                             UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
@@ -131,13 +131,37 @@ void kernel_main() {
                             hop_info.mcast.range);
                     }
                 } break;
+                case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
+                    if constexpr (with_state) {
+                        // with_state TBD for this packet type
+                    } else {
+                        uint16_t first_chunk_size = packet_payload_size_bytes / 2;
+                        tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader scatter_hdr;
+                        scatter_hdr.noc_address[0] = get_noc_addr(noc_x_start, noc_y_start, target_address);
+                        scatter_hdr.noc_address[1] =
+                            get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size);
+                        scatter_hdr.semaphore_noc_address =
+                            get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address);
+                        scatter_hdr.chunk_size[0] = first_chunk_size;
+                        scatter_hdr.val = 1;
+                        scatter_hdr.flush = true;
+                        fabric_multicast_noc_fused_scatter_write_atomic_inc(
+                            connections,
+                            route_id,
+                            source_l1_buffer_address,
+                            packet_payload_size_bytes,
+                            scatter_hdr,
+                            hop_info.mcast.start_distance,
+                            hop_info.mcast.range);
+                    }
+                } break;
                 default: {
                     ASSERT(false);
                 } break;
             }
         } else {
             switch (noc_packet_type) {
-                case NOC_UNICAST_ATOMIC_INC: {
+                case NocPacketType::NOC_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
                         fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
@@ -153,7 +177,7 @@ void kernel_main() {
                             hop_info.ucast.num_hops);
                     }
                 } break;
-                case NOC_FUSED_UNICAST_ATOMIC_INC: {
+                case NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
                         fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<
                             UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
@@ -177,6 +201,30 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 1,
                                 true},
+                            hop_info.ucast.num_hops);
+                    }
+                } break;
+                case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
+                    if constexpr (with_state) {
+                        // with_state TBD for this packet type
+                        ASSERT(false);
+                    } else {
+                        uint16_t first_chunk_size = packet_payload_size_bytes / 2;
+                        tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader scatter_hdr;
+                        scatter_hdr.noc_address[0] = get_noc_addr(noc_x_start, noc_y_start, target_address);
+                        scatter_hdr.noc_address[1] =
+                            get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size);
+                        scatter_hdr.semaphore_noc_address =
+                            get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address);
+                        scatter_hdr.chunk_size[0] = first_chunk_size;
+                        scatter_hdr.val = 1;
+                        scatter_hdr.flush = true;
+                        fabric_unicast_noc_fused_scatter_write_atomic_inc(
+                            connections,
+                            route_id,
+                            source_l1_buffer_address,
+                            packet_payload_size_bytes,
+                            scatter_hdr,
                             hop_info.ucast.num_hops);
                     }
                 } break;
@@ -191,7 +239,7 @@ void kernel_main() {
             "Sparse multicast has not been tested yet with mesh topology");
         if constexpr (fabric_packet_type == FabricPacketType::CHIP_MULTICAST) {
             switch (noc_packet_type) {
-                case NOC_UNICAST_ATOMIC_INC: {
+                case NocPacketType::NOC_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
                         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
@@ -207,7 +255,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1, true});
                     }
                 } break;
-                case NOC_FUSED_UNICAST_ATOMIC_INC: {
+                case NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
                         fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
                             UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
@@ -234,13 +282,36 @@ void kernel_main() {
                                 true});
                     }
                 } break;
+                case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
+                    if constexpr (with_state) {
+                        // with_state TBD for this packet type
+                    } else {
+                        uint16_t first_chunk_size = packet_payload_size_bytes / 2;
+                        tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader scatter_hdr;
+                        scatter_hdr.noc_address[0] = get_noc_addr(noc_x_start, noc_y_start, target_address);
+                        scatter_hdr.noc_address[1] =
+                            get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size);
+                        scatter_hdr.semaphore_noc_address =
+                            get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address);
+                        scatter_hdr.chunk_size[0] = first_chunk_size;
+                        scatter_hdr.val = 1;
+                        scatter_hdr.flush = true;
+                        fabric_multicast_noc_fused_scatter_write_atomic_inc(
+                            connections,
+                            route_id,
+                            ranges,
+                            source_l1_buffer_address,
+                            packet_payload_size_bytes,
+                            scatter_hdr);
+                    }
+                } break;
                 default: {
                     ASSERT(false);
                 } break;
             }
         } else {
             switch (noc_packet_type) {
-                case NOC_UNICAST_ATOMIC_INC: {
+                case NocPacketType::NOC_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
                         fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
@@ -255,7 +326,7 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1, true});
                     }
                 } break;
-                case NOC_FUSED_UNICAST_ATOMIC_INC: {
+                case NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC: {
                     if constexpr (with_state) {
                         fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<
                             UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
@@ -279,6 +350,24 @@ void kernel_main() {
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 1,
                                 true});
+                    }
+                } break;
+                case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
+                    if constexpr (with_state) {
+                        // with_state TBD for this packet type
+                    } else {
+                        uint16_t first_chunk_size = packet_payload_size_bytes / 2;
+                        tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader scatter_hdr;
+                        scatter_hdr.noc_address[0] = get_noc_addr(noc_x_start, noc_y_start, target_address);
+                        scatter_hdr.noc_address[1] =
+                            get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size);
+                        scatter_hdr.semaphore_noc_address =
+                            get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address);
+                        scatter_hdr.chunk_size[0] = first_chunk_size;
+                        scatter_hdr.val = 1;
+                        scatter_hdr.flush = true;
+                        fabric_unicast_noc_fused_scatter_write_atomic_inc(
+                            connections, route_id, source_l1_buffer_address, packet_payload_size_bytes, scatter_hdr);
                     }
                 } break;
                 default: {

@@ -47,7 +47,9 @@ void kernel_main() {
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
     *atomic_poll_addr = 0;
 
-    if constexpr (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC) {
+    if constexpr (
+        noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+        noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC) {
         for (uint32_t i = 0; i < payload_size_words; i++) {
             start_addr[i] = 0;
         }
@@ -62,7 +64,9 @@ void kernel_main() {
         }
         WAYPOINT("FPD");
 
-        if constexpr (noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC) {
+        if constexpr (
+            noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+            noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC) {
             bool data_written = false;
             for (uint32_t j = 0; j < payload_size_words; j++) {
                 if (start_addr[j] != 0) {
