@@ -114,7 +114,6 @@ jobs:
         os: ["ubuntu-22.04"]
         test-group: ${{ fromJSON(needs.define-ttnn-tests.outputs.ttnn-tests) }}
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    timeout-minutes: ${{ matrix.test-group.timeout || inputs.timeout }}
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
