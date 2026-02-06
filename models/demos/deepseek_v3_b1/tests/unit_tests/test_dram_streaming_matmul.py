@@ -292,7 +292,6 @@ def test_dram_streaming_matmul_indexed(device, k, n, m, num_experts, fused_activ
 
     # Define shapes
     in0_shape = [1, 1, m, k]
-    in1_shape = [1, 1, k_total, n_padded]  # All experts stacked along K
 
     # Build CoreRangeSet for specific compute cores
     compute_core_grid = ttnn.CoreRangeSet(
