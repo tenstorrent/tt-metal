@@ -465,7 +465,6 @@ class DRAMStreamingMatmul:
             ("dram_mm_cb_mul_in1", cb_id_mul_in1),
             ("dram_mm_mul_num_tiles", mul_num_tiles),
             # Scalar mul parameters (NCRISC sets up scalar source CB)
-            ("dram_mm_enable_scalar_mul", 1 if enable_scalar_mul else 0),
             ("dram_mm_cb_scalar_src", cb_id_scalar_src if enable_scalar_mul else 0),
         ]
 
@@ -478,7 +477,6 @@ class DRAMStreamingMatmul:
             ("dram_mm_cb_final_out", cb_id_out),
             ("dram_mm_mul_num_tiles", mul_num_tiles),
             # Scalar mul parameters
-            ("dram_mm_enable_scalar_mul", 1 if enable_scalar_mul else 0),
             ("dram_mm_cb_scalar", cb_id_scalar if enable_scalar_mul else 0),
             ("dram_mm_cb_scalar_src", cb_id_scalar_src if enable_scalar_mul else 0),
         ]
@@ -501,7 +499,6 @@ class DRAMStreamingMatmul:
             ("dram_mm_cb_mul_out", cb_id_out),
             ("dram_mm_mul_num_tiles", mul_num_tiles),
             # Scalar mul parameters
-            ("dram_mm_enable_scalar_mul", 1 if enable_scalar_mul else 0),
             ("dram_mm_cb_scalar", cb_id_scalar if enable_scalar_mul else 0),
         ]
 
