@@ -90,12 +90,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          sparse-checkout: |
-            .github/actions
-            .github/scripts
-            .github/workflows/build-docker-artifact.yaml
-            dockerfile
-          sparse-checkout-cone-mode: false
 
       - name: Parse platform
         id: platform
