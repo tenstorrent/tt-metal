@@ -508,12 +508,12 @@ This error typically appears across multiple MPI ranks with the same hostname me
      - `/data/scaleout_configs/4xBH_4x32_intrapod_updated/` - updated 4x32 configs
 
 3. **Update the script or use a custom command**:
-   
+
    Option A - Modify the recovery script temporarily:
    ```bash
    # Edit recover_4x32.sh and change the --factory-descriptor-path to the correct FSD
    ```
-   
+
    Option B - Run the validation command directly with the correct FSD:
    ```bash
    mpirun --host <hosts> tt-smi -r
@@ -730,10 +730,10 @@ The error originates from `tt_metal/impl/context/metal_context.cpp` during `Meta
    # Reset all hosts
    mpirun --host <hosts> tt-smi -r
    sleep 30
-   
+
    # Validate cluster health
    ./run_validation_4x32.sh <hosts> <docker-image>
-   
+
    # Only proceed if validation passes
    ./run_fabric_tests_4x32.sh <hosts> <docker-image>
    ```
@@ -782,10 +782,10 @@ The error originates from `tt_metal/impl/device/device_manager.cpp` during `Devi
    # Reset and wait
    mpirun --host <hosts> tt-smi -r
    sleep 60
-   
+
    # Validate - exit early if cluster is unhealthy
    ./run_validation_4x32.sh <hosts> <docker-image> || exit 1
-   
+
    # Run fabric tests
    ./run_fabric_tests_4x32.sh <hosts> <docker-image>
    ```
