@@ -60,7 +60,7 @@ union subordinate_map_t {
             volatile uint8_t neo0_trisc1;
             volatile uint8_t neo0_trisc2;
             volatile uint8_t neo0_trisc3;
-            volatile uint8_t neo1_risc0;
+            volatile uint8_t neo1_trisc0;
             volatile uint8_t neo1_trisc1;
             volatile uint8_t neo1_trisc2;
             volatile uint8_t neo1_trisc3;

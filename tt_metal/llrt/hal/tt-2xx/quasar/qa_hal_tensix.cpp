@@ -156,8 +156,8 @@ HalCoreInfoType create_tensix_mem_map() {
              .fw_launch_addr_value = MEM_TRISC2_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
             // TRISC3
-            {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
-             .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
+            {.fw_base_addr = MEM_TRISC3_FIRMWARE_BASE,
+             .local_init_addr = MEM_TRISC3_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
@@ -181,8 +181,8 @@ HalCoreInfoType create_tensix_mem_map() {
             //  .fw_launch_addr_value = MEM_TRISC2_FIRMWARE_BASE,
             //  .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
             // // TRISC3
-            // {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
-            //  .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
+            // {.fw_base_addr = MEM_TRISC3_FIRMWARE_BASE,
+            //  .local_init_addr = MEM_TRISC3_INIT_LOCAL_L1_BASE_SCRATCH,
             //  .fw_launch_addr = 0x0,
             //  .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
             //  .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},

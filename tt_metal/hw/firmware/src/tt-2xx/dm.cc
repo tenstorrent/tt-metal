@@ -18,11 +18,12 @@
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
 
-constexpr uint32_t RISCV_IC_TRISC3_MASK = 0x0;
-constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x1;
-constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x2;
-constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x4;
-constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
+constexpr uint32_t RISCV_IC_TRISC3_MASK = 0x1;
+constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x2;
+constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
+constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x8;
+constexpr uint32_t RISCV_IC_TRISC_ALL_MASK =
+    RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK | RISCV_IC_TRISC3_MASK;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -88,7 +89,6 @@ void invalidate_trisc_instruction_cache() {
 }
 
 void deassert_trisc() {
-    subordinate_sync->allDMs = RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
     // subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
     // subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;

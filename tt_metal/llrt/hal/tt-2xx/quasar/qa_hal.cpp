@@ -146,7 +146,7 @@ public:
                     case 8:
                     case 12:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC0_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC0_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
                         flags += fmt::format(
                             " -Wl,--defsym=__fw_data={} ",
                             MEM_TRISC0_GLOBAL_BASE +
@@ -158,7 +158,7 @@ public:
                     case 9:
                     case 13:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC1_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC1_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
                         flags += fmt::format(
                             " -Wl,--defsym=__fw_data={} ",
                             MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
@@ -169,7 +169,7 @@ public:
                     case 10:
                     case 14:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC2_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC2_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
                         flags += fmt::format(
                             " -Wl,--defsym=__fw_data={} ",
                             MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
@@ -180,7 +180,7 @@ public:
                     case 11:
                     case 15:
                         flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_TRISC3_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC3_FIRMWARE_SIZE);
+                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
                         flags += fmt::format(
                             " -Wl,--defsym=__fw_data={} ",
                             MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE * (params.processor_id / 4));
