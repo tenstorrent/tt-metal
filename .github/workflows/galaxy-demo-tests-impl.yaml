@@ -133,7 +133,7 @@ jobs:
           NO_PROMPT: 1
         run: |
           pytest \
-            models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py \
+            models/tt_dit/tests/models/mochi/test_pipeline_mochi.py \
             -k "4x8sp1tp0" \
             --timeout=1500
       - name: Run GPT-OSS demo tests (direct pytest)
@@ -247,7 +247,7 @@ jobs:
           NO_PROMPT: 1
           TT_MM_THROTTLE_PERF: 5
         run: |
-          pytest models/experimental/tt_dit/tests/models/sd35/test_pipeline_sd35.py \
+          pytest models/tt_dit/tests/models/sd35/test_pipeline_sd35.py \
             -k "4x8cfg1sp0tp1" \
             --timeout 1200
       - name: Run Flux.1-dev demo tests (direct pytest)
@@ -258,7 +258,7 @@ jobs:
           NO_PROMPT: 1
           TT_MM_THROTTLE_PERF: 5
         run: |
-          pytest models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py \
+          pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py \
             -k "4x8sp0tp1-dev" \
             --timeout 1200
       - name: Run Motif-Image-6B-Preview demo tests (direct pytest)
@@ -268,7 +268,7 @@ jobs:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
           NO_PROMPT: 1
         run: |
-          pytest models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1" --timeout 1200
+          pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1" --timeout 1200
       - name: Run Wan2.2 demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'wan22' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -277,7 +277,7 @@ jobs:
           NO_PROMPT: 1
         run: |
           pytest \
-            models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
+            models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
             -k "wh_4x8sp1tp0 and resolution_720p" \
             --timeout 1500
       - name: Run Qwen3-32B demo tests (direct pytest)
@@ -321,7 +321,7 @@ jobs:
           NO_PROMPT: 1
         run: |
           pytest \
-            models/experimental/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py \
+            models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py \
             -k "4x8" \
             --timeout 1200
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
