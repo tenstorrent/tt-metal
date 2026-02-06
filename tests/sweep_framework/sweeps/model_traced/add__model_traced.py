@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     get_mesh_shape_from_machine_info,
+    mesh_tensor_to_torch,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -192,7 +193,7 @@ def run(
 
     start_time = start_measuring_time()
     ttnn.add_(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_torch(input_tensor_a)
+    output_tensor = mesh_tensor_to_torch(input_tensor_a, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC

@@ -16,6 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     get_mesh_shape_from_machine_info,
+    mesh_tensor_to_torch,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -154,7 +155,7 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.clamp(input_tensor_a, min=min, max=max, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC

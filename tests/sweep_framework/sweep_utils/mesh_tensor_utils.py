@@ -103,35 +103,24 @@ def create_mesh_device(mesh_shape: Tuple[int, int], device_ids: Optional[list] =
 
     Args:
         mesh_shape: Tuple of (rows, cols) for mesh shape
-        device_ids: Optional list of device IDs to use
+        device_ids: Optional list of device IDs (deprecated, not used by API)
 
     Returns:
         ttnn.MeshDevice instance
     """
-    # Calculate number of devices needed
-    num_devices = mesh_shape[0] * mesh_shape[1]
-
-    # Use provided device_ids or default to range
-    if not device_ids:
-        device_ids = list(range(num_devices))
-
-    # Ensure we have the right number of device IDs
-    if len(device_ids) < num_devices:
-        print(f"⚠️ Not enough device IDs provided ({len(device_ids)} < {num_devices}), using range")
-        device_ids = list(range(num_devices))
-
+    # Create mesh device with just the mesh shape
+    # The API automatically selects available devices based on the mesh shape
     return ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh_shape),
-        device_ids=device_ids[:num_devices],  # Use only what we need
         dispatch_core_config=ttnn.DispatchCoreConfig(),
     )
 
 
 def create_tensor_on_mesh(
     torch_tensor: torch.Tensor,
+    mesh_device: ttnn.MeshDevice,
     dtype: ttnn.DataType,
     layout: ttnn.Layout,
-    mesh_device: ttnn.MeshDevice,
     memory_config: ttnn.MemoryConfig,
     tensor_placement: Optional[Dict] = None,
 ) -> ttnn.Tensor:
@@ -140,9 +129,9 @@ def create_tensor_on_mesh(
 
     Args:
         torch_tensor: Input torch tensor
+        mesh_device: Mesh device to create tensor on
         dtype: TTNN data type
         layout: TTNN layout (TILE/ROW_MAJOR)
-        mesh_device: Mesh device to create tensor on
         memory_config: Memory configuration
         tensor_placement: Optional placement info from traced config
 
@@ -211,3 +200,39 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
             return None
 
     return None
+
+
+def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None) -> torch.Tensor:
+    """
+    Convert a TTNN tensor (mesh or single device) to torch tensor.
+
+    For mesh tensors, this extracts one device copy (typically device 0) since
+    the model tracer tests expect the single-device result shape.
+
+    Args:
+        ttnn_tensor: TTNN tensor (mesh or single device)
+        mesh_device: Optional mesh device reference (can be None)
+
+    Returns:
+        torch.Tensor: Converted tensor
+    """
+    import ttnn
+
+    # Check if this is a mesh tensor by checking the device attribute
+    try:
+        device = ttnn_tensor.device()
+        # If device is a mesh device, extract tensor from first device
+        if device is not None and hasattr(device, "get_num_devices"):
+            # For mesh tensors, get the tensor from device 0 only
+            # This avoids shape mismatches from concatenation
+            device_tensors = ttnn.get_device_tensors(ttnn_tensor)
+            if device_tensors and len(device_tensors) > 0:
+                return ttnn.to_torch(device_tensors[0])
+            # Fallback if get_device_tensors doesn't work
+            return ttnn.to_torch(ttnn_tensor)
+        else:
+            # Single device tensor - direct conversion
+            return ttnn.to_torch(ttnn_tensor)
+    except Exception:
+        # Fallback: try direct conversion (for host tensors or edge cases)
+        return ttnn.to_torch(ttnn_tensor)
