@@ -11,7 +11,7 @@ Single unified Attention1D class with separate forward methods:
 
 Execution paths:
   Decode:  QKV matmul → all_reduce → create_qkv_heads → rotary → KV cache update → SDPA → concat_heads → WO matmul → all_reduce
-  Prefill: [reshape] → QKV matmul → all_reduce → create_qkv_heads → rotary → KV cache fill → SDPA → concat_heads → [reshape] → all_gather → WO matmul
+  Prefill: [reshape] → QKV matmul → all_reduce → create_qkv_heads → rotary → KV cache fill → SDPA → concat_heads → [reshape] → all_gather → WO matmul → reduce_scatter
 
 Key design decisions:
   - No static branching on topology in forward() - TG excluded at module level
@@ -157,46 +157,52 @@ class Attention1DConfig:
     # Threshold for sharding KV cache during prefill to handle update_cache memory limitations.
     min_kv_prefill_shard_seqlen: int | None = None
 
-    # Weight dtypes
-    wqkv_dtype: ttnn.DataType | None = None
-    wo_dtype: ttnn.DataType | None = None
-    activation_dtype: ttnn.DataType | None = None
+    # Weight dtypes (None = auto-resolved based on device arch / model config)
+    wqkv_dtype: ttnn.DataType | None = None  # QKV projection weight dtype
+    wo_dtype: ttnn.DataType | None = None  # Output projection weight dtype
+    activation_dtype: ttnn.DataType | None = None  # Intermediate activation dtype (post-RoPE, etc.)
 
-    # Weight memory configs
-    wqkv_memcfg: ttnn.MemoryConfig | None = None
-    wo_memcfg: ttnn.MemoryConfig | None = None
+    # Weight memory configs (None = DRAM interleaved by default)
+    wqkv_memcfg: ttnn.MemoryConfig | None = None  # QKV weight placement
+    wo_memcfg: ttnn.MemoryConfig | None = None  # Output weight placement
 
-    # Decode program configs
-    decode_input_memcfg: ttnn.MemoryConfig | None = None
-    decode_xqkv_prg_config: "ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig | None" = None
-    decode_sdpa_prg_config: ttnn.SDPAProgramConfig | None = None
-    decode_attn_output_prg_config: "ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig | None" = None
-    decode_residual_memcfg: ttnn.MemoryConfig | None = None
-    decode_create_qkv_head_memcfg: ttnn.MemoryConfig | None = None
-    decode_scores_memcfg: Callable[[int], ttnn.MemoryConfig] | None = None
+    # Decode program configs (None = auto-derived in _resolve_attention1d_config)
+    decode_input_memcfg: ttnn.MemoryConfig | None = None  # DRAM-sharded input for decode
+    decode_xqkv_prg_config: "ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig | None" = None  # QKV matmul
+    decode_sdpa_prg_config: ttnn.SDPAProgramConfig | None = None  # Scaled dot-product attention
+    decode_attn_output_prg_config: "ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig | None" = (
+        None  # WO matmul
+    )
+    decode_residual_memcfg: ttnn.MemoryConfig | None = None  # Residual add output placement
+    decode_create_qkv_head_memcfg: ttnn.MemoryConfig | None = None  # QKV head split output
+    decode_scores_memcfg: Callable[[int], ttnn.MemoryConfig] | None = None  # SDPA scores; f(batch_size)
 
-    # Prefill program configs
-    prefill_input_memcfg: ttnn.MemoryConfig | None = None
-    prefill_xqkv_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = None
-    prefill_sdpa_prg_config: Callable[[int, int | None], ttnn.SDPAProgramConfig] | None = None
-    prefill_wo_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = None
-    prefill_kv_memcfg: Callable[[int], ttnn.MemoryConfig] | None = None
+    # Prefill program configs (Callable factories: seq_len → config)
+    prefill_input_memcfg: ttnn.MemoryConfig | None = None  # DRAM interleaved input for prefill
+    prefill_xqkv_prg_config: Callable[
+        [int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
+    ] | None = None  # f(seq_len)
+    prefill_sdpa_prg_config: Callable[[int, int | None], ttnn.SDPAProgramConfig] | None = None  # f(seq_len, chunk_size)
+    prefill_wo_prg_config: Callable[[int], ttnn.MatmulMultiCoreReuseMultiCastProgramConfig] | None = None  # f(seq_len)
+    prefill_kv_memcfg: Callable[[int], ttnn.MemoryConfig] | None = None  # f(seq_len) for KV cache write
 
-    # Fused all-gather matmul (Ring topology)
-    use_fused_all_gather_matmul: bool | None = None  # None = auto-detect
-    decode_all_gather_matmul_prg_config: "ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None" = None
-    decode_all_gather_matmul_memcfg: ttnn.MemoryConfig | None = None
+    # Fused all-gather matmul (Ring topology only, decode path)
+    use_fused_all_gather_matmul: bool | None = None  # None = auto-detect based on topology + dim
+    decode_all_gather_matmul_prg_config: "ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None" = (
+        None  # Fused AG+WO
+    )
+    decode_all_gather_matmul_memcfg: ttnn.MemoryConfig | None = None  # Output placement for fused AG+WO
 
-    # Separate all-gather (non-Ring topology or non-fused path)
-    decode_gather_users_memcfg: ttnn.MemoryConfig | None = None
+    # Separate all-gather (non-Ring topology or non-fused decode path)
+    decode_gather_users_memcfg: ttnn.MemoryConfig | None = None  # Output placement for standalone all_gather
 
-    # Compute kernel configs
-    li_qkv_decode_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    sdpa_decode_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    li_o_decode_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    li_qkv_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    sdpa_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
-    li_o_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    # Compute kernel configs (None = auto-derived; fp32 dest acc, math fidelity, etc.)
+    li_qkv_decode_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Decode QKV matmul kernel
+    sdpa_decode_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Decode SDPA kernel
+    li_o_decode_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Decode WO matmul kernel
+    li_qkv_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Prefill QKV matmul kernel
+    sdpa_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Prefill SDPA kernel
+    li_o_prefill_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None  # Prefill WO matmul kernel
 
     # Transformation matrices for rotary embedding (static, computed once).
     # These are NOT LazyWeights because they are:
@@ -915,7 +921,7 @@ class Attention1D(LightweightModule):
         ttnn.experimental.paged_update_cache(values, v_heads, update_idxs_tensor=current_pos, page_table=page_table)
 
     def load_device_weights(self):
-        """Load weights to device lazily."""
+        """Materialize LazyWeights onto device. Called automatically on first forward; idempotent."""
         if self._device_weights_loaded:
             return
 
@@ -1488,7 +1494,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     if config.min_kv_prefill_shard_seqlen is None:
         to_set["min_kv_prefill_shard_seqlen"] = (TILE_SIZE * 8 * 8) // (n_kv_heads // num_devices)
 
-    # --- Phase 3: Dtypes ---
+    # --- Phase 4: Dtypes ---
 
     if config.wqkv_dtype is None:
         to_set["wqkv_dtype"] = ttnn.bfloat8_b
@@ -1497,7 +1503,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     if config.activation_dtype is None:
         to_set["activation_dtype"] = ttnn.bfloat16
 
-    # --- Phase 4: Compute kernel configs ---
+    # --- Phase 5: Compute kernel configs ---
 
     compute_kernel_hifi2_fp16 = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -1525,7 +1531,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     if config.li_o_prefill_compute_kernel_cfg is None:
         to_set["li_o_prefill_compute_kernel_cfg"] = compute_kernel_hifi2_fp16
 
-    # --- Phase 5: Program configs ---
+    # --- Phase 6: Program configs ---
 
     tile_size = TILE_SIZE
     tile_padded_batch_rows = tile_size * math.ceil(config.max_batch_size / tile_size)
@@ -1738,7 +1744,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             use_height_and_width_as_shard_shape=True,
         )
 
-    # --- Phase 6: Input/output memory configs ---
+    # --- Phase 7: Input/output memory configs ---
 
     if config.decode_input_memcfg is None:
         # All 1D topologies use WIDTH_SHARDED for DRAM-sharded matmul (matches TTTv1)
@@ -1754,7 +1760,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     if config.prefill_input_memcfg is None:
         to_set["prefill_input_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
 
-    # --- Phase 7: Resolve LazyWeights ---
+    # --- Phase 8: Resolve LazyWeights ---
 
     wqkv_dtype = to_set.get("wqkv_dtype", config.wqkv_dtype)
     wo_dtype = to_set.get("wo_dtype", config.wo_dtype)
@@ -1830,7 +1836,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             k_norm_cfg = replace(k_norm_cfg, mesh_device=mesh_device)
         to_set["k_norm_config"] = k_norm_cfg
 
-    # --- Phase 8: Handle QKV bias ---
+    # --- Phase 9: Handle QKV bias ---
 
     if config.wqkv_bias is not None:
         # Extract source tensor from LazyWeight for custom transformation
@@ -1874,7 +1880,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             wqkv_bias_decode.append(decode_bias_lazy)
         to_set["_wqkv_bias_decode"] = wqkv_bias_decode
 
-    # --- Phase 9: Create transformation matrices for rotary embedding ---
+    # --- Phase 10: Create transformation matrices for rotary embedding ---
 
     if config.transformation_mat_decode is None:
         use_qk_fused = config.use_qk_fused
@@ -1917,7 +1923,7 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
         )
         to_set["transformation_mat_prefill"] = transformation_mat_prefill
 
-    # --- Phase 10: Resolve KV cache ---
+    # --- Phase 11: Resolve KV cache ---
     # KV cache is a static configuration, allocated once and reused for all forward calls.
     # If use_paged_kv_cache=True, the cache is managed externally (e.g., by vLLM) and not created here.
     if not config.use_vllm_paged_kv_cache:

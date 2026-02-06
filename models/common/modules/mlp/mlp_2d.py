@@ -5,8 +5,8 @@
 TTTv2-style MLP module for TG (Galaxy) devices with 2D mesh topology.
 
 Single unified MLP2D class with separate forward methods:
-  - decode_forward(): For decode mode (seq_len <= 32)
-  - prefill_forward(): For prefill mode (seq_len > 32)
+  - decode_forward(): For decode mode
+  - prefill_forward(): For prefill mode
   - forward(x, mode): Dispatcher that calls the appropriate method
 
 Execution paths:
@@ -44,7 +44,8 @@ class MLP2DConfig:
     """
     Central configuration for MLP2D - the single source of truth for all settings.
 
-    After __post_init__, all None fields are populated with derived defaults.
+    None fields are populated with derived defaults during config resolution
+    (inside ``MLP2D.__init__`` or ``MLP2D.from_config``).
 
     Simple usage (all defaults):
         config = MLP2DConfig(w1, w2, w3)
@@ -169,6 +170,7 @@ class MLP2D(LightweightModule):
         return instance
 
     def load_device_weights(self):
+        """Materialize LazyWeights onto device. Called automatically on first forward; idempotent."""
         if self._device_weights_loaded:
             return
 

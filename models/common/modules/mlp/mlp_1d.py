@@ -4,7 +4,7 @@
 """
 TTTv2-style MLP module for 1D-topology devices: N150 (1x1), N300 (1x2), T3K (1x8).
 
-Single unified MLPNonTG class with separate forward methods:
+Single unified MLP1D class with separate forward methods:
   - decode_forward(): For decode mode
   - prefill_forward(): For prefill mode
   - forward(x, mode): Dispatcher that calls the appropriate method
@@ -177,6 +177,7 @@ class MLP1D(LightweightModule):
         return instance
 
     def load_device_weights(self):
+        """Materialize LazyWeights onto device. Called automatically on first forward; idempotent."""
         if self._device_weights_loaded:
             return
 
@@ -588,11 +589,6 @@ class MLP1D(LightweightModule):
 
 
 # =============================================================================
-# Topology auto-detection helper
-# =============================================================================
-
-
-# =============================================================================
 # Config helper functions (adapted from TTTv1 model_config.py)
 # =============================================================================
 
@@ -829,7 +825,7 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
 
     if config.decode_input_memcfg is None:
         to_set["decode_input_memcfg"] = ttnn.create_sharded_memory_config(
-            (tile_padded_batch_rows, dim // mlp_core_grid.num_cores),  # Shard shape> 1 shard per core
+            (tile_padded_batch_rows, dim // mlp_core_grid.num_cores),  # Shard shape: 1 shard per core
             mlp_core_grid,
             ttnn.ShardStrategy.WIDTH,
             ttnn.ShardOrientation.ROW_MAJOR,
