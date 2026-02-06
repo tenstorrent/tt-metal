@@ -692,26 +692,26 @@ MoEComputeMeshWorkloadFactory::create_at(
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_reader.cpp",
         tilize_core_range_set,
         tt::tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::NOC_1,
-            .noc_mode = NOC_MODE::DM_DYNAMIC_NOC,
-            .compile_args = tilize_compile_time_args,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::NOC_1,
+            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .compile_args = std::move(tilize_compile_time_args),
             .defines = {},
-            .named_compile_args = tilize_named_compile_time_args,
-            .opt_level = KernelBuildOptLevel::O2});
+            .named_compile_args = std::move(tilize_named_compile_time_args),
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
 
     tt::tt_metal::KernelHandle tilize_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_writer.cpp",
         tilize_core_range_set,
         tt::tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::NOC_1,
-            .noc_mode = NOC_MODE::DM_DYNAMIC_NOC,
-            .compile_args = tilize_compile_time_args,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::NOC_1,
+            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .compile_args = std::move(tilize_compile_time_args),
             .defines = {},
-            .named_compile_args = tilize_named_compile_time_args,
-            .opt_level = KernelBuildOptLevel::O2});
+            .named_compile_args = std::move(tilize_named_compile_time_args),
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
 
     // Compute kernel compile-time args for tilization
     std::unordered_map<std::string, uint32_t> compute_tilize_named_compile_time_args = {
