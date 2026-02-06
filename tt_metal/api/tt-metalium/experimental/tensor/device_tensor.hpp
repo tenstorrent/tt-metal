@@ -81,7 +81,8 @@ public:
      * @param mesh_device The mesh device to allocate on.
      * @return A DeviceTensor with allocated device memory.
      */
-    static DeviceTensor allocate_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+    // TODO: overload for tensor topology
+    static DeviceTensor allocate_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice& mesh_device);
 
     /**
      * Deallocate and release owned device memory.

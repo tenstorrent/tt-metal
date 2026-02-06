@@ -46,19 +46,10 @@ TEST_F(TransferToDeviceTest, BasicTransfer) {
     HostBuffer host_buffer{std::move(data_copy)};
     HostTensor host_tensor{std::move(host_buffer), tensor_spec, TensorTopology{}};
 
-    // Create device tensor spec with DRAM memory config
+    // Create device tensor spec with DRAM memory config and allocate on device
     TensorSpec device_tensor_spec(
         shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{BufferType::DRAM}));
-
-    // Allocate mesh buffer for device tensor
-    distributed::ReplicatedBufferConfig global_config{.size = device_tensor_spec.compute_packed_buffer_size_bytes()};
-    distributed::DeviceLocalBufferConfig local_config{
-        .page_size = device_tensor_spec.compute_packed_buffer_size_bytes(), .buffer_type = BufferType::DRAM};
-    auto mesh_buffer = distributed::MeshBuffer::create(global_config, local_config, mesh_device_.get());
-
-    // Create DeviceTensor from the allocated buffer
-    DeviceStorage device_storage(mesh_buffer, {distributed::MeshCoordinate{0, 0}});
-    DeviceTensor device_tensor(std::move(device_storage), device_tensor_spec, TensorTopology{});
+    auto device_tensor = DeviceTensor::allocate_on_device(device_tensor_spec, mesh_device_.get());
 
     ASSERT_TRUE(device_tensor.is_allocated());
 
@@ -89,14 +80,7 @@ TEST_F(TransferToDeviceTest, TopologyUpdatedAfterTransfer) {
 
     TensorSpec device_tensor_spec(
         shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{BufferType::DRAM}));
-
-    distributed::ReplicatedBufferConfig global_config{.size = device_tensor_spec.compute_packed_buffer_size_bytes()};
-    distributed::DeviceLocalBufferConfig local_config{
-        .page_size = device_tensor_spec.compute_packed_buffer_size_bytes(), .buffer_type = BufferType::DRAM};
-    auto mesh_buffer = distributed::MeshBuffer::create(global_config, local_config, mesh_device_.get());
-
-    DeviceStorage device_storage(mesh_buffer, {distributed::MeshCoordinate{0, 0}});
-    DeviceTensor device_tensor(std::move(device_storage), device_tensor_spec, TensorTopology{});
+    auto device_tensor = DeviceTensor::allocate_on_device(device_tensor_spec, mesh_device_.get());
 
     auto& cq = mesh_device_->mesh_command_queue();
     TransferToDevice(cq, host_tensor, device_tensor, /*blocking=*/true);
@@ -128,25 +112,10 @@ TEST_F(TransferToDeviceTest, ReplicationToMultiDeviceMesh) {
     HostBuffer host_buffer{std::move(data_copy)};
     HostTensor host_tensor{std::move(host_buffer), tensor_spec, TensorTopology{}};
 
-    // Create device tensor on the full mesh
+    // Create device tensor on the full mesh using allocate_on_device
     TensorSpec device_tensor_spec(
         shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{BufferType::DRAM}));
-
-    distributed::ReplicatedBufferConfig global_config{.size = device_tensor_spec.compute_packed_buffer_size_bytes()};
-    distributed::DeviceLocalBufferConfig local_config{
-        .page_size = device_tensor_spec.compute_packed_buffer_size_bytes(), .buffer_type = BufferType::DRAM};
-    auto mesh_buffer = distributed::MeshBuffer::create(global_config, local_config, mesh_device_.get());
-
-    // Build coords for all devices in the mesh
-    std::vector<distributed::MeshCoordinate> all_coords;
-    for (size_t row = 0; row < mesh_shape[0]; ++row) {
-        for (size_t col = 0; col < mesh_shape[1]; ++col) {
-            all_coords.emplace_back(row, col);
-        }
-    }
-
-    DeviceStorage device_storage(mesh_buffer, all_coords);
-    DeviceTensor device_tensor(std::move(device_storage), device_tensor_spec, TensorTopology{});
+    auto device_tensor = DeviceTensor::allocate_on_device(device_tensor_spec, mesh_device_.get());
 
     ASSERT_TRUE(device_tensor.is_allocated());
 
@@ -155,10 +124,12 @@ TEST_F(TransferToDeviceTest, ReplicationToMultiDeviceMesh) {
     TransferToDevice(cq, host_tensor, device_tensor, /*blocking=*/true);
 
     // Read data back from all devices and verify replication
-    for (size_t i = 0; i < all_coords.size(); ++i) {
-        std::vector<float> result_data(num_elements);
-        distributed::ReadShard(cq, result_data, device_tensor.mesh_buffer(), all_coords[i]);
-        EXPECT_EQ(result_data, host_data) << "Data mismatch at coord index " << i;
+    for (size_t row = 0; row < mesh_shape[0]; ++row) {
+        for (size_t col = 0; col < mesh_shape[1]; ++col) {
+            std::vector<float> result_data(num_elements);
+            distributed::ReadShard(cq, result_data, device_tensor.mesh_buffer(), distributed::MeshCoordinate{row, col});
+            EXPECT_EQ(result_data, host_data) << "Data mismatch at coord (" << row << ", " << col << ")";
+        }
     }
 }
 

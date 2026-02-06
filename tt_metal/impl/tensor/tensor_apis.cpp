@@ -82,18 +82,18 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
 
 }  // namespace tensor_impl
 
-DeviceTensor DeviceTensor::allocate_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
-    auto mesh_buffer = tensor_impl::allocate_device_buffer(mesh_device, tensor_spec);
+DeviceTensor DeviceTensor::allocate_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice& mesh_device) {
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, tensor_spec);
 
     std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(mesh_device->shape().mesh_size());
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+    coords.reserve(mesh_device.shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
         coords.push_back(coord);
     }
     DeviceStorage device_storage(std::move(mesh_buffer), coords);
 
     // Create a fully replicated tensor topology
-    auto tensor_topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device->shape());
+    auto tensor_topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device.shape());
 
     return DeviceTensor(std::move(device_storage), tensor_spec, tensor_topology);
 }
