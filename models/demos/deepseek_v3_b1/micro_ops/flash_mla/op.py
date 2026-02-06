@@ -31,13 +31,6 @@ def pack_two_bfloat16_into_uint32(val: float) -> int:
     return (bfloat16_val << 16) | bfloat16_val
 
 
-def float_to_uint32(val: float) -> int:
-    """Convert float to uint32 representation."""
-    import struct
-
-    return struct.unpack("I", struct.pack("f", val))[0]
-
-
 def get_noc_max_page_size() -> int:
     """Get NOC max page size for Blackhole architecture."""
     return 16384
@@ -347,6 +340,82 @@ class FlashMLADecode:
         return output
 
     @staticmethod
+    def golden_dummy(
+        q: torch.Tensor,
+        kv_cache: torch.Tensor,
+        position_ids: torch.Tensor,
+        head_dim_v: int,
+        kv_chunk_size: int,
+    ) -> torch.Tensor:
+        """
+        Simplified golden matching the dummy compute kernel (no softmax, no scale).
+
+        For each KV chunk:
+            QK = Q @ K_chunk^T          -> [num_heads, 1, chunk_len]
+            OUT_chunk = QK @ V_chunk     -> [num_heads, 1, head_dim_v]
+        Final output = sum of all chunk outputs.
+
+        Args:
+            q: Query tensor [1, batch_size, num_heads, kvpe_dim]
+            kv_cache: KV cache tensor [batch_size, 1, max_seq_len, kvpe_dim]
+            position_ids: Position indices [batch_size]
+            head_dim_v: The value head dimension (first head_dim_v elements of kvpe_dim)
+            kv_chunk_size: Size of each KV chunk (must match k_chunk_size in ProgramConfig)
+
+        Returns:
+            Attention output [1, batch_size, num_heads, head_dim_v]
+        """
+        batch_size = q.shape[1]
+        num_heads = q.shape[2]
+        kvpe_dim = q.shape[3]
+
+        # Reshape Q: [1, batch, num_heads, kvpe_dim] -> [batch, num_heads, 1, kvpe_dim]
+        q = q.permute(1, 2, 0, 3)  # [batch, num_heads, 1, kvpe_dim]
+
+        outputs = []
+        for b in range(batch_size):
+            seq_len = position_ids[b].item() + 1
+
+            # Get KV for this batch: [1, seq_len, kvpe_dim]
+            kv = kv_cache[b, :, :seq_len, :]  # [1, seq_len, kvpe_dim]
+
+            # Expand KV to num_heads: [num_heads, seq_len, kvpe_dim]
+            kv_expanded = kv.expand(num_heads, seq_len, kvpe_dim)
+
+            # Q for this batch: [num_heads, 1, kvpe_dim]
+            q_b = q[b]
+
+            # Break into chunks and accumulate (no softmax, no scale)
+            num_chunks = (seq_len + kv_chunk_size - 1) // kv_chunk_size
+            out_b = torch.zeros(num_heads, 1, head_dim_v, dtype=q.dtype)
+
+            for c in range(num_chunks):
+                start = c * kv_chunk_size
+                end = min(start + kv_chunk_size, seq_len)
+
+                k_chunk = kv_expanded[:, start:end, :]  # [num_heads, chunk_len, kvpe_dim]
+                v_chunk = k_chunk[:, :, :head_dim_v]  # [num_heads, chunk_len, head_dim_v]
+
+                # QK = Q @ K_chunk^T (no scale!)
+                qk = torch.matmul(q_b, k_chunk.transpose(-2, -1))  # [num_heads, 1, chunk_len]
+
+                # OUT_chunk = QK @ V_chunk
+                out_chunk = torch.matmul(qk, v_chunk)  # [num_heads, 1, head_dim_v]
+
+                out_b += out_chunk
+
+            outputs.append(out_b)
+
+        # Stack outputs: [batch, num_heads, 1, head_dim_v]
+        output = torch.stack(outputs, dim=0)
+
+        # Reshape to [1, batch, num_heads, head_dim_v]
+        output = output.squeeze(2)  # [batch, num_heads, head_dim_v]
+        output = output.unsqueeze(0)  # [1, batch, num_heads, head_dim_v]
+
+        return output
+
+    @staticmethod
     def op(
         q_tensor: ttnn.Tensor,
         kv_cache_tensor: ttnn.Tensor,
@@ -386,7 +455,6 @@ class FlashMLADecode:
 
         # Program config parameters
         k_chunk_size = program_config.k_chunk_size
-        exp_approx_mode = program_config.exp_approx_mode
         grid = program_config.grid
 
         # Validate device has sufficient grid size for hard-coded S block layout
@@ -537,12 +605,6 @@ class FlashMLADecode:
         out_in0_num_subblocks = PNHt // out_out_subblock_h
         out_in1_num_subblocks = vDHt // out_out_subblock_w
 
-        dht_granularity = min(DHt, dst_size)
-        log2_dht_granularity = int(math.log2(dht_granularity)) if dht_granularity > 0 else 0
-        if dht_granularity != (1 << log2_dht_granularity):
-            dht_granularity = 1
-            log2_dht_granularity = 0
-
         # =========================================================================
         # Data formats (matching C++ lines 374-426)
         # =========================================================================
@@ -609,7 +671,6 @@ class FlashMLADecode:
         # =========================================================================
         packed_identity_scalar = pack_two_bfloat16_into_uint32(1.0)
         packed_zero_scalar = pack_two_bfloat16_into_uint32(0.0)
-        scale_uint32 = float_to_uint32(scale)
 
         # =========================================================================
         # Create output core lists (matching C++ lines 671-721)
@@ -703,29 +764,11 @@ class FlashMLADecode:
             num_heads_per_core,  # 20 (always 1)
             B,  # 21: q_heads_parallel_factor
             Q_TILE_HEIGHT,  # 22: Q tile height
-            scale_uint32,  # 23
+            0,  # 23: scale_fp32 (unused by simplified compute)
             grid.NUM_TREE_REDUCTION_STEPS,  # 24: tree reduction steps (3)
         ]
 
-        # Compute defines (C++ lines 844-892)
-        sub_exp_granularity = min(Sk_chunk_t, dst_size)
-        log2_sub_exp_granularity = int(math.log2(sub_exp_granularity))
-        mul_bcast_granularity = min(PNHt * Sk_chunk_t, dst_size)
-        log2_mul_bcast_granularity = int(math.log2(mul_bcast_granularity))
-        stats_granularity = min(Sk_chunk_t, dst_size)
-        log2_stats_granularity = int(math.log2(stats_granularity))
-
-        compute_defines = [
-            ("SUB_EXP_GRANULARITY", str(sub_exp_granularity)),
-            ("LOG2_SUB_EXP_GRANULARITY", str(log2_sub_exp_granularity)),
-            ("MUL_BCAST_GRANULARITY", str(mul_bcast_granularity)),
-            ("LOG2_MUL_BCAST_GRANULARITY", str(log2_mul_bcast_granularity)),
-            ("STATS_GRANULARITY", str(stats_granularity)),
-            ("LOG2_STATS_GRANULARITY", str(log2_stats_granularity)),
-            ("EXP_APPROX_MODE", "1" if exp_approx_mode else "0"),
-            ("DHT_GRANULARITY", str(dht_granularity)),
-            ("LOG2_DHT_GRANULARITY", str(log2_dht_granularity)),
-        ]
+        # No compute defines needed for simplified kernel (no softmax)
 
         # =========================================================================
         # Create CB descriptors (matching C++ lines 475-655)
@@ -841,78 +884,6 @@ class FlashMLADecode:
                 total_size=out_im_tiles * im_tile_size,
                 core_ranges=core_grid,
                 format_descriptors=[ttnn.CBFormatDescriptor(26, im_df, im_tile_size, im_tile_descriptor)],
-            )
-        )
-
-        # c_27: cb_cur_max (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(27, stats_df, stats_tile_size, stats_tile_descriptor)],
-            )
-        )
-
-        # c_28: cb_prev_max (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(28, stats_df, stats_tile_size, stats_tile_descriptor)],
-            )
-        )
-
-        # c_29: cb_cur_sum (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(29, stats_df, stats_tile_size, stats_tile_descriptor)],
-            )
-        )
-
-        # c_30: cb_prev_sum (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(30, stats_df, stats_tile_size, stats_tile_descriptor)],
-            )
-        )
-
-        # c_31: cb_exp_max_diff (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(31, stats_df, stats_tile_size, stats_tile_descriptor)],
-            )
-        )
-
-        # c_21: cb_prev_sum_2 (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(21, stats_df, stats_tile_size, stats_tile_descriptor)],
-            )
-        )
-
-        # c_22: cb_exp_max_diff_2 (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=statistics_tiles * stats_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(22, stats_df, stats_tile_size, stats_tile_descriptor)],
-            )
-        )
-
-        # c_23: cb_out_accumulate_im_2 (tiny tile)
-        cb_descriptors.append(
-            ttnn.CBDescriptor(
-                total_size=out_im_tiles * im_tile_size,
-                core_ranges=core_grid,
-                format_descriptors=[ttnn.CBFormatDescriptor(23, im_df, im_tile_size, im_tile_descriptor)],
             )
         )
 
@@ -1101,7 +1072,6 @@ class FlashMLADecode:
                 core_ranges=core_grid,
                 compile_time_args=compute_compile_time_args,
                 runtime_args=compute_rtargs,
-                defines=compute_defines,
                 config=ttnn.ComputeConfigDescriptor(
                     math_fidelity=math_fidelity,
                     fp32_dest_acc_en=fp32_dest_acc_en,

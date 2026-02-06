@@ -151,14 +151,14 @@ def test_flash_mla_decode(device, batch_size, num_chunks, k_chunk_size, max_seq_
         packer_l1_acc=False,
     )
 
-    # Compute PyTorch reference using FlashMLADecode.golden
+    # Compute PyTorch reference using FlashMLADecode.golden_dummy (matches simplified compute kernel)
     logger.info("Computing PyTorch reference...")
-    reference_output = FlashMLADecode.golden(
+    reference_output = FlashMLADecode.golden_dummy(
         q=torch_q,
         kv_cache=torch_cache,
         position_ids=position_ids,
         head_dim_v=kv_lora_rank,
-        scale=scale,
+        kv_chunk_size=k_chunk_size,
     )
 
     # Run the op - stress test with multiple iterations
