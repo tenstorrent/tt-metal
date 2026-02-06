@@ -24,7 +24,9 @@ struct ExecuteScaledDotProductAttention {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
+        const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+        bool use_mla = false,
+        std::optional<uint32_t> head_dim_v = std::nullopt);
 };
 
 struct ExecuteChunkedScaledDotProductAttention {

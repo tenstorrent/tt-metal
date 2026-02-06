@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 from pathlib import Path
 
 import torch
@@ -251,9 +252,12 @@ class MoEGate(AbstractModule):
 
         # calculate top-2 scores with expert groups
         if cfg["topk_fallback"]:
+            begin_time = time.time()
             topk_scores_within_expert_groups, topk_indices_within_expert_groups = cls.topk_fallback_op(
                 expert_scores_grouped, **cfg["topk_fallback_config"], **cfg["topk_within_expert_groups"]
             )
+            end_time = time.time()
+            print(f"Topk fallback op completed in {end_time - begin_time} seconds")
         else:
             if expert_scores_grouped.shape[3] < TOPK_MIN_WIDTH:
                 # Pad to 64 for topk op
@@ -275,9 +279,12 @@ class MoEGate(AbstractModule):
 
         # calculate top-k expert groups
         if cfg["topk_fallback"]:
+            begin_time = time.time()
             topk_expert_groups_scores, topk_expert_groups_indices = cls.topk_fallback_op(
                 expert_group_scores, **cfg["topk_fallback_config"], **cfg["topk_expert_groups"]
             )
+            end_time = time.time()
+            print(f"Topk fallback op completed in {end_time - begin_time} seconds")
         else:
             if expert_group_scores.shape[3] < TOPK_MIN_WIDTH:
                 expert_group_scores = ttnn.pad(
@@ -319,9 +326,12 @@ class MoEGate(AbstractModule):
 
         # calculate top-k experts
         if cfg["topk_fallback"]:
+            begin_time = time.time()
             topk_experts_scores_with_bias, topk_experts_indices = cls.topk_fallback_op(
                 active_experts_scores, **cfg["topk_fallback_config"], **cfg["topk_experts"]
             )
+            end_time = time.time()
+            print(f"Topk fallback op completed in {end_time - begin_time} seconds")
         else:
             topk_experts_scores_with_bias, topk_experts_indices = ttnn.topk(
                 active_experts_scores, **cfg["topk_experts"]

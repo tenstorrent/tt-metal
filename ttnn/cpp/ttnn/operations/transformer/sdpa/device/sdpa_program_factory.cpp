@@ -22,7 +22,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const SDPAParams& operation_attributes, const SDPAInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
-    const auto& input_tensor_v = operation_attributes.use_mla ? tensor_args.k : tensor_args.v.value_or(tensor_args.k);
+    const auto& input_tensor_v =
+        operation_attributes.use_mla ? tensor_args.v.value_or(tensor_args.k) : tensor_args.v.value_or(tensor_args.k);
     const auto& output_tensor = tensor_return_value;
     const auto& attn_mask = tensor_args.attn_mask;
     const auto& page_table = tensor_args.page_table;
@@ -50,6 +51,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     V: B x NKH x S x DH
     attn_mask: B x NQH x S x S  or  B x 1 x S x S
     */
+    // Needs to be changed to support  NKH != NVH (if K is [1, 1, seq_len, 512], and V is [1, 1, seq_len, 128])
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = input_tensor_k.logical_shape();
@@ -76,6 +78,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t Sqt = padded_Sq / TILE_HEIGHT;
     const uint32_t Skt = padded_Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
+    // needs changing here as well.
     const uint32_t vDHt = use_mla ? head_dim_v / TILE_WIDTH : DHt;
 
     const uint32_t valid_Sqt = std::ceil((float)Sq / TILE_HEIGHT);
@@ -96,28 +99,27 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const bool broadcast_provided_mask_heads = use_provided_mask ? (attn_mask.value().logical_shape()[1] == 1) : true;
 
     // log_debug all of the above
-    log_debug(tt::LogOp, "B: {}", B);
-    log_debug(tt::LogOp, "NQH: {}", NQH);
+    log_info(tt::LogOp, "B: {}", B);
+    log_info(tt::LogOp, "NQH: {}", NQH);
 
-    log_debug(tt::LogOp, "Sq: {}", Sq);
-    log_debug(tt::LogOp, "Sk: {}", Sk);
-    log_debug(tt::LogOp, "padded_Sq: {}", padded_Sq);
-    log_debug(tt::LogOp, "padded_Sk: {}", padded_Sk);
-    log_debug(tt::LogOp, "valid_Sqt: {}", valid_Sqt);
-    log_debug(tt::LogOp, "valid_Skt: {}", valid_Skt);
-    log_debug(tt::LogOp, "DH: {}", DH);
-    log_debug(tt::LogOp, "Sqt: {}", Sqt);
-    log_debug(tt::LogOp, "Skt: {}", Skt);
-    log_debug(tt::LogOp, "DHt: {}", DHt);
-    log_debug(tt::LogOp, "vDHt: {}", vDHt);
-    log_debug(tt::LogOp, "Sq_chunk_t: {}", Sq_chunk_t);
-    log_debug(tt::LogOp, "Sk_chunk_t: {}", Sk_chunk_t);
-    log_debug(tt::LogOp, "q_chunk_size: {}", q_chunk_size);
-    log_debug(tt::LogOp, "k_chunk_size: {}", k_chunk_size);
-    log_debug(tt::LogOp, "q_num_chunks: {}", q_num_chunks);
-    log_debug(tt::LogOp, "k_num_chunks: {}", k_num_chunks);
-    log_debug(tt::LogOp, "NKH: {}", NKH);
-    log_debug(tt::LogOp, "sliding_window_size: {}", sliding_window_size.has_value() ? sliding_window_size.value() : 0);
+    log_info(tt::LogOp, "Sk: {}", Sk);
+    log_info(tt::LogOp, "padded_Sq: {}", padded_Sq);
+    log_info(tt::LogOp, "padded_Sk: {}", padded_Sk);
+    log_info(tt::LogOp, "valid_Sqt: {}", valid_Sqt);
+    log_info(tt::LogOp, "valid_Skt: {}", valid_Skt);
+    log_info(tt::LogOp, "DH: {}", DH);
+    log_info(tt::LogOp, "Sqt: {}", Sqt);
+    log_info(tt::LogOp, "Skt: {}", Skt);
+    log_info(tt::LogOp, "DHt: {}", DHt);
+    log_info(tt::LogOp, "vDHt: {}", vDHt);
+    log_info(tt::LogOp, "Sq_chunk_t: {}", Sq_chunk_t);
+    log_info(tt::LogOp, "Sk_chunk_t: {}", Sk_chunk_t);
+    log_info(tt::LogOp, "q_chunk_size: {}", q_chunk_size);
+    log_info(tt::LogOp, "k_chunk_size: {}", k_chunk_size);
+    log_info(tt::LogOp, "q_num_chunks: {}", q_num_chunks);
+    log_info(tt::LogOp, "k_num_chunks: {}", k_num_chunks);
+    log_info(tt::LogOp, "NKH: {}", NKH);
+    log_info(tt::LogOp, "sliding_window_size: {}", sliding_window_size.has_value() ? sliding_window_size.value() : 0);
 
     // In chunked prefill mode, the offset of Q in terms of Q chunks
     uint32_t chunked_q_chunk_offset = 0;
@@ -162,7 +164,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     auto* q_buffer = input_tensor_q.buffer();
     auto* k_buffer = input_tensor_k.buffer();
-    auto* v_buffer = use_mla ? input_tensor_k.buffer() : input_tensor_v.buffer();
+    auto* v_buffer = input_tensor_v.buffer();
     auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
     auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
 
@@ -198,10 +200,10 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         batch_parallel_factor * nh_parallel_factor * q_parallel_factor,
         num_cores);
 
-    log_debug(tt::LogOp, "Parallelization scheme:");
-    log_debug(tt::LogOp, "batch_parallel_factor: {}", batch_parallel_factor);
-    log_debug(tt::LogOp, "nh_parallel_factor: {}", nh_parallel_factor);
-    log_debug(tt::LogOp, "q_parallel_factor: {}", q_parallel_factor);
+    log_info(tt::LogOp, "Parallelization scheme:");
+    log_info(tt::LogOp, "batch_parallel_factor: {}", batch_parallel_factor);
+    log_info(tt::LogOp, "nh_parallel_factor: {}", nh_parallel_factor);
+    log_info(tt::LogOp, "q_parallel_factor: {}", q_parallel_factor);
 
     // Ceiling divide to allow for non-perfect divisions
     const uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
@@ -210,7 +212,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
 
-    log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
+    log_info(tt::LogOp, "q_per_core: {}", q_per_core);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
@@ -225,15 +227,15 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
 
     // log all values
-    log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
-    log_debug(tt::LogOp, "k_tiles: {}", k_tiles);
-    log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
-    log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
-    log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
-    log_debug(tt::LogOp, "out0_t: {}", out0_t);
-    log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
-    log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
-    log_debug(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
+    log_info(tt::LogOp, "q_tiles: {}", q_tiles);
+    log_info(tt::LogOp, "k_tiles: {}", k_tiles);
+    log_info(tt::LogOp, "v_tiles: {}", v_tiles);
+    log_info(tt::LogOp, "mask_tiles: {}", mask_tiles);
+    log_info(tt::LogOp, "qk_tiles: {}", qk_tiles);
+    log_info(tt::LogOp, "out0_t: {}", out0_t);
+    log_info(tt::LogOp, "scale_tiles: {}", scale_tiles);
+    log_info(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
+    log_info(tt::LogOp, "attention_sink_tiles: {}", attention_sink_tiles);
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -266,19 +268,19 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // log all values
-    log_debug(tt::LogOp, "dst_size: {}", dst_size);
-    log_debug(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);
-    log_debug(tt::LogOp, "qk_out_subblock_w: {}", qk_out_subblock_w);
-    log_debug(tt::LogOp, "qk_out_subblock_h: {}", qk_out_subblock_h);
-    log_debug(tt::LogOp, "qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
-    log_debug(tt::LogOp, "qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
-    log_debug(tt::LogOp, "qk_num_blocks: {}", qk_num_blocks);
-    log_debug(tt::LogOp, "out_in0_block_w: {}", out_in0_block_w);
-    log_debug(tt::LogOp, "out_out_subblock_w: {}", out_out_subblock_w);
-    log_debug(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
-    log_debug(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
-    log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
-    log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
+    log_info(tt::LogOp, "dst_size: {}", dst_size);
+    log_info(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);
+    log_info(tt::LogOp, "qk_out_subblock_w: {}", qk_out_subblock_w);
+    log_info(tt::LogOp, "qk_out_subblock_h: {}", qk_out_subblock_h);
+    log_info(tt::LogOp, "qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
+    log_info(tt::LogOp, "qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
+    log_info(tt::LogOp, "qk_num_blocks: {}", qk_num_blocks);
+    log_info(tt::LogOp, "out_in0_block_w: {}", out_in0_block_w);
+    log_info(tt::LogOp, "out_out_subblock_w: {}", out_out_subblock_w);
+    log_info(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
+    log_info(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
+    log_info(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
+    log_info(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
 
     // Determine granularity for statistics computation
     const uint32_t stats_granularity = std::min(Sq_chunk_t, dst_size);
@@ -325,16 +327,16 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         reduce_granularity);
 
     // Log these
-    log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
-    log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
-    log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
-    log_debug(tt::LogOp, "mul_bcast_granularity: {}", mul_bcast_granularity);
-    log_debug(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
-    log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
-    log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
-    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
-    log_debug(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
+    log_info(tt::LogOp, "stats_granularity: {}", stats_granularity);
+    log_info(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
+    log_info(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
+    log_info(tt::LogOp, "log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
+    log_info(tt::LogOp, "mul_bcast_granularity: {}", mul_bcast_granularity);
+    log_info(tt::LogOp, "log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
+    log_info(tt::LogOp, "dht_granularity: {}", dht_granularity);
+    log_info(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
+    log_info(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
+    log_info(tt::LogOp, "log2_reduce_granularity: {}", log2_reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -487,12 +489,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
 
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
-    tt::DataFormat v_df;
-    if (use_mla) {
-        v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
-    } else {
-        v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    }
+    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
+    // if (use_mla) {
+    //     v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
+    // } else {
+    //     v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
+    // }
     tt::DataFormat mask_df = attn_mask.has_value()
                                  ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
                                  : tt::DataFormat::Bfp4_b;
@@ -511,14 +513,14 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
 
-    log_debug(tt::LogOp, "q_data_format: {}", q_df);
-    log_debug(tt::LogOp, "k_data_format: {}", k_df);
-    log_debug(tt::LogOp, "v_data_format: {}", v_df);
-    log_debug(tt::LogOp, "mask_data_format: {}", mask_df);
-    log_debug(tt::LogOp, "out_data_format: {}", out_df);
-    log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
-    log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
-    log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
+    log_info(tt::LogOp, "q_data_format: {}", q_df);
+    log_info(tt::LogOp, "k_data_format: {}", k_df);
+    log_info(tt::LogOp, "v_data_format: {}", v_df);
+    log_info(tt::LogOp, "mask_data_format: {}", mask_df);
+    log_info(tt::LogOp, "out_data_format: {}", out_df);
+    log_info(tt::LogOp, "scalar_data_format: {}", scalar_df);
+    log_info(tt::LogOp, "intermediate_data_format: {}", im_df);
+    log_info(tt::LogOp, "statistics_data_format: {}", stats_df);
 
     // Q input
     auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
@@ -738,7 +740,16 @@ void SDPAProgramFactory::override_runtime_arguments(
 
     auto *q_buffer = tensor_args.q.buffer();
     auto *k_buffer = tensor_args.k.buffer();
-    auto *v_buffer = use_mla ? tensor_args.k.buffer() : tensor_args.v.value_or(tensor_args.k).buffer();
+    Buffer* v_buffer = nullptr;
+    if (use_mla) {
+        if (tensor_args.v.has_value()) {
+            v_buffer = tensor_args.v.value().buffer();
+        } else {
+            v_buffer = tensor_args.k.buffer();
+        }
+    } else {
+        v_buffer = tensor_args.v.value_or(tensor_args.k).buffer();
+    }
     auto *mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
     auto *attention_sink_buffer =
         tensor_args.attention_sink.has_value() ? tensor_args.attention_sink->buffer() : nullptr;

@@ -26,7 +26,9 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<ttnn::Tensor>& attention_sink) {
+    const std::optional<ttnn::Tensor>& attention_sink,
+    bool use_mla,
+    std::optional<uint32_t> head_dim_v) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -44,8 +46,8 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
         scale,
         sliding_window_size,
         std::nullopt,  // chunk_start_idx
-        false,         // use_mla
-        std::nullopt,  // head_dim_v
+        use_mla,
+        head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
         kernel_config_val);

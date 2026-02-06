@@ -5,7 +5,26 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_tile.h"
 
+template <bool is_output_cb, bool is_wr_ptr>
+void dprint_cb_tile_sdpa(uint32_t cb_id, uint32_t tile_id) {
+    noc_async_read_barrier();
+    noc_async_write_barrier();
+    for (uint8_t i = 0; i < 32; ++i) {
+        DPRINT << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{.h0 = i, .h1 = (uint8_t)(i + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                      is_output_cb ? TSLICE_OUTPUT_CB : TSLICE_INPUT_CB,
+                      is_wr_ptr ? TSLICE_WR_PTR : TSLICE_RD_PTR,
+                      true,
+                      true)
+               << ENDL();
+    }
+}
+// v dtype
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
@@ -91,14 +110,27 @@ void kernel_main() {
     const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
+    DPRINT << "v_addr: " << v_addr << ENDL();
+    DPRINT << "v_tile_bytes: " << v_tile_bytes << ENDL();
+    DPRINT << "k_addr: " << k_addr << ENDL();
+    DPRINT << "k_tile_bytes: " << k_tile_bytes << ENDL();
+    DPRINT << "q_addr: " << q_addr << ENDL();
     const auto mask_reader = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
     const auto attention_sink_reader =
         TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
+    DPRINT << "q chunks per core: " << q_chunks_per_core << ENDL();
 
+    const uint32_t skip_src_cols = (v_addr == k_addr) ? DHt - vDHt : 0;
+    DPRINT << "skip_src_cols: " << skip_src_cols << ENDL();
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
-    const auto v_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
+    const auto v_tile_shape = TensorTileShape(B, NKH, valid_Skt, vDHt);
     const auto attention_sink_tile_shape = TensorTileShape(B, NQH, 1, 1);
+    // DPRINT << "q_tile_shape: [" << q_tile_shape.shape[0] << " " << q_tile_shape.shape[1] << " " <<
+    // q_tile_shape.shape[2] << " " << q_tile_shape.shape[3] << "]" << ENDL(); DPRINT << "k_tile_shape: [" <<
+    // k_tile_shape.shape[0] << " " << k_tile_shape.shape[1] << " " << k_tile_shape.shape[2] << " " <<
+    // k_tile_shape.shape[3] << "]" << ENDL(); DPRINT << "v_tile_shape: [" << v_tile_shape.shape[0] << " " <<
+    // v_tile_shape.shape[1] << " " << v_tile_shape.shape[2] << " " << v_tile_shape.shape[3] << "]" << ENDL();
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
 
@@ -184,6 +216,13 @@ void kernel_main() {
                     const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, read_offset + q_row_start_tile, 0);
                     read_chunk_with_padding<q_tile_bytes>(
                         q_reader, cb_q_in, q_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                    noc_async_read_barrier();
+                    DPRINT << "Printing Q tiles... " << ENDL();
+                    for (uint32_t i = 0; i < 2; i++) {
+                        DPRINT << "Q Tile id: " << i << ENDL();
+                        dprint_cb_tile_sdpa<false, false>(cb_q_in, i);
+                        DPRINT << ENDL();
+                    }
                     q_chunk = chunked_q_chunk_offset + q_chunk;
                     uint32_t q_low_idx =
                         q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
@@ -195,9 +234,12 @@ void kernel_main() {
                     }
 
                     const uint32_t kv_head = nq / q_heads_per_kv;
+                    // Fix this
+                    DPRINT << "kv_head: " << kv_head << ENDL();
 
                     // loop while k_low < q_high
                     for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+                        DPRINT << "k_chunk: " << k_chunk << ENDL();
                         const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                         const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
 
@@ -205,6 +247,20 @@ void kernel_main() {
                         const uint32_t k_row_end_tile = std::min(k_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                         const uint32_t k_row_tile_count = k_row_end_tile - k_row_start_tile;
                         const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
+
+                        // const uint32_t v_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
+                        // const uint32_t v_row_end_tile = std::min(v_row_start_tile + Sk_chunk_t, valid_Skt_bound);
+                        // const uint32_t v_row_tile_count = v_row_end_tile - v_row_start_tile;
+                        // const uint32_t v_start_tile_id = v_tile_shape.id_of(nb, kv_head, v_row_start_tile, 0);
+                        // DPRINT << "k_row_start_tile: " << k_row_start_tile << ENDL();
+                        // DPRINT << "k_row_end_tile: " << k_row_end_tile << ENDL();
+                        // DPRINT << "k_row_tile_count: " << k_row_tile_count << ENDL();
+                        // DPRINT << "k_start_tile_id: " << k_start_tile_id << ENDL();
+
+                        // DPRINT << "v_row_start_tile: " << v_row_start_tile << ENDL();
+                        // DPRINT << "v_row_end_tile: " << v_row_end_tile << ENDL();
+                        // DPRINT << "v_row_tile_count: " << v_row_tile_count << ENDL();
+                        // DPRINT << "v_start_tile_id: " << v_start_tile_id << ENDL();
 
                         if constexpr (is_chunked) {
                             // Use page table to read K chunk
@@ -235,6 +291,15 @@ void kernel_main() {
                                 barrier_threshold,
                                 true  // transpose=true for K reads
                             );
+                        }
+                        // K transposed is read
+                        noc_async_read_barrier();
+
+                        DPRINT << "Printing transposed K tiles... " << ENDL();
+                        for (uint32_t i = 0; i < 2; i++) {
+                            DPRINT << "K Tile id: " << i << ENDL();
+                            dprint_cb_tile_sdpa<false, false>(cb_k_in, i);
+                            DPRINT << ENDL();
                         }
 
                         if constexpr (use_provided_mask) {
@@ -273,6 +338,7 @@ void kernel_main() {
                         if constexpr (is_chunked) {
                             // Use page table to read V chunk
                             const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
+                            const uint32_t skip_src_cols = (v_addr == k_addr) ? DHt - vDHt : 0;
                             read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
                                 v_reader,
                                 cb_v_in,
@@ -286,19 +352,51 @@ void kernel_main() {
                                 barrier_threshold,
                                 page_table_ptr,
                                 false,
-                                DHt - vDHt /* src_skip_cols */);
+                                skip_src_cols);
                         } else {
+                            uint32_t v_start_tile_id = k_start_tile_id;
+                            if (v_addr != k_addr) {
+                                v_start_tile_id = v_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
+                                ;
+                            }
+                            // const ReaderType& reader,
+                            // const uint32_t cb_id,
+                            // uint32_t start_tile_id,
+                            // const uint32_t src_rows,
+                            // const uint32_t src_cols,
+                            // const uint32_t dst_rows,
+                            // const uint32_t dst_cols,
+                            // const uint32_t barrier_threshold,
+                            // const bool transpose = false,
+                            // const uint32_t skip_src_cols = 0)
+                            DPRINT << "v_start_tile_id: " << v_start_tile_id << " corresponding to start_tile_id "
+                                   << ENDL();
+                            DPRINT << "k_row_tile_count: " << k_row_tile_count << " corresponding to src_rows"
+                                   << ENDL();
+                            DPRINT << "vDHt: " << vDHt << " corresponding to src_cols" << ENDL();
+                            DPRINT << "Sk_chunk_t: " << Sk_chunk_t << " corresponding to dst_cols" << ENDL();
+                            DPRINT << "vDHt: " << vDHt << " corresponding to dst_rows" << ENDL();
+
                             read_chunk_with_padding<v_tile_bytes>(
                                 v_reader,
                                 cb_v_in,
-                                k_start_tile_id,
+                                v_start_tile_id,
                                 k_row_tile_count,
                                 vDHt,
                                 Sk_chunk_t,
                                 vDHt,
                                 barrier_threshold,
                                 false,
-                                DHt - vDHt /* src_skip_cols */);
+                                skip_src_cols);
+                            // DHt - vDHt /* src_skip_cols */);
+                            //  V is read
+                            noc_async_read_barrier();
+                            DPRINT << "Printing V tile... " << ENDL();
+                            for (uint32_t i = 0; i < 1; i++) {
+                                DPRINT << "V Tile id: " << i << ENDL();
+                                dprint_cb_tile_sdpa<false, false>(cb_v_in, i);
+                                DPRINT << ENDL();
+                            }
                         }
                     }
                 }

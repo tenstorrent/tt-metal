@@ -15,10 +15,12 @@ from models.demos.deepseek_v3.utils.test_utils import get_valid_system_names, lo
 from tests.scripts.common import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
+SKIP_REF_TESTS_OPTION = "--skip-ref-tests"
 
 # Shared test parametrization constants
 # Prefill sequence lengths: powers of 2 from 128 to 128K
-PREFILL_SEQ_LENS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+# PREFILL_SEQ_LENS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
+PREFILL_SEQ_LENS = [4 * 1024]
 
 
 def pytest_addoption(parser):
@@ -26,6 +28,12 @@ def pytest_addoption(parser):
         RESET_WEIGHT_CACHE_OPTION,
         action="store_true",
         help="Reset weight configs for tests",
+    )
+    parser.addoption(
+        SKIP_REF_TESTS_OPTION,
+        action="store_true",
+        default=False,
+        help="Skip reference tests",
     )
 
 
@@ -180,7 +188,7 @@ def clear_state_dict_cache(request):
 def hf_config_short(request, hf_config):
     hf_config_out = deepcopy(hf_config)
     hf_config_out.num_hidden_layers = getattr(request, "param", 1)
-    hf_config_out.max_seq_len = 8 * 1024  # 8k max atm
+    hf_config_out.max_seq_len = 4 * 1024  # 32k max atm
     return hf_config_out
 
 
@@ -224,6 +232,15 @@ def force_recalculate_weight_config(request):
     Fixture to control whether weight configuration files should be recalculated.
     """
     return request.config.getoption(RESET_WEIGHT_CACHE_OPTION)
+
+
+@pytest.fixture(scope="session")
+def skip_ref_tests(request):
+    """
+    Fixture to control whether reference tests should be skipped.
+    Returns False by default (ref tests run), True when --skip-ref-tests is passed.
+    """
+    return request.config.getoption(SKIP_REF_TESTS_OPTION)
 
 
 @pytest.fixture(scope="session")

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
+from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -121,6 +122,8 @@ class MLA1D(AbstractModule):
             -2, -1
         )  # [num_heads, kv_lora_rank, qk_nope_head_dim]
         torch_weights_v = torch_weights[..., qk_nope_head_dim:, :]  # [num_heads, v_head_dim, kv_lora_rank]
+        # print("torch_weights_v = ", torch_weights_v.shape)
+        # torch_weights_v_reshaped = torch_weights_v.reshape(1, num_heads * v_head_dim, kv_lora_rank)
 
         return {
             **norm_weight_configs,
@@ -266,20 +269,23 @@ class MLA1D(AbstractModule):
         # Set up CCLs
 
         # Q
+
+        topology = ttnn.Topology.Linear
+        num_links = 1
         wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring if mesh_device.shape[1] <= 8 else ttnn.Topology.Linear,
-            num_links=4,
+            topology=topology,
+            num_links=num_links,
         )
         wq_a_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_device.shape),
             cluster_axis=1,
             dim=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring if mesh_device.shape[1] <= 8 else ttnn.Topology.Linear,
-            num_links=4,
+            topology=topology,
+            num_links=num_links,
         )
 
         # KV
@@ -288,8 +294,8 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring if mesh_device.shape[1] <= 8 else ttnn.Topology.Linear,
-            num_links=4,
+            topology=topology,
+            num_links=num_links,
         )
         wkv_a_r_config = {
             "dims": [1],
@@ -308,16 +314,16 @@ class MLA1D(AbstractModule):
             cluster_axis=1,
             dim=3,  # Changed from dim=1 to dim=2 to gather after permute in prefill
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring if mesh_device.shape[1] <= 8 else ttnn.Topology.Linear,
-            num_links=4,
+            topology=topology,
+            num_links=num_links,
         )
 
         wo_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,  # Changed from dim=1 to dim=2 to gather after permute in prefill
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring if mesh_device.shape[1] <= 8 else ttnn.Topology.Linear,
-            num_links=4,
+            topology=topology,
+            num_links=num_links,
         )
 
         return {
@@ -1036,6 +1042,12 @@ class MLA1D(AbstractModule):
             is_decode_mode=False,
         )
 
+        signpost(header="new mm")
+        print("tt_kv_nope shape is: ", tt_kv_nope.shape)
+        tt_kv_nope_expanded = ttnn.repeat(tt_kv_nope, [1, num_heads_local, 1, 1])
+        print("tt_kv_nope_expanded shape is: ", tt_kv_nope_expanded.shape)
+        v_in = ttnn.linear(tt_kv_nope_expanded, **cfg["wkv_b2"])
+
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
         # TODO: Add Norm here for KVPE
         ttnn.deallocate(tt_kv_nope)
@@ -1057,15 +1069,20 @@ class MLA1D(AbstractModule):
         )
 
         # FlashMLA
+        print("tt_kvpe dtype is: ", tt_kvpe.dtype)
         attn_out = ttnn.transformer.flash_mla_prefill(
             tt_q,
             tt_kvpe,
             **cfg["flash_mla"],
         )  # [1, num_heads_local, seq_len, kv_lora_rank]
         ttnn.deallocate(tt_q)
+        # print("cfg[flash_mla] = ", cfg["flash_mla"])
 
         # wkv_b2
+        # attn_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        signpost(header="old mm")
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
+        # print("cfg[wkv_b2] = ", cfg["wkv_b2"])
 
         # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
         # v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads_local, v_head_dim]

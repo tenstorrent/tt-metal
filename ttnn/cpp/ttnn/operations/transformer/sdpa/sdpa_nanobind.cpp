@@ -42,6 +42,8 @@ void bind_sdpa(nb::module_& mod) {
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
+            use_mla (bool): Defaults to `false`. Enable Multi-Latent Attention mode.
+            head_dim_v (int, optional): Defaults to `None`. Head dimension for V tensor in MLA mode.
 
 
         Returns:
@@ -66,7 +68,9 @@ void bind_sdpa(nb::module_& mod) {
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               std::optional<ttnn::Tensor> attention_sink) {
+               std::optional<ttnn::Tensor> attention_sink,
+               bool use_mla,
+               std::optional<uint32_t> head_dim_v) {
                 return self(
                     input_tensor_q,
                     input_tensor_k,
@@ -78,7 +82,9 @@ void bind_sdpa(nb::module_& mod) {
                     memory_config,
                     program_config,
                     compute_kernel_config,
-                    attention_sink);
+                    attention_sink,
+                    use_mla,
+                    head_dim_v);
             },
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
@@ -91,7 +97,9 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("attention_sink") = nb::none()});
+            nb::arg("attention_sink") = nb::none(),
+            nb::arg("use_mla").noconvert() = false,
+            nb::arg("head_dim_v") = nb::none()});
 
     const auto* chunked_doc =
         R"doc(

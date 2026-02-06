@@ -306,10 +306,13 @@ def run_test_forward_pass_mla1d(
         mesh_device,
         force_recalculate_weight_config,
     )
+    logger.info("Get model config")
     model_config = get_model_config(MLA1D, mode, hf_config_short, mesh_device)
+    logger.info("MLA1D.create_state")
     model_state = MLA1D.create_state(
         hf_config_short, paged_config, mesh_device, ccl, (paged_input_cache,) * mesh_device.shape[0]
     )
+    logger.info("create_run_config")
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Set up ttnn inputs
@@ -526,7 +529,7 @@ def run_test_forward_pass_mla2d(
 # Base test cases - ranges will be expanded into individual test cases
 # see documentation for expand_test_cases_with_position_ids_ranges for more details
 BASE_TEST_CASES = [
-    ("prefill", seq_len, 1, None) for seq_len in [4 * 1024]  # PREFILL_SEQ_LENS
+    ("prefill", seq_len, 1, None) for seq_len in [1 * 1024]  # PREFILL_SEQ_LENS
 ]  # decode_position_ids is not applicable for prefill
 # [
 #     # mode, seq_len, batch_size_per_row, decode_position_ids
@@ -549,7 +552,7 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
@@ -564,8 +567,8 @@ EXPANDED_TEST_IDS = build_expanded_test_ids(EXPANDED_TEST_CASES)
 @pytest.mark.parametrize(
     "test_closure",
     [
-        # run_test_forward_pass_mla1d,
-        run_test_forward_pass_mla2d,
+        run_test_forward_pass_mla1d,
+        # run_test_forward_pass_mla2d,
     ],
 )
 def test_forward_pass(

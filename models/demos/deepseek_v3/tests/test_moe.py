@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import time
+
 import pytest
 import torch
 from loguru import logger
@@ -61,6 +63,7 @@ def test_forward_pass(
     mesh_device,
     ccl,
     topk_fallback,
+    skip_ref_tests,
 ):
     """Test forward pass against reference model."""
 
@@ -80,8 +83,16 @@ def test_forward_pass(
     # Reference forward pass
     reference_model.eval()
     reference_model.to(torch.bfloat16)
-    with torch.no_grad():
-        reference_output = reference_model(torch_input)
+    if not skip_ref_tests:
+        with torch.no_grad():
+            # measure time pls
+            start_time = time.time()
+            print("Starting reference forward pass")
+            reference_output = reference_model(torch_input)
+            end_time = time.time()
+            print(f"Reference forward pass completed in {end_time - start_time} seconds")
+    else:
+        print("Skipping reference forward pass")
 
     weight_config = get_test_weight_config(
         MoE, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
@@ -111,8 +122,11 @@ def test_forward_pass(
 
     # TTNN forward pass using utility function
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+    print("Starting TTNN forward pass")
+    start_time = time.time()
     tt_output = run_module_forward(MoE, mode, tt_input, run_config)
-
+    end_time = time.time()
+    print(f"TTNN forward pass completed in {end_time - start_time} seconds")
     # Verify output memory config matches expected
     expected_output_memory_config = run_config["output_memory_config"]
     actual_output_memory_config = tt_output.memory_config()
@@ -120,19 +134,23 @@ def test_forward_pass(
         actual_output_memory_config == expected_output_memory_config
     ), f"MoE output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
-    # Convert output back to torch
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
-    )
+    if not skip_ref_tests:
+        # Convert output back to torch
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
+        )
 
-    # Cleanup
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
+        # Cleanup
+        ttnn.deallocate(tt_input)
+        ttnn.deallocate(tt_output)
 
-    # Compare outputs using utility function
-    logger.info(f"Mode: {mode}, Seq len: {seq_len}")
-    assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
+        # Compare outputs using utility function
+        logger.info(f"Mode: {mode}, Seq len: {seq_len}")
+        assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
+    else:
+        logger.info("No reference tests, skipping comparison calculations")
+        ttnn.synchronize_device(mesh_device)
 
 
 if __name__ == "__main__":
