@@ -38,6 +38,5 @@ class TtTimestepEmbedding(LightweightModule):
             self.tt_weights_2,
             bias=self.tt_bias_2,
             program_config=self.linear_2_program_config if self.linear_2_program_config else None,
-            activation="silu" if not self.linear_2_program_config else None,
         )
         return sample
