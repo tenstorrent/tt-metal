@@ -83,9 +83,8 @@ void kernel_main() {
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, send_socket.downstream_bytes_sent_addr);
-    uint64_t upstream_bytes_acked_noc_addr =
-        get_noc_addr(recv_socket.upstream_noc_x, recv_socket.upstream_noc_y, recv_socket.upstream_bytes_acked_addr);
-
+    uint64_t upstream_bytes_acked_noc_addr = get_noc_addr(
+        recv_socket.d2d.upstream_noc_x, recv_socket.d2d.upstream_noc_y, recv_socket.d2d.upstream_bytes_acked_addr);
     uint64_t receiver_noc_coord_addr = get_noc_addr_from_bank_id<false>(
         downstream_bank_id, 0, tt::tt_fabric::connection_interface::edm_fabric_write_noc_index);
     // Initial Handshake

@@ -97,7 +97,9 @@ void kernel_main() {
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.downstream_bytes_sent_addr);
     uint64_t upstream_bytes_acked_noc_addr = get_noc_addr(
-        receiver_socket.upstream_noc_x, receiver_socket.upstream_noc_y, receiver_socket.upstream_bytes_acked_addr);
+        receiver_socket.d2d.upstream_noc_x,
+        receiver_socket.d2d.upstream_noc_y,
+        receiver_socket.d2d.upstream_bytes_acked_addr);
 
     // Initial read of data into CB. This is not profiled, since the expectation is that
     // in a real workload,
