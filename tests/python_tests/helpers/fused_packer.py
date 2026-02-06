@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
 
-from .fused_math import MatmulFpu, ReduceFpu
+from .fused_fpu import ReduceFpu
 from .llk_params import PerfRunType
 
 
@@ -37,21 +37,6 @@ class Packer:
 
     def _dest_section_done(self, config: "GlobalConfig") -> str:
         return f"_llk_pack_dest_section_done_<DstSync::SyncHalf, {config.dest_acc.value}>();\n"
-
-    def _matmul_tile_loop(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        rt_dim = operation.rt_dim
-        ct_dim = operation.ct_dim
-        code = f"for (std::uint32_t mt = 0; mt < {rt_dim}; ++mt) {{\n"
-        code += f"for (std::uint32_t nt = 0; nt < {ct_dim}; ++nt) {{\n"
-        code += self._wait_for_math()
-        code += f"std::uint32_t tile_idx = mt * {operation.dest_tiles_w} + nt;\n"
-        code += self.pack(operation, config, 0, "tile_idx")
-        code += self._dest_section_done(config)
-        code += "}\n"
-        code += "}\n"
-        return code
 
     def _batch_loop(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         batch_size = operation.batch_size
@@ -82,14 +67,6 @@ class Packer:
 
         return code
 
-    def _generate_tile_loop(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        batch_size = operation.batch_size
-        if isinstance(operation.math.fpu, MatmulFpu) and batch_size == 1:
-            return self._matmul_tile_loop(operation, config)
-        return self._batch_loop(operation, config)
-
     def pack_with_perf(
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
@@ -102,8 +79,8 @@ class Packer:
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ):
-            return self.pack(operation, config)
-        return self._generate_tile_loop(operation, config)
+            return self.pack(operation, config, 0, 0)
+        return self._batch_loop(operation, config)
 
     def exec_perf(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         code = "{\n"
@@ -152,7 +129,7 @@ class Packer:
         else:
             code += self.hw_configure(operation, config)
             code += self.init(operation, config)
-            code += self._generate_tile_loop(operation, config)
+            code += self._batch_loop(operation, config)
             code += self.unpacker_sync(operation, config)
             code += self.uninit(operation, config)
 
@@ -210,8 +187,8 @@ class Packer:
         else:
             raise ValueError("Unsupported architecture for packer")
 
-        if isinstance(operation.math.fpu, ReduceFpu):
-            reduce_dim = operation.math.fpu.reduce_dim()
+        if operation.math.has_fpu(ReduceFpu):
+            reduce_dim = operation.math.get_reduce_pack_mask()
             code += f"    _llk_pack_reduce_mask_config_<false, {reduce_dim}>();\n"
 
         return code
@@ -231,7 +208,7 @@ class Packer:
     def uninit(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         code = ""
 
-        if isinstance(operation.math.fpu, ReduceFpu):
+        if operation.math.has_fpu(ReduceFpu):
             code = "    _llk_pack_reduce_mask_clear_();\n"
 
         return code

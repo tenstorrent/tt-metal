@@ -9,18 +9,16 @@ import torch
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat
-from .fused_math import Math, MatmulFpu
+from .fused_fpu import MatmulFpu
+from .fused_math import ComputePipeline
 from .fused_operand import Operand, OperandMapping
 from .fused_packer import Packer
-from .fused_unpacker import Unpacker, UnpackerTilizeA
+from .fused_unpacker import UnpackerTilizeA
 from .llk_params import (
-    BroadcastType,
-    DataCopyType,
     DestSync,
     MathFidelity,
     StochasticRounding,
     Tilize,
-    Transpose,
     format_tile_sizes,
 )
 from .matmul_sweep import validate_tile_dimensions
@@ -28,20 +26,15 @@ from .matmul_sweep import validate_tile_dimensions
 
 @dataclass
 class FusedOperation:
-    unpacker: Type[Unpacker]
-    math: Math
+    math: ComputePipeline
     packer: Type[Packer]
     operand_mapping: OperandMapping
     stage_id: int = 0
     num_stages: int = 1
     math_fidelity: MathFidelity = MathFidelity.HiFi4
     unpack_to_dest: bool = False
-    unpack_transpose_faces: Transpose = Transpose.No
-    unpack_transpose_within_face: Transpose = Transpose.No
-    math_transpose_faces: Transpose = Transpose.No
     throttle: int = 0
     stochastic_rnd: StochasticRounding = StochasticRounding.No
-    data_copy_type: DataCopyType = DataCopyType.A2D
     tiny_tiles: bool = False
     partial_face_A: bool = False
     partial_face_B: bool = False
@@ -59,7 +52,6 @@ class FusedOperation:
     dst_index: int = 0
     srca_reuse_count: int = 4
     batch_size: int = 0
-    broadcast_type: BroadcastType = BroadcastType.None_
 
     def __post_init__(self):
         mapping = self.operand_mapping
@@ -113,7 +105,7 @@ class FusedOperation:
 
         if (
             get_chip_architecture() == ChipArchitecture.BLACKHOLE
-            and self.unpacker is UnpackerTilizeA
+            and self.math.has_unpacker(UnpackerTilizeA)
             and self.src_a.data_format != DataFormat.Bfp8_b
         ):
             self.bh_tilize = Tilize.Yes
@@ -123,13 +115,10 @@ class FusedOperation:
         if self.batch_size <= 0 or self.batch_size > self.output.tile_count:
             self.batch_size = self.output.tile_count
 
-        if isinstance(self.math.fpu, MatmulFpu):
+        if self.math.has_fpu(MatmulFpu):
             tile_count = self.output.tile_count
-            if self.batch_size != 1 and self.batch_size != tile_count:
+            if self.batch_size != self.ct_dim and self.batch_size != tile_count:
                 self.batch_size = tile_count
-
-        if self.broadcast_type != BroadcastType.None_:
-            self.data_copy_type = DataCopyType.B2D
 
     @property
     def src_a(self) -> Operand:
@@ -152,11 +141,10 @@ class FusedOperation:
         return mapping.resolve_output_dimensions(mapping.operand_registry)
 
     def unpack(self, config) -> str:
-        unpacker_instance = self.unpacker()
-        return unpacker_instance.exec(self, config)
+        return self.math.unpack_body(self, config)
 
     def do_math(self, config) -> str:
-        return self.math.exec(self, config)
+        return self.math.math_body(self, config)
 
     def pack(self, config) -> str:
         packer_instance = self.packer()
@@ -170,7 +158,6 @@ class FusedOperation:
         tensor_a = self.src_a.raw_data.view(src_a_dims)
         tensor_b = self.src_b.raw_data.view(src_b_dims)
 
-        tensor_a, tensor_b = self.unpacker().golden(tensor_a, tensor_b, self, config)
         l1_golden_tensor = self.math.golden(tensor_a, tensor_b, self, config)
         l1_golden_tensor = self.packer().golden(l1_golden_tensor, self, config)
 
@@ -180,9 +167,6 @@ class FusedOperation:
         golden_tensor_a = self.src_a.master_golden.view(src_a_dims)
         golden_tensor_b = self.src_b.master_golden.view(src_b_dims)
 
-        golden_tensor_a, golden_tensor_b = self.unpacker().golden(
-            golden_tensor_a, golden_tensor_b, self, config
-        )
         master_golden_tensor = self.math.golden(
             golden_tensor_a, golden_tensor_b, self, config
         )
@@ -197,17 +181,11 @@ class FusedOperation:
             f"\n{'='*60}\n"
             f"Operation {self.stage_id}\n"
             f"{'='*60}\n"
-            f"  Unpacker: {self.unpacker.__name__}\n"
-            f"  Math: {self.math}\n"
-            f"    Fpu Math Op: {self.math.fpu}\n"
-            f"    Sfpu Math Ops: {[op.__str__() for op in self.math.sfpu]}\n"
+            f"  {self.math}\n"
             f"  Packer: {self.packer.__name__}\n"
             f"  Src_A: {self.src_a}\n"
             f"  Src_B: {self.src_b}\n"
             f"  Output: {self.output}\n"
             f"  Math Fidelity: {self.math_fidelity}\n"
-            f"  Unpack Transpose Faces: {self.unpack_transpose_faces}\n"
-            f"  Unpack Transpose Within Faces: {self.unpack_transpose_within_face}\n"
             f"  Batch Size: {self.batch_size}\n"
-            f"  Broadcast Type: {self.broadcast_type}\n"
         )
