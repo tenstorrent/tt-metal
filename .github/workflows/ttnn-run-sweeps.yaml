@@ -662,9 +662,9 @@ on:
     - cron: "0 4 * * 3,6" # This cron schedule runs the workflow at 4:00 AM UTC on Wed/Sat (comprehensive run)
     - cron: "0 3 * * *" # This cron schedule runs the workflow at 3:00 AM UTC daily (model traced runs)
     - cron: "0 2 * * *" # This cron schedule runs the workflow at 2:00 AM UTC daily (lead model runs)
-# concurrency:
-#   group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name || github.event.schedule }}
-#   cancel-in-progress: false
+concurrency:
+  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name || github.event.schedule }}
+  cancel-in-progress: false
 
 jobs:
   display-workflow-options:
@@ -739,7 +739,7 @@ jobs:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
           # Reconstruct from ttnn_ops schema (V1 format for backward compatibility)
-          python tests/sweep_framework/load_ttnn_ops_data.py reconstruct \
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct \
             model_tracer/traced_operations/ttnn_operations_master_reconstructed.json \
             ttnn_ops
 
@@ -1191,7 +1191,6 @@ jobs:
           echo "│ Batch:                ${{ matrix.batch_display }}"
           echo "│ Module Selector:      ${{ matrix.module_selector }}"
           echo "│ Suite Override:       ${{ matrix.suite_name || 'none' }}"
-          echo "│ Mesh Device Shape:    ${{ matrix.mesh_device_shape || 'default (single device)' }}"
           echo "│ Architecture:         ${{ matrix.arch }}"
           echo "│ Runner:               ${{ toJSON(matrix.runs_on) }}"
           echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') }}"
@@ -1210,12 +1209,9 @@ jobs:
           path: /work/tests/sweep_framework/vectors_export
           merge-multiple: true
       - name: Run ttnn sweeps (batch)
-        env:
-          MESH_DEVICE_SHAPE: ${{ matrix.mesh_device_shape || '' }}
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"
           SUITE_NAME="${{ matrix.suite_name }}"
-          MESH_SHAPE="${{ matrix.mesh_device_shape }}"
 
           # Set skip-on-timeout flag based on input (default to true for all scheduled runs)
           SKIP_ON_TIMEOUT_FLAG=""
@@ -1247,11 +1243,6 @@ jobs:
             MEMORY_FLAG="--measure-memory"
           elif [[ "${{ github.event.inputs.measure_memory }}" == "true" ]]; then
             MEMORY_FLAG="--measure-memory"
-          fi
-
-          # Display mesh configuration if set
-          if [[ -n "$MESH_SHAPE" ]]; then
-            echo "🔧 Mesh Device Shape: $MESH_SHAPE"
           fi
 
           CMD=(
