@@ -106,6 +106,15 @@
         "cacheVariables": {
           "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--fix;--fix-errors;--fix-notes"}
         }
+      },
+      {
+        "name": "clang-tidy-kernels-fix-parallel",
+        "inherits": "clang-tidy-kernels",
+        "description": "Run Clang Tidy on kernels in parallel, export fixes to YAML (apply with clang-apply-replacements)",
+        "binaryDir": "${sourceDir}/.build/clang-tidy-kernels-fix-parallel",
+        "cacheVariables": {
+          "CMAKE_CXX_CLANG_TIDY": {"value": "${sourceDir}/cmake/clang-tidy-export-fixes-wrapper.sh;${sourceDir}/.build/clang-tidy-kernels-fix-parallel/fixes"}
+        }
       }
     ],
     "buildPresets": [
@@ -164,6 +173,12 @@
         "configurePreset": "clang-tidy-kernels-fix",
         "targets": ["kernel_clang_tidy"],
         "nativeToolOptions": ["-k0", "-j1"]
+      },
+      {
+        "name": "clang-tidy-kernels-fix-parallel",
+        "configurePreset": "clang-tidy-kernels-fix-parallel",
+        "targets": ["kernel_clang_tidy"],
+        "nativeToolOptions": ["-k0"]
       }
     ]
   }
