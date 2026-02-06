@@ -755,29 +755,46 @@ class PostSDPA:
                 # ========================================================================
                 # Runtime args for CCL
                 # ========================================================================
-                # CCL Sender NCRISC runtime args: tensor_address (gather2 output address)
+                # === COMMON RUNTIME ARGS ===
+                # Sender NCRISC common runtime args (arg 0)
+                ccl_sender_ncrisc_common_rt_args = [
+                    gather2_receiver_data_addr,  # tensor_address
+                ]
+
+                # Sender BRISC common runtime args (args 0-1)
+                ccl_sender_brisc_common_rt_args = [
+                    intermediate_tensor_device.buffer_address(),  # receiver_base_address
+                    ccl_sender_semaphore_addr,  # receive_semaphore_addr
+                ]
+
+                # Receiver NCRISC common runtime args (arg 0)
+                ccl_receiver_ncrisc_common_rt_args = [
+                    ccl_receiver_semaphore_addr,  # sender_semaphore_addr
+                ]
+
+                # === PER-CORE RUNTIME ARGS (empty, fabric args appended later) ===
                 ccl_sender_ncrisc_rt_args = ttnn.RuntimeArgs()
-                ccl_sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = [
-                    gather2_receiver_data_addr,  # Address of gather2 output on gather core
-                ]
+                ccl_sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
 
-                # CCL Sender BRISC runtime args: receiver_base_address, receive_semaphore_addr
                 ccl_sender_brisc_rt_args = ttnn.RuntimeArgs()
-                ccl_sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = [
-                    intermediate_tensor_device.buffer_address(),  # Remote intermediate tensor
-                    ccl_sender_semaphore_addr,
-                ]
+                ccl_sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = []
 
-                # CCL Receiver NCRISC runtime args: sender_semaphore_addr
                 ccl_receiver_ncrisc_rt_args = ttnn.RuntimeArgs()
-                ccl_receiver_ncrisc_rt_args[gather_core.x][gather_core.y] = [
-                    ccl_receiver_semaphore_addr,
-                ]
+                ccl_receiver_ncrisc_rt_args[gather_core.x][gather_core.y] = []
 
-                # Set runtime args for CCL kernels
+                # Set runtime args and common runtime args for CCL kernels
                 program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args = ccl_sender_ncrisc_rt_args
+                program.kernels[
+                    ccl_sender_group.ncrisc_kernel_index
+                ].common_runtime_args = ccl_sender_ncrisc_common_rt_args
                 program.kernels[ccl_sender_group.brisc_kernel_index].runtime_args = ccl_sender_brisc_rt_args
+                program.kernels[
+                    ccl_sender_group.brisc_kernel_index
+                ].common_runtime_args = ccl_sender_brisc_common_rt_args
                 program.kernels[ccl_receiver_group.ncrisc_kernel_index].runtime_args = ccl_receiver_ncrisc_rt_args
+                program.kernels[
+                    ccl_receiver_group.ncrisc_kernel_index
+                ].common_runtime_args = ccl_receiver_ncrisc_common_rt_args
 
                 # ========================================================================
                 # Fabric connection setup

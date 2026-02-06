@@ -371,8 +371,8 @@ void kernel_main() {
         using DummyWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
-        ccl_sender_args.tensor_address = get_arg_val<uint32_t>(0);
-        size_t fabric_arg_idx = 1;
+        ccl_sender_args.tensor_address = get_common_arg_val<uint32_t>(0);
+        size_t fabric_arg_idx = 0;
 
         deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
         ccl_sender_reader(ccl_sender_args, fabric_arg_idx);
@@ -384,8 +384,8 @@ void kernel_main() {
         using DummyComputeCTArgs = deepseek_b1_ops::AllReduceReceiver::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0>;
 
         deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
-        ccl_receiver_args.sender_semaphore_addr = get_arg_val<uint32_t>(0);
-        size_t fabric_arg_idx = 1;
+        ccl_receiver_args.sender_semaphore_addr = get_common_arg_val<uint32_t>(0);
+        size_t fabric_arg_idx = 0;
 
         deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs> ccl_receiver_reader;
         ccl_receiver_reader(ccl_receiver_args, fabric_arg_idx);
@@ -398,9 +398,9 @@ void kernel_main() {
         using DummyReaderCTArgs = deepseek_b1_ops::AllReduceSender::ReaderCTArgs<0, 0, 0, 0, 0>;
 
         deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
-        ccl_sender_args.receiver_base_address = get_arg_val<uint32_t>(0);
-        ccl_sender_args.receive_semaphore_addr = get_arg_val<uint32_t>(1);
-        size_t fabric_arg_idx = 2;
+        ccl_sender_args.receiver_base_address = get_common_arg_val<uint32_t>(0);
+        ccl_sender_args.receive_semaphore_addr = get_common_arg_val<uint32_t>(1);
+        size_t fabric_arg_idx = 0;
 
         deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
         ccl_sender_writer(ccl_sender_args, fabric_arg_idx);
