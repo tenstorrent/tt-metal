@@ -1,0 +1,16 @@
+Tests:
+  - name: "CustomMaxPacketSizeMesh7K_specific"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      max_packet_size: 7616
+      num_links: 1
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 20000
+      size: 2048
+
+    patterns:
+      - type: all_to_all
