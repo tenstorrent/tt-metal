@@ -224,7 +224,6 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
-        includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
         includes.push_back("tt_metal/hw/inc/internal");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
@@ -232,6 +231,7 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/");
+        includes.push_back("tt_metal/third_party/tt_llk/tt_llk_quasar/llk_lib");
 
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:

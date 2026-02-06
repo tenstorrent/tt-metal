@@ -144,8 +144,11 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
     }
 }
 
-std::string HalJitBuildQueryBase::weakened_firmware_target_name(const HalJitBuildQueryInterface::Params&) const {
-    return "dm0";
+std::string HalJitBuildQueryBase::weakened_firmware_target_name(const HalJitBuildQueryInterface::Params& params) const {
+    if (params.core_type == HalProgrammableCoreType::TENSIX && params.processor_class == HalProcessorClassType::DM) {
+        return "dm0";
+    }
+    return target_name(params);
 }
 
 }  // namespace tt::tt_metal::hal_2xx
