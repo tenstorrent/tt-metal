@@ -499,7 +499,22 @@ jobs:
           elapsed=0
           interval=20
 
+          # Read the server PID
+          if [ ! -f "${FILE_SERVER_PID}" ]; then
+            echo "❌ Server PID file not found"
+            exit 1
+          fi
+          server_pid=$(cat "${FILE_SERVER_PID}")
+
           while [ $elapsed -lt $timeout_seconds ]; do
+            # Check if server process is still running
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "❌ Server process (PID: $server_pid) crashed or exited before becoming ready."
+              echo "Check out the server log in a step below."
+              exit 1
+            fi
+
+            # Check if server is ready
             if curl -sf http://localhost:8000/health; then
               echo "Server is up! 🚀 [$elapsed sec]"
               exit 0
