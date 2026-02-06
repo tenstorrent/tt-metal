@@ -479,10 +479,9 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
     tile_h = m
     tile_w = 32
 
-    # Tile shapes - tensors use 1x32 tiles, CBs alias to 16x16 for mul
+    # Tile shapes - tensors use 1x32 tiles
     in0_tile = ttnn.Tile([tile_h, tile_w])  # 1x32 for matmul input
     mm_out_tile = ttnn.Tile([tile_h, tile_w])  # 1x32 for matmul output, mul_tensor, and final output
-    mul_out_tile = ttnn.Tile([16, 16])  # 16x16 for mul output
 
     # Get compute cores from optimal DRAM bank assignment
     compute_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
