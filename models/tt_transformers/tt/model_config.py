@@ -3742,12 +3742,15 @@ class ModelArgs:
         )
         return wrapper
 
-    def reference_attention(self):
-        model = self.reference_transformer(wrap=False)
+    def reference_attention(self, load_checkpoint=False):
+        model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
         layer = model.model.layers[0].self_attn
         use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
         wrapper = HfAttentionWrapper(
-            layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None, self.use_hf_rope
+            layer,
+            self.head_dim,
+            model.model.rotary_emb if use_position_embeddings else None,
+            use_hf_rope=self.use_hf_rope,
         )
         return wrapper
 
@@ -3873,6 +3876,8 @@ class HfAttentionWrapper:
         return self.forward(*args, **kwargs)
 
     def load_state_dict(self, state_dict):
+        if self.use_hf_rope:
+            raise NotImplementedError("Not supported if `use_hf_rope` is True")
         try:  # Checking for fused qkv layer
             fuse_qkv = hasattr(self.attention, "qkv_proj")
         except:

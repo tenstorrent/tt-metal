@@ -15,7 +15,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
 
 @torch.no_grad()
@@ -76,20 +76,18 @@ def test_attention_inference(
         prefetcher.init(mode)
 
     model_args = ModelArgs(
-        mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, prefetcher=prefetcher
+        mesh_device,
+        max_batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        cache_hf=True,
+        prefetcher=prefetcher,
+        use_hf_rope=True,
     )
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
 
-    first_layer_prefix = model_args.get_state_dict_prefix("Attention", 0) + "."
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-
-    reference_model = model_args.reference_attention()
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model = model_args.reference_attention(load_checkpoint=True)
 
     seq_len = 1
 
@@ -97,8 +95,10 @@ def test_attention_inference(
     generation_length = 10
     all_tests_pass = True
 
+    DefaultRopeSetup = HfRotarySetup if model_args.use_hf_rope else RotarySetup
+
     # Setup RoPE transformation matrices
-    rope_setup = RotarySetup(
+    rope_setup = DefaultRopeSetup(
         mesh_device,
         batch_size,
         model_args.head_dim,
@@ -199,6 +199,7 @@ def test_attention_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
+        # When using hf style rope, this
         rot_mats = rope_setup.get_rot_mats(current_pos)
 
         tt_out = tt_model(
