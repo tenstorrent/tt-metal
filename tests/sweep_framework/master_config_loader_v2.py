@@ -59,6 +59,7 @@ class TensorConfig:
     layout: str
     memory_config: Dict
     storage_type: str = "StorageType::DEVICE"  # Default to DEVICE
+    tensor_placement: Optional[Dict] = None  # Per-tensor placement info (PlacementShard/Replicate)
 
 
 class MasterConfigLoader:
@@ -169,6 +170,7 @@ class MasterConfigLoader:
                 layout=arg_data.get("layout", ""),
                 memory_config=arg_data.get("memory_config", {}),
                 storage_type=arg_data.get("storage_type", "StorageType.DEVICE"),
+                tensor_placement=arg_data.get("tensor_placement"),  # Extract placement info
             )
         except Exception:
             return None
@@ -718,6 +720,7 @@ class MasterConfigLoader:
                                 "dtype": parsed_dtype,
                                 "layout": parsed_layout,
                                 "memory_config": parsed_mem_config,
+                                "tensor_placement": tensor_config.tensor_placement,
                             }
                         )
                     else:
@@ -743,6 +746,7 @@ class MasterConfigLoader:
                 config_dict[f"input_{suffix}_dtype"] = tensor["dtype"]
                 config_dict[f"input_{suffix}_layout"] = tensor["layout"]
                 config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
+                config_dict[f"input_{suffix}_tensor_placement"] = tensor.get("tensor_placement")
 
             config_dict["output_memory_config"] = positional_tensors[0]["memory_config"]
 
@@ -766,6 +770,7 @@ class MasterConfigLoader:
                     config_dict[f"{key}_dtype"] = parsed_dtype
                     config_dict[f"{key}_layout"] = parsed_layout
                     config_dict[f"{key}_memory_config"] = parsed_mem_config
+                    config_dict[f"{key}_tensor_placement"] = tensor_config.tensor_placement
                 else:
                     # Scalar/bool kwarg - pass as-is (preserve name)
                     # Try enum parsing first, then float parsing
