@@ -19,6 +19,7 @@ namespace tt::tt_metal {
 namespace distributed {
 class MeshDevice;
 class MeshBuffer;
+class MeshCoordinateRange;
 }
 
 /**
@@ -67,6 +68,20 @@ public:
         impl(std::make_unique<TensorAttributes>(Storage(std::move(storage)), std::move(spec), std::move(topology))) {}
 
     // End speical member functions
+
+    // Static factory methods
+
+    /**
+     * Allocate a DeviceTensor on the given mesh device.
+     *
+     * This allocates a MeshBuffer based on the TensorSpec and creates a DeviceTensor
+     * with a fully replicated topology across all devices in the mesh.
+     *
+     * @param tensor_spec The specification of the tensor to allocate.
+     * @param mesh_device The mesh device to allocate on.
+     * @return A DeviceTensor with allocated device memory.
+     */
+    static DeviceTensor allocate_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
     /**
      * Deallocate and release owned device memory.

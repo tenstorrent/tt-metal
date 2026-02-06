@@ -11,6 +11,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace {
 
@@ -58,6 +59,44 @@ DeviceStorage write_to_mesh_buffer(
 }  // namespace
 
 namespace tt::tt_metal {
+
+namespace tensor_impl {
+
+std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
+    const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
+
+    distributed::DeviceLocalBufferConfig device_local_buffer_config{
+        .page_size = tensor_spec.compute_page_size_bytes(),
+        .buffer_type = memory_config.buffer_type(),
+        .sharding_args = tensor_spec.compute_buffer_sharding_args(),
+    };
+
+    // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.
+    const distributed::ReplicatedBufferConfig replicated_buffer_config{
+        .size = tensor_spec.compute_packed_buffer_size_bytes(),
+    };
+
+    return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
+}
+
+}  // namespace tensor_impl
+
+DeviceTensor DeviceTensor::allocate_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(mesh_device, tensor_spec);
+
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(mesh_device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+        coords.push_back(coord);
+    }
+    DeviceStorage device_storage(std::move(mesh_buffer), coords);
+
+    // Create a fully replicated tensor topology
+    auto tensor_topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device->shape());
+
+    return DeviceTensor(std::move(device_storage), tensor_spec, tensor_topology);
+}
 
 bool logical_matches_physical(const TensorSpec& tensor_spec) {
     return tensor_spec.layout() == Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape();
@@ -200,11 +239,25 @@ void TransferToDevice(
     TT_FATAL(device_tensor.is_allocated(), "DeviceTensor must be allocated");
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Shape mismatch");
     TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Dtype mismatch");
+    TT_FATAL(
+        host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
+        "Host tensor has different page config");
 
-    const auto& host_buffer = host_tensor.host_storage().buffer();
     auto mesh_buffer = device_tensor.mesh_buffer();
 
-    cq.enqueue_write(mesh_buffer, host_buffer, blocking);
+    // Use to_device_mesh_buffer to handle replication logic (same as ttnn::copy_to_device)
+    auto [device_storage, topology] = tensor_impl::to_device_mesh_buffer(
+        cq, host_tensor.host_storage(), mesh_buffer, device_tensor.tensor_spec(), host_tensor.tensor_topology());
+
+    if (blocking) {
+        cq.finish();
+    }
+
+    // Reconstruct DeviceTensor with updated storage and topology
+    device_tensor = DeviceTensor(
+        std::move(device_storage),
+        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
+        topology);
 }
 
 namespace tensor_impl {

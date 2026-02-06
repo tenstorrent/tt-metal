@@ -17,6 +17,7 @@
 namespace tt::tt_metal::distributed {
 class MeshCommandQueue;
 class MeshBuffer;
+class MeshDevice;
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::tensor_impl {
@@ -98,6 +99,13 @@ std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const Ten
 //   * Resulting data is safe to be converted to python tensors or general consumption with just a ND logical shape
 template <typename T>
 std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const TensorSpec& tensor_spec);
+
+// ======================================================================================
+//                                  Device Buffer Allocation
+// ======================================================================================
+
+std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
 // ======================================================================================
 //                                  H2D Transfer utilities
