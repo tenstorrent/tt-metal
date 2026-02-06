@@ -261,6 +261,8 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
+    const std::array<uint32_t, 3> default_dilation = {1, 1, 1};
+
     auto operation_attributes = OperationType::operation_attributes_t{
         .config = config,
         .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
@@ -271,14 +273,11 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .stride = stride_,
         .padding = padding_,
         .dilation =
-            (config.dilation != std::array<uint32_t, 3>({1, 1, 1}) && dilation_ == std::array<uint32_t, 3>({1, 1, 1}))
-                ? config.dilation
-                : dilation_,
+            (config.dilation != default_dilation && dilation_ == default_dilation) ? config.dilation : dilation_,
         .padding_mode = padding_mode_,
         .groups = groups_};
     TT_FATAL(
-        config.dilation == std::array<uint32_t, 3>({1, 1, 1}) || dilation_ == std::array<uint32_t, 3>({1, 1, 1}) ||
-            config.dilation == dilation_,
+        config.dilation == default_dilation || dilation_ == default_dilation || config.dilation == dilation_,
         "dilation in Conv3dConfig and op args must match when both are set. config=({}, {}, {}), args=({}, {}, {})",
         config.dilation[0],
         config.dilation[1],
