@@ -109,14 +109,46 @@ void kernel_main() {
     };
 
     // ------------------------------------------------------------------------
-    // DRAM Streaming Matmul (reader - no-op, cb_in0 reuses mcast_dst_cb)
+    // DRAM Streaming Matmul (reader - DRAM streaming uses NOC_0)
     // ------------------------------------------------------------------------
-    using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs;
+    using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
+        get_named_compile_time_arg_val("gate_proj_cb_in1"),
+        get_named_compile_time_arg_val("gate_proj_cb_out"),
+        get_named_compile_time_arg_val("gate_proj_in1_tensor_addr"),
+        get_named_compile_time_arg_val("gate_proj_in1_page_size"),
+        get_named_compile_time_arg_val("gate_proj_in1_num_pages"),
+        get_named_compile_time_arg_val("gate_proj_subblock_k"),
+        get_named_compile_time_arg_val("gate_proj_per_core_n"),
+        get_named_compile_time_arg_val("gate_proj_in1_block_size_bytes"),
+        get_named_compile_time_arg_val("gate_proj_out_num_tiles"),
+        get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
+        get_named_compile_time_arg_val("gate_proj_bank_id"),
+        get_named_compile_time_arg_val("gate_proj_vc"),
+        1,  // enable_indexing = true
+        get_named_compile_time_arg_val("gate_proj_cb_index"),
+        get_named_compile_time_arg_val("gate_proj_index_offset"),
+        get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
 
     // ------------------------------------------------------------------------
-    // up_proj Matmul (reader - no-op, cb_in0 reuses mcast_dst_cb)
+    // up_proj Matmul (reader - DRAM streaming uses NOC_0)
     // ------------------------------------------------------------------------
-    using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs;
+    using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
+        get_named_compile_time_arg_val("up_proj_cb_in1"),
+        get_named_compile_time_arg_val("up_proj_cb_mm_out"),  // Intermediate output (before mul)
+        get_named_compile_time_arg_val("up_proj_in1_tensor_addr"),
+        get_named_compile_time_arg_val("up_proj_in1_page_size"),
+        get_named_compile_time_arg_val("up_proj_in1_num_pages"),
+        get_named_compile_time_arg_val("up_proj_subblock_k"),
+        get_named_compile_time_arg_val("up_proj_per_core_n"),
+        get_named_compile_time_arg_val("up_proj_in1_block_size_bytes"),
+        get_named_compile_time_arg_val("up_proj_out_num_tiles"),
+        get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
+        get_named_compile_time_arg_val("up_proj_bank_id"),
+        get_named_compile_time_arg_val("up_proj_vc"),
+        1,  // enable_indexing = true
+        get_named_compile_time_arg_val("up_proj_cb_index"),
+        get_named_compile_time_arg_val("up_proj_index_offset"),
+        get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
 
     // ------------------------------------------------------------------------
     // Mul (reader - setup gate_proj_output as mul_in1 in 16x16 format)
@@ -153,9 +185,25 @@ void kernel_main() {
     };
 
     // ------------------------------------------------------------------------
-    // down_proj DRAM Matmul (reader - no-op, cb_in0 reuses mcast output)
+    // down_proj DRAM Matmul (reader - DRAM streaming uses NOC_0)
     // ------------------------------------------------------------------------
-    using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs;
+    using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
+        get_named_compile_time_arg_val("down_proj_cb_in1"),
+        get_named_compile_time_arg_val("down_proj_cb_out"),
+        get_named_compile_time_arg_val("down_proj_in1_tensor_addr"),
+        get_named_compile_time_arg_val("down_proj_in1_page_size"),
+        get_named_compile_time_arg_val("down_proj_in1_num_pages"),
+        get_named_compile_time_arg_val("down_proj_subblock_k"),
+        get_named_compile_time_arg_val("down_proj_per_core_n"),
+        get_named_compile_time_arg_val("down_proj_in1_block_size_bytes"),
+        get_named_compile_time_arg_val("down_proj_out_num_tiles"),
+        get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
+        get_named_compile_time_arg_val("down_proj_bank_id"),
+        get_named_compile_time_arg_val("down_proj_vc"),
+        1,  // enable_indexing = true
+        get_named_compile_time_arg_val("down_proj_cb_index"),
+        get_named_compile_time_arg_val("down_proj_index_offset"),
+        get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
 
     // ------------------------------------------------------------------------
     // Eltwise Add (reader - no-op, CB setup done above)
@@ -291,47 +339,9 @@ void kernel_main() {
         get_write_ptr(expert_scale_mcast_dst_cb),
     };
 
-    // ------------------------------------------------------------------------
-    // DRAM Streaming Matmul (writer)
-    // ------------------------------------------------------------------------
-    using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs<
-        get_named_compile_time_arg_val("gate_proj_cb_in1"),
-        get_named_compile_time_arg_val("gate_proj_cb_out"),
-        get_named_compile_time_arg_val("gate_proj_in1_tensor_addr"),
-        get_named_compile_time_arg_val("gate_proj_in1_page_size"),
-        get_named_compile_time_arg_val("gate_proj_in1_num_pages"),
-        get_named_compile_time_arg_val("gate_proj_subblock_k"),
-        get_named_compile_time_arg_val("gate_proj_per_core_n"),
-        get_named_compile_time_arg_val("gate_proj_in1_block_size_bytes"),
-        get_named_compile_time_arg_val("gate_proj_out_num_tiles"),
-        get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
-        get_named_compile_time_arg_val("gate_proj_bank_id"),
-        get_named_compile_time_arg_val("gate_proj_vc"),
-        1,  // enable_indexing = true
-        get_named_compile_time_arg_val("gate_proj_cb_index"),
-        get_named_compile_time_arg_val("gate_proj_index_offset"),
-        get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
-
-    // ------------------------------------------------------------------------
-    // up_proj Matmul (writer) - writes to intermediate CB, not final output
-    // ------------------------------------------------------------------------
-    using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs<
-        get_named_compile_time_arg_val("up_proj_cb_in1"),
-        get_named_compile_time_arg_val("up_proj_cb_mm_out"),  // Intermediate output (before mul)
-        get_named_compile_time_arg_val("up_proj_in1_tensor_addr"),
-        get_named_compile_time_arg_val("up_proj_in1_page_size"),
-        get_named_compile_time_arg_val("up_proj_in1_num_pages"),
-        get_named_compile_time_arg_val("up_proj_subblock_k"),
-        get_named_compile_time_arg_val("up_proj_per_core_n"),
-        get_named_compile_time_arg_val("up_proj_in1_block_size_bytes"),
-        get_named_compile_time_arg_val("up_proj_out_num_tiles"),
-        get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
-        get_named_compile_time_arg_val("up_proj_bank_id"),
-        get_named_compile_time_arg_val("up_proj_vc"),
-        1,  // enable_indexing = true
-        get_named_compile_time_arg_val("up_proj_cb_index"),
-        get_named_compile_time_arg_val("up_proj_index_offset"),
-        get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+    // DRAM Streaming Matmul (no-op for BRISC, handled by NCRISC)
+    using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
+    using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
 
     // ------------------------------------------------------------------------
     // Mul (writer) - waits for final output after mul, copies scalar for multiply
@@ -375,26 +385,8 @@ void kernel_main() {
         get_write_ptr(down_proj_mcast_dst_cb),
     };
 
-    // ------------------------------------------------------------------------
-    // down_proj DRAM Matmul (writer)
-    // ------------------------------------------------------------------------
-    using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs<
-        get_named_compile_time_arg_val("down_proj_cb_in1"),
-        get_named_compile_time_arg_val("down_proj_cb_out"),
-        get_named_compile_time_arg_val("down_proj_in1_tensor_addr"),
-        get_named_compile_time_arg_val("down_proj_in1_page_size"),
-        get_named_compile_time_arg_val("down_proj_in1_num_pages"),
-        get_named_compile_time_arg_val("down_proj_subblock_k"),
-        get_named_compile_time_arg_val("down_proj_per_core_n"),
-        get_named_compile_time_arg_val("down_proj_in1_block_size_bytes"),
-        get_named_compile_time_arg_val("down_proj_out_num_tiles"),
-        get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
-        get_named_compile_time_arg_val("down_proj_bank_id"),
-        get_named_compile_time_arg_val("down_proj_vc"),
-        1,  // enable_indexing = true
-        get_named_compile_time_arg_val("down_proj_cb_index"),
-        get_named_compile_time_arg_val("down_proj_index_offset"),
-        get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+    // down_proj DRAM Matmul (no-op for BRISC, handled by NCRISC)
+    using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
 
     // ------------------------------------------------------------------------
     // Eltwise Add (writer - no-op)
