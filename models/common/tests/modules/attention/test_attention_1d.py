@@ -601,8 +601,8 @@ def test_attention_1d_config_defaults():
     assert config.use_vllm_paged_kv_cache is False
     assert config.kv_cache_dtype == ttnn.bfloat8_b
     assert config.use_qk_fused is False
-    assert config.num_reduce_scatter_links == 1
-    assert config.num_all_gather_links == 2
+    assert config.num_reduce_scatter_links is None
+    assert config.num_all_gather_links is None
 
     # Optional fields default to None
     assert config.mesh_device is None

@@ -89,3 +89,82 @@ class TT_CCL:
         current_idx = self.rs_semaphores_idx[semaphore_index]
         self.rs_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
         return self.rs_semaphore_handles[semaphore_index][current_idx]
+
+    def get_num_links(self, cluster_axis=None):
+        """Get the number of available Ethernet links for CCL operations on this mesh device."""
+        return get_num_links(self.mesh_device, cluster_axis)
+
+
+# =============================================================================
+# Device name / link count helpers (copied from TTTv1 ccl.py + model_config.py
+# to avoid importing from tt_transformers)
+# =============================================================================
+
+
+def _determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
+    """Determine device name based on number of devices and architecture."""
+    num_devices = mesh_device.get_num_devices() if mesh_device else 0
+    arch_name = ttnn.get_arch_name()
+    dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None
+
+    if num_devices == 0:
+        return "CPU"
+
+    if "blackhole" in arch_name:
+        dict_device_names = {
+            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",
+            2: "P300",
+            4: "P150x4",
+            8: "P150x8",
+            32: "BHGLX",
+        }
+    elif "wormhole_b0" in arch_name:
+        dict_device_names = {
+            1: "N150",
+            2: "N300",
+            4: "N150x4",
+            8: "T3K",
+            32: "TG",
+        }
+    else:
+        raise ValueError(f"Unsupported architecture: {arch_name}")
+
+    if num_devices in dict_device_names:
+        return dict_device_names[num_devices]
+    raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")
+
+
+def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None) -> int:
+    """
+    Get the number of available Ethernet links for CCL operations.
+
+    Args:
+        mesh_device: The mesh device to query.
+        cluster_axis: Optional cluster axis to query links for.
+            - 0: vertical axis (North-South).
+            - 1: horizontal axis (East-West).
+            - None: minimum across all axes.
+
+    Returns:
+        int: The number of available links.
+    """
+    device_name = _determine_device_name(mesh_device)
+    link_dict = {
+        "P100": (0, 0),
+        "P150": (0, 0),
+        "N150": (0, 0),
+        "N300": (1, 1),
+        "T3K": (1, 1),
+        "P150x4": (2, 2),
+        "P150x8": (2, 2),
+        "P300": (2, 2),
+        "BHGLX": (4, 3),
+        "TG": (4, 3),
+        "N150x4": (1, 1),
+    }
+    device_links = link_dict[device_name]
+    if cluster_axis is None:
+        return min(device_links)
+    if cluster_axis in (0, 1):
+        return device_links[cluster_axis]
+    return min(device_links)

@@ -112,8 +112,8 @@ class Attention1DConfig:
     mesh_device: ttnn.MeshDevice | None = None
     tt_ccl: TT_CCL | None = None
     topology: Optional[ttnn.Topology] = None  # None = auto-detect
-    num_reduce_scatter_links: int = 1
-    num_all_gather_links: int = 2
+    num_reduce_scatter_links: int | None = None
+    num_all_gather_links: int | None = None
 
     # Model dimensions (derived from weights if None)
     dim: int | None = None
@@ -1334,8 +1334,6 @@ class Attention1D(LightweightModule):
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             topology=configuration.ccl_topology(),
-            num_reduce_scatter_links=configuration.num_reduce_scatter_links,
-            num_all_gather_links=configuration.num_all_gather_links,
             dim=configuration.dim,
             n_heads=configuration.n_heads,
             n_kv_heads=configuration.n_kv_heads,
@@ -1447,6 +1445,13 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
         to_set["topology"] = _default_topology(mesh_device)
 
     topology = to_set.get("topology", config.topology)
+
+    # Auto-detect num_links (same approach as TTTv1 ccl.py tt_all_reduce)
+    tt_ccl = to_set.get("tt_ccl", config.tt_ccl)
+    if config.num_reduce_scatter_links is None and num_devices > 1:
+        to_set["num_reduce_scatter_links"] = tt_ccl.get_num_links()
+    if config.num_all_gather_links is None and num_devices > 1:
+        to_set["num_all_gather_links"] = tt_ccl.get_num_links()
 
     # --- Phase 3: Derived dimensions ---
 
