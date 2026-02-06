@@ -22,6 +22,7 @@ Data::Data()
 
     // Initialize RPC server if enabled
     const auto& rtoptions = MetalContext::instance().rtoptions();
+    log_info(tt::LogInspector, "Inspector RPC server enabled: {}", rtoptions.get_inspector_rpc_server_enabled());
     if (rtoptions.get_inspector_rpc_server_enabled()) {
         try {
             auto address = rtoptions.get_inspector_rpc_server_address();

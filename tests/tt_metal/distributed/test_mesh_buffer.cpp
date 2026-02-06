@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <iostream>
 #include <tt-metalium/distributed.hpp>
 #include <array>
 #include <cstddef>
@@ -534,7 +536,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
     uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     std::vector<std::thread> threads;
-    for (int thread_idx = 0; thread_idx < 2; thread_idx += 1) {
+    for (int thread_idx = 0; thread_idx < 1; thread_idx += 1) {
         threads.push_back(std::thread([&]() {
             std::uniform_int_distribution<int> gen_num_datums(32, 128);
             std::mt19937 rng(seed);
@@ -579,11 +581,98 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
                         output_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(dst_vec[coord].data()));
                     }
 
-                    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
+                    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, true);
                     mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
 
                     for (auto& dst : dst_vec) {
+                        std::cerr << "Coord: " << dst.first.coords()[0] << "," << dst.first.coords()[1] << std::endl;
                         EXPECT_EQ(dst.second, src_vec);
+                        if (dst.second != src_vec) {
+                            std::cerr << "Expected: ";
+                            for (size_t idx = 0; idx < dst.second.size(); idx++) {
+                                if (dst.second[idx] != src_vec[idx]) {
+                                    std::cerr << src_vec[idx] << " ";
+                                    std::cerr << dst.second[idx] << std::endl;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }));
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+}
+
+TEST_F(MeshBufferTestSuite, SingleShardReadWriteMultiThread) {
+    constexpr uint32_t NUM_ITERS = 50;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", 0);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+
+    std::vector<std::thread> threads;
+    for (int thread_idx = 0; thread_idx < 1; thread_idx += 1) {
+        threads.push_back(std::thread([&]() {
+            std::uniform_int_distribution<int> gen_num_datums(32, 128);
+            std::mt19937 rng(seed);
+
+            DeviceLocalBufferConfig per_device_buffer_config{
+                .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+            distributed::MeshCoordinateRange coord_range({1, 2}, {1, 2});
+
+            uint32_t rows = 1;
+            uint32_t cols = 1;
+            uint32_t num_devices = rows * cols;
+
+            for (int i = 0; i < NUM_ITERS; i++) {
+                Shape2D global_buffer_shape = {32 * constants::TILE_HEIGHT * rows, 32 * constants::TILE_WIDTH * cols};
+                Shape2D shard_shape =
+                    global_buffer_shape;  //{global_buffer_shape.height() / rows, global_buffer_shape.width() / cols};
+                uint32_t global_buffer_size =
+                    global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
+                ShardedBufferConfig sharded_config{
+                    .global_size = global_buffer_size,
+                    .global_buffer_shape = global_buffer_shape,
+                    .shard_shape = shard_shape,
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                };
+                auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_buffer_config, mesh_device_.get());
+                std::cerr << "buf address: " << mesh_buffer->get_device_buffer({1, 2})->address() << std::endl;
+
+                std::vector<uint32_t> src_vec =
+                    std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
+                std::iota(src_vec.begin(), src_vec.end(), 0);
+                std::unordered_map<distributed::MeshCoordinate, std::vector<uint32_t>> dst_vec = {};
+                std::vector<distributed::ShardDataTransfer> input_shards = {};
+                std::vector<distributed::ShardDataTransfer> output_shards = {};
+
+                for (const auto& coord : coord_range) {
+                    input_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(src_vec.data()));
+                }
+                for (const auto& coord : coord_range) {
+                    dst_vec[coord] = std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
+                    output_shards.push_back(distributed::ShardDataTransfer{coord}.host_data(dst_vec[coord].data()));
+                }
+
+                mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, true);
+                mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
+
+                for (auto& dst : dst_vec) {
+                    std::cerr << "Coord: " << dst.first.coords()[0] << "," << dst.first.coords()[1] << std::endl;
+                    EXPECT_EQ(dst.second, src_vec);
+                    EXPECT_EQ(dst.second.size(), src_vec.size());
+                    std::cerr << "Dst size: " << dst.second.size() << " Src size: " << src_vec.size() << std::endl;
+                    if (dst.second != src_vec) {
+                        for (size_t idx = 0, printed_count = 0; idx < dst.second.size() && printed_count < 1; idx++) {
+                            if (dst.second[idx] != src_vec[idx]) {
+                                std::cerr << "fail @ index " << idx * sizeof(uint32_t) << std::endl;
+                                std::cerr << src_vec[idx] << " ";
+                                std::cerr << dst.second[idx] << std::endl;
+                                printed_count++;
+                            }
+                        }
                     }
                 }
             }

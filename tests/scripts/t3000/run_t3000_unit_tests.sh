@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eo pipefail
 
-TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
+TT_CACHE_HOME=/home/pilkic/.cache/huggingface
 
 # Exit immediately if ARCH_NAME is not set or empty
 if [ -z "${ARCH_NAME}" ]; then
