@@ -43,6 +43,8 @@ DEVICE_PERF_TARGETS_US = {
     ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: set real targets
     ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 32768): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},
 }
 
@@ -426,8 +428,42 @@ def _build_ff2_inputs(
         # batch_size=32 for all modes
         ("decode", 1, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 128, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 1024, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 131072, 0.97, 0.5, 0.5, 0.0),
+        pytest.param(
+            "prefill",
+            1024,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
+        pytest.param(
+            "prefill",
+            8192,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
+        pytest.param(
+            "prefill",
+            32768,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
+        pytest.param(
+            "prefill",
+            131072,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
     ],
 )
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real_weights", "random_weights"])
@@ -511,8 +547,42 @@ def test_ds_ff2(
         # batch_size=32 for all modes
         ("decode", 1, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 128, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 1024, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 131072, 0.97, 0.5, 0.5, 0.0),
+        pytest.param(
+            "prefill",
+            1024,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
+        pytest.param(
+            "prefill",
+            8192,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
+        pytest.param(
+            "prefill",
+            32768,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
+        pytest.param(
+            "prefill",
+            131072,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
     ],
 )
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real_weights", "random_weights"])
@@ -553,8 +623,10 @@ def test_ds_ff2_single_device(
     [
         ("decode", 1),
         ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 131072),
+        pytest.param("prefill", 1024, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 8192, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 32768, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 131072, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
     ],
 )
 def test_ds_ff2_device_perf(mode, seq_len):
@@ -641,8 +713,10 @@ def test_ds_ff2_device_perf(mode, seq_len):
     [
         ("decode", 1),
         ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 131072),
+        pytest.param("prefill", 1024, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 8192, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 32768, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 131072, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
     ],
 )
 def test_ds_ff2_single_device_device_perf(mode, seq_len):

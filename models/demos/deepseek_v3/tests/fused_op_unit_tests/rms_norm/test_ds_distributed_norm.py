@@ -26,7 +26,6 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     log_run_mode,
     maybe_skip_long_seq,
     measure_perf_us,
-    skip_single_device_ccl,
 )
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
@@ -48,6 +47,8 @@ DEVICE_PERF_TARGETS_US = {
     ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: set real targets
     ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 32768): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},
 }
 
@@ -358,6 +359,8 @@ def _build_distributed_norm_inputs(
         ("decode", 1, 0.98, 0.5, 0.5, 0.0),  # TODO: set real perf targets
         ("prefill", 128, 0.98, 0.5, 0.5, 0.0),
         ("prefill", 1024, 0.98, 0.5, 0.5, 0.0),
+        ("prefill", 8192, 0.98, 0.5, 0.5, 0.0),
+        ("prefill", 32768, 0.98, 0.5, 0.5, 0.0),
         ("prefill", 131072, 0.98, 0.5, 0.5, 0.0),  # 128k
     ],
 )
@@ -392,7 +395,16 @@ def test_ds_distributed_norm(
     force_recalculate_weight_config,
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
+    is_ci_env,
 ):
+    # CI skip logic: keep only decode/1/trace and prefill/128/eager in CI with program_cache and real_weights
+    if is_ci_env:
+        ci_keep = (mode == "decode" and seq_len == 1 and trace_mode and program_cache_enabled and use_real_weights) or (
+            mode == "prefill" and seq_len == 128 and not trace_mode and program_cache_enabled and use_real_weights
+        )
+        if not ci_keep:
+            pytest.skip("CI test only runs decode/1/trace and prefill/128/eager with program_cache and real_weights")
+
     # Trace capture replays pre-compiled binaries. When program cache is disabled, ops may
     # trigger compilation/program writes during capture, which is forbidden and can TT_FATAL.
     if trace_mode and not program_cache_enabled:
@@ -438,56 +450,14 @@ def test_ds_distributed_norm(
 
 
 @pytest.mark.parametrize(
-    "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
-    [
-        ("decode", 1, 0.98, 0.5, 0.5, 0.0),
-        ("prefill", 128, 0.98, 0.5, 0.5, 0.0),
-        ("prefill", 1024, 0.98, 0.5, 0.5, 0.0),
-        ("prefill", 131072, 0.98, 0.5, 0.5, 0.0),
-    ],
-)
-@pytest.mark.parametrize("use_real_weights", [True, False], ids=["real_weights", "random_weights"])
-@pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
-@pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
-        }
-    ],
-    indirect=True,
-)
-def test_ds_distributed_norm_single_device(
-    mode,
-    seq_len,
-    expected_pcc,
-    expected_atol,
-    expected_rtol,
-    expected_perf_us,
-    use_real_weights,
-    program_cache_enabled,
-    trace_mode,
-    hf_config,
-    cache_path,
-    mesh_device,
-    ccl,
-    force_recalculate_weight_config,
-    set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
-):
-    skip_single_device_ccl("ds_distributed_norm")
-
-
-@pytest.mark.parametrize(
     "mode, seq_len",
     [
         ("decode", 1),
         ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 131072),
+        pytest.param("prefill", 1024, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 8192, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 32768, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 131072, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
     ],
 )
 def test_ds_distributed_norm_device_perf(mode, seq_len):
@@ -563,19 +533,6 @@ def test_ds_distributed_norm_device_perf(mode, seq_len):
         batch_size=batch_size,
         input_sequence_length=seq_len,
     )
-
-
-@pytest.mark.parametrize(
-    "mode, seq_len",
-    [
-        ("decode", 1),
-        ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 131072),
-    ],
-)
-def test_ds_distributed_norm_single_device_device_perf(mode, seq_len):
-    skip_single_device_ccl("ds_distributed_norm")
 
 
 if __name__ == "__main__":

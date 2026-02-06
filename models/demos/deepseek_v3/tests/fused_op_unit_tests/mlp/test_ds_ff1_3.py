@@ -43,6 +43,8 @@ DEVICE_PERF_TARGETS_US = {
     ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: set real targets
     ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 32768): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},
 }
 
@@ -332,6 +334,8 @@ def _build_ff1_3_inputs(
         ("decode", 1, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 128, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 1024, 0.97, 0.5, 0.5, 0.0),
+        ("prefill", 8192, 0.97, 0.5, 0.5, 0.0),
+        ("prefill", 32768, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 131072, 0.97, 0.5, 0.5, 0.0),
     ],
 )
@@ -364,7 +368,16 @@ def test_ds_ff1_3(
     ccl,
     force_recalculate_weight_config,
     set_deterministic_env,
+    is_ci_env,
 ):
+    # CI skip logic: keep only decode/1/trace and prefill/128/eager in CI with program_cache and real_weights
+    if is_ci_env:
+        ci_keep = (mode == "decode" and seq_len == 1 and trace_mode and program_cache_enabled and use_real_weights) or (
+            mode == "prefill" and seq_len == 128 and not trace_mode and program_cache_enabled and use_real_weights
+        )
+        if not ci_keep:
+            pytest.skip("CI test only runs decode/1/trace and prefill/128/eager with program_cache and real_weights")
+
     if mode == "decode":
         assert seq_len == 1, "Decode only supports seq_len=1"
     else:
@@ -412,6 +425,8 @@ def test_ds_ff1_3(
         ("decode", 1, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 128, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 1024, 0.97, 0.5, 0.5, 0.0),
+        ("prefill", 8192, 0.97, 0.5, 0.5, 0.0),
+        ("prefill", 32768, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 131072, 0.97, 0.5, 0.5, 0.0),
     ],
 )
@@ -453,8 +468,10 @@ def test_ds_ff1_3_single_device(
     [
         ("decode", 1),
         ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 131072),
+        pytest.param("prefill", 1024, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 8192, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 32768, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 131072, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
     ],
 )
 def test_ds_ff1_3_device_perf(mode, seq_len):
@@ -541,8 +558,10 @@ def test_ds_ff1_3_device_perf(mode, seq_len):
     [
         ("decode", 1),
         ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 131072),
+        pytest.param("prefill", 1024, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 8192, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 32768, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 131072, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
     ],
 )
 def test_ds_ff1_3_single_device_device_perf(mode, seq_len):

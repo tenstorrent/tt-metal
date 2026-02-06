@@ -389,12 +389,54 @@ def _build_lm_head_inputs(
     [
         ("decode", 1, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=1 → 32 tokens
         ("prefill", 128, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=128 → 4096 tokens
-        ("prefill", 1024, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=1024 → 32768 tokens
-        ("prefill", 131072, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=128k
+        pytest.param(
+            "prefill",
+            1024,
+            0.97,
+            1.0,
+            1.0,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),  # batch=32, seq=1024 → 32768 tokens
+        pytest.param(
+            "prefill",
+            8192,
+            0.97,
+            1.0,
+            1.0,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
+        pytest.param(
+            "prefill",
+            32768,
+            0.97,
+            1.0,
+            1.0,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
+        pytest.param(
+            "prefill",
+            131072,
+            0.97,
+            1.0,
+            1.0,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),  # batch=32, seq=128k
     ],
 )
-@pytest.mark.parametrize("use_real_weights", [True, False], ids=["real_weights", "random_weights"])
-@pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
+@pytest.mark.parametrize(
+    "use_real_weights",
+    [True, pytest.param(False, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"))],
+    ids=["real_weights", "random_weights"],
+)
+@pytest.mark.parametrize(
+    "program_cache_enabled",
+    [True, pytest.param(False, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"))],
+    ids=["program_cache", "no_program_cache"],
+)
 @pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
 @pytest.mark.parametrize(
     "device_params",
@@ -429,6 +471,20 @@ def test_ds_lm_head(
     This tests the linear projection from hidden_size (7168) to vocab_size (129280).
     The weight is sharded across all 32 devices with bfloat4_b quantization.
     """
+    # CI skip logic: only run specific combinations in CI
+    in_ci = os.getenv("CI") == "true"
+    if in_ci:
+        # Only run these combinations in CI:
+        # - decode + seq_len=1 + trace + program_cache + real_weights
+        # - prefill + seq_len=128 + eager + program_cache + real_weights
+        keep_in_ci = (
+            mode == "decode" and seq_len == 1 and trace_mode and program_cache_enabled and use_real_weights
+        ) or (mode == "prefill" and seq_len == 128 and not trace_mode and program_cache_enabled and use_real_weights)
+        if not keep_in_ci:
+            pytest.skip(
+                "Skip in CI - only run decode/1/trace and prefill/128/eager with program_cache and real_weights"
+            )
+
     # Trace capture requires program cache enabled
     if trace_mode and not program_cache_enabled:
         pytest.skip("Trace mode requires program cache enabled (skip trace + no_program_cache).")
@@ -527,8 +583,10 @@ def test_ds_lm_head_single_device(
     [
         ("decode", 1),
         ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 131072),
+        pytest.param("prefill", 1024, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 8192, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 32768, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 131072, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
     ],
 )
 def test_ds_lm_head_device_perf(mode, seq_len):

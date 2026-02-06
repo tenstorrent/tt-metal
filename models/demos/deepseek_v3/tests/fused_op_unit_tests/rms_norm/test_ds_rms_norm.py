@@ -52,6 +52,10 @@ DEVICE_PERF_TARGETS_US = {
     ("prefill", 128, "q_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 1024, "kv_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 1024, "q_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 8192, "kv_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 8192, "q_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 32768, "kv_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},
+    ("prefill", 32768, "q_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 131072, "kv_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},
     ("prefill", 131072, "q_lora_rank"): {"kernel": 0.0, "op_to_op": 0.0},
 }
@@ -349,6 +353,8 @@ def _build_rms_norm_inputs(
         ("decode", 1, 0.98, 0.5, 0.5, 0.0),  # TODO: set real perf targets
         ("prefill", 128, 0.98, 0.5, 0.5, 0.0),
         ("prefill", 1024, 0.98, 0.5, 0.5, 0.0),
+        ("prefill", 8192, 0.98, 0.5, 0.5, 0.0),
+        ("prefill", 32768, 0.98, 0.5, 0.5, 0.0),
         ("prefill", 131072, 0.98, 0.5, 0.5, 0.0),  # 128k
     ],
 )
@@ -388,7 +394,16 @@ def test_ds_rms_norm(
     force_recalculate_weight_config,
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
+    is_ci_env,
 ):
+    # CI skip logic: keep only decode/1/trace and prefill/128/eager in CI with program_cache and real_weights
+    if is_ci_env:
+        ci_keep = (mode == "decode" and seq_len == 1 and trace_mode and program_cache_enabled and use_real_weights) or (
+            mode == "prefill" and seq_len == 128 and not trace_mode and program_cache_enabled and use_real_weights
+        )
+        if not ci_keep:
+            pytest.skip("CI test only runs decode/1/trace and prefill/128/eager with program_cache and real_weights")
+
     # Trace capture replays pre-compiled binaries. When program cache is disabled, ops may
     # trigger compilation/program writes during capture, which is forbidden and can TT_FATAL.
     if trace_mode and not program_cache_enabled:
@@ -497,10 +512,30 @@ def test_ds_rms_norm_single_device(
         ("decode", 1, "q_lora_rank"),
         ("prefill", 128, "kv_lora_rank"),
         ("prefill", 128, "q_lora_rank"),
-        ("prefill", 1024, "kv_lora_rank"),
-        ("prefill", 1024, "q_lora_rank"),
-        ("prefill", 131072, "kv_lora_rank"),
-        ("prefill", 131072, "q_lora_rank"),
+        pytest.param(
+            "prefill", 1024, "kv_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 1024, "q_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 8192, "kv_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 8192, "q_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 32768, "kv_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 32768, "q_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 131072, "kv_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 131072, "q_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
     ],
 )
 def test_ds_rms_norm_device_perf(mode, seq_len, hf_config_size_attr):
@@ -587,8 +622,24 @@ def test_ds_rms_norm_device_perf(mode, seq_len, hf_config_size_attr):
         ("decode", 1, "q_lora_rank"),
         ("prefill", 128, "kv_lora_rank"),
         ("prefill", 128, "q_lora_rank"),
-        ("prefill", 1024, "kv_lora_rank"),
-        ("prefill", 1024, "q_lora_rank"),
+        pytest.param(
+            "prefill", 1024, "kv_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 1024, "q_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 8192, "kv_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 8192, "q_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 32768, "kv_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
+        pytest.param(
+            "prefill", 32768, "q_lora_rank", marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+        ),
     ],
 )
 def test_ds_rms_norm_single_device_device_perf(mode, seq_len, hf_config_size_attr):

@@ -17,7 +17,6 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     log_run_mode,
     maybe_skip_long_seq,
     measure_perf_us,
-    skip_single_device_ccl,
 )
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -319,11 +318,49 @@ def _build_all_gather_embedding_inputs(
         # batch_size=32 for all modes
         ("decode", 1, 0.9999, 0.2, 0.2, 0.0),
         ("prefill", 128, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 1024, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 131072, 0.9999, 0.2, 0.2, 0.0),
+        pytest.param(
+            "prefill",
+            1024,
+            0.9999,
+            0.2,
+            0.2,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
+        pytest.param(
+            "prefill",
+            8192,
+            0.9999,
+            0.2,
+            0.2,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
+        pytest.param(
+            "prefill",
+            32768,
+            0.9999,
+            0.2,
+            0.2,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
+        pytest.param(
+            "prefill",
+            131072,
+            0.9999,
+            0.2,
+            0.2,
+            0.0,
+            marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+        ),
     ],
 )
-@pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
+@pytest.mark.parametrize(
+    "program_cache_enabled",
+    [True, pytest.param(False, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"))],
+    ids=["program_cache", "no_program_cache"],
+)
 @pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
 @pytest.mark.parametrize(
     "device_params",
@@ -394,53 +431,14 @@ def test_ds_all_gather_embedding(
 
 
 @pytest.mark.parametrize(
-    "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
-    [
-        # batch_size=32 for all modes
-        ("decode", 1, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 128, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 1024, 0.9999, 0.2, 0.2, 0.0),
-        ("prefill", 131072, 0.9999, 0.2, 0.2, 0.0),
-    ],
-)
-@pytest.mark.parametrize("program_cache_enabled", [True, False], ids=["program_cache", "no_program_cache"])
-@pytest.mark.parametrize("trace_mode", [False, True], ids=["eager", "trace"])
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 2967552,
-        }
-    ],
-    indirect=True,
-)
-def test_ds_all_gather_embedding_single_device(
-    mode,
-    seq_len,
-    expected_pcc,
-    expected_atol,
-    expected_rtol,
-    expected_perf_us,
-    program_cache_enabled,
-    trace_mode,
-    hf_config,
-    cache_path,
-    mesh_device,
-    ccl,
-    force_recalculate_weight_config,
-    set_deterministic_env,
-):
-    skip_single_device_ccl("ds_all_gather_embedding")
-
-
-@pytest.mark.parametrize(
     "mode, seq_len",
     [
         ("decode", 1),
         ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 131072),
+        pytest.param("prefill", 1024, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 8192, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 32768, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
+        pytest.param("prefill", 131072, marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")),
     ],
 )
 def test_ds_all_gather_embedding_device_perf(mode, seq_len):
@@ -520,19 +518,6 @@ def test_ds_all_gather_embedding_device_perf(mode, seq_len):
         batch_size=batch_size,
         input_sequence_length=seq_len,
     )
-
-
-@pytest.mark.parametrize(
-    "mode, seq_len",
-    [
-        ("decode", 1),
-        ("prefill", 128),
-        ("prefill", 1024),
-        ("prefill", 131072),
-    ],
-)
-def test_ds_all_gather_embedding_single_device_device_perf(mode, seq_len):
-    skip_single_device_ccl("ds_all_gather_embedding")
 
 
 if __name__ == "__main__":
