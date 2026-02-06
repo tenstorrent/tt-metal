@@ -77,6 +77,9 @@ jobs:
             timeout: 15
           # - name: t3000 fast fabric tests
           #   cmd: "source tests/scripts/t3000/run_t3000_unit_tests.sh && run_t3000_ttfabric_tests"
+          - name: fabric sanity benchmark
+            cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
+            timeout: 15
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
       - in-service
@@ -123,6 +126,35 @@ jobs:
           else
             ${{ matrix.test-group.cmd }}
           fi
+      - name: Check latency/BW results
+        id: check-data
+        if: ${{ !cancelled() && matrix.test-group.name == 'fabric sanity benchmark' }}
+        uses: ./docker-job/.github/actions/check-latency-bw-results
+        with:
+          path: /work
+          arch: blackhole
+          check_bw: "true"
+          check_latency: "true"
+      - name: Upload BW results
+        ## Only upload fabric benchmark data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_benchmark_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_bandwidth_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+      - name: Upload latency data
+        ## Only upload fabric latency data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_latency_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_latency_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
       - name: Print tt-smi data on failure
         if: ${{ failure() }}
         run: |
