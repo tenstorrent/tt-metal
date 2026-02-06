@@ -392,7 +392,7 @@ def _get_device_type_from_runner_environment() -> str:
     # This assumes all CIv2 runner names start with tt-ubuntu
     if runner_name.startswith("tt-ubuntu"):
         r = runner_name.lower()
-        if "blackhole" in r or "bh-" in r or "p150" in r:
+        if "blackhole" in r or "bh-" in r or "p100" in r or "p150" in r:
             return "blackhole"
         if "n150" in r or "n300" in r or "wormhole" in r:
             return "wormhole_b0"
