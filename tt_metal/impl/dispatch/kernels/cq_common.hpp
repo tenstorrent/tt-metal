@@ -462,7 +462,7 @@ public:
 
     // Returns how much data is available. Will block until data is available. May release old pages before cmd_ptr to
     // writer. Updates cmd_ptr on wrap-around.
-    // noc_nonposted_writes_num_issued[noc_index] must be updated before calling this function.
+    // noc_increment_nonposted_writes_issued() must be called before calling this function.
     // If this function doesn't return sufficient data, there are two options:
     // 1. Process all the available data and then call this function again.
     // 2. Call get_cb_page_and_release_pages to attempt to get more data.
@@ -484,8 +484,8 @@ public:
     // handle the orphan data that would otherwise be lost and will then release old pages to writer.
     //
     // The argument to on_boundary is whether the next block is the first block in the circular buffer (in which case
-    // cmd_ptr is set to the base address after on_boundary is called).  noc_nonposted_writes_num_issued[noc_index] must
-    // be updated before on_boundary returns.
+    // cmd_ptr is set to the base address after on_boundary is called).
+    // noc_increment_nonposted_writes_issued() must be called before on_boundary returns.
     template <typename OnBoundaryFn>
     FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
         if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {

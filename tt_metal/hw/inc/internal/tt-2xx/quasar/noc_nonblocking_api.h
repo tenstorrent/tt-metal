@@ -355,7 +355,7 @@ inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr_coordinate(
 
 /**
  * Sets the full target address for a NOC command buffer.
- * Writes both NOC_TARG_ADDR_LO and NOC_TARG_ADDR_COORDINATE registers.
+ * Writes NOC_TARG_ADDR_LO, NOC_TARG_ADDR_MID, and NOC_TARG_ADDR_COORDINATE registers.
  *
  * Return value: None
  *
@@ -368,6 +368,7 @@ inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr_coordinate(
 inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr(
     uint32_t noc, uint32_t cmd_buf, uint64_t targ_addr) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(targ_addr & 0xFFFFFFFF));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(targ_addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(targ_addr >> NOC_ADDR_COORD_SHIFT));
 }
 
@@ -390,7 +391,7 @@ inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr_coordinate(
 
 /**
  * Sets the full return address for a NOC command buffer.
- * Writes both NOC_RET_ADDR_LO and NOC_RET_ADDR_COORDINATE registers.
+ * Writes NOC_RET_ADDR_LO, NOC_RET_ADDR_MID, and NOC_RET_ADDR_COORDINATE registers.
  * Typically used for atomic operations where a return value is expected.
  *
  * Return value: None
@@ -403,6 +404,7 @@ inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr_coordinate(
  */
 inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr(uint32_t noc, uint32_t cmd_buf, uint64_t ret_addr) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(ret_addr & 0xFFFFFFFF));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(ret_addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(ret_addr >> NOC_ADDR_COORD_SHIFT));
 }
 
