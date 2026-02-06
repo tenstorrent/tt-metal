@@ -330,7 +330,7 @@ Tensor ExecuteDiv::invoke(
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     DataType input_dtype = input_a.dtype();
-    const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
+    // const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
     // Only force legacy mode if rounding_mode is set and inputs are not of INT32 dtype
     const auto has_legacy_only_args = (rounding_mode.has_value() && !is_int32);
@@ -412,38 +412,42 @@ Tensor ExecuteDiv::invoke(
         (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
-    Tensor result;
+    // Tensor result;
     // When use_legacy is true, the division operation is performed with fp32 precision and final result is typecasted
     // back.
-    if (is_fp32) {
-        result = ttnn::divide(
-            input_a,
-            input_b,
-            std::nullopt,
-            output_mem_config,
-            output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            std::nullopt,
-            fast_and_approximate_mode,
-            sub_core_grids);
-    } else {
-        Tensor a = typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
-        Tensor b = typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
-        result = ttnn::divide(
-            a,
-            b,
-            std::nullopt,
-            output_mem_config,
-            output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            std::nullopt,
-            fast_and_approximate_mode,
-            sub_core_grids);
-    }
+    // if (is_fp32) {
+
+    fast_and_approximate_mode = rounding_mode.has_value() ? false : fast_and_approximate_mode;
+    // rounding mode needs to perform SFPU division
+
+    Tensor result = ttnn::divide(
+        input_a,
+        input_b,
+        std::nullopt,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        std::nullopt,
+        fast_and_approximate_mode,
+        sub_core_grids);
+    // } else {
+    //     Tensor a = typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
+    //     Tensor b = typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
+    //     result = ttnn::divide(
+    //         a,
+    //         b,
+    //         std::nullopt,
+    //         output_mem_config,
+    //         output_tensor,
+    //         post_activations,
+    //         lhs_activations,
+    //         rhs_activations,
+    //         std::nullopt,
+    //         fast_and_approximate_mode,
+    //         sub_core_grids);
+    // }
 
     if (rounding_mode == "trunc") {
         result = ttnn::trunc(result, output_mem_config, output_tensor, sub_core_grids);
@@ -451,10 +455,10 @@ Tensor ExecuteDiv::invoke(
         result = ttnn::floor(result, output_mem_config, output_tensor, sub_core_grids);
     }
 
-    if (is_fp32) {
-        return result;
-    }
-    return typecast(result, input_dtype, output_mem_config, output_tensor, sub_core_grids);
+    // if (is_fp32) {
+    return result;
+    // }
+    // return typecast(result, input_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
 Tensor _div_no_nan_overload(
