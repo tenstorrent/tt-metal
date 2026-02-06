@@ -194,131 +194,65 @@ set(SOURCES
 )
 
 # Manually select only specific files from metal ops
+# Note: Only .cpp files are listed here. Headers (.hpp) are found via include directories.
 set(METAL_OPS_FILES
-    # General
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/operations.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ttnn_all_includes.hpp
-    # Common
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/dataflow_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/compute_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/program_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/const_utils.hpp
-    # RMSNorm
     # RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
     # RMSNorm Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/rmsnorm_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/rmsnorm_bw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.cpp
     # LayerNorm Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/layernorm_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/layernorm_bw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp
     # LayerNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/layernorm_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/layernorm_fw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_program_factory.cpp
-    # CrossEntropy
+    # CrossEntropy Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.cpp
+    # CrossEntropy Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_program_factory.cpp
     # Softmax
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/softmax.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/softmax.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/softmax/device/softmax_program_factory.cpp
     # ProfilerNoOp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/profiler_no_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/profiler_no_op.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_program_factory.cpp
     # SiLU Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/silu_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/silu_bw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
     # SDPA Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
     # SDPA Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.cpp
     # SGD Fused Optimizer
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_program_factory.cpp
     # SwiGLU Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/swiglu_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/swiglu_fw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
     # AdamW Optimizer (consolidated: supports both half and full precision)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.cpp
 )
 
