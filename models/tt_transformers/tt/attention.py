@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
 import math
-import os
 
 import torch
 
@@ -14,15 +12,6 @@ from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
-
-collected = set()
-if os.path.exists("attn_2d_performance.csv"):
-    with open("attn_2d_performance.csv", "r") as f:
-        reader = csv.reader(f)
-        next(reader, None)  # skip header
-        for row in reader:
-            if row:
-                collected.add(",".join(row[1:]))
 
 
 class Attention(LightweightModule):
@@ -66,7 +55,6 @@ class Attention(LightweightModule):
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
-        self.layer_num = layer_num
 
         self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
@@ -459,18 +447,6 @@ class Attention(LightweightModule):
         current_pos: (batch_size), current token position in the sequence for each user
         """
 
-        mode = "decode"
-        file_exists = os.path.exists("attn_2d_performance.csv")
-        with open("attn_2d_performance.csv", "a") as f:
-            if not file_exists:
-                f.write(
-                    "layer_num,cluster_shape_x,cluster_shape_y,x_dtype,wqkv_dtype,x_shape_0,x_shape_1,x_shape_2,x_shape_3,wqkv_shape_0,wqkv_shape_1,wqkv_shape_2,wqkv_shape_3,hf_model_name,mode\n"
-                )
-            entry = f"{self.args.cluster_shape[0]},{self.args.cluster_shape[1]},{x.dtype},{self.wqkv.dtype},{x.shape[0]},{x.shape[1]},{x.shape[2]},{x.shape[3]},{self.wqkv.shape[0]},{self.wqkv.shape[1]},{self.wqkv.shape[2]},{self.wqkv.shape[3]},{self.args.model_name},{mode}"
-            if entry not in collected:
-                collected.add(entry)
-                f.write(f"{self.layer_num},{entry}\n")
-
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
@@ -762,19 +738,6 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
-        mode = "prefill"
-        x = x_11SH
-        file_exists = os.path.exists("attn_2d_performance.csv")
-        with open("attn_2d_performance.csv", "a") as f:
-            if not file_exists:
-                f.write(
-                    "layer_num,cluster_shape_x,cluster_shape_y,x_dtype,wqkv_dtype,x_shape_0,x_shape_1,x_shape_2,x_shape_3,wqkv_shape_0,wqkv_shape_1,wqkv_shape_2,wqkv_shape_3,hf_model_name,mode\n"
-                )
-            entry = f"{self.args.cluster_shape[0]},{self.args.cluster_shape[1]},{x.dtype},{self.wqkv.dtype},{x.shape[0]},{x.shape[1]},{x.shape[2]},{x.shape[3]},{self.wqkv.shape[0]},{self.wqkv.shape[1]},{self.wqkv.shape[2]},{self.wqkv.shape[3]},{self.args.model_name},{mode}"
-            if entry not in collected:
-                collected.add(entry)
-                f.write(f"{self.layer_num},{entry}\n")
-
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
