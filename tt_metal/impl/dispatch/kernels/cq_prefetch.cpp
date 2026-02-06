@@ -2248,13 +2248,10 @@ void kernel_main_h() {
         uint32_t cmd_id = cmd->base.cmd_id;
         // Infer that an exec_buf command is to be executed based on the stall state.
         bool is_exec_buf = (stall_state == STALLED);
-        DPRINT << "cmd_id: " << cmd_id << ENDL();
         if (cmd_id == CQ_PREFETCH_CMD_RELAY_LINEAR_H) {
             cmd_ptr += process_relay_linear_h_cmd(cmd_ptr, downstream_data_ptr);
         } else if (cmd_id == CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H) {
-            DPRINT << "relay linear packed h" << ENDL();
             cmd_ptr += process_relay_linear_packed_h_cmd(cmd_ptr, downstream_data_ptr, l1_cache);
-            DPRINT << "relay linear packed h done" << ENDL();
         } else {
             cmd_ptr = process_relay_inline_all(cmd_ptr, fence, is_exec_buf);
         }
