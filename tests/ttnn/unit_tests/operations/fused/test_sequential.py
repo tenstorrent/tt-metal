@@ -320,6 +320,149 @@ class TestSequentialChainInfrastructure:
         assert total_cbs <= 32, "Should not exceed 32 CBs"
 
 
+def dump_fused_kernels(fused_desc, output_dir: str, label: str = "fused"):
+    """
+    Dump all generated fused kernel files and metadata to output_dir for inspection.
+
+    For each kernel in the fused descriptor, writes:
+      - <label>_kernel_<i>_<type>.cpp  (source code, read from file if FILE_PATH)
+      - <label>_kernel_<i>_<type>_meta.txt  (defines, compile-time args, named args, etc.)
+    Also writes:
+      - <label>_cbs.txt  (all CB descriptors)
+      - <label>_summary.txt  (high-level overview)
+
+    Args:
+        fused_desc: An OpDescriptor whose .descriptor is the fused ProgramDescriptor.
+        output_dir: Directory to write files into (created if needed).
+        label: Prefix for output filenames.
+    """
+    import os
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    descriptor = fused_desc.descriptor
+    kernels = list(descriptor.kernels)
+    cbs = list(descriptor.cbs)
+
+    summary_lines = [
+        f"Fused descriptor summary: {label}",
+        f"  Kernels: {len(kernels)}",
+        f"  CBs:     {len(cbs)}",
+        f"  Input tensors:  {len(fused_desc.input_tensors)}",
+        f"  Output tensors: {len(fused_desc.output_tensors)}",
+        "",
+    ]
+
+    for i, kernel in enumerate(kernels):
+        # Classify kernel type
+        config = kernel.config
+        if isinstance(config, ttnn.ComputeConfigDescriptor):
+            ktype = "compute"
+        elif isinstance(config, ttnn.ReaderConfigDescriptor):
+            ktype = "reader"
+        elif isinstance(config, ttnn.WriterConfigDescriptor):
+            ktype = "writer"
+        elif isinstance(config, ttnn.DataMovementConfigDescriptor):
+            from ttnn import DataMovementProcessor
+
+            ktype = "reader" if config.processor == DataMovementProcessor.RISCV_1 else "writer"
+        else:
+            ktype = "unknown"
+
+        # Determine source type and get source code
+        is_source_code = kernel.source_type == ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+        source_path_or_code = kernel.kernel_source
+
+        if is_source_code:
+            source_code = source_path_or_code
+            source_origin = "SOURCE_CODE (generated)"
+        else:
+            source_origin = f"FILE_PATH: {source_path_or_code}"
+            # Try to read the file
+            source_code = ""
+            base_paths = [
+                os.environ.get("TT_METAL_HOME", ""),
+                "",
+            ]
+            for base in base_paths:
+                full = os.path.join(base, source_path_or_code) if base else source_path_or_code
+                if os.path.exists(full):
+                    with open(full) as f:
+                        source_code = f.read()
+                    break
+            if not source_code:
+                source_code = f"// Could not read file: {source_path_or_code}\n"
+
+        # Write source file
+        src_filename = f"{label}_kernel_{i}_{ktype}.cpp"
+        src_path = os.path.join(output_dir, src_filename)
+        with open(src_path, "w") as f:
+            f.write(source_code)
+
+        # Collect metadata
+        meta_lines = [
+            f"Kernel {i}: {ktype}",
+            f"  Source type: {source_origin}",
+            f"  Source length: {len(source_code)} chars",
+            "",
+        ]
+
+        # Defines
+        defines = list(kernel.defines)
+        meta_lines.append(f"  Defines ({len(defines)}):")
+        for name, value in defines:
+            meta_lines.append(f"    {name} = {value}")
+        meta_lines.append("")
+
+        # Compile-time args
+        ct_args = list(kernel.compile_time_args)
+        meta_lines.append(f"  Compile-time args ({len(ct_args)}):")
+        for j, val in enumerate(ct_args):
+            meta_lines.append(f"    [{j}] = {val}")
+        meta_lines.append("")
+
+        # Named compile-time args
+        named_args = list(kernel.named_compile_time_args)
+        meta_lines.append(f"  Named compile-time args ({len(named_args)}):")
+        for name, value in named_args:
+            meta_lines.append(f"    {name} = {value}")
+        meta_lines.append("")
+
+        # Write metadata file
+        meta_filename = f"{label}_kernel_{i}_{ktype}_meta.txt"
+        meta_path = os.path.join(output_dir, meta_filename)
+        with open(meta_path, "w") as f:
+            f.write("\n".join(meta_lines))
+
+        summary_lines.append(f"  Kernel {i} [{ktype}]: {source_origin} ({len(source_code)} chars)")
+        summary_lines.append(f"    defines={len(defines)}  ct_args={len(ct_args)}  named_args={len(named_args)}")
+
+    # Dump CB descriptors
+    summary_lines.append("")
+    cb_lines = [f"CB descriptors ({len(cbs)}):", ""]
+    for cb_desc in cbs:
+        for fmt in cb_desc.format_descriptors:
+            idx = fmt.buffer_index
+            try:
+                df = fmt.data_format
+            except (TypeError, AttributeError):
+                df = "N/A"
+            cb_lines.append(f"  CB {idx}: page_size={fmt.page_size}  total_size={cb_desc.total_size}  data_format={df}")
+            summary_lines.append(f"  CB {idx}: page_size={fmt.page_size}  total_size={cb_desc.total_size}")
+
+    cb_path = os.path.join(output_dir, f"{label}_cbs.txt")
+    with open(cb_path, "w") as f:
+        f.write("\n".join(cb_lines))
+
+    # Write summary
+    summary_path = os.path.join(output_dir, f"{label}_summary.txt")
+    with open(summary_path, "w") as f:
+        f.write("\n".join(summary_lines))
+
+    print(f"\nDumped fused kernel files to: {output_dir}")
+    print("\n".join(summary_lines))
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 class TestSequentialChainExecution:
     """
@@ -330,22 +473,23 @@ class TestSequentialChainExecution:
     The tests document the intended API and what golden results should be.
     """
 
-    @pytest.mark.skip(reason="Multi-phase kernel fusion not yet implemented - requires generating fused kernel source")
+    @pytest.mark.skip(reason="Fused kernel source generated but needs device compilation testing")
     def test_layernorm_rmsnorm_layernorm_chain(self, device, test_tensors):
         """
         Test fusing LayerNorm -> RMSNorm -> LayerNorm chain.
 
         This test validates true multi-phase kernel fusion where:
-        1. A single fused reader reads all inputs
+        1. A single fused reader reads all inputs (gamma/beta for all phases)
         2. A single fused compute runs all phase computations sequentially
         3. A single fused writer writes the final output
 
-        STATUS: Not yet implemented. The CB remapping infrastructure works
-        (verified by test_cb_remapping_preserves_named_args), but actual
-        execution requires generating combined kernel source code that:
-        - Wraps each phase's computation in separate scopes
-        - Uses phase-prefixed named compile-time args for CB indices
-        - Handles the complex layernorm kernel structure (macros, namespaces)
+        STATUS: Infrastructure complete. Fused kernel source is generated with:
+        - Phase 0 reader extended to read gamma/beta for all phases
+        - Fused compute with each phase wrapped as phaseN_compute() function
+        - Phase-prefixed named compile-time args for CB indices
+        - Merged defines and compile-time args
+
+        REMAINING: Test actual kernel compilation and device execution.
         """
         from models.experimental.ops.descriptors.sequential import SequentialChainBuilder
         from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
@@ -407,7 +551,7 @@ class TestSequentialChainExecution:
         passing, pcc = comp_pcc(torch_golden, torch_output, pcc=0.98)
         assert passing, f"PCC check failed: {pcc}"
 
-    @pytest.mark.skip(reason="Requires kernel CB parameterization - see docstring")
+    @pytest.mark.skip(reason="Fused kernel source generated but needs device compilation testing")
     def test_chain_with_parallel_op(self, device, test_tensors):
         """
         Test running a fused chain in parallel with another op on different cores.
@@ -857,6 +1001,54 @@ class TestParallelChains:
         # Should return the same descriptor
         assert fused is ln
 
+    def test_dump_fused_kernel_files(self, device, test_tensors):
+        """Build a fused 3-phase chain and dump all generated kernel files for inspection."""
+        import os
+
+        from models.experimental.ops.descriptors.sequential import fuse_layernorm_chain
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        ln1 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+        rms1 = rms_norm.rms_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+        )
+        ln2 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight3"],
+            bias=test_tensors["tt_bias2"],
+            epsilon=1e-5,
+        )
+
+        fused = fuse_layernorm_chain([ln1, rms1, ln2])
+
+        output_dir = os.path.join(os.path.dirname(__file__), "gen_kernels")
+        dump_fused_kernels(fused, output_dir, label="ln_rms_ln")
+
+        # Verify files were created
+        files = os.listdir(output_dir)
+        assert any(f.endswith(".cpp") for f in files), "Should have generated .cpp source files"
+        assert any("summary" in f for f in files), "Should have generated summary file"
+        assert any("meta" in f for f in files), "Should have generated metadata files"
+        assert any("cbs" in f for f in files), "Should have generated CB descriptor file"
+
+        # Verify the compute kernel is SOURCE_CODE (generated)
+        summary_path = os.path.join(output_dir, "ln_rms_ln_summary.txt")
+        with open(summary_path) as f:
+            summary = f.read()
+        assert "SOURCE_CODE" in summary, "Fused compute kernel should be SOURCE_CODE type"
+
     def test_extract_named_compile_time_args(self, device, test_tensors):
         """Test that named compile-time args can be extracted from LayerNorm kernels."""
         from models.experimental.ops.descriptors.sequential import extract_cb_names_from_kernel
@@ -938,7 +1130,7 @@ class TestParallelChainsExecution:
     Some tests are skipped pending full kernel CB parameterization.
     """
 
-    @pytest.mark.skip(reason="Requires kernel CB parameterization for true fusion")
+    @pytest.mark.skip(reason="Fused kernel source generated but needs device compilation testing")
     def test_two_parallel_chains_execution(self, device, test_tensors):
         """
         Test executing two parallel chains:
@@ -1003,7 +1195,7 @@ class TestParallelChainsExecution:
         assert passing_a, f"Chain A PCC: {pcc_a}"
         assert passing_b, f"Chain B PCC: {pcc_b}"
 
-    @pytest.mark.skip(reason="Requires kernel CB parameterization for true fusion")
+    @pytest.mark.skip(reason="Fused kernel source generated but needs device compilation testing")
     def test_four_parallel_chains(self, device, test_tensors):
         """
         Test running 4 parallel chains on 4 different cores.
