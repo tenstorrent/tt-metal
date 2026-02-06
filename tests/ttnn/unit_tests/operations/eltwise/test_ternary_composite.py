@@ -180,13 +180,7 @@ def test_ternary_addcdiv_float32_full_range(input_shapes, value, device):
     output_tensor = ttnn.addcdiv(input_tensor_a, input_tensor_b, input_tensor_c, value=value)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    ARCH_NAME = ttnn.get_arch_name()
-
-    # Retest and fix BH assert once #33726 is done
-    if "blackhole" in ARCH_NAME:
-        assert torch.allclose(output_tensor, torch_output_tensor, atol=1e-6, rtol=1e-5)
-    elif "wormhole" in ARCH_NAME:
-        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=64, allow_nonfinite=True)
+    assert torch.allclose(output_tensor, torch_output_tensor, atol=1e-6, rtol=1e-5)
 
 
 @pytest.mark.parametrize(

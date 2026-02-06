@@ -10,6 +10,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_unary/addcmul.h"
+#include "compute_kernel_api/eltwise_unary/addcdiv.h"
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
