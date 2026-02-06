@@ -695,9 +695,9 @@ MoEComputeMeshWorkloadFactory::create_at(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_1,
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
-            .compile_args = std::move(tilize_compile_time_args),
+            .compile_args = tilize_compile_time_args,
             .defines = {},
-            .named_compile_args = std::move(tilize_named_compile_time_args),
+            .named_compile_args = tilize_named_compile_time_args,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
 
     tt::tt_metal::KernelHandle tilize_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -708,9 +708,9 @@ MoEComputeMeshWorkloadFactory::create_at(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
-            .compile_args = std::move(tilize_compile_time_args),
+            .compile_args = tilize_compile_time_args,
             .defines = {},
-            .named_compile_args = std::move(tilize_named_compile_time_args),
+            .named_compile_args = tilize_named_compile_time_args,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
 
     // Compute kernel compile-time args for tilization
