@@ -85,6 +85,7 @@ class VisionAttention(LightweightModule):
 
         self.transformation_mats = transformation_mats
         self.configuration = configuration
+        self.decoders_optimizations = configuration.decoders_optimizations
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
