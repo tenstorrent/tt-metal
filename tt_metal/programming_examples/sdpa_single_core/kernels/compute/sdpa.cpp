@@ -41,9 +41,7 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     // Wait for tiles:
     // - in0_cb: cumulative wait since we never pop it
     // - in1_cb: cumulative wait since we never pop it
-    MATH(DPRINT << "Waiting for in0_cb: " << (q_subblock + 1) * tiles_per_row * cols << " tiles." << ENDL());
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row * cols);
-    MATH(DPRINT << "Waiting for in1_cb: " << (q_subblock + 1) * tiles_per_row << " tiles." << ENDL());
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
 
     // if constexpr (do_reduce) {
@@ -195,11 +193,14 @@ void reduce_c_row_pair(uint32_t out_cb, uint32_t prev_cb, uint32_t row_pair_inde
 template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
+    uint32_t Sv_chunk_t,
     uint32_t head_dim_t,
     uint32_t cb_q_in,
     uint32_t cb_kt_in,
+    uint32_t cb_v_in,
     uint32_t cb_qkt_im,
     uint32_t cb_identity_scale_in,
+    uint32_t cb_out,
     uint32_t scale_fp32>
 void sdpa_inner_loop_8x4x16(
     const uint32_t cb_max_A, const uint32_t cb_max_B, const uint32_t cb_sum_A, const uint32_t cb_sum_B) {
@@ -317,36 +318,148 @@ void sdpa_inner_loop_8x4x16(
         q_index_offset += subblock_h * in0_block_w;
         q_wait_tiles += q_subblock_num_tiles;
     }
-    MATH(DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks << "]" << ENDL());
-    for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
-        uint32_t prev_q_subblock = q_num_subblocks - 1;
-        MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
-        sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
-            cb_qkt_im, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
-    }
 
     cb_pop_front(cb_q_in, head_dim_t * Sq_chunk_t);
     cb_pop_front(cb_kt_in, head_dim_t * Sk_chunk_t);
-    cb_pop_front(alias_cur_max, Sq_chunk_t);
 
+    // QKT @ V: compute attention output
+    // in0 = cb_qkt_im: Sq_chunk_t × Sk_chunk_t (M × K) — already produced
+    // in1 = cb_v_in:   Sv_chunk_t × head_dim_t  (K × N)
+    // out = cb_out:     Sq_chunk_t × head_dim_t  (M × N)
+    // Drain sub_exp for the last Q@KT row is interleaved with the first QKT@V q_subblock.
+    // sub_exp uses SFPU for exp, matmul uses FPU — they overlap on different hardware units.
+    MATH(DPRINT << "Starting QKT @ V computation" << ENDL());
+    {
+        constexpr uint32_t qktv_subblock_h = 2;
+        constexpr uint32_t qktv_subblock_w = 4;
+        constexpr uint32_t qktv_in0_block_w = Sv_chunk_t;
+        constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_subblock_h;
+        constexpr uint32_t qktv_v_num_subblocks = head_dim_t / qktv_subblock_w;
+        constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * head_dim_t;
+        constexpr uint32_t qktv_in0_subblock_num_tiles = qktv_subblock_h * qktv_in0_block_w;
+
+        uint32_t qktv_in0_index_offset = 0;
+        uint32_t qktv_in0_wait_tiles = qktv_in0_subblock_num_tiles;
+
+        MATH(DPRINT << "Waiting for cb_v_in: " << Sv_chunk_t * head_dim_t << " tiles" << ENDL());
+        cb_wait_front(cb_v_in, Sv_chunk_t * head_dim_t);
+        MATH(DPRINT << "Reserving cb_out: " << qktv_output_num_tiles << " tiles" << ENDL());
+        cb_reserve_back(cb_out, qktv_output_num_tiles);
+
+        for (uint32_t q_subblock = 0; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
+            MATH(DPRINT << "QKT@V: Processing Q_subblock " << q_subblock << ENDL());
+            cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
+
+            // Drain: interleave sub_exp for last Q@KT row with first QKT@V matmul
+            if (q_subblock == 0) {
+                MATH(
+                    DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << "] during QKT@V q_subblock 0"
+                           << ENDL());
+                for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
+                    sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
+                        cb_qkt_im, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_subblock);
+                }
+                // Reconfigure for matmul after sub_exp changed pack/unpack config
+                pack_reconfig_data_format(cb_out);
+                reconfig_data_format(cb_v_in, cb_qkt_im);
+            }
+
+            {
+                mm_block_init_short(
+                    cb_qkt_im,
+                    cb_v_in,
+                    false /*transpose*/,
+                    qktv_subblock_w /*ct_dim*/,
+                    qktv_subblock_h /*rt_dim*/,
+                    qktv_in0_block_w /*kt_dim*/);
+            }
+
+            uint32_t v_index_offset = 0;
+            for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                MATH(DPRINT << "QKT@V Matmul for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
+                {
+                    DeviceZoneScopedN("QKT@V matmul 2x4");
+                    tile_regs_acquire();
+
+                    uint32_t dst_index = 0;
+                    uint32_t in0_index = qktv_in0_index_offset;
+                    uint32_t in1_index = v_index_offset;
+
+                    for (uint32_t inner = 0; inner < qktv_in0_block_w; ++inner) {
+                        matmul_block(
+                            cb_qkt_im,
+                            cb_v_in,
+                            in0_index,
+                            in1_index,
+                            dst_index,
+                            false /*transpose*/,
+                            qktv_subblock_w,
+                            qktv_subblock_h,
+                            qktv_in0_block_w);
+                        in0_index++;
+                        in1_index += head_dim_t;
+                    }
+                    tile_regs_commit();
+                }
+
+                {
+                    DeviceZoneScopedN("QKT@V pack 2x4");
+                    tile_regs_wait();
+                    PACK(DPRINT << "QKT@V Pack for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
+                    uint32_t dst_idx = 0;
+                    uint32_t out_col_offset = v_subblock * qktv_subblock_w;
+                    for (uint32_t r = 0; r < qktv_subblock_h; r++) {
+                        uint32_t out_row_offset = (r + q_subblock * qktv_subblock_h) * head_dim_t;
+                        for (uint32_t c = 0; c < qktv_subblock_w; c++) {
+                            pack_tile<true>(dst_idx, cb_out, out_row_offset + out_col_offset + c);
+                            dst_idx++;
+                        }
+                    }
+                    tile_regs_release();
+                    MATH(
+                        DPRINT << "Packed " << qktv_subblock_h * qktv_subblock_w << " tiles to cb_out for Q["
+                               << q_subblock << "] V[" << v_subblock << "]" << ENDL());
+                }
+
+                v_index_offset += qktv_subblock_w;
+            }
+
+            qktv_in0_index_offset += qktv_subblock_h * qktv_in0_block_w;
+            qktv_in0_wait_tiles += qktv_in0_subblock_num_tiles;
+            MATH(
+                DPRINT << "Pushing " << qktv_subblock_h * head_dim_t << " tiles to cb_out for Q_subblock " << q_subblock
+                       << ENDL());
+            cb_push_back(cb_out, qktv_subblock_h * head_dim_t);
+        }
+
+        MATH(DPRINT << "Popping cb_v_in: " << Sv_chunk_t * head_dim_t << " tiles" << ENDL());
+        cb_pop_front(cb_v_in, Sv_chunk_t * head_dim_t);
+        MATH(DPRINT << "Popping cb_qkt_im: " << Sq_chunk_t * Sk_chunk_t << " tiles" << ENDL());
+        cb_pop_front(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
+    }
+
+    cb_pop_front(alias_cur_max, Sq_chunk_t);
     cb_push_back(alias_cur_sum, Sq_chunk_t);
     cb_pop_front(alias_cur_sum, Sq_chunk_t);
 
-    // dummy: use QKT somehow
-    cb_wait_front(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
-    cb_pop_front(cb_qkt_im, Sq_chunk_t * Sk_chunk_t);
+    cb_wait_front(cb_out, Sq_chunk_t * head_dim_t);
+    cb_pop_front(cb_out, Sq_chunk_t * head_dim_t);
+    MATH(DPRINT << "Finished QKT @ V computation" << ENDL());
 }
 
 void kernel_main() {
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(0);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(1);
-    constexpr uint32_t head_dim_t = get_compile_time_arg_val(2);
-    constexpr uint32_t num_iter = get_compile_time_arg_val(3);
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(4);
+    constexpr uint32_t Sv_chunk_t = get_compile_time_arg_val(2);
+    constexpr uint32_t head_dim_t = get_compile_time_arg_val(3);
+    constexpr uint32_t num_iter = get_compile_time_arg_val(4);
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(5);
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_kt_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_qkt_im = tt::CBIndex::c_2;
+    constexpr uint32_t cb_v_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_out = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_max_A = tt::CBIndex::c_27;
     constexpr uint32_t cb_max_B = tt::CBIndex::c_28;
@@ -362,11 +475,14 @@ void kernel_main() {
             sdpa_inner_loop_8x4x16<
                 Sq_chunk_t,
                 Sk_chunk_t,
+                Sv_chunk_t,
                 head_dim_t,
                 cb_q_in,
                 cb_kt_in,
+                cb_v_in,
                 cb_qkt_im,
                 cb_identity_scale_in,
+                cb_out,
                 scale_fp32>(cb_max_A, cb_max_B, cb_sum_A, cb_sum_B);
         }
     }
