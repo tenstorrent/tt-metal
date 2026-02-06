@@ -1,34 +1,322 @@
 #!/usr/bin/env python3
 """
 CI Failure Clustering - Interactive Network Graph (Final)
-Sub-node labels only appear when cluster is expanded
+Sub-node labels only appear when cluster is expanded.
+Fetches OPEN issues dynamically from GitHub Projects V2 board.
 """
 
 import json
+import re
+import subprocess
+import sys
+import time
+
 import numpy as np
+import requests
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import KMeans
+from sklearn.decomposition import TruncatedSVD
+from sklearn.cluster import MiniBatchKMeans
 from pyvis.network import Network
 from collections import Counter
 import html as html_module
 
-# Load the JSON data
-print("Loading failure data...")
-with open("build_temp.json", "r") as f:
-    failures = json.load(f)
+# ============================================================================
+# GitHub Projects V2 - Dynamic Data Fetching
+# ============================================================================
 
-print(f"Loaded {len(failures)} failure entries")
+PROJECT_OWNER = "ebanerjeeTT"
+PROJECT_NUMBER = 2
 
-# Extract error messages
-error_messages = [entry["job_error_message"] for entry in failures]
 
+def get_gh_token():
+    """Get GitHub token from gh CLI."""
+    result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"ERROR: Failed to get gh auth token: {result.stderr}")
+        sys.exit(1)
+    return result.stdout.strip()
+
+
+def fetch_project_items(token):
+    """Fetch all items from the GitHub Projects V2 board, paginating through all pages."""
+    url = "https://api.github.com/graphql"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    query = """
+    query($login: String!, $number: Int!, $cursor: String) {
+      user(login: $login) {
+        projectV2(number: $number) {
+          items(first: 100, after: $cursor) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              content {
+                ... on Issue {
+                  number
+                  title
+                  body
+                  url
+                  state
+                  __typename
+                }
+                ... on DraftIssue {
+                  __typename
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    all_issues = []
+    cursor = None
+    page = 1
+
+    while True:
+        variables = {"login": PROJECT_OWNER, "number": PROJECT_NUMBER, "cursor": cursor}
+        resp = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
+        resp.raise_for_status()
+        result = resp.json()
+
+        if "errors" in result:
+            print(f"GraphQL errors: {result['errors']}")
+            sys.exit(1)
+
+        items_data = result["data"]["user"]["projectV2"]["items"]
+        nodes = items_data["nodes"]
+        print(f"  Page {page}: {len(nodes)} item(s)")
+
+        for node in nodes:
+            content = node.get("content")
+            if not content:
+                continue
+            if content.get("__typename") != "Issue":
+                continue
+            if content.get("state") != "OPEN":
+                continue
+            all_issues.append(content)
+
+        if not items_data["pageInfo"]["hasNextPage"]:
+            break
+        cursor = items_data["pageInfo"]["endCursor"]
+        page += 1
+        time.sleep(0.3)
+
+    return all_issues
+
+
+def extract_centroid_error(body):
+    """Extract the centroid error from the ## Error Message code block."""
+    match = re.search(r"## Error Message\s*```\s*(.+?)\s*```", body, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    # Fallback: first code block
+    match = re.search(r"```\s*(.+?)\s*```", body, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def extract_all_runs(body):
+    """Extract every numbered run entry from the issue body.
+
+    Each run line looks like:
+      1. [[CENTROID] timestamp (marked as ND)](url) - workflow / job (commit: abc1234...)
+      2. [timestamp](url) - workflow / job (commit: abc1234...)
+
+    Runs may optionally have an indented code block with a per-run error message.
+    Returns a list of dicts with url, commit_hash, timestamp, is_nd, workflow_job, error_message.
+    """
+    # Matches both [CENTROID] and regular run lines
+    line_pattern = r"^\d+\.\s+\[(.+)\]\(([^)]+)\)(?:\s*-\s*(.*?))?\s*(?:\(commit:\s*([a-fA-F0-9]+)\))?\s*$"
+
+    runs = []
+    lines = body.split("\n")
+
+    current_run = None
+    in_code_block = False
+    code_block_lines = []
+
+    for line in lines:
+        m = re.match(line_pattern, line)
+        if m:
+            # Save pending code block to previous run
+            if current_run and code_block_lines:
+                current_run["error_message"] = "\n".join(code_block_lines).strip()
+                code_block_lines = []
+            in_code_block = False
+
+            label, url, suffix, commit_hash = m.groups()
+
+            # Only process GitHub Actions run URLs
+            if not ("github.com" in url and ("actions/runs" in url or "/job/" in url)):
+                current_run = None
+                continue
+
+            is_nd = "(marked as ND)" in (label or "")
+            # Clean timestamp from label
+            clean_label = label or ""
+            if clean_label.startswith("[CENTROID]"):
+                clean_label = clean_label[len("[CENTROID]") :].strip()
+            clean_label = clean_label.replace("(marked as ND)", "").strip()
+
+            workflow_job = suffix.strip() if suffix else ""
+
+            current_run = {
+                "url": url.strip(),
+                "commit_hash": (commit_hash or "").strip(),
+                "timestamp": clean_label,
+                "is_nd": is_nd,
+                "workflow_job": workflow_job,
+                "error_message": "",
+            }
+            runs.append(current_run)
+
+        elif current_run:
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                if in_code_block:
+                    in_code_block = False
+                    if code_block_lines:
+                        current_run["error_message"] = "\n".join(code_block_lines).strip()
+                        code_block_lines = []
+                else:
+                    in_code_block = True
+                    code_block_lines = []
+            elif in_code_block:
+                code_block_lines.append(line.lstrip())
+
+    # Handle trailing code block
+    if current_run and code_block_lines:
+        current_run["error_message"] = "\n".join(code_block_lines).strip()
+
+    return runs
+
+
+def parse_issues_to_failures(issues):
+    """Convert raw OPEN issues into failure entries — one per run, not one per issue."""
+    failures = []
+    for issue in issues:
+        body = issue.get("body", "") or ""
+        centroid_error = extract_centroid_error(body)
+        runs = extract_all_runs(body)
+
+        if not runs:
+            # No parseable runs; fall back to a single entry if we have a centroid error
+            if centroid_error:
+                failures.append(
+                    {
+                        "github_job_id": "",
+                        "github_job_link": "",
+                        "job_name": issue.get("title", "Unknown"),
+                        "job_error_message": centroid_error,
+                        "job_slack_ts": "",
+                        "job_commit_hash": "",
+                        "is_nd": False,
+                    }
+                )
+            continue
+
+        for run in runs:
+            # Use the run's own error message if it has one, otherwise centroid error
+            error = run["error_message"] or centroid_error
+            if not error:
+                continue
+
+            job_id = ""
+            if run["url"]:
+                jm = re.search(r"/job/(\d+)", run["url"])
+                if jm:
+                    job_id = jm.group(1)
+
+            failures.append(
+                {
+                    "github_job_id": job_id,
+                    "github_job_link": run["url"],
+                    "job_name": run["workflow_job"] or issue.get("title", "Unknown"),
+                    "job_error_message": error,
+                    "job_slack_ts": run["timestamp"],
+                    "job_commit_hash": run["commit_hash"],
+                    "is_nd": run["is_nd"],
+                }
+            )
+
+    return failures
+
+
+# ---- Fetch data ----
+print("Fetching GitHub auth token...")
+_token = get_gh_token()
+
+print(f"Fetching OPEN issues from {PROJECT_OWNER}/projects/{PROJECT_NUMBER}...")
+_raw_issues = fetch_project_items(_token)
+print(f"  Found {len(_raw_issues)} OPEN issue(s)")
+
+print("Parsing issue bodies...")
+failures = parse_issues_to_failures(_raw_issues)
+print(f"Loaded {len(failures)} failure entries (issues with parseable errors)")
+
+if len(failures) < 2:
+    print("ERROR: Need at least 2 failure entries to cluster. Exiting.")
+    sys.exit(1)
+
+
+# --- Text cleaning (matches production pipeline) ---
+def clean_text(x):
+    x = x.lower()
+    x = re.sub(r"\s+", " ", x)
+    x = re.sub(r"[^a-z0-9_\-./ ]", " ", x)
+    return x.strip()
+
+
+print("Cleaning error text...")
+for entry in failures:
+    entry["_clean"] = clean_text(entry["job_error_message"])
+
+# Filter out very short texts (< 40 chars after cleaning)
+failures = [e for e in failures if len(e["_clean"]) > 40]
+print(f"  {len(failures)} entries after filtering short texts")
+
+error_messages = [entry["_clean"] for entry in failures]
+
+# --- TF-IDF (matches production pipeline) ---
 print("Vectorizing error messages...")
-vectorizer = TfidfVectorizer(max_features=500, stop_words="english", ngram_range=(1, 2), min_df=2)
+_min_df = min(5, max(1, len(failures) // 10))
+vectorizer = TfidfVectorizer(
+    max_features=30000,
+    min_df=_min_df,
+    max_df=0.6,
+    ngram_range=(1, 2),
+    stop_words="english",
+    sublinear_tf=True,
+)
 X = vectorizer.fit_transform(error_messages)
+print(f"  TF-IDF matrix: {X.shape}")
 
-print("Running K-means clustering (k=10)...")
-kmeans = KMeans(n_clusters=10, random_state=42, n_init=10)
-cluster_labels = kmeans.fit_predict(X)
+# --- SVD dimensionality reduction ---
+n_svd = min(120, X.shape[1] - 1, X.shape[0] - 1)
+print(f"Reducing dimensions with SVD (n={n_svd})...")
+svd = TruncatedSVD(n_components=n_svd, random_state=42)
+X_reduced = svd.fit_transform(X)
+print(f"  Explained variance: {svd.explained_variance_ratio_.sum():.1%}")
+
+# --- MiniBatchKMeans k=30 (matches production pipeline) ---
+n_clusters = min(30, len(failures))
+print(f"Running MiniBatchKMeans clustering (k={n_clusters})...")
+kmeans = MiniBatchKMeans(
+    n_clusters=n_clusters,
+    batch_size=min(20000, len(failures)),
+    random_state=42,
+    n_init="auto",
+)
+cluster_labels = kmeans.fit_predict(X_reduced)
 
 # Add cluster labels to failures
 for i, entry in enumerate(failures):
@@ -67,10 +355,27 @@ print("Generating cluster names...")
 cluster_names = {}
 cluster_counts = Counter(cluster_labels)
 
-for cluster_id in range(10):
+# First pass: generate base names
+base_names = {}
+for cluster_id in range(n_clusters):
     cluster_entries = [f for f in failures if f["cluster"] == cluster_id]
-    cluster_names[cluster_id] = generate_cluster_name(cluster_entries)
-    print(f"  Cluster {cluster_id}: {cluster_names[cluster_id]} ({len(cluster_entries)} failures)")
+    base_names[cluster_id] = generate_cluster_name(cluster_entries)
+
+# Second pass: disambiguate duplicates with top job type
+name_usage = Counter(base_names.values())
+name_seen = Counter()
+for cluster_id in range(n_clusters):
+    base = base_names[cluster_id]
+    cluster_entries = [f for f in failures if f["cluster"] == cluster_id]
+    if name_usage[base] > 1:
+        # Find the most common job prefix to distinguish this cluster
+        job_types = [e["job_name"].split("/")[0].strip() for e in cluster_entries]
+        top_job = Counter(job_types).most_common(1)[0][0]
+        name_seen[base] += 1
+        cluster_names[cluster_id] = f"{base} ({top_job})"
+    else:
+        cluster_names[cluster_id] = base
+    print(f"  Cluster {cluster_id}: {cluster_names[cluster_id]} ({cluster_counts[cluster_id]} failures)")
 
 print("\nCreating interactive network graph...")
 
@@ -82,18 +387,10 @@ net.set_options(
     """
 {
   "physics": {
-    "enabled": true,
-    "stabilization": {
-      "enabled": true,
-      "iterations": 200
-    },
-    "barnesHut": {
-      "gravitationalConstant": -8000,
-      "centralGravity": 0.3,
-      "springLength": 150,
-      "springConstant": 0.04,
-      "damping": 0.95
-    }
+    "enabled": false
+  },
+  "edges": {
+    "smooth": false
   },
   "interaction": {
     "hover": true,
@@ -106,8 +403,39 @@ net.set_options(
 """
 )
 
-# Color palette for clusters
-colors = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A", "#98D8C8", "#F7DC6F", "#BB8FCE", "#85C1E2", "#F8B739", "#52B788"]
+# Color palette for 30 clusters
+colors = [
+    "#FF6B6B",
+    "#4ECDC4",
+    "#45B7D1",
+    "#FFA07A",
+    "#98D8C8",
+    "#F7DC6F",
+    "#BB8FCE",
+    "#85C1E2",
+    "#F8B739",
+    "#52B788",
+    "#E74C3C",
+    "#3498DB",
+    "#2ECC71",
+    "#9B59B6",
+    "#F39C12",
+    "#1ABC9C",
+    "#E67E22",
+    "#2980B9",
+    "#27AE60",
+    "#8E44AD",
+    "#D35400",
+    "#16A085",
+    "#C0392B",
+    "#7F8C8D",
+    "#2C3E50",
+    "#D4AC0D",
+    "#A569BD",
+    "#5DADE2",
+    "#48C9B0",
+    "#EC7063",
+]
 
 
 # Convert hex to RGB for transparency
@@ -117,10 +445,20 @@ def hex_to_rgba(hex_color, alpha):
     return f"rgba({r}, {g}, {b}, {alpha})"
 
 
+# Pre-compute circular positions so cluster bubbles never overlap
+import math
+
+_radius = 200 * n_clusters / (2 * math.pi)  # scale ring to cluster count
+_radius = max(_radius, 600)
+
 # Add cluster center nodes
-for cluster_id in range(10):
+for cluster_id in range(n_clusters):
     count = cluster_counts[cluster_id]
     cluster_name = cluster_names[cluster_id]
+
+    angle = 2 * math.pi * cluster_id / n_clusters
+    cx = int(_radius * math.cos(angle))
+    cy = int(_radius * math.sin(angle))
 
     title = f"<b>Click to expand: {cluster_name}</b><br>Total Failures: {count}"
     label = f"{cluster_name}\n({count} failures)"
@@ -129,13 +467,14 @@ for cluster_id in range(10):
         f"cluster_{cluster_id}",
         label=label,
         title=title,
-        color=colors[cluster_id],
-        size=50 + count * 2,
+        color=colors[cluster_id % len(colors)],
+        size=min(30 + count, 100),
         shape="dot",
-        font={"size": 16, "color": "#000000"},
+        font={"size": 14, "color": "#000000"},
         borderWidth=4,
-        x=0,
-        y=0,
+        x=cx,
+        y=cy,
+        fixed=True,
     )
 
 # Store full labels and ND status for later use
@@ -193,19 +532,26 @@ for i, entry in enumerate(failures):
     # Color based on deterministic status: black for ND, red for deterministic
     node_color = "rgba(0, 0, 0, 0.08)" if entry["is_nd"] else "rgba(255, 0, 0, 0.08)"
 
-    # Start with empty label and transparent
+    # Start hidden — only shown when cluster is expanded (huge perf win)
     net.add_node(
         node_id,
-        label=" ",  # Space to prevent showing node ID
+        label=" ",
         title=title,
         color=node_color,
         size=node_size,
         shape=shape,
-        font={"size": 1, "align": "center", "color": "rgba(0,0,0,0)"},  # Invisible font
+        font={"size": 1, "align": "center", "color": "rgba(0,0,0,0)"},
         borderWidth=0.5,
+        hidden=True,
     )
 
-    net.add_edge(f"cluster_{cluster_id}", node_id, color={"color": colors[cluster_id], "opacity": 0.3}, width=1.5)
+    net.add_edge(
+        f"cluster_{cluster_id}",
+        node_id,
+        color={"color": colors[cluster_id % len(colors)], "opacity": 0.3},
+        width=1.5,
+        hidden=True,
+    )
 
 # Save the network
 output_file = "failure_clusters_network.html"
@@ -218,7 +564,8 @@ with open(output_file, "r") as f:
     html_content = f.read()
 
 # Insert custom header and functionality
-header_insert = """
+header_insert = (
+    """
 <style>
     body { margin: 0; padding: 0; font-family: Arial, sans-serif; }
     .header {
@@ -261,7 +608,9 @@ header_insert = """
 </style>
 <div class="header">
     <h1>🔍 CI Failure Analysis Dashboard</h1>
-    <p>Interactive clustering of 212 CI failures • Click cluster nodes to expand</p>
+    <p>Interactive clustering of """
+    + str(len(failures))
+    + """ CI failures • Click cluster nodes to expand</p>
 </div>
 <div class="instructions">
     <b>How to use:</b> 🖱️ Click large circles to expand and see details • Click legend to filter •
@@ -271,8 +620,9 @@ header_insert = """
 <div class="legend">
     <h3>📊 Click to Filter by Cluster</h3>
 """
+)
 
-for cluster_id in range(10):
+for cluster_id in range(n_clusters):
     header_insert += f"""    <div class="legend-item" onclick="focusCluster({cluster_id})">
         <div class="legend-color" style="background: {colors[cluster_id]};"></div>
         <span>{cluster_names[cluster_id]} ({cluster_counts[cluster_id]})</span>
@@ -311,76 +661,79 @@ js_code = (
     function focusCluster(clusterId) {
         currentCluster = clusterId;
         const clusterNodeId = 'cluster_' + clusterId;
-        const allNodeIds = network.body.data.nodes.getIds();
 
+        // Hide all cluster nodes except this one; unfix it so physics can act
+        const allNodeIds = network.body.data.nodes.getIds();
+        const nodeUpdates = [];
         allNodeIds.forEach(nodeId => {
-            const node = network.body.data.nodes.get(nodeId);
-            if (nodeId.startsWith('cluster_') && nodeId !== clusterNodeId) {
-                network.body.data.nodes.update({id: nodeId, hidden: true});
-            } else if (nodeId.startsWith('failure_')) {
-                const edges = network.body.data.edges.get({
-                    filter: function(edge) {
-                        return edge.from === clusterNodeId || edge.to === clusterNodeId;
-                    }
-                });
-                const connectedIds = edges.map(e => e.from === clusterNodeId ? e.to : e.from);
-                if (!connectedIds.includes(nodeId)) {
-                    network.body.data.nodes.update({id: nodeId, hidden: true});
+            if (nodeId.startsWith('cluster_')) {
+                if (nodeId !== clusterNodeId) {
+                    nodeUpdates.push({id: nodeId, hidden: true});
                 } else {
-                    // Show the label and make opaque for visible failure nodes
-                    // Color: black for ND, red for deterministic
-                    const isND = nodeIsND[nodeId];
-                    const nodeColor = isND ? '#000000' : '#FF0000';
-                    network.body.data.nodes.update({
-                        id: nodeId,
-                        label: nodeLabels[nodeId] || "",
-                        color: nodeColor,
-                        font: {size: 9, align: 'center', color: '#000000'}
-                    });
+                    nodeUpdates.push({id: nodeId, fixed: false});
                 }
             }
         });
 
+        // Find edges connected to this cluster and unhide those nodes
+        const edges = network.body.data.edges.get({
+            filter: function(edge) {
+                return edge.from === clusterNodeId || edge.to === clusterNodeId;
+            }
+        });
+        const edgeUpdates = [];
+        edges.forEach(edge => {
+            const childId = edge.from === clusterNodeId ? edge.to : edge.from;
+            const isND = nodeIsND[childId];
+            const nodeColor = isND ? '#000000' : '#FF0000';
+            nodeUpdates.push({
+                id: childId,
+                hidden: false,
+                label: nodeLabels[childId] || "",
+                color: nodeColor,
+                font: {size: 9, align: 'center', color: '#000000'}
+            });
+            edgeUpdates.push({id: edge.id, hidden: false});
+        });
+
+        network.body.data.nodes.update(nodeUpdates);
+        network.body.data.edges.update(edgeUpdates);
+
+        // Enable physics briefly so children spread out
+        network.setOptions({physics: {
+            enabled: true,
+            stabilization: false,
+            barnesHut: {gravitationalConstant: -8000, springLength: 150, springConstant: 0.04, damping: 0.9}
+        }});
+
         document.getElementById('backButton').style.display = 'block';
         setTimeout(() => {
-            network.fit({
-                animation: { duration: 1000, easingFunction: 'easeInOutQuad' }
-            });
-        }, 100);
+            network.setOptions({physics: {enabled: false}});
+            network.fit({animation: {duration: 600, easingFunction: 'easeInOutQuad'}});
+        }, 800);
     }
 
     function showAllClusters() {
+        // Hide all failure nodes and edges, restore all cluster nodes as fixed
         const allNodeIds = network.body.data.nodes.getIds();
-        // Helper to convert hex to rgba
-        function hexToRgba(hex, alpha) {
-            const r = parseInt(hex.slice(1, 3), 16);
-            const g = parseInt(hex.slice(3, 5), 16);
-            const b = parseInt(hex.slice(5, 7), 16);
-            return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + alpha + ')';
-        }
-
+        const nodeUpdates = [];
         allNodeIds.forEach(nodeId => {
             if (nodeId.startsWith('failure_')) {
-                // Color based on ND status: black for ND, red for deterministic
-                const isND = nodeIsND[nodeId];
-                const transparentColor = isND ? 'rgba(0, 0, 0, 0.08)' : 'rgba(255, 0, 0, 0.08)';
-
-                network.body.data.nodes.update({
-                    id: nodeId,
-                    hidden: false,
-                    label: " ",
-                    color: transparentColor,
-                    font: {size: 1, align: 'center', color: 'rgba(0,0,0,0)'}
-                });
+                nodeUpdates.push({id: nodeId, hidden: true});
             } else {
-                network.body.data.nodes.update({id: nodeId, hidden: false});
+                nodeUpdates.push({id: nodeId, hidden: false, fixed: true});
             }
         });
+        network.body.data.nodes.update(nodeUpdates);
+
+        const allEdges = network.body.data.edges.get();
+        const edgeUpdates = allEdges.map(e => ({id: e.id, hidden: true}));
+        network.body.data.edges.update(edgeUpdates);
+
+        network.setOptions({physics: {enabled: false}});
         document.getElementById('backButton').style.display = 'none';
         setTimeout(() => {
-            network.fit({
-                animation: { duration: 1000, easingFunction: 'easeInOutQuad' }
-            });
+            network.fit({animation: {duration: 600, easingFunction: 'easeInOutQuad'}});
         }, 100);
     }
 
@@ -395,10 +748,6 @@ js_code = (
                 focusCluster(clusterId);
             }
         }
-    });
-
-    network.on("stabilizationIterationsDone", function() {
-        network.setOptions({ physics: { enabled: false } });
     });
 })();
 </script>
