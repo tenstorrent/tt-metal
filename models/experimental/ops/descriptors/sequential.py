@@ -682,6 +682,9 @@ class SequentialChainBuilder:
         # Validate fp32_dest_acc_en consistency across phases before fusion.
         _validate_fp32_consistency([phase.op_descriptor for phase in self.phases])
 
+        # Validate that CB requirements won't overflow the 32 available CBs
+        _validate_cb_capacity(self.phases)
+
         remapper = CBRemapper()
 
         # Only reader-filled constant CBs are shared across phases.  All other
@@ -2344,6 +2347,68 @@ def _validate_fp32_consistency(op_descriptors: List[OpDescriptor]) -> None:
         f"  rms = rms_norm.rms_norm(input, ..., compute_kernel_config=config)\n"
         f"  ln  = layer_norm.layer_norm(input, ..., compute_kernel_config=config)"
     )
+
+
+def _validate_cb_capacity(phases: List[PhaseInfo]) -> None:
+    """
+    Validate that the fused chain won't exceed the 32 available circular buffers.
+
+    With only 32 CBs (indices 0-31), multi-phase fusion with CB remapping can
+    potentially exhaust the available CBs. This function estimates the total CB
+    requirements and provides a clear error message before attempting fusion.
+
+    The estimation is conservative:
+    - Shared CBs (gamma, beta, etc.) count as 1 across all phases
+    - Per-phase CBs (input, output, scratch) need unique allocations for each phase
+    - Chained CBs (output of phase N = input of phase N+1) are reused
+
+    Raises ValueError if the estimated CB count exceeds 32.
+    """
+    if len(phases) == 1:
+        return  # Single phase can't overflow
+
+    # CBs that are shared across phases (reader-filled constants)
+    READER_FILLED_CB_INDICES = {2, 3, 5, 6}  # cb_scaler, cb_eps, cb_gamma, cb_beta
+
+    # Track unique CBs needed
+    shared_cbs = set()
+    per_phase_cb_count = []
+
+    for phase in phases:
+        phase_unique_cbs = set()
+        for cb_idx in phase.cb_info.keys():
+            if cb_idx in READER_FILLED_CB_INDICES:
+                shared_cbs.add(cb_idx)
+            else:
+                phase_unique_cbs.add(cb_idx)
+        per_phase_cb_count.append(len(phase_unique_cbs))
+
+    # Estimate total CBs:
+    # - Shared CBs count once
+    # - Each phase needs its own per-phase CBs
+    # - Minus (N-1) for chained CBs (output of phase i reused as input of phase i+1)
+    num_shared = len(shared_cbs)
+    num_per_phase = sum(per_phase_cb_count)
+    num_chained_reuse = len(phases) - 1  # Conservative: assume all phases chain
+
+    estimated_total = num_shared + num_per_phase - num_chained_reuse
+
+    if estimated_total > CBRemapper.NUM_CBS:
+        phase_details = "\n".join(f"  Phase {i}: {count} per-phase CBs" for i, count in enumerate(per_phase_cb_count))
+        raise ValueError(
+            f"CB capacity exceeded: estimated {estimated_total} CBs needed, "
+            f"but only {CBRemapper.NUM_CBS} available.\n"
+            f"Breakdown:\n"
+            f"  - Shared CBs (gamma, beta, etc.): {num_shared}\n"
+            f"  - Per-phase CBs (input, output, scratch): {num_per_phase}\n"
+            f"  - Chained CB reuse: -{num_chained_reuse}\n"
+            f"  - Total estimate: {estimated_total}\n\n"
+            f"Per-phase details:\n{phase_details}\n\n"
+            f"Suggestions:\n"
+            f"  - Reduce the number of phases in the chain\n"
+            f"  - Fuse fewer operations at once\n"
+            f"  - Split into multiple smaller chains executed sequentially"
+        )
 
 
 def fuse_layernorm_chain(
