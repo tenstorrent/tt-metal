@@ -48,25 +48,22 @@ bool should_use_true_flash(const tensor_args_t& tensor_args) {
     const uint64_t original_y_mem = 2U * twice_block_size * bfloat16_tile_size;  // Y_partial + Y (block_size)
     const uint64_t original_total = original_input_mem + w_mem + original_intermediate_mem + original_y_mem;
 
-    // Use True Flash if:
-    // 1. It fits in L1
-    // 2. It saves significant memory (True Flash is beneficial when hidden_dim > embed_dim)
+    // True Flash trades compute for memory:
+    // - It recomputes XW products for each k_block (O(K_blocks) more compute)
+    // - But it uses O(block_size) memory instead of O(hidden_dim) for intermediates
+    //
+    // Only use True Flash when ORIGINAL doesn't fit in L1.
+    // When both fit, prefer ORIGINAL for better compute efficiency.
     const bool true_flash_fits = true_flash_total <= available_L1;
     const bool original_fits = original_total <= available_L1;
-    const bool true_flash_saves_memory = true_flash_total < original_total;
 
-    // If only True Flash fits, use it
+    // Use True Flash only when it's the only option that fits
     if (true_flash_fits && !original_fits) {
         return true;
     }
 
-    // If both fit, prefer True Flash when it saves memory (prepares for Phase 2 block matmul)
-    if (true_flash_fits && original_fits && true_flash_saves_memory) {
-        // For now, default to original for stability. Enable True Flash via explicit flag.
-        // TODO: Enable True Flash by default after Phase 2 (block matmul) is implemented
-        return false;
-    }
-
+    // If both fit, prefer ORIGINAL (faster due to less recomputation)
+    // If neither fits, also return false (will use ORIGINAL and hope for spilling)
     return false;
 }
 
