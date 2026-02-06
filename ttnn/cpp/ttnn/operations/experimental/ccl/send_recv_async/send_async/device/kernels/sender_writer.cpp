@@ -80,7 +80,7 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_whole_packets; ++i) {
             socket_reserve_pages(sender_socket, 1);
-            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
+            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
             write_data_to_remote_core<data_cb_id, is_dram>(
                 fabric_connection, dst_addr, full_packet_size, data_packet_header_addr);
             socket_push_pages(sender_socket, 1);
@@ -89,7 +89,7 @@ void kernel_main() {
 
         if (num_pages_remainder > 0) {
             socket_reserve_pages(sender_socket, 1);
-            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
+            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
             write_data_to_remote_core<data_cb_id, is_dram>(
                 fabric_connection, dst_addr, remainder_packet_size, data_packet_header_addr);
             socket_push_pages(sender_socket, 1);
@@ -101,7 +101,7 @@ void kernel_main() {
     else {
         for (uint32_t i = 0; i < num_pages; ++i) {
             socket_reserve_pages(sender_socket, 1);
-            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
+            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
             for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
                 write_data_to_remote_core<data_cb_id, is_dram>(
                     fabric_connection, dst_addr, whole_packet_size, data_packet_header_addr);
