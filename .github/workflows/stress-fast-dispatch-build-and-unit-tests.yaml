@@ -82,7 +82,7 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type stress_post_commit --dispatch-mode fast
+          ./tests/scripts/run_stress_post_commit_tests.sh fast
       - name: Upload watcher log
         if: always()
         uses: actions/upload-artifact@v4
