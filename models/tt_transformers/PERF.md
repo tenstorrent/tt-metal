@@ -17,11 +17,9 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Llama-3.2-1B      | N150        | 79        | 97        | 87.8          | 26        |
 | Llama-3.2-1B      | N300        | 79        | 97        | 105.9         | 22        |
 | Llama-3.2-1B      | T3K         | 80        | 97        | 119.8         | 32        |
-| Llama-3.2-1B      | TG          | 77        | 96        | 51.0          |           |
 | Llama-3.2-3B      | N150        | 89        | 98        | 54.0          | 55        |
 | Llama-3.2-3B      | N300        | 89        | 98        | 68.0          | 39        |
 | Llama-3.2-3B      | T3K         | 91        | 99        | 68.5          | 52        |
-| Llama-3.2-3B      | TG          | 87        | 97        | 33.5          |           |
 | Llama-3.1-8B      | N150        | 90        | 97        | 28.3          | 104       |
 | Llama-3.1-8B      | N300        | 90        | 97        | 44.2          | 67        |
 | Llama-3.1-8B      | P100        | 90        | 98        | 29.5          | 84        |
@@ -29,14 +27,10 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Llama-3.1-8B      | T3K         | 90        | 98        | 64.3          | 53        |
 | Llama-3.1-8B      | T3K  (DP=4) |           |           | 39.6          | 58        |
 | Llama-3.1-8B      | T3K  (DP=8) |           |           | 24.9          | 86        |
-| Llama-3.1-8B      | TG          | 88        | 97        | 29.5          |           |
 | Llama-3.2-11B     | N150        | 90        | 98        | 55.5          | 58        |
 | Llama-3.2-11B     | N300        | 90        | 98        | 44.1          | 67        |
 | Llama-3.2-11B     | T3K         | 90        | 98        | 62.7          | 47        |
-| Llama-3.2-11B     | TG          | 87        | 97        | 29.5          |           |
 | Llama-3.1-70B     | T3K         | 96        | 100       | 16.6          | 164       |
-| Llama-3.1-70B     | TG          | 95        | 100       | 12.7          |           |
-| Llama-3.1-70B     | TG   (DP=4) |           |           | 14.8          | 189       |
 | Llama-3.2-90B     | T3K         | 96        | 100       | 6             | 5535      |
 | Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.2          | 225       |
@@ -64,21 +58,16 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Llama-3.2-1B      | N150        | 87        | 99        | 84.7          | 29        |
 | Llama-3.2-1B      | N300        | 87        | 98        | 102.8         | 21        |
 | Llama-3.2-1B      | T3K         | 88        | 99        | 120.5         | 28        |
-| Llama-3.2-1B      | TG          | 85        | 98        | 48.4          |           |
 | Llama-3.2-3B      | N150        | 96        | 100       | 47.6          | 63        |
 | Llama-3.2-3B      | N300        | 96        | 100       | 63.5          | 41        |
 | Llama-3.2-3B      | T3K         | 96        | 100       | 67.9          | 69        |
-| Llama-3.2-3B      | TG          | 92        | 99        | 33.6          |           |
 | Llama-3.1-8B      | N150        | 96        | 100       | 25.2          | 138       |
 | Llama-3.1-8B      | N300        | 96        | 100       | 38.8          | 79        |
 | Llama-3.1-8B      | T3K         | 97        | 100       | 60.8          | 81        |
-| Llama-3.1-8B      | TG          | 95        | 100       | 29.5          |           |
 | Llama-3.2-11B     | N150        | 95        | 100       | 56.7          | 62        |
 | Llama-3.2-11B     | N300        | 95        | 100       | 38.3          | 78        |
 | Llama-3.2-11B     | T3K         | 96        | 100       | 61.4          | 53        |
-| Llama-3.2-11B     | TG          | 94        | 100       | 29.5          |           |
 | Llama-3.1-70B     | T3K         | 96        | 100       | 16.5          | 168       |
-| Llama-3.1-70B     | TG          | 95        | 100       | 12.7          |           |
 | Llama-3.2-90B     | T3K         | 96        | 100       | 6             | 5600      |
 | Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.1          | 216       |
@@ -105,20 +94,15 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=1 and pref
 | Llama-3.2-1B   | N150   | 53.0          | 20066     |
 | Llama-3.2-1B   | N300   | 65.2          | 10949     |
 | Llama-3.2-1B   | T3K    | 73.7          | 5271      |
-| Llama-3.2-1B   | TG     |               |           |
 | Llama-3.2-3B   | N150   | 25.3          | 46743     |
 | Llama-3.2-3B   | N300   | 34.8          | 22921     |
 | Llama-3.2-3B   | T3K    | 41.0          | 10677     |
-| Llama-3.2-3B   | TG     |               |           |
 | Llama-3.1-8B   | N150   | 16.9          | 64385     |
 | Llama-3.1-8B   | N300   | 26.1          | 36229     |
 | Llama-3.1-8B   | T3K    | 38.1          | 16165     |
-| Llama-3.1-8B   | TG     |               |           |
 | Llama-3.2-11B  | N300   | 26.1          | 36247     |
 | Llama-3.2-11B  | T3K    | 38.4          | 16167     |
-| Llama-3.2-11B  | TG     |               |           |
 | Llama-3.1-70B  | T3K    | 11.9          | 74363     |
-| Llama-3.1-70B  | TG     |               |           |
 | Qwen2.5-7B     | N300   |               |           |
 | Qwen2.5-72B    | T3K    |               |           |
 
@@ -139,20 +123,15 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=32 and pre
 | Llama-3.2-1B   | N150   | 54.7          | 38            |
 | Llama-3.2-1B   | N300   | 64.2          | 34            |
 | Llama-3.2-1B   | T3K    | 69.9          | 42            |
-| Llama-3.2-1B   | TG     |               |               |
 | Llama-3.2-3B   | N150   | 36.5          | 69            |
 | Llama-3.2-3B   | N300   | 45.8          | 51            |
 | Llama-3.2-3B   | T3K    | 47.8          | 63            |
-| Llama-3.2-3B   | TG     |               |               |
 | Llama-3.1-8B   | N150   | 22.3          | 119           |
 | Llama-3.1-8B   | N300   | 33.5          | 80            |
 | Llama-3.1-8B   | T3K    | 45.6          | 64            |
-| Llama-3.1-8B   | TG     |               |               |
 | Llama-3.2-11B  | N300   | 33.4          | 79            |
 | Llama-3.2-11B  | T3K    | 45.1          | 64            |
-| Llama-3.2-11B  | TG     |               |               |
 | Llama-3.1-70B  | T3K    | 14.8          | 192           |
-| Llama-3.1-70B  | TG     |               |               |
 | Qwen2.5-7B     | N300   |               |               |
 | Qwen2.5-72B    | T3K    |               |               |
 | Phi-3-mini-128k-instruct  | 150    | 25.66         | 68.58         |

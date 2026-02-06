@@ -93,20 +93,12 @@ def ensure_ttsmi_installed():
     os.makedirs(config_dir, exist_ok=True)
     config_file = os.path.join(config_dir, f"reset_config_{hostname}.json")
 
-    device = get_device()
     try:
-        if device == "TG":
-            generate_tg_config_file()
-        else:
-            subprocess.run(["tt-smi", "-g", config_file], check=True)
+        subprocess.run(["tt-smi", "-g", config_file], check=True)
         print(f"Generated reset config file: {config_file}")
     except subprocess.CalledProcessError as e:
         print(f"Error generating reset config file: {e}")
         sys.exit(1)
-
-    if device == "TG":  # Reset TG device on program start
-        print("Resetting device on program start...")
-        reset_device_sync(config_file)
 
 
 def reset_device_sync(config_file):
@@ -135,23 +127,21 @@ def get_device():
         device = "N300" if "Wormhole" in smi_ls_output else "P300"  # Blackhole
     elif total_devices == 8:
         device = "T3K"
-    else:  # TG has 36 devices
-        device = "TG"
+    else:
+        raise ValueError(f"Unsupported device count from tt-smi -ls: {total_devices}")
 
     # Old method of getting device name based on hostname
     # hostname = os.environ.get("HOSTNAME", "unknown")
     # if "t30" in hostname:
     #     device = "T3K"
     # elif "glx" in hostname:
-    #     device = "TG"
+    #     device = "..."
 
     return device
 
 
 def list_supported_devices(device):
-    if device == "TG":
-        return "n150, n300, t3k, tg"
-    elif device == "T3K":
+    if device == "T3K":
         return "n150, n300, t3k"
     elif device == "N300":
         return "n150, n300"
@@ -1245,35 +1235,6 @@ def terminate_process_tree(pid):
         os.killpg(os.getpgid(pid), signal.SIGTERM)
     except (psutil.NoSuchProcess, ProcessLookupError):
         pass  # Process already terminated
-
-
-def generate_tg_config_file():
-    hostname = os.environ.get("HOSTNAME", "unknown")
-    host_name_config = hostname.split("-special-")[0]  # e.g. aus-glx-NR
-    mobo_name_config = (
-        host_name_config.split("-")[0]
-        + "-"
-        + host_name_config.split("-")[1]
-        + "-mgmt-"
-        + host_name_config.split("-")[2]
-    )  # e.g. aus-glx-mgmt-NR
-    config_file = os.path.expanduser(f"~/.config/tenstorrent/reset_config_{hostname}.json")
-    config = {
-        "time": "",
-        "host_name": host_name_config,
-        "wh_link_reset": {"pci_index": [0, 1, 2, 3]},
-        "re_init_devices": True,
-        "wh_mobo_reset": [
-            {
-                "nb_host_pci_idx": [0, 1, 2, 3],
-                "mobo": mobo_name_config,
-                "disabled_ports": ["0:0", "0:1", "0:2", "1:0", "1:1", "1:2", "6:2", "7:2"],
-            }
-        ],
-    }
-    with open(config_file, "w") as f:
-        json.dump(config, f)
-        f.close()
 
 
 def reset_device_async(entry, screen_lock, screen_needs_update):

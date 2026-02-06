@@ -67,7 +67,7 @@ def test_rms_norm_inference(
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl=tt_ccl, TG=model_args.is_galaxy)
+    tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl=tt_ccl)
 
     input = torch.rand(1, 1, max_seq_len, model_args.vision_dim)
     reference_output = reference_model(input)

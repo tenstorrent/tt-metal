@@ -115,15 +115,12 @@ def get_supported_trace_region_size(request, mesh_device):
         },
         "GPT-OSS-120B": {
             "T3K": 50000000,
-            "TG": 50000000,
         },
         "Qwen2.5-72B": {
             "T3K": 70000000,
-            "TG": 70000000,
         },
         "gemma-3-27b": {
             "T3K": 70000000,
-            "TG": 70000000,
         },
         "DeepSeek-R1-Distill-Llama-70B": {
             "P150x4": 90000000,

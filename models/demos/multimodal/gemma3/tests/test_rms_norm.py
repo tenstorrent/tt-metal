@@ -69,7 +69,7 @@ def test_rms_norm_inference(
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl, TG=model_args.is_galaxy)
+    tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl)
 
     # Create reference model (unchanged)
     partial_state_dict = {

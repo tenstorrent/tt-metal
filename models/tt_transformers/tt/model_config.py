@@ -463,12 +463,17 @@ class ModelArgs:
         self.arch_name = ttnn.get_arch_name()
         self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
 
+        if self.num_devices == 32:
+            raise ValueError(
+                "32-device meshes are not supported in models/tt_transformers. "
+                "Please use the dedicated galaxy demo stack under models/demos/llama3_70b_galaxy instead."
+            )
+
         self.device_name = determine_device_name(self.mesh_device)
 
         logger.info(f"Inferring device name: {self.device_name}")
         device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
-        self.is_galaxy = self.num_devices == 32
 
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
@@ -500,7 +505,7 @@ class ModelArgs:
 
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
-            else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
+            else:  # For HF models, always append the device name (e.g. N150/N300/T3K) to the cache path
                 self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
             self.model_name = HF_MODEL.strip("/").split("/")[
                 -1
@@ -542,31 +547,30 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
-                "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
-                "Qwen3-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
-                "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
-                "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
-                "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
-                "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "P150x4": 128},
+                "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "P150x4": 128},
+                "Llama-3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "P150x4": 128},
+                "Llama-3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "P150x4": 128},
+                "Llama-3.1-70B": {"N150": None, "N300": None, "T3K": 32, "P150x4": 128},
+                "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "P150x4": 128},
+                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "P150x4": 128},
+                "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "P150x4": 128},
+                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "P150x4": 128},
+                "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "P150x4": None},
+                "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "P150x4": None},
+                "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "P150x4": None},
+                "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "P150x4": None},
+                "Qwen3-VL-32B": {"N150": None, "N300": None, "T3K": 64, "P150x4": None},
+                "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "P150x4": None},
+                "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "P150x4": 128},
+                "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "P150x4": 128},
+                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "P150x4": 128},
+                "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "P150x4": 128},
+                "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {
                     "N150": 32,
                     "N300": 64,
                     "T3K": 128,
-                    "TG": 128,
                     "P150x4": 128,
                 },  # Conservative: Allow on all devices
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
@@ -705,19 +709,15 @@ class ModelArgs:
 
             # Create memory config for sharded tensors
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
-            self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
-                ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
-                if self.is_galaxy
-                else ttnn.create_sharded_memory_config(
-                    (
-                        self.tile_padded_batch_rows,
-                        self.dim // residual_grid.num_cores // self.num_devices,
-                    ),
-                    residual_grid,
-                    ttnn.ShardStrategy.WIDTH,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
+            self.model_config["DECODE_RESIDUAL_MEMCFG"] = ttnn.create_sharded_memory_config(
+                (
+                    self.tile_padded_batch_rows,
+                    self.dim // residual_grid.num_cores // self.num_devices,
+                ),
+                residual_grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
             # Chunk values based on what works best empirically
@@ -753,24 +753,18 @@ class ModelArgs:
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
             # Note: for some models (e.g. Mistral-Small) n_heads * head_dim != dim
-            self.model_config["ATTN_OUTPUT_PROGCFG"] = (
-                None
-                if self.is_galaxy
-                else self.dram_matmul_config(
-                    m=self.tile_padded_batch_rows,
-                    k=(self.n_heads * self.head_dim) // self.num_devices,
-                    n=self.dim,
-                    num_cores=self.n_heads // self.num_devices,
-                )
+            self.model_config["ATTN_OUTPUT_PROGCFG"] = self.dram_matmul_config(
+                m=self.tile_padded_batch_rows,
+                k=(self.n_heads * self.head_dim) // self.num_devices,
+                n=self.dim,
+                num_cores=self.n_heads // self.num_devices,
             )
 
             # All Gather Matmul for Dense Out (DO)
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
             # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
-            # TODO: #26657 (self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
             self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
                 self.num_devices == 8
-                and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
                 and self.ccl_topology() == ttnn.Topology.Ring
@@ -802,18 +796,10 @@ class ModelArgs:
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
             prefill_rows = 8  # TODO if BH = 10, if wh = 8
-            mlp1_3_grid = lambda seq_len: (
-                (8, min(min(seq_len, 1024) // 32, 4))
-                if self.is_galaxy
-                else self.find_prefill_grid(prefill_rows, self.dim // self.tile_size)
-            )
-            mlp2_grid = lambda seq_len: (
-                (8, min(min(seq_len, 1024) // 32, 4))
-                if self.is_galaxy
-                else self.find_prefill_grid(prefill_rows, self.hidden_dim // self.tile_size)
-            )
+            mlp1_3_grid = lambda seq_len: self.find_prefill_grid(prefill_rows, self.dim // self.tile_size)
+            mlp2_grid = lambda seq_len: self.find_prefill_grid(prefill_rows, self.hidden_dim // self.tile_size)
 
-            mlp_w_dram_sharded = not self.is_galaxy
+            mlp_w_dram_sharded = True
             n_w1_w3 = self.hidden_dim // self.cluster_shape[1]
             # Using dram_shard_grid_width to ensure per_core_N matches DRAM shard width for P100, otherwise matmuls silently give bad PCC
             dram_shard_grid_width = 8 if is_wormhole_b0() else self.dram_grid_size.x  # 7 for P100, 8 for P150
@@ -829,7 +815,7 @@ class ModelArgs:
             n_w2 = self.dim
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
-                k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
+                k=self.hidden_dim,
                 n=n_w2,
                 grid_size=mlp2_grid(seq_len),
                 per_core_N=math.ceil(n_w2 / (self.tile_size * dram_shard_grid_width)) if mlp_w_dram_sharded else None,
@@ -852,43 +838,26 @@ class ModelArgs:
                 per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
             )
             # Attention output is not necessarily the same dimension as the self.dim, e.g. in Mistral
-            k_dim = (
-                (self.n_heads * self.head_dim) // self.cluster_shape[0]
-                if self.is_galaxy
-                else (self.n_heads * self.head_dim) // self.num_devices
-            )
-            # TODO: #26657 (if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
+            k_dim = (self.n_heads * self.head_dim) // self.num_devices
             n_dim = (
-                self.dim // self.cluster_shape[1]
-                if self.is_galaxy
-                else (
-                    1024
-                    if self.num_devices == 8
-                    and os.getenv("ACTUAL_DEVICE", "") != "TG"
-                    and not is_blackhole()
-                    and 1024 % (self.dim // self.num_devices) == 0
-                    else self.dim
-                )
+                1024
+                if self.num_devices == 8 and not is_blackhole() and 1024 % (self.dim // self.num_devices) == 0
+                else self.dim
             )
             num_rows = lambda seq_len: min(seq_len, 1024)
-            dram_sharded_wo = not (self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] or self.is_galaxy)
+            dram_sharded_wo = not (self.model_config["USE_FUSED_ALL_GATHER_MATMUL"])
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=num_rows(seq_len),
                 k=k_dim,
                 n=n_dim,
                 grid_size=self.find_prefill_grid(prefill_rows, k_dim // self.tile_size),
-                in0_block_w=1 if self.is_galaxy else None,
+                in0_block_w=None,
                 fuse_batch=seq_len <= 1024,
                 per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
             )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
-            if self.num_devices == 32:
-                lm_head_num_rows = 4
-                while self.dim % (32 * 32 * lm_head_num_rows) != 0:
-                    lm_head_num_rows -= 1
-            else:
-                lm_head_num_rows = 8
+            lm_head_num_rows = 8
             lm_head_cores_per_row = 8
             while self.dim % (32 * lm_head_num_rows * lm_head_cores_per_row) != 0:
                 lm_head_num_rows -= 1
@@ -910,7 +879,7 @@ class ModelArgs:
             self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
-                    nearest_32((self.dim // (4 if self.is_galaxy else 1)) // self.lm_head_core_grid.num_cores),
+                    nearest_32((self.dim) // self.lm_head_core_grid.num_cores),
                 ),  # Shard shape: [32, 128] -> 1 shard per core
                 self.lm_head_core_grid,
                 ttnn.ShardStrategy.WIDTH,
@@ -980,11 +949,7 @@ class ModelArgs:
             )
 
             # MLP configs
-            mlp_core_grid = (
-                self.dram_shard_core_grid_for_k(self.dim)
-                if self.is_galaxy
-                else self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
-            )
+            mlp_core_grid = self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
 
             self.model_config["SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
@@ -1003,15 +968,11 @@ class ModelArgs:
                 num_cores=mlp_core_grid.num_cores,
             )
 
-            mlp2_core_grid = (
-                ttnn.CoreGrid(y=1, x=8)
-                if self.is_galaxy
-                else self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
-            )
+            mlp2_core_grid = self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
 
             self.model_config["SHARDED_MLP2_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
-                    32 if self.is_galaxy else self.tile_padded_batch_rows,
+                    self.tile_padded_batch_rows,
                     self.hidden_dim // self.cluster_shape[1] // mlp2_core_grid.num_cores,
                 ),
                 mlp2_core_grid,
@@ -1026,47 +987,22 @@ class ModelArgs:
                 num_cores=mlp2_core_grid.num_cores,
             )
             attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
-            self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = (
-                ttnn.create_sharded_memory_config(
-                    shape=(32, nearest_32(self.dim // (8 * lm_head_num_rows) // 4)),
-                    core_grid=ttnn.CoreGrid(y=lm_head_num_rows, x=8),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                if self.is_galaxy
-                else ttnn.create_sharded_memory_config(
-                    (
-                        self.tile_padded_batch_rows,
-                        self.dim // attn_input_grid.num_cores,
-                    ),  # Shard shape: [32, 128] -> 1 shard per core
-                    attn_input_grid,
-                    ttnn.ShardStrategy.WIDTH,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
+            self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                (
+                    self.tile_padded_batch_rows,
+                    self.dim // attn_input_grid.num_cores,
+                ),  # Shard shape: [32, 128] -> 1 shard per core
+                attn_input_grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
-            # glx doesn't support DRAM sharded matmuls yet
-            self.model_config["XQKV_DECODE_PROGCFG"] = (
-                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 5 if self.is_70b or self.is_90b else lm_head_num_rows),
-                    in0_block_w=2 if self.is_70b or self.is_90b else 1,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
-                    per_core_M=1,
-                    per_core_N=1,
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
-                if self.is_galaxy
-                else self.dram_matmul_config(
-                    m=self.tile_padded_batch_rows,
-                    k=self.dim,
-                    n=self.qkv_size // self.num_devices,
-                    num_cores=attn_input_grid.num_cores,
-                )
+            self.model_config["XQKV_DECODE_PROGCFG"] = self.dram_matmul_config(
+                m=self.tile_padded_batch_rows,
+                k=self.dim,
+                n=self.qkv_size // self.num_devices,
+                num_cores=attn_input_grid.num_cores,
             )
 
             full_grid = ttnn.CoreRangeSet(
@@ -1101,43 +1037,6 @@ class ModelArgs:
                 if self.dim >= 4096
                 else self.model_config["FULL_GRID_MEMCFG"]
             )
-
-            if self.is_galaxy:
-                self.model_config["FF1_3_TG_PROGCFG"] = self.matmul_1d_config_from_tensor_shapes(
-                    (
-                        1,
-                        1,
-                        32,
-                        self.dim // 4,
-                    ),
-                    (
-                        1,
-                        1,
-                        self.dim // 4,
-                        self.hidden_dim // 8,
-                    ),
-                    grid=ttnn.CoreGrid(x=8, y=2),
-                    overwrite_subblock_h=1,
-                    overwrite_subblock_w=1,
-                )
-
-                self.model_config["FF2_TG_PROGCFG"] = self.matmul_1d_config_from_tensor_shapes(
-                    (
-                        1,
-                        1,
-                        32,
-                        self.hidden_dim // 8,
-                    ),
-                    (
-                        1,
-                        1,
-                        self.hidden_dim // 8,
-                        self.dim // 4,
-                    ),
-                    grid=ttnn.CoreGrid(x=8, y=2),
-                    overwrite_subblock_h=1,
-                    overwrite_subblock_w=1,
-                )
 
             self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, self.hidden_dim // 28 // 8),  # shard_grid_cores = 28, num_devices=8
@@ -1330,7 +1229,7 @@ class ModelArgs:
                 ),
             )
 
-            self.set_tg_attention_config()
+            self.set_attention_gather_configs()
 
             self.is_multichip = self.num_devices > 1
             self.ccl_dtype = ttnn.bfloat8_b
@@ -1388,7 +1287,6 @@ class ModelArgs:
             "N150": [128],
             "N300": [128, 1024],
             "T3K": [128, 1024],
-            "TG": [128, 1024],
             "P150": [128, 1024],
             "P300": [128, 1024],
             "P150x4": [128, 1024],
@@ -1402,11 +1300,9 @@ class ModelArgs:
                 "N150": [128, 1024],
                 "N300": [128, 1024, 2048, 4096, 8192],
                 "T3K": [128, 1024, 2048, 4096, 8192],
-                "TG": [128, 1024, 2048, 4096, 8192],
             },
             "Llama-3.1-70B": {
                 "T3K": [128, 1024, 2048, 4096, 8192],
-                "TG": [128, 1024, 2048, 4096, 8192],
             },
             "Llama-3.3-70B": {
                 "T3K": [128],
@@ -1625,7 +1521,7 @@ class ModelArgs:
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
-        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
+        self.padded_vocab_size = None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
@@ -2151,9 +2047,7 @@ class ModelArgs:
             per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
 
         out_subblock_h = 1
-        out_subblock_w = (
-            get_out_subblock_w(per_core_N, out_subblock_h) if not self.is_galaxy else 1
-        )  # TODO: Needed for TG hang workaround
+        out_subblock_w = get_out_subblock_w(per_core_N, out_subblock_h)
 
         if in0_block_w is None:
             assert (
@@ -2830,85 +2724,29 @@ class ModelArgs:
         wrapper = HfAttentionWrapper(layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None)
         return wrapper
 
-    def set_tg_attention_config(self):
-        shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(40)})
-
-        self.model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
-            None
-            if self.dim < 4096
-            else ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    shard_spec_n_cores_grid,
-                    [
-                        32,
-                        32,
-                    ],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            )
+    def set_attention_gather_configs(self):
+        qkv_core_grid = self.dram_shard_core_grid_for_k(self.dim)
+        self.model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_axis_len: ttnn.create_sharded_memory_config(
+            (
+                self.tile_size * mesh_axis_len,
+                self.dim // qkv_core_grid.num_cores,
+            ),
+            core_grid=qkv_core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
         )
-
-        if self.is_galaxy:
-            num_cores = 40 if self.dim == 8192 else (24 if self.dim == 4096 else (20 if self.dim == 3072 else 12))
-
-            self.model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-                core_grid=num_to_coregrid(num_cores),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_rows, self.dim // 4 // min(32, self.dim // 4 // 32)),
-                core_grid=num_to_coregrid(min(32, self.dim // 4 // 32)),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-                core_grid=num_to_coregrid(min(32, self.dim // 8 // 32)),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-        else:
-            qkv_core_grid = self.dram_shard_core_grid_for_k(self.dim)
-            self.model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                (
-                    self.tile_size * mesh_rows,
-                    self.dim // qkv_core_grid.num_cores,
-                ),  # Shard shape: [32, 128] -> 1 shard per core
-                core_grid=qkv_core_grid,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            gather_core_grid = self.dram_shard_core_grid_for_k(self.dim // 4)
-            self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                (
-                    self.tile_size * mesh_rows,
-                    self.dim // 4 // gather_core_grid.num_cores,
-                ),
-                core_grid=gather_core_grid,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            users_core_grid = self.dram_shard_core_grid_for_k(self.dim // 8)
-            self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-                (
-                    self.tile_size * mesh_cols,
-                    self.dim // 8 // users_core_grid.num_cores,
-                ),
-                core_grid=users_core_grid,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+        users_core_grid = self.dram_shard_core_grid_for_k(self.dim // 8)
+        self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_axis_len: ttnn.create_sharded_memory_config(
+            (
+                self.tile_size * mesh_axis_len,
+                self.dim // 8 // users_core_grid.num_cores,
+            ),
+            core_grid=users_core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
 
 class HfAttentionWrapper:
@@ -3297,7 +3135,6 @@ def determine_device_name(mesh_device):
             2: "P300",
             4: "P150x4",
             8: "P150x8",
-            32: "BHGLX",
         }
     elif is_wormhole_b0():
         dict_device_names = {
@@ -3305,10 +3142,15 @@ def determine_device_name(mesh_device):
             2: "N300",
             4: "N150x4",
             8: "T3K",
-            32: "TG",
         }
     else:
         raise ValueError(f"Unsupported architecture: {arch_name}")
+
+    if num_devices == 32:
+        raise ValueError(
+            "32-device meshes are not supported in models/tt_transformers. "
+            "Please use the dedicated galaxy demo stack under models/demos/llama3_70b_galaxy instead."
+        )
 
     if num_devices in dict_device_names:
         return dict_device_names[num_devices]

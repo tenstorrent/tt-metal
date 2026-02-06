@@ -34,7 +34,6 @@ class Attention(LightweightModule):
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
-        self.TG = self.num_devices == 32
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim
@@ -47,41 +46,13 @@ class Attention(LightweightModule):
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
         self.rms_norm_add_unit_offset = configuration.rms_norm_add_unit_offset
-        self.num_device_groups = self.num_devices // self.n_kv_heads
-        self.num_devices_per_group = self.n_kv_heads if self.TG else self.num_devices
-        self.batch_size_per_device_group = (
-            max(self.max_batch_size // self.num_device_groups, 1) if self.TG else self.max_batch_size
-        )
+        self.num_devices_per_group = self.num_devices
+        self.batch_size_per_device_group = self.max_batch_size
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 
         self.arch_name = configuration.arch_name
-        # TODO: Fix this once all-gather supports < tile_size
-        if self.TG:
-            weight = torch.zeros(1, 32, 8, 32)
-            for i in range(32):
-                col = i % 4  # This determines which group of 8 to select
-                weight[:, i, :, col * 8 : (col + 1) * 8] = torch.eye(8)
-
-            self.slice_mat = ttnn.from_torch(
-                weight,
-                dtype=ttnn.bfloat4_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
-            )
-            user_selection_matrix = torch.eye(8, 8)
-            user_selection_matrix = torch.nn.functional.pad(user_selection_matrix, (0, 24), "constant", 0)  # (8, 32)
-            user_selection_matrix = [user_selection_matrix] * 4
-            user_selection_matrix = torch.block_diag(*user_selection_matrix)  # (32, 128)
-            self.user_selection_matrix = ttnn.from_torch(
-                user_selection_matrix,
-                dtype=ttnn.bfloat4_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
 
         self.dtype = dtype
 
@@ -236,10 +207,8 @@ class Attention(LightweightModule):
             dtype=self.wqkv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
-            ),
+            memory_config=wqkv_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(2, 3), mesh_shape=configuration.cluster_shape),
             cache_file_name=cache_name("wqkv_sharded_2d"),
         )
 
@@ -306,14 +275,14 @@ class Attention(LightweightModule):
             dtype=self.wo_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul) else wo_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
+                dims=(2, 3) if (self.use_fused_all_gather_matmul) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
             ),
             cache_file_name=(
-                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
+                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul) else cache_name("wo")
             ),
         )
         if not use_paged_kv_cache:
@@ -459,7 +428,7 @@ class Attention(LightweightModule):
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+            dtype=self.activation_dtype or ttnn.bfloat16,
         )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
@@ -469,7 +438,7 @@ class Attention(LightweightModule):
             xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
 
         ttnn.deallocate(x)
-        xqkv_fused = tt_all_reduce(
+        xqkv_fused_sharded = tt_all_reduce(
             xqkv_fused_sharded,
             self.mesh_device,
             self.tt_ccl,
@@ -480,17 +449,8 @@ class Attention(LightweightModule):
             topology=self.ccl_topology,
         )
 
-        if self.TG:
-            # TODO: Slice the fused_query_key_value tensor get batch=8
-            xqkv_fused = ttnn.matmul(
-                self.slice_mat,
-                xqkv_fused,
-                dtype=ttnn.bfloat16,
-                memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
-            )
-        else:
-            # bfloat16 is required by nlp_create_qkv_heads_decode
-            xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
+        # bfloat16 is required by nlp_create_qkv_heads_decode
+        xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
 
         ttnn.deallocate(xqkv_fused_sharded)
 
@@ -674,26 +634,14 @@ class Attention(LightweightModule):
                 sharded=True,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
             )
-            if self.TG:
-                attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
-                # user_selection_matrix = [1, 1, 32, 128]
-                # user_selection_matrix @ activation -> [1, 1, 32, 128] * [1, 1, 128, 2048] -> [1, 1, 32, 2048]
-                attn_output = ttnn.matmul(
-                    self.user_selection_matrix,
-                    attn_output,
-                    core_grid=ttnn.CoreGrid(y=4, x=8),
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                )
 
-            # TODO: Fix this once self.TG supports dram-sharded matmuls
             dense_out_sharded = ttnn.matmul(
                 attn_output,
                 self.wo,
-                core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
-                program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
+                core_grid=None,
+                program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b if self.TG else None,
+                dtype=None,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
             )
 
@@ -705,26 +653,15 @@ class Attention(LightweightModule):
                 self.mesh_device,
                 self.tt_ccl,
                 cluster_axis=0,
-                dim=0 if (self.TG and self.hidden_size < 8192) else 3,
+                dim=3,
                 topology=self.ccl_topology,
-                memory_config=(
-                    (
-                        self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
-                        if self.hidden_size == 8192
-                        else self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
-                    )
-                    if self.TG
-                    else self.model_config["DECODE_RESIDUAL_MEMCFG"]
-                ),
+                memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
                 sharded=True,
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
             )
 
-            if not self.TG:
-                dense_out_reduced = ttnn.to_memory_config(
-                    dense_out_reduced, self.model_config["DECODE_RESIDUAL_MEMCFG"]
-                )
+            dense_out_reduced = ttnn.to_memory_config(dense_out_reduced, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
             return dense_out_reduced
 
@@ -753,7 +690,7 @@ class Attention(LightweightModule):
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+            dtype=self.activation_dtype or ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
@@ -832,7 +769,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD)
 
         # sharding k_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not page_table:
             k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             k_fill = k_heads_1KSD_8b
@@ -842,14 +779,11 @@ class Attention(LightweightModule):
         ttnn.deallocate(v_heads_1VSD)
 
         # sharding v_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not page_table:
             v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             v_fill = v_heads_1VSD_8b
 
-        if self.TG:
-            k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
-            v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
         if page_table:
             # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
             # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
@@ -873,7 +807,7 @@ class Attention(LightweightModule):
                 v_fill,
                 user_id % self.batch_size_per_device_group,
             )
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not page_table:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 
@@ -960,7 +894,7 @@ class Attention(LightweightModule):
                 self.mesh_device,
                 self.tt_ccl,
                 cluster_axis=0,
-                dim=0 if self.TG else 3,
+                dim=3,
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,

@@ -118,7 +118,6 @@ class Transformer(LightweightModule):
             ),
             args,
             self.tt_ccl,
-            args.is_galaxy,
         )
 
         self.lm_head = LMHead(
@@ -357,7 +356,7 @@ class Transformer(LightweightModule):
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(None, 0) if (self.args.is_galaxy and B > 1) else (None, None),
+                dims=(None, None),
                 mesh_shape=self.args.cluster_shape,
             ),
         )
@@ -369,7 +368,7 @@ class Transformer(LightweightModule):
                 dtype=ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device,
-                    dims=(None, -2) if (self.args.is_galaxy and B > 1) else (None, None),
+                    dims=(None, None),
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
@@ -397,10 +396,7 @@ class Transformer(LightweightModule):
         Concatenate the output of the devices into a single host tensor.
         """
         torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out)]
-        if self.args.is_galaxy:
-            row_dim, col_dim = (3, 1)
-        else:
-            row_dim, col_dim = (1, -1)
+        row_dim, col_dim = (1, -1)
 
         rows, cols = self.args.cluster_shape
         mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
@@ -536,18 +532,16 @@ class Transformer(LightweightModule):
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
-            cluster_axis = 0 if self.args.is_galaxy else None
-            num_links = 2 if self.args.is_galaxy else 1
             tt_logits = ttnn.experimental.all_gather_async(
                 tt_logits,
                 persistent_output_buffer=None,
                 dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                num_links=num_links,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(None),
+                num_links=1,
                 memory_config=tt_logits.memory_config(),
-                cluster_axis=cluster_axis,
+                cluster_axis=None,
                 topology=self.args.ccl_topology(),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(None),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
@@ -555,9 +549,8 @@ class Transformer(LightweightModule):
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
-        if not self.args.is_galaxy:
-            # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+        # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
+        tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits, None
 
@@ -580,7 +573,7 @@ class Transformer(LightweightModule):
             activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
                 decoder_id=i, tensor=TensorGroup.ACTIVATION
             )
-            if mode == "decode" and not self.args.is_galaxy:
+            if mode == "decode":
                 x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"], activation_dtype)
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)

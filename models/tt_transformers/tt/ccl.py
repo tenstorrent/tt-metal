@@ -209,7 +209,7 @@ def tt_all_reduce(
         input_tensor.deallocate(True)
         return reduced
 
-    # TG: all_reduce
+    # all_reduce
     # Cast to CCL dtype
     if input_tensor.dtype != dtype:
         input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG, dtype)  # typecast and to interleaved

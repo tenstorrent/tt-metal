@@ -119,7 +119,6 @@ class TransformerBlock(LightweightModule):
             ),
             args,
             tt_ccl=self.tt_ccl,
-            TG=args.is_galaxy,
         )
         self.ff_norm = DistributedNorm(
             RMSNorm(
@@ -141,7 +140,6 @@ class TransformerBlock(LightweightModule):
             ),
             args,
             tt_ccl=self.tt_ccl,
-            TG=args.is_galaxy,
         )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
@@ -163,7 +161,6 @@ class TransformerBlock(LightweightModule):
                 ),
                 args,
                 tt_ccl=self.tt_ccl,
-                TG=args.is_galaxy,
             )
         else:
             # If pre_feedforward_layernorm is not in state_dict, we do not use it
@@ -189,7 +186,6 @@ class TransformerBlock(LightweightModule):
                 ),
                 args,
                 tt_ccl=self.tt_ccl,
-                TG=args.is_galaxy,
             )
         else:
             # If post_feedforward_layernorm is not in state_dict, we do not use it
@@ -208,7 +204,6 @@ class TransformerBlock(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ) -> ttnn.Tensor:
-        TG = self.args.is_galaxy
         residual = x
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
@@ -239,9 +234,7 @@ class TransformerBlock(LightweightModule):
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         if self.pre_ff_norm is None:
-            hidden_states = ttnn.add(
-                residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
-            )
+            hidden_states = ttnn.add(residual, attn_out, memory_config=skip_mem_cfg)
             residual = hidden_states
             if mode == "prefill":
                 x.deallocate(True)
@@ -264,16 +257,12 @@ class TransformerBlock(LightweightModule):
                 )
 
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
-            hidden_states = ttnn.add(
-                residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
-            )
+            hidden_states = ttnn.add(residual, hidden_states, memory_config=skip_mem_cfg)
             residual = hidden_states
             hidden_states = self.pre_ff_norm(hidden_states, mode)
 
         ttnn.deallocate(attn_out)
 
-        if TG and mode == "decode":
-            hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
 
         hidden_states = self.feed_forward.forward(hidden_states, mode)
@@ -302,9 +291,7 @@ class TransformerBlock(LightweightModule):
             residual,
             hidden_states,
             memory_config=skip_mem_cfg,
-            dtype=self.args.ccl_dtype
-            if TG and not self.args.is_distributed_norm(mode)
-            else activation_dtype or ttnn.bfloat16,
+            dtype=activation_dtype or ttnn.bfloat16,
         )
 
         return out  # fractured across devices
