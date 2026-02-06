@@ -4470,3 +4470,39 @@ def test_binary_sharded_half_mem_config_interleaved(device, memory_config):
     ttnn_result = ttnn.to_torch(ttnn_result)
 
     assert_with_pcc(torch_output, ttnn_result)
+
+
+def test_binary_sharded_output_uneven(device):
+    h_dim = 544
+    torch.manual_seed(0)
+    width_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))]),
+            [h_dim, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    pt_in1 = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
+    pt_in2 = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
+    tt_in1 = ttnn.from_torch(
+        pt_in1, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+    )
+    tt_in2 = ttnn.from_torch(
+        pt_in2, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+    )
+    block_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))]),
+            [96, 384],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    torch_output = torch.multiply(pt_in1, pt_in2)
+    result = ttnn.multiply(tt_in1, tt_in2, memory_config=block_sharded)
+    result = ttnn.to_torch(result)
+    assert_with_pcc(torch_output, result)
