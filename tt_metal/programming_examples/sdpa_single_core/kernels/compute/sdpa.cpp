@@ -351,18 +351,16 @@ void sdpa_inner_loop_8x4x16(
             cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
 
             // Drain: interleave sub_exp for last Q@KT row with first QKT@V matmul
-            if (q_subblock == 0) {
-                MATH(
-                    DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << "] during QKT@V q_subblock 0"
-                           << ENDL());
-                for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
-                    sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
-                        cb_qkt_im, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, kt_subblock);
-                }
-                // Reconfigure for matmul after sub_exp changed pack/unpack config
-                pack_reconfig_data_format(cb_out);
-                reconfig_data_format(cb_v_in, cb_qkt_im);
-            }
+            MATH(
+                DPRINT << "DRAIN: SUB_EXP for Q[" << q_num_subblocks - 1 << "," << q_subblock
+                       << "] during QKT@V q_subblock 0" << ENDL());
+
+            sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
+                cb_qkt_im, alias_cur_sum, Sk_chunk_t, q_num_subblocks - 1, q_subblock);
+
+            // Reconfigure for matmul after sub_exp changed pack/unpack config
+            pack_reconfig_data_format(cb_out);
+            reconfig_data_format(cb_v_in, cb_qkt_im);
 
             {
                 mm_block_init_short(
