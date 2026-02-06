@@ -5,6 +5,7 @@
 #pragma once
 
 #include <concepts>
+#include <exception>
 #include <optional>
 #include <random>
 #include <tt-logger/tt-logger.hpp>
@@ -19,6 +20,7 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/concepts.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -513,6 +515,26 @@ ttnn::MeshDevice* get_mesh_device(
     return mesh_device;
 }
 
+// RAII guard for automatic error capture - zero overhead on happy path
+class OperationErrorGuard {
+    std::string operation_name_;
+    int uncaught_exceptions_at_start_;
+
+public:
+    explicit OperationErrorGuard(std::string_view op_name) :
+        operation_name_(op_name), uncaught_exceptions_at_start_(std::uncaught_exceptions()) {}
+
+    ~OperationErrorGuard() {
+        // Only record error if we're unwinding due to an exception
+        if (std::uncaught_exceptions() > uncaught_exceptions_at_start_) {
+            ttnn::graph::GraphProcessor::track_error("exception", "Operation failed", operation_name_);
+        }
+    }
+
+    OperationErrorGuard(const OperationErrorGuard&) = delete;
+    OperationErrorGuard& operator=(const OperationErrorGuard&) = delete;
+};
+
 /**
  * Launch an operation on a mesh device.
  *
@@ -528,8 +550,14 @@ typename device_operation_t::tensor_return_value_t launch(
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
-    tt::tt_metal::GraphTracker::instance().track_function_start(
-        detail::get_operation_name<device_operation_t>(operation_attributes), operation_attributes, input_tensors);
+    const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
+    tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, operation_attributes, input_tensors);
+
+    // RAII guard captures error if exception occurs - only active during graph capture
+    std::optional<OperationErrorGuard> error_guard;
+    if (tt::tt_metal::GraphTracker::instance().is_enabled()) {
+        error_guard.emplace(operation_name);
+    }
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     if (first_tensor.has_value()) [[likely]] {
