@@ -679,7 +679,7 @@ def run_reduce_scatter_impl(
                 mm_N_block_wt=8,
                 chunk_width_in_mm_blocks=1,
             ),
-            id="experimental_strided_toy_4_correctness_check_3",
+            id="experimental_strided_toy_5_correctness_check",
         ),
     ],
 )
