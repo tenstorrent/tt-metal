@@ -544,7 +544,7 @@ void ControlPlane::init_control_plane(
 
     // Initialize distributed contexts after topology_mapper is created so we can use its helper function
     this->initialize_distributed_contexts();
-    // this->generate_intermesh_connectivity();
+    this->generate_intermesh_connectivity();
 
     // Printing, only enabled with log_debug
     this->mesh_graph_->print_connectivity();
