@@ -51,7 +51,7 @@ void kernel_main() {
     // Recall that compile-time arguments are stored as a vector of uint32_t values.
     // TensorAccessorArgs is a clean way to extract the appropriate number of
     // these uint32_t values and store them in an object.
-    constexpr auto src1_layout_args = TensorAccessorArgs<src0_layout_args.next_compile_time_args_offset()>();
+    constexpr auto src1_layout_args = TensorAccessorArgs<0>();
     // Finally, construct the address generator for the second input buffer.
     const auto src1_addr_gen = TensorAccessor(src1_layout_args, src1_base_addr, tile_size_bytes_1);
 
