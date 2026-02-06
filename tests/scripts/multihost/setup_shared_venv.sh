@@ -2,31 +2,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# Setup shared Python venv for multi-host MPI scenarios.
-# This script handles race conditions when multiple hosts may access
-# the same shared workspace simultaneously by using file locking
-# and atomic directory creation.
-#
-# Usage:
-#   ./setup_shared_venv.sh [OPTIONS] [SOURCE_VENV] [TARGET_VENV]
-#
-# Options:
-#   --activate    Output shell commands to activate the venv (for use with eval)
-#
-# Arguments:
-#   SOURCE_VENV   Source venv to copy from (default: /opt/venv)
-#   TARGET_VENV   Target venv path (default: ./python_env)
-#
-# Examples:
-#   # Just setup the shared venv (no activation)
-#   ./setup_shared_venv.sh
-#
-#   # Setup and activate the shared venv in the caller's shell
-#   eval "$(./setup_shared_venv.sh --activate)"
-#
-# The --activate flag outputs shell commands that, when eval'd, switch the
-# caller's active venv. This is required because environment changes made
-# in a subshell don't propagate to the parent.
 
 set -eo pipefail
 
@@ -34,8 +9,43 @@ set -eo pipefail
 ACTIVATE_MODE=false
 POSITIONAL_ARGS=()
 
+usage() {
+    cat <<USAGE
+    Setup shared Python venv for multi-host MPI scenarios.
+    This script handles race conditions when multiple hosts may access
+    the same shared workspace simultaneously by using file locking
+    and atomic directory creation.
+
+    Usage:
+      $0 [OPTIONS] [SOURCE_VENV] [TARGET_VENV]
+
+    Options:
+      -h, --help    Show this help message and exit
+      --activate    Output shell commands to activate the venv (for use with eval)
+
+    Arguments:
+      SOURCE_VENV   Source venv to copy from (default: /opt/venv)
+      TARGET_VENV   Target venv path (default: ./python_env)
+
+    Examples:
+      # Just setup the shared venv (no activation)
+      $0
+
+      # Setup and activate the shared venv in the caller's shell
+      eval "\$($0 --activate)"
+
+    The --activate flag outputs shell commands that, when eval'd, switch the
+    caller's active venv. This is required because environment changes made
+    in a subshell don't propagate to the parent.
+USAGE
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
         --activate)
             ACTIVATE_MODE=true
             shift

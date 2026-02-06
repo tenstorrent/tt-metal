@@ -2,34 +2,44 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# Bundle Python interpreter into a virtual environment.
-#
-# This script deep-copies the Python interpreter into the venv, making it
-# fully self-contained and portable. This is necessary for multi-host SLURM
-# environments where the venv may be shared over NFS and each host needs
-# access to the Python interpreter without relying on symlinks to a Docker
-# container's local filesystem.
-#
-# Usage: bundle_python_into_venv.sh <venv_dir> [--force]
-#
-# Arguments:
-#   venv_dir    Path to the virtual environment directory
-#   --force     Bundle even if Python is not symlinked (optional)
-#
-# The script uses uv's Python installation structure:
-#   <UV_PYTHON_INSTALL_DIR>/cpython-<version>-<platform>/bin/python
-#
-# Exit codes:
-#   0 - Success (bundled or already bundled)
-#   1 - Error (missing venv, permission denied, etc.)
 
 set -eo pipefail
+
+usage() {
+    cat <<EOF
+    Bundle Python interpreter into a virtual environment.
+
+    This script deep-copies the Python interpreter into the venv, making it
+    fully self-contained and portable. This is necessary for multi-host SLURM
+    environments where the venv may be shared over NFS and each host needs
+    access to the Python interpreter without relying on symlinks to a Docker
+    container's local filesystem.
+
+    Usage: $0 <venv_dir> [--force]
+
+    Arguments:
+      venv_dir    Path to the virtual environment directory
+      --force     Bundle even if Python is not symlinked (optional)
+
+    The script uses uv's Python installation structure:
+      <UV_PYTHON_INSTALL_DIR>/cpython-<version>-<platform>/bin/python
+
+    Exit codes:
+      0 - Success (bundled or already bundled)
+      1 - Error (missing venv, permission denied, etc.)
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+fi
 
 VENV_DIR="${1:-}"
 FORCE_BUNDLE="${2:-}"
 
 if [[ -z "$VENV_DIR" ]]; then
-    echo "Usage: $0 <venv_dir> [--force]" >&2
+    usage >&2
     exit 1
 fi
 
