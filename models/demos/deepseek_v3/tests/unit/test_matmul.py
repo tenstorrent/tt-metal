@@ -272,6 +272,8 @@ def test_matmul_dram_sharded_mesh_device(
     """
     Mesh device test for matmul with DRAM sharded weights.
     """
+    if is_watcher_enabled() and (M, K, N) == (32, 7168, 256):
+        pytest.skip("Fails with watcher enabled. See issue #36314")
     # Get device grid info from mesh_device
     grid = mesh_device.compute_with_storage_grid_size()
     max_num_cores = grid.x * grid.y
