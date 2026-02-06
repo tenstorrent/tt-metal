@@ -75,6 +75,25 @@ class PerCoreCompileTimeDescriptor:
 
 
 @dataclass
+class PerCoreRuntimeArgsDescriptor:
+    """
+    Descriptor for per-core runtime args for each RISC processor.
+
+    Each RISC can have different runtime args per core. This allows specifying
+    runtime args that vary by both RISC and core coordinate.
+
+    Args:
+        ncrisc_args: List of (CoreCoord, args_list) tuples for NCRISC
+        brisc_args: List of (CoreCoord, args_list) tuples for BRISC
+        trisc_args: List of (CoreCoord, args_list) tuples for TRISC
+    """
+
+    ncrisc_args: list = field(default_factory=list)
+    brisc_args: list = field(default_factory=list)
+    trisc_args: list = field(default_factory=list)
+
+
+@dataclass
 class UnifiedCompileTimeCoreDescriptor:
     """
     Descriptor for a compile-time arg that varies across core ranges.
@@ -127,6 +146,7 @@ class UnifiedKernelDescriptor:
         trisc_compute_config: Optional compute configuration (math fidelity, fp32 acc, etc.)
         unified_compile_time_core_descriptors: List of per-core-range compile-time arg overrides
         per_core_compile_time_descriptors: List of PerCoreCompileTimeDescriptor for individual core values
+        per_core_runtime_args_descriptor: PerCoreRuntimeArgsDescriptor for per-core runtime args
         defines: Preprocessor definitions as list of (name, value) tuples, e.g. [("SKIP_CCL", "1")]
     """
 
@@ -144,6 +164,9 @@ class UnifiedKernelDescriptor:
     trisc_compute_config: Optional[ttnn.ComputeConfigDescriptor] = None
     unified_compile_time_core_descriptors: list = field(default_factory=list)
     per_core_compile_time_descriptors: list = field(default_factory=list)  # List of PerCoreCompileTimeDescriptor
+    per_core_runtime_args_descriptor: Optional[
+        PerCoreRuntimeArgsDescriptor
+    ] = None  # Per-core runtime args for all RISCs
     defines: list = field(default_factory=list)  # List of (name, value) tuples
 
     def _get_core_range_set(
@@ -155,6 +178,50 @@ class UnifiedKernelDescriptor:
         if isinstance(core_range, ttnn.CoreCoord):
             return ttnn.CoreRangeSet([ttnn.CoreRange(core_range, core_range)])
         return ttnn.CoreRangeSet([core_range])
+
+    def _build_runtime_args(self, risc: str, core_range_set: ttnn.CoreRangeSet) -> ttnn.RuntimeArgs:
+        """
+        Build RuntimeArgs for a specific RISC based on runtime_args_descriptor.
+
+        Args:
+            risc: Which RISC processor ("ncrisc", "brisc", or "trisc")
+            core_range_set: The cores to build args for
+
+        Returns:
+            RuntimeArgs object (empty if no descriptor or no args for this RISC)
+        """
+        runtime_args = ttnn.RuntimeArgs()
+
+        if self.per_core_runtime_args_descriptor is None:
+            return runtime_args
+
+        # Get the args list for this RISC
+        if risc == "ncrisc":
+            core_args_list = self.per_core_runtime_args_descriptor.ncrisc_args
+        elif risc == "brisc":
+            core_args_list = self.per_core_runtime_args_descriptor.brisc_args
+        else:  # trisc
+            core_args_list = self.per_core_runtime_args_descriptor.trisc_args
+
+        if not core_args_list:
+            return runtime_args
+
+        # Build lookup from core coord to args
+        core_to_args = {}  # {(x, y): args_list}
+        for core_coord, args in core_args_list:
+            core_key = (core_coord.x, core_coord.y)
+            if core_key not in core_to_args:
+                core_to_args[core_key] = []
+            core_to_args[core_key].extend(args)
+
+        # Build RuntimeArgs for all cores in the range
+        all_cores = ttnn.corerange_to_cores(core_range_set)
+        for core_coord in all_cores:
+            core_key = (core_coord.x, core_coord.y)
+            args = core_to_args.get(core_key, [])
+            runtime_args[core_coord.x][core_coord.y] = list(args)
+
+        return runtime_args
 
     def get_kernel_descriptors(self) -> UnifiedKernelResult:
         """
@@ -180,6 +247,11 @@ class UnifiedKernelDescriptor:
 
     def _get_simple_kernel_descriptors(self) -> UnifiedKernelResult:
         """Generate simple kernel descriptors without per-core overrides."""
+        # Build runtime args from per_core_runtime_args_descriptors for each RISC
+        ncrisc_runtime_args = self._build_runtime_args("ncrisc", self.core_ranges)
+        brisc_runtime_args = self._build_runtime_args("brisc", self.core_ranges)
+        trisc_runtime_args = self._build_runtime_args("trisc", self.core_ranges)
+
         # Reader kernel (NCRISC)
         reader_descriptor = ttnn.KernelDescriptor(
             kernel_source=self.kernel_source,
@@ -189,6 +261,7 @@ class UnifiedKernelDescriptor:
             named_compile_time_args=self.ncrisc_named_compile_time_args,
             defines=self.defines,
             common_runtime_args=self.ncrisc_common_runtime_args,
+            runtime_args=ncrisc_runtime_args,
             config=ttnn.ReaderConfigDescriptor(),
         )
 
@@ -201,6 +274,7 @@ class UnifiedKernelDescriptor:
             named_compile_time_args=self.brisc_named_compile_time_args,
             defines=self.defines,
             common_runtime_args=self.brisc_common_runtime_args,
+            runtime_args=brisc_runtime_args,
             config=ttnn.WriterConfigDescriptor(),
         )
 
@@ -214,6 +288,7 @@ class UnifiedKernelDescriptor:
             named_compile_time_args=self.trisc_named_compile_time_args,
             defines=self.defines,
             common_runtime_args=self.trisc_common_runtime_args,
+            runtime_args=trisc_runtime_args,
             config=compute_config,
         )
 
@@ -303,6 +378,11 @@ class UnifiedKernelDescriptor:
             core_coords = [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(core_tuples)]
             core_range_set = ttnn.CoreRangeSet(core_coords)
 
+            # Build runtime args for this core range for each RISC
+            ncrisc_runtime_args = self._build_runtime_args("ncrisc", core_range_set)
+            brisc_runtime_args = self._build_runtime_args("brisc", core_range_set)
+            trisc_runtime_args = self._build_runtime_args("trisc", core_range_set)
+
             # Track kernel indices for this group
             ncrisc_idx = len(descriptors)
             descriptors.append(
@@ -314,6 +394,7 @@ class UnifiedKernelDescriptor:
                     named_compile_time_args=ncrisc_named_compile_time_args_merged,
                     defines=self.defines,
                     common_runtime_args=self.ncrisc_common_runtime_args,
+                    runtime_args=ncrisc_runtime_args,
                     config=ttnn.ReaderConfigDescriptor(),
                 )
             )
@@ -328,6 +409,7 @@ class UnifiedKernelDescriptor:
                     named_compile_time_args=brisc_named_compile_time_args_merged,
                     defines=self.defines,
                     common_runtime_args=self.brisc_common_runtime_args,
+                    runtime_args=brisc_runtime_args,
                     config=ttnn.WriterConfigDescriptor(),
                 )
             )
@@ -342,6 +424,7 @@ class UnifiedKernelDescriptor:
                     named_compile_time_args=trisc_named_compile_time_args_merged,
                     defines=self.defines,
                     common_runtime_args=self.trisc_common_runtime_args,
+                    runtime_args=trisc_runtime_args,
                     config=compute_config,
                 )
             )

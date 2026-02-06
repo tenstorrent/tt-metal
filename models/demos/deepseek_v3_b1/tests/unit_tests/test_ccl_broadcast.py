@@ -14,9 +14,11 @@ This test validates dual-axis broadcast on a 2D mesh where:
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def create_fabric_router_config(max_payload_size):
@@ -46,7 +48,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
 @pytest.mark.parametrize("using_persistent_buffers", [True])
-@pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -73,6 +75,7 @@ def test_ccl_broadcast_dual_axis(
     secondary_cluster_axis,
     using_persistent_buffers,
     num_iters,
+    num_warmup_iter,
 ):
     num_devices = mesh_rows * mesh_cols
 
@@ -155,6 +158,10 @@ def test_ccl_broadcast_dual_axis(
     logger.info(f"Running CCL broadcast: sender=({sender_row},{sender_col}), mesh={mesh_rows}x{mesh_cols}")
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
 
+    profiler = BenchmarkProfiler()
+
+    # Compile Run
+    logger.info("Compiling model")
     ttnn_result = DeepseekMinimalBroadcast.op(
         input_tensor_mesh,
         output_tensor,
@@ -165,6 +172,58 @@ def test_ccl_broadcast_dual_axis(
         semaphores=semaphores,
     )
     ttnn.synchronize_device(submesh)
+
+    # Capture warmup trace
+    logger.info("Capturing warmup trace")
+    trace_id_warmup = ttnn.begin_trace_capture(submesh, cq_id=0)
+    for i in range(num_warmup_iter):
+        ttnn_result = DeepseekMinimalBroadcast.op(
+            input_tensor_mesh,
+            output_tensor,
+            sender_coord,
+            cluster_axis=cluster_axis,
+            secondary_cluster_axis=secondary_cluster_axis,
+            using_persistent_buffers=using_persistent_buffers,
+            semaphores=semaphores,
+        )
+    ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(submesh)
+
+    # Capture main trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
+    for i in range(num_iters):
+        ttnn_result = DeepseekMinimalBroadcast.op(
+            input_tensor_mesh,
+            output_tensor,
+            sender_coord,
+            cluster_axis=cluster_axis,
+            secondary_cluster_axis=secondary_cluster_axis,
+            using_persistent_buffers=using_persistent_buffers,
+            semaphores=semaphores,
+        )
+    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+    ttnn.synchronize_device(submesh)
+
+    # Execute warmup trace
+    logger.info("Executing warmup trace...")
+    profiler.start("deepseek-broadcast-warmup")
+    ttnn.execute_trace(submesh, trace_id_warmup, blocking=False)
+    ttnn.release_trace(submesh, trace_id_warmup)
+    ttnn.synchronize_device(submesh)
+    profiler.end("deepseek-broadcast-warmup")
+
+    # Execute main trace with signposts for profiling
+    logger.info("Starting Trace perf test...")
+    signpost("start")
+    profiler.start("deepseek-broadcast-trace")
+
+    ttnn.execute_trace(submesh, trace_id, blocking=False)
+    ttnn.release_trace(submesh, trace_id)
+    ttnn.synchronize_device(submesh)
+
+    profiler.end("deepseek-broadcast-trace")
+    signpost("stop")
 
     # Verify output - all devices should have the sender's data
     logger.info("Verifying broadcast results...")
