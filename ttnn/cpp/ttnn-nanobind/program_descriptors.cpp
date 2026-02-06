@@ -368,7 +368,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "set_buffer_from_tensor",
             [](tt::tt_metal::CBDescriptor& self, const ttnn::Tensor& tensor) {
-                auto buffer = tensor.buffer();
+                auto* buffer = tensor.buffer();
                 if (buffer == nullptr) {
                     throw std::runtime_error("Tensor buffer is null - tensor must be device-backed");
                 }
