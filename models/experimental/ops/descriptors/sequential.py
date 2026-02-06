@@ -1150,6 +1150,9 @@ def _generate_fused_writer(
     Generate a fused writer kernel.
 
     Only the last phase's output needs to be written to DRAM.
+    The writer's blk (compile-time arg [0]) must match Phase 0's blk
+    so that cb_wait_front in the writer matches the number of tiles
+    pushed by the fused compute kernel (which uses Phase 0's blk for all phases).
     """
     if not phase_kernels:
         return None
@@ -1158,9 +1161,21 @@ def _generate_fused_writer(
     if phase_kernels[last_phase_idx]["writer"] is None:
         return None
 
-    # Use the last phase's writer directly
-    # It writes from the final output CB (already remapped)
-    return phase_kernels[last_phase_idx]["writer"]
+    writer = phase_kernels[last_phase_idx]["writer"]
+
+    # Normalize writer's blk (compile-time arg [0]) to match Phase 0's blk.
+    # The fused compute kernel uses Phase 0's blk for ALL phases, so the writer
+    # must use the same blk so cb_wait_front(cb_out, block.full_block_size())
+    # matches the number of tiles pushed by the last phase's compute.
+    if phase_kernels[0]["compute"] is not None:
+        phase0_args = list(phase_kernels[0]["compute"].compile_time_args)
+        if len(phase0_args) > 1:
+            phase0_blk = phase0_args[1]  # blk is compile-time arg index 1 for compute
+            writer_args = list(writer.compile_time_args)
+            if writer_args and writer_args[0] != phase0_blk:
+                writer.compile_time_args = tuple([phase0_blk] + writer_args[1:])
+
+    return writer
 
 
 def _generate_fused_compute(
@@ -1259,8 +1274,12 @@ def _merge_defines(
     """
     Merge defines from all phases' compute kernels.
 
-    Each define is prefixed with phaseN_ to avoid conflicts.
-    Common defines (like REDUCE_OP) are only included once.
+    Source-level defines (RMSNORM, FUSE_PRE_ADD, etc.) are NOT included here
+    because they are resolved per-phase directly into the generated source code
+    by _resolve_ifdef_directives. Only compiler-level defines that affect all
+    phases uniformly (REDUCE_OP, REDUCE_DIM, etc.) are passed through.
+
+    Other phase-specific defines are prefixed with PHASE{i}_ to avoid conflicts.
     """
     merged = []
     seen_common = set()  # Track common defines to avoid duplicates
@@ -1277,12 +1296,132 @@ def _merge_defines(
                 if name not in seen_common:
                     merged.append((name, value))
                     seen_common.add(name)
+            elif name in _SOURCE_LEVEL_DEFINES:
+                # Already resolved into source per-phase; don't pass to compiler
+                continue
             else:
                 # Phase-specific defines get prefixed
                 prefixed_name = f"PHASE{i}_{name}"
                 merged.append((prefixed_name, value))
 
     return merged
+
+
+# Defines that are resolved per-phase in source code (not passed to compiler)
+_SOURCE_LEVEL_DEFINES = {"RMSNORM", "FUSE_PRE_ADD", "FUSED_PRE_ADD"}
+
+
+def _resolve_ifdef_directives(source: str, active_defines: set) -> str:
+    """
+    Resolve preprocessor #ifdef/#ifndef/#if defined directives in source code.
+
+    Only resolves directives involving known source-level defines (RMSNORM,
+    FUSE_PRE_ADD, FUSED_PRE_ADD). Other #ifdef directives are left untouched.
+
+    This is needed for fused kernels where each phase may have different defines
+    (e.g., Phase 0 is LayerNorm, Phase 1 is RMSNorm). Since all phases share
+    one compilation unit, preprocessor defines can't vary per-phase. Instead,
+    we resolve them into the source before extraction.
+
+    Args:
+        source: The kernel source code
+        active_defines: Set of define names that are active for this phase
+
+    Returns:
+        Source with relevant #ifdef blocks resolved (included or excluded)
+    """
+    import re
+
+    lines = source.split("\n")
+    result = []
+    # Stack entries: (include_current_branch, is_known_define)
+    stack: List[Tuple[bool, bool]] = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        directive_handled = False
+
+        if stripped.startswith("#if defined"):
+            # Handle: #if defined NAME and not defined NAME2
+            # Handle: #if defined NAME
+            names_found = re.findall(r"\bdefined\s+(\w+)", stripped)
+            involved = [n for n in names_found if n in _SOURCE_LEVEL_DEFINES]
+            if involved:
+                # Evaluate the expression
+                result_val = _eval_ifdef_expression(stripped, active_defines)
+                stack.append((result_val, True))
+                directive_handled = True
+            else:
+                stack.append((True, False))
+
+        elif stripped.startswith("#ifdef "):
+            name = stripped[7:].strip()
+            if name in _SOURCE_LEVEL_DEFINES:
+                stack.append((name in active_defines, True))
+                directive_handled = True
+            else:
+                stack.append((True, False))
+
+        elif stripped.startswith("#ifndef "):
+            name = stripped[8:].strip()
+            if name in _SOURCE_LEVEL_DEFINES:
+                stack.append((name not in active_defines, True))
+                directive_handled = True
+            else:
+                stack.append((True, False))
+
+        elif stripped == "#else":
+            if stack and stack[-1][1]:
+                incl, known = stack[-1]
+                stack[-1] = (not incl, known)
+                directive_handled = True
+
+        elif stripped == "#endif":
+            if stack:
+                _, known = stack[-1]
+                stack.pop()
+                if known:
+                    directive_handled = True
+
+        if directive_handled:
+            continue
+
+        # Include line only if all known-define branches on the stack are active
+        include = True
+        for incl, known in stack:
+            if known and not incl:
+                include = False
+                break
+
+        if include:
+            result.append(line)
+
+    return "\n".join(result)
+
+
+def _eval_ifdef_expression(directive: str, active_defines: set) -> bool:
+    """
+    Evaluate a #if defined expression like:
+      #if defined RMSNORM and not defined FUSE_PRE_ADD
+
+    Returns True if the condition is satisfied.
+    """
+    import re
+
+    # Find all "defined NAME" and "not defined NAME" clauses
+    # Pattern: optional "not" followed by "defined NAME"
+    clauses = re.findall(r"(not\s+)?defined\s+(\w+)", directive)
+
+    result = True
+    for negation, name in clauses:
+        is_defined = name in active_defines
+        if negation:
+            result = result and (not is_defined)
+        else:
+            result = result and is_defined
+
+    return result
 
 
 def _generate_multi_phase_compute_source(
@@ -1298,18 +1437,26 @@ def _generate_multi_phase_compute_source(
     if not phase_kernels:
         return None
 
-    # Read source from all compute kernels
+    # Read source from all compute kernels, resolving per-phase #ifdef directives.
+    # Each phase may have different defines (e.g., RMSNORM for RMSNorm phases).
+    # Since all phases share one compilation unit, we resolve these into the source.
     phase_sources = []
+    phase_define_sets = []
     for pk in phase_kernels:
         if pk["compute"] is not None:
             source = _read_kernel_source_from_descriptor(pk["compute"])
             if source:
-                phase_sources.append(source)
+                phase_defs = {name for name, _ in pk["compute"].defines}
+                resolved = _resolve_ifdef_directives(source, phase_defs)
+                phase_sources.append(resolved)
+                phase_define_sets.append(phase_defs)
 
     if not phase_sources:
         return None
 
-    # Extract defines, includes, and other pre-main code separately
+    # Extract defines, includes, and other pre-main code separately.
+    # Use Phase 0's resolved source for defines/includes (since all phases
+    # share the same includes and global defines like REDUCE_OP).
     defines = []
     includes = set()
     other_pre_main = []
@@ -1320,7 +1467,6 @@ def _generate_multi_phase_compute_source(
             if "void kernel_main()" in line:
                 break
             if stripped.startswith("#define"):
-                # Only add unique defines
                 if stripped not in [d.strip() for d in defines]:
                     defines.append(line)
             elif stripped.startswith("#include"):
@@ -1365,16 +1511,38 @@ def _generate_multi_phase_compute_source(
     lines.extend(other_pre_main)
     lines.append("")
 
+    # Determine Phase 0's blk value (compile-time arg index 1).
+    # When fusing, all phases must use the same blk to ensure consistent
+    # CB push/wait patterns. The reader pushes full_block_size tiles (including
+    # padding for partial blocks), but Phase 0's output only pushes actual tiles
+    # using its own blk. Phase 1+ must match Phase 0's blk so their
+    # cb_wait_front(cb, block.full_block_size()) matches what's available.
+    phase0_blk = None
+    if phase_kernels[0]["compute"] is not None:
+        phase0_args = list(phase_kernels[0]["compute"].compile_time_args)
+        if len(phase0_args) > 1:
+            phase0_blk = phase0_args[1]  # blk is arg index 1 for LayerNorm/RMSNorm
+
     # Generate a phase function for each phase
+    source_idx = 0
     for i, (pk, phase) in enumerate(zip(phase_kernels, phases)):
         if pk["compute"] is None:
             continue
 
-        source = _read_kernel_source_from_descriptor(pk["compute"])
-        body = _extract_kernel_body_for_fusion(source)
+        # Use the already-resolved source (ifdefs flattened per-phase)
+        resolved_source = phase_sources[source_idx]
+        source_idx += 1
+        body = _extract_kernel_body_for_fusion(resolved_source)
 
         # Get this phase's compile-time args for substitution
         phase_compile_args = list(pk["compute"].compile_time_args) if pk["compute"] else []
+
+        # For phases 1+, override blk (arg index 1) to match Phase 0's blk.
+        # This is critical: Phase 0 pushes tiles to the intermediate CB using its
+        # blk-sized blocks. Phase 1+ must use the same blk so cb_wait_front with
+        # block.full_block_size() matches the number of tiles actually available.
+        if i > 0 and phase0_blk is not None and len(phase_compile_args) > 1:
+            phase_compile_args[1] = phase0_blk
 
         # Apply CB remapping with phase prefix, and substitute compile-time args
         remapped_body = _apply_cb_remapping_to_source(

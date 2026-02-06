@@ -473,7 +473,6 @@ class TestSequentialChainExecution:
     The tests document the intended API and what golden results should be.
     """
 
-    @pytest.mark.skip(reason="Fused kernel source generated but needs device compilation testing")
     def test_layernorm_rmsnorm_layernorm_chain(self, device, test_tensors):
         """
         Test fusing LayerNorm -> RMSNorm -> LayerNorm chain.
@@ -1246,3 +1245,327 @@ class TestParallelChainsExecution:
 
             passing, pcc = comp_pcc(golden, out, pcc=0.98)
             assert passing, f"Chain {i} PCC: {pcc}"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+class TestSequentialDebugHang:
+    """
+    Systematic debugging tests for the fused kernel device hang.
+
+    These tests progressively increase complexity to isolate the root cause.
+    The hang was caused by Phase 1 (RMSNorm) compiling as LayerNorm due to
+    the RMSNORM preprocessor define not being resolved per-phase.
+    """
+
+    def test_debug_ln_ln_2phase(self, device, test_tensors):
+        """
+        Step 1: 2-phase LayerNorm -> LayerNorm chain.
+        No RMSNORM involved — tests basic fusion infrastructure.
+        """
+        import os
+        import signal
+
+        from models.experimental.ops.descriptors.sequential import fuse_layernorm_chain
+        from models.experimental.ops.descriptors.normalization import layer_norm
+        from models.experimental.ops.descriptors import composite
+
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        ln1 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+        ln2 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight2"],
+            bias=test_tensors["tt_bias2"],
+            epsilon=1e-5,
+        )
+
+        fused = fuse_layernorm_chain([ln1, ln2])
+
+        # Dump for inspection
+        output_dir = os.path.join(os.path.dirname(__file__), "gen_kernels")
+        dump_fused_kernels(fused, output_dir, label="debug_ln_ln")
+
+        # Launch with timeout
+        def _timeout_handler(signum, frame):
+            raise TimeoutError("Device operation timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(60)
+        try:
+            outputs = composite.launch([fused])
+            tt_output = outputs[0][0]
+            torch_output = ttnn.to_torch(tt_output)
+            signal.alarm(0)
+        except TimeoutError:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+            pytest.fail("HANG DETECTED in LN->LN 2-phase chain")
+        signal.signal(signal.SIGALRM, old_handler)
+
+        # Golden: LayerNorm(LayerNorm(x)) — using ones weights, so effectively just normalization
+        temp = torch_layer_norm(
+            test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"], eps=1e-5
+        )
+        golden = torch_layer_norm(temp, test_tensors["torch_weight2"], test_tensors["torch_bias2"], eps=1e-5)
+
+        passing, pcc = comp_pcc(golden, torch_output, pcc=0.98)
+        print(f"Fused LN->LN PCC vs golden: {pcc}")
+
+        # Also compare against unfused sequential: run two separate LN on device
+        from models.experimental.ops.descriptors.normalization import layer_norm as ln_module
+
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        # Phase 0 alone
+        single_ln = ln_module.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+        single_out = composite.launch([single_ln])
+        phase0_output = ttnn.to_torch(single_out[0][0])
+        _, pcc_phase0 = comp_pcc(temp, phase0_output, pcc=0.99)
+        print(f"Unfused Phase 0 PCC vs golden phase0: {pcc_phase0}")
+
+        # Phase 1 (unfused, using Phase 0 output as input)
+        tt_phase0_out = single_out[0][0]
+        second_ln = ln_module.layer_norm(
+            tt_phase0_out,
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight2"],
+            bias=test_tensors["tt_bias2"],
+            epsilon=1e-5,
+        )
+        second_out = composite.launch([second_ln])
+        unfused_sequential_output = ttnn.to_torch(second_out[0][0])
+        _, pcc_unfused = comp_pcc(golden, unfused_sequential_output, pcc=0.99)
+        print(f"Unfused sequential LN->LN PCC vs golden: {pcc_unfused}")
+
+        # Compare fused vs unfused sequential
+        _, pcc_fused_vs_unfused = comp_pcc(unfused_sequential_output, torch_output, pcc=0.99)
+        print(f"Fused vs unfused sequential PCC: {pcc_fused_vs_unfused}")
+
+        # Also compare fused output vs single LN output (is Phase 1 doing anything?)
+        _, pcc_fused_vs_single = comp_pcc(phase0_output, torch_output, pcc=0.99)
+        print(f"Fused output vs single LN (Phase 0 only) PCC: {pcc_fused_vs_single}")
+
+        assert passing, f"LN->LN PCC check failed: {pcc}"
+
+    def test_debug_ln_rms_2phase(self, device, test_tensors):
+        """
+        Step 2: 2-phase LayerNorm -> RMSNorm chain.
+        This was the minimal hang case before the ifdef resolution fix.
+        """
+        import os
+        import signal
+
+        from models.experimental.ops.descriptors.sequential import fuse_layernorm_chain
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        ln1 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+        rms1 = rms_norm.rms_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+        )
+
+        fused = fuse_layernorm_chain([ln1, rms1])
+
+        # Dump for inspection
+        output_dir = os.path.join(os.path.dirname(__file__), "gen_kernels")
+        dump_fused_kernels(fused, output_dir, label="debug_ln_rms")
+
+        # Verify the fix: Phase 1 source should NOT contain "#ifdef RMSNORM" or
+        # "cb_reserve_back(cb_xmm, total_buffer_size)" in its body
+        compute_path = os.path.join(output_dir, "debug_ln_rms_kernel_2_compute.cpp")
+        with open(compute_path) as f:
+            compute_src = f.read()
+
+        # After fix, Phase 1 should have the RMSNorm code path where cb_xmm = cb_in
+        assert "cb_xmm = cb_in" in compute_src, "Phase 1 (RMSNorm) should have cb_xmm = cb_in after ifdef resolution"
+
+        # Launch with timeout
+        def _timeout_handler(signum, frame):
+            raise TimeoutError("Device operation timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(60)
+        try:
+            outputs = composite.launch([fused])
+            tt_output = outputs[0][0]
+            torch_output = ttnn.to_torch(tt_output)
+            signal.alarm(0)
+        except TimeoutError:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+            pytest.fail("HANG DETECTED in LN->RMS 2-phase chain")
+        signal.signal(signal.SIGALRM, old_handler)
+
+        # Golden: RMSNorm(LayerNorm(x)) — using ones weights
+        temp = torch_layer_norm(
+            test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"], eps=1e-5
+        )
+        golden = torch_rms_norm(temp, test_tensors["torch_weight2"], eps=1e-5)
+
+        passing, pcc = comp_pcc(golden, torch_output, pcc=0.98)
+        assert passing, f"LN->RMS PCC check failed: {pcc}"
+
+    def test_debug_full_3phase(self, device, test_tensors):
+        """
+        Step 3: Full 3-phase LayerNorm -> RMSNorm -> LayerNorm chain.
+        The original hanging test case.
+        """
+        import os
+        import signal
+
+        from models.experimental.ops.descriptors.sequential import fuse_layernorm_chain
+        from models.experimental.ops.descriptors.normalization import layer_norm, rms_norm
+        from models.experimental.ops.descriptors import composite
+
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        ln1 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+        rms1 = rms_norm.rms_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight2"],
+            epsilon=1e-5,
+        )
+        ln2 = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight3"],
+            bias=test_tensors["tt_bias2"],
+            epsilon=1e-5,
+        )
+
+        fused = fuse_layernorm_chain([ln1, rms1, ln2])
+
+        # Dump for inspection
+        output_dir = os.path.join(os.path.dirname(__file__), "gen_kernels")
+        dump_fused_kernels(fused, output_dir, label="debug_ln_rms_ln")
+
+        # Launch with timeout
+        def _timeout_handler(signum, frame):
+            raise TimeoutError("Device operation timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(60)
+        try:
+            outputs = composite.launch([fused])
+            tt_output = outputs[0][0]
+            torch_output = ttnn.to_torch(tt_output)
+            signal.alarm(0)
+        except TimeoutError:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+            pytest.fail("HANG DETECTED in LN->RMS->LN 3-phase chain")
+        signal.signal(signal.SIGALRM, old_handler)
+
+        # Golden: LayerNorm(RMSNorm(LayerNorm(x))) — using ones weights
+        temp1 = torch_layer_norm(
+            test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"], eps=1e-5
+        )
+        temp2 = torch_rms_norm(temp1, test_tensors["torch_weight2"], eps=1e-5)
+        golden = torch_layer_norm(temp2, test_tensors["torch_weight3"], test_tensors["torch_bias2"], eps=1e-5)
+
+        passing, pcc = comp_pcc(golden, torch_output, pcc=0.98)
+        assert passing, f"LN->RMS->LN PCC check failed: {pcc}"
+
+    def test_debug_single_ln_source_code(self, device, test_tensors):
+        """
+        Step 0: Verify that a single LayerNorm works when its compute kernel
+        is converted from FILE_PATH to SOURCE_CODE.
+
+        If this test hangs, the issue is with SOURCE_CODE kernel compilation.
+        If it passes, SOURCE_CODE works fine and the issue is in multi-phase fusion.
+        """
+        import os
+        import signal
+
+        from models.experimental.ops.descriptors.normalization import layer_norm
+        from models.experimental.ops.descriptors import composite
+        from models.experimental.ops.descriptors.sequential import _read_kernel_source_from_descriptor, _classify_kernel
+
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+        ln_desc = layer_norm.layer_norm(
+            test_tensors["tt_input"],
+            core_range_set=core_range,
+            weight=test_tensors["tt_weight1"],
+            bias=test_tensors["tt_bias1"],
+            epsilon=1e-5,
+        )
+
+        # Find the compute kernel and convert it from FILE_PATH to SOURCE_CODE
+        descriptor = ln_desc.descriptor
+        kernels = list(descriptor.kernels)
+        for kernel in kernels:
+            ktype = _classify_kernel(kernel)
+            if ktype == "compute":
+                # Read the source from the file
+                source = _read_kernel_source_from_descriptor(kernel)
+                assert source, "Could not read compute kernel source"
+                print(f"Compute kernel source: {len(source)} chars")
+                print(f"Original source type: {kernel.source_type}")
+
+                # Convert to SOURCE_CODE
+                kernel.kernel_source = source
+                kernel.source_type = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
+                print(f"Converted to SOURCE_CODE")
+
+                # Dump the source for inspection
+                output_dir = os.path.join(os.path.dirname(__file__), "gen_kernels")
+                os.makedirs(output_dir, exist_ok=True)
+                with open(os.path.join(output_dir, "debug_single_ln_compute.cpp"), "w") as f:
+                    f.write(source)
+                break
+
+        # Launch with timeout
+        def _timeout_handler(signum, frame):
+            raise TimeoutError("Device operation timed out")
+
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(60)
+        try:
+            outputs = composite.launch([ln_desc])
+            tt_output = outputs[0][0]
+            torch_output = ttnn.to_torch(tt_output)
+            signal.alarm(0)
+        except TimeoutError:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+            pytest.fail("HANG DETECTED: Single LN with SOURCE_CODE compute kernel")
+        signal.signal(signal.SIGALRM, old_handler)
+
+        # Golden: single LayerNorm
+        golden = torch_layer_norm(
+            test_tensors["torch_input"], test_tensors["torch_weight1"], test_tensors["torch_bias1"], eps=1e-5
+        )
+        passing, pcc = comp_pcc(golden, torch_output, pcc=0.98)
+        print(f"Single LN SOURCE_CODE PCC: {pcc}")
+        assert passing, f"Single LN SOURCE_CODE PCC check failed: {pcc}"
