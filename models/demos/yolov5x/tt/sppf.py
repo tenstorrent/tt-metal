@@ -58,8 +58,6 @@ class TtnnSPPF:
                 applied_shard_scheme=None if y[-1].is_sharded() else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             )
 
-            # tt_out_dram = ttnn.to_memory_config(tt_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            # y.append(tt_out_dram)
             tt_out = ttnn.sharded_to_interleaved(tt_out, memory_config=ttnn.L1_MEMORY_CONFIG)
             y.append(tt_out)
 

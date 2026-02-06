@@ -24,7 +24,6 @@ sys.modules["models.yolo"] = yolov7_model
 
 
 def init_model_and_runner(model_location_generator, device, model_type, batch_size_per_device):
-    # disable_persistent_kernel_cache()
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
     logger.info(f"Running with batch_size={batch_size} across {num_devices} devices")

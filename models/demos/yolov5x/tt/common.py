@@ -77,9 +77,6 @@ class TtYOLOv5xConv2D:
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED
             )
 
-        # if auto_shard:
-        #     shard_layout = None
-
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
             shard_layout=None if auto_shard else shard_layout,

@@ -220,12 +220,9 @@ class TtYOLOv7Matmul:
     def _prepare_weights_and_bias(self, device):
         """Prepare weights and bias tensors for computation."""
         if not self._weights_processed:
-            # Convert conv weights to tiled layout format for matmul
-            # Replicate the behavior of convert_conv_weight_tensor_to_tiled_layout
-            # which converts [out_channels, in_channels, H, W] to tiled 2D format
+            # Convert conv weights to tiled layout
             pass
 
-            # On mesh device, weights are replicated; use first shard for to_torch (no mesh_composer for replicate)
             if device.get_num_devices() > 1:
                 weight_shards = ttnn.get_device_tensors(self.weights)
                 weights_torch = ttnn.to_torch(weight_shards[0])
@@ -237,49 +234,40 @@ class TtYOLOv7Matmul:
                 else:
                     weights_torch = ttnn.to_torch(ttnn.to_layout(self.weights, ttnn.ROW_MAJOR_LAYOUT))
 
-            # Get original shape - weights are conv format [out_channels, in_channels, H, W]
             if len(weights_torch.shape) == 4:
                 out_channels, in_channels, h, w = weights_torch.shape
-                # Reshape to [out_channels, in_channels*H*W] - flatten spatial dims
+
                 weights_reshaped = weights_torch.view(out_channels, in_channels * h * w)
-                # Transpose to [in_channels*H*W, out_channels] for ttnn.linear (input @ weight)
+
                 weights_transposed = weights_reshaped.T.contiguous()
             elif len(weights_torch.shape) == 2:
-                # Already 2D: [out_features, in_features] -> transpose to [in_features, out_features]
                 weights_transposed = weights_torch.T.contiguous()
             else:
                 raise ValueError(f"Unexpected weight shape: {weights_torch.shape}")
 
-            # Convert to ttnn tensor on host first (without device) with TILE_LAYOUT
-            # This matches the old convert_conv_weight_tensor_to_tiled_layout behavior
             self.weights = ttnn.from_torch(
                 weights_transposed,
-                dtype=ttnn.bfloat16,  # Start with bfloat16 like old code
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
-            # Convert dtype on host (to_dtype only works on host tensors)
             self.weights = ttnn.to_dtype(self.weights, self.weight_dtype)
-            # Move to device after dtype conversion
+
             self.weights = ttnn.to_device(self.weights, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             self._weights_processed = True
 
         if not self._bias_processed:
-            # Convert bias to tiled layout - ensure operations happen on host
-            # On mesh device, bias is replicated; use first shard for to_torch
+            # Convert bias to tiled layout
             if device.get_num_devices() > 1:
                 bias_shards = ttnn.get_device_tensors(self.bias)
                 bias_torch = ttnn.to_torch(bias_shards[0])
             else:
                 bias_torch = ttnn.to_torch(self.bias)
-            # Convert to ttnn tensor on host first
             self.bias = ttnn.from_torch(
                 bias_torch,
-                dtype=ttnn.bfloat16,  # Start with bfloat16
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
-            # Convert dtype on host (to_dtype only works on host tensors)
             self.bias = ttnn.to_dtype(self.bias, self.bias_dtype)
-            # Move to device after dtype conversion
             self.bias = ttnn.to_device(self.bias, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             self._bias_processed = True
 

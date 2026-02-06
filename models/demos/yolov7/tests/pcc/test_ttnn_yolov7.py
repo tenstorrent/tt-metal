@@ -12,7 +12,7 @@ from models.demos.yolov7.common import YOLOV7_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov7.reference import yolov7_model, yolov7_utils
 from models.demos.yolov7.tt.ttnn_yolov7 import ttnn_yolov7
 from models.demos.yolov7.ttnn_yolov7_utils import create_yolov7_input_tensors, custom_preprocessor
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 sys.modules["models.common"] = yolov7_utils
 sys.modules["models.yolo"] = yolov7_model
@@ -37,8 +37,5 @@ def test_yolov7(device, reset_seeds, model_location_generator):
     output = ttnn_model(ttnn_input)[0]
 
     output = ttnn.to_torch(output)
-
-    pcc_result = comp_pcc(torch_output_tensor[0], output)
-    print(f"PCC between torch and ttnn outputs: {pcc_result[1]:.6f}")
 
     assert_with_pcc(torch_output_tensor[0], output, pcc=0.99)

@@ -91,7 +91,7 @@ class TtnnYoloV11:
         x = self.c3k2_4(self.device, x)
         x = self.sppf(self.device, x)
         x = self.c2psa(self.device, x)
-        x10 = x
+        x10 = x  # for input tensor's whose shape is different from each other
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         nhw = x.shape[0] * x.shape[1] * x.shape[2]
