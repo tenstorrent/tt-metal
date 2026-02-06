@@ -8,6 +8,7 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "api/debug/assert.h"
+// #include "api/debug/dprint.h"
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -21,6 +22,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/reduce_custom.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -98,6 +100,7 @@ template <
     uint32_t cols,
     int vector_mode = static_cast<int>(VectorMode::C)>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
+    // DeviceZoneScopedN("REDUCE C NEW");
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -299,6 +302,8 @@ template <
     bool do_reduce = true,
     int vector_mode = (int)VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
+    //  DeviceZoneScopedN("SUB_EXP_BLOCK_BCAST");
+    //  DPRINT << "sub_exp_block_bcast_cols_inplace" << ENDL();
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -388,6 +393,7 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
     // Postcondition: in0_cb empty
     // Postcondition: in1_cb empty
     // Postcondition: out_cb has rows*cols produced
+    // DeviceZoneScopedN("MUL_BLOCK_BCAST_COLS");
 
     constexpr uint32_t num_tiles = rows * cols;
 
@@ -417,6 +423,25 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
         constexpr uint32_t dst_tiles = 1;
         constexpr uint32_t granularity = cols;
 #endif
+
+        // #ifdef DHT_GRANULARITY
+        //         DPRINT << "mul_block_bcast_cols: DHT_GRANULARITY=ENABLED"
+        //                << " dst_tiles=" << dst_tiles
+        //                << " granularity=" << granularity
+        //                << " DHT_GRANULARITY=" << DHT_GRANULARITY
+        //                << " LOG2_DHT_GRANULARITY=" << LOG2_DHT_GRANULARITY
+        //                << " immediate_pop=" << (uint32_t)immediate_pop
+        //                << " pack_accumulate=" << (uint32_t)pack_accumulate
+        //                << ENDL();
+        // #else
+        //         DPRINT << "mul_block_bcast_cols: DHT_GRANULARITY=DISABLED"
+        //                << " dst_tiles=" << dst_tiles
+        //                << " granularity=" << granularity
+        //                << " immediate_pop=" << (uint32_t)immediate_pop
+        //                << " pack_accumulate=" << (uint32_t)pack_accumulate
+        //                << ENDL();
+        // #endif
+
         PACK((llk_pack_reconfig_l1_acc(pack_accumulate)));
         if (!pack_accumulate) {
             cb_reserve_back(out_cb, num_tiles);
@@ -534,18 +559,54 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
  */
 template <bool pop_in1 = true>
 void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    // DeviceZoneScopedN("ADD_BLOCK_INPLACE");
+
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
+    constexpr uint32_t CHUNK_SIZE = 8;  // Max tiles that fit in dest registers
 
     add_tiles_init(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
-        add_tiles(in0_cb, in1_cb, i, i, 0);
-        pack_tile(0, in0_cb);
-        release_dst();
+
+    uint32_t tiles_processed = 0;
+
+    // Process full chunks of 8 tiles
+    while (tiles_processed + CHUNK_SIZE <= num_tiles) {
+        // MATH phase: compute 8 tiles into dest regs 0-7
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < CHUNK_SIZE; i++) {
+            add_tiles(in0_cb, in1_cb, tiles_processed + i, tiles_processed + i, i);
+        }
+        tile_regs_commit();
+
+        // PACK phase
+        tile_regs_wait();
+        for (uint32_t i = 0; i < CHUNK_SIZE; i++) {
+            pack_tile(i, in0_cb);
+        }
+        tile_regs_release();
+
+        tiles_processed += CHUNK_SIZE;
+    }
+
+    // Process remainder (< 8 tiles)
+    uint32_t remainder = num_tiles - tiles_processed;
+    if (remainder > 0) {
+        // MATH phase
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < remainder; i++) {
+            add_tiles(in0_cb, in1_cb, tiles_processed + i, tiles_processed + i, i);
+        }
+        tile_regs_commit();
+
+        // PACK phase
+        tile_regs_wait();
+        for (uint32_t i = 0; i < remainder; i++) {
+            pack_tile(i, in0_cb);
+        }
+        tile_regs_release();
     }
 
     cb_pop_front(in0_cb, num_tiles);
@@ -557,25 +618,64 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 }
 
 void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
-    /**
-     * Given in0_cb and in1_cb, multiply each tile of in0_cb by the corresponding tile of in1_cb
-     * and bcast cols of in1_cb.
-     */
+    DeviceZoneScopedN("MUL_TILES_BCAST_COLS");
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
 
+    constexpr uint32_t CHUNK_SIZE = 8;  // Max tiles that fit in dest registers
+
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
-        mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
-        cb_pop_front(in0_cb, 1);
-        cb_reserve_back(in0_cb, 1);
-        pack_tile(0, in0_cb);
-        cb_push_back(in0_cb, 1);
-        release_dst();
+
+    uint32_t tiles_processed = 0;
+
+    // Process full chunks of 8 tiles
+    while (tiles_processed + CHUNK_SIZE <= num_tiles) {
+        // MATH phase: compute 8 tiles into dest regs 0-7
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < CHUNK_SIZE; i++) {
+            mul_tiles_bcast_cols(in0_cb, in1_cb, i, tiles_processed + i, i);
+        }
+        tile_regs_commit();
+
+        // PACK phase: batch CB operations
+        cb_pop_front(in0_cb, CHUNK_SIZE);
+        cb_reserve_back(in0_cb, CHUNK_SIZE);
+
+        tile_regs_wait();
+        for (uint32_t i = 0; i < CHUNK_SIZE; i++) {
+            pack_tile(i, in0_cb);
+        }
+        tile_regs_release();
+
+        cb_push_back(in0_cb, CHUNK_SIZE);
+
+        tiles_processed += CHUNK_SIZE;
+    }
+
+    // Process remainder (< 8 tiles)
+    uint32_t remainder = num_tiles - tiles_processed;
+    if (remainder > 0) {
+        // MATH phase
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < remainder; i++) {
+            mul_tiles_bcast_cols(in0_cb, in1_cb, i, tiles_processed + i, i);
+        }
+        tile_regs_commit();
+
+        // PACK phase: batch CB operations
+        cb_pop_front(in0_cb, remainder);
+        cb_reserve_back(in0_cb, remainder);
+
+        tile_regs_wait();
+        for (uint32_t i = 0; i < remainder; i++) {
+            pack_tile(i, in0_cb);
+        }
+        tile_regs_release();
+
+        cb_push_back(in0_cb, remainder);
     }
 }
 
@@ -848,28 +948,72 @@ void exp_tile_first_column(uint32_t idst) {
  */
 template <uint32_t scale_fp32>
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    // DeviceZoneScopedN("SUB_EXP_BLOCK");
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
-    sub_tiles_init(in0_cb, in1_cb);
-    exp_tile_init<EXP_APPROX_MODE, false>();
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
+    constexpr uint32_t CHUNK_SIZE = 8;  // Max tiles that fit in dest registers
+
+    {
+        DeviceZoneScopedN("SUB_EXP_BLOCK INIT");
+        sub_tiles_init(in0_cb, in1_cb);
+        exp_tile_init<EXP_APPROX_MODE, false>();
+        cb_wait_front(in0_cb, num_tiles);
+        cb_wait_front(in1_cb, num_tiles);
+        cb_reserve_back(out_cb, num_tiles);
+    }
 
     // Convert scale_fp32 to bf16 scale
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        invalidate_l1_cache();
-        acquire_dst();
-        sub_tiles(in0_cb, in1_cb, i, i, 0);
-        MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));
-        pack_tile(0, out_cb);
-        cb_push_back(out_cb, 1);
-        release_dst();
+    uint32_t tiles_processed = 0;
+
+    tensix_sync();
+    {
+        DeviceZoneScopedN("SUB_EXP_BLOCK LOOP");
+        // Process full chunks of 8 tiles
+        while (tiles_processed + CHUNK_SIZE <= num_tiles) {
+            // MATH phase: compute 8 tiles into dest regs 0-7
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < CHUNK_SIZE; i++) {
+                sub_tiles(in0_cb, in1_cb, tiles_processed + i, tiles_processed + i, i);
+                // MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(i)));
+            }
+            tile_regs_commit();
+
+            // PACK phase
+            tile_regs_wait();
+            for (uint32_t i = 0; i < CHUNK_SIZE; i++) {
+                pack_tile(i, out_cb);
+            }
+            tile_regs_release();
+
+            tiles_processed += CHUNK_SIZE;
+        }
+
+        // Process remainder (< 8 tiles)
+        uint32_t remainder = num_tiles - tiles_processed;
+        if (remainder > 0) {
+            // MATH phase
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < remainder; i++) {
+                sub_tiles(in0_cb, in1_cb, tiles_processed + i, tiles_processed + i, i);
+                // MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(i)));
+            }
+            tile_regs_commit();
+
+            // PACK phase
+            tile_regs_wait();
+            for (uint32_t i = 0; i < remainder; i++) {
+                pack_tile(i, out_cb);
+            }
+            tile_regs_release();
+        }
+        tensix_sync();
     }
+
+    cb_push_back(out_cb, num_tiles);
 }
 
 #ifdef TRISC_MATH
@@ -1175,6 +1319,7 @@ ALWI void matmul_blocks(
     const bool& add_mask = false,
     const uint32_t& mask_cb = 0,
     const uint32_t& zero_cb = 0) {
+    // DeviceZoneScopedN("MATMUL_BLOCKS");
     // precondition: in0_cb has M*K produced
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty

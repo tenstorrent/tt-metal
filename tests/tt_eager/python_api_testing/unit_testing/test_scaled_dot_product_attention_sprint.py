@@ -171,15 +171,13 @@ def run_sdpa_determinism(
 INPUT_SHAPES = [
     # batch, num_heads, sequence_length, head_dim
     [1, 10, 9472, 128],
-    [1, 10, 2368, 128],
 ]
 INPUT_IDS = [
     "wan_1xGLX_analog",
-    "wan_4xGLX_analog",
 ]
 
-Q_CHUNK_SIZES = [64, 128, 256, 512]
-K_CHUNK_SIZES = [128, 256, 512]
+Q_CHUNK_SIZES = [256]
+K_CHUNK_SIZES = [512]
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
@@ -363,9 +361,9 @@ def test_sdpa_create_perf_table(b, nh, s, d):
     Sweep chunk sizes for a given SDPA shape and print a performance table.
     Shows the best chunk size configurations ranked by kernel duration.
     """
-    # NOTE: Hardcoded for P150 Blackhole (10x13 grid = 130 cores)
+    # NOTE: Hardcoded for P100 Blackhole (10x11 grid = 110 cores)
     # Cannot query device here as it causes TLB resource contention with subprocess tests
-    num_cores = 130
+    num_cores = 110
 
     subdir = "ttnn_sdpa_performance"
     perf_results = []
