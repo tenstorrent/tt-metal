@@ -49,7 +49,7 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     // }
 
     {
-        DeviceZoneScopedN("SUB");
+        // DeviceZoneScopedN("SUB");
         tile_regs_acquire();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -63,7 +63,7 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     }
 
     {
-        DeviceZoneScopedN("EXP");
+        // DeviceZoneScopedN("EXP");
         tile_regs_wait();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -75,7 +75,7 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     }
 
     {
-        DeviceZoneScopedN("EXP PACK");
+        // DeviceZoneScopedN("EXP PACK");
         tile_regs_wait();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -246,7 +246,7 @@ void sdpa_inner_loop_8x4x16(
 
             {
                 {
-                    DeviceZoneScopedN("matmul_blocks 2x4 init");
+                    // DeviceZoneScopedN("matmul_blocks 2x4 init");
                     mm_block_init_short(
                         cb_q_in,
                         cb_kt_in,
@@ -258,7 +258,7 @@ void sdpa_inner_loop_8x4x16(
                 MATH(DPRINT << "Matmul for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
 
                 {
-                    DeviceZoneScopedN("matmul_blocks 2x4");
+                    // DeviceZoneScopedN("matmul_blocks 2x4");
 
                     tile_regs_acquire();
                     uint32_t dst_index = 0;
@@ -283,7 +283,7 @@ void sdpa_inner_loop_8x4x16(
                 }
             }
             {
-                DeviceZoneScopedN("Pack 2x4");
+                // DeviceZoneScopedN("Pack 2x4");
                 // Pack the subblock
                 tile_regs_wait();
                 PACK(DPRINT << "Pack for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
@@ -310,7 +310,7 @@ void sdpa_inner_loop_8x4x16(
         //  JUST TO ENSURE THE WORST-CASE IS MEASURED, DO THE ELTWISE MAX EVERY TIME
         static_assert(subblock_h == 2, "subblock_h must be 2");
         {
-            DeviceZoneScopedN("Reduce max 2x16");
+            // DeviceZoneScopedN("Reduce max 2x16");
             reduce_c_row_pair<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qkt_im, cb_identity_scale_in, Sk_chunk_t>(
                 alias_cur_max, alias_prev_max, q_subblock, true /*do_eltwise_max*/);
         }
@@ -376,7 +376,7 @@ void sdpa_inner_loop_8x4x16(
             for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                 MATH(DPRINT << "QKT@V Matmul for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
                 {
-                    DeviceZoneScopedN("QKT@V matmul 2x4");
+                    // DeviceZoneScopedN("QKT@V matmul 2x4");
                     tile_regs_acquire();
 
                     uint32_t dst_index = 0;
@@ -401,7 +401,7 @@ void sdpa_inner_loop_8x4x16(
                 }
 
                 {
-                    DeviceZoneScopedN("QKT@V pack 2x4");
+                    // DeviceZoneScopedN("QKT@V pack 2x4");
                     tile_regs_wait();
                     PACK(DPRINT << "QKT@V Pack for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
                     uint32_t dst_idx = 0;
@@ -482,6 +482,10 @@ void kernel_main() {
                 cb_identity_scale_in,
                 cb_out,
                 scale_fp32>(cb_max_A, cb_max_B, cb_sum_A, cb_sum_B);
+        }
+        {
+            tensix_sync();
+            DeviceZoneScopedN("end");
         }
     }
 }
