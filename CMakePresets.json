@@ -104,7 +104,7 @@
         "description": "Run Clang Tidy on kernel (device) code and apply fix-its",
         "binaryDir": "${sourceDir}/.build/clang-tidy-kernels-fix",
         "cacheVariables": {
-          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--fix;--fix-notes"}
+          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--fix;--fix-errors;--fix-notes"}
         }
       }
     ],
