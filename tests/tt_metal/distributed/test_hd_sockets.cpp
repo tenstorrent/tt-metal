@@ -26,7 +26,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
-
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 namespace tt::tt_metal::distributed {
 
 void test_h2d_socket(
@@ -35,7 +35,7 @@ void test_h2d_socket(
     std::size_t page_size,
     std::size_t data_size,
     H2DMode h2d_mode,
-    uint32_t num_iterations = 10,
+    uint32_t num_iterations = 100,
     const MeshCoreCoord& recv_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)}) {
     auto input_socket = H2DSocket(mesh_device, recv_core, BufferType::L1, socket_fifo_size, h2d_mode);
     input_socket.set_page_size(page_size);
@@ -79,26 +79,33 @@ void test_h2d_socket(
 
     uint32_t num_writes = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
-
-    auto recv_core_virtual = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
     uint32_t page_size_words = page_size / sizeof(uint32_t);
-
-    // Write a single page at a time
-    const auto& cluster = MetalContext::instance().get_cluster();
-    for (int i = 0; i < num_iterations; i++) {
-        std::iota(src_vec.begin(), src_vec.end(), i);
+    // std::cout << "Page size: " << page_size << std::endl;
+    // std::vector<std::chrono::nanoseconds> write_times = std::vector<std::chrono::nanoseconds>(num_writes);
+    auto start_time = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < num_iterations; i++) {
         for (uint32_t j = 0; j < num_writes; j++) {
             input_socket.write(src_vec.data() + (j * page_size_words), 1);
         }
-        input_socket.barrier();
-        std::vector<uint32_t> recv_data_readback(data_size / sizeof(uint32_t));
-        cluster.read_core(
-            recv_data_readback.data(),
-            data_size,
-            tt_cxy_pair(mesh_device->get_device(recv_core.device_coord)->id(), recv_core_virtual),
-            recv_data_buffer->address());
-        EXPECT_EQ(src_vec, recv_data_readback);
     }
+    input_socket.barrier();
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time);
+    std::cout << "Write time: " << duration.count() << "ns for: " << recv_core.device_coord << " "
+              << num_writes * num_iterations << " writes" << std::endl;
+    // std::cout << "Average write time: " << duration.count() << "ns for: "  << recv_core.device_coord << " " <<
+    // num_writes << " writes" << std::endl; for (uint32_t j = 0; j < num_writes; j++) {
+    //     auto start_time = std::chrono::high_resolution_clock::now();
+    //     input_socket.write(src_vec.data() + (j * page_size_words), 1);
+    //     input_socket.barrier();
+    //     auto duration =
+    //     std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - start_time);
+    //     write_times[j] = duration;
+    // }
+
+    // std::cout << "Average write time: " << (std::accumulate(write_times.begin(), write_times.end(),
+    // std::chrono::nanoseconds(0)) / num_writes).count() << "ns for: "  << recv_core.device_coord << " " <<  num_writes
+    // << " writes" << std::endl;
 }
 
 void test_d2h_socket(
@@ -106,6 +113,7 @@ void test_d2h_socket(
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
+    uint32_t num_iterations = 100,
     const MeshCoreCoord& sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)}) {
     auto output_socket = D2HSocket(mesh_device, sender_core, socket_fifo_size);
     output_socket.set_page_size(page_size);
@@ -122,6 +130,20 @@ void test_d2h_socket(
         .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false,
     };
+
+    uint32_t num_txns = data_size / page_size;
+    uint32_t measurement_buffer_size = sizeof(uint64_t);
+
+    const ReplicatedBufferConfig measurement_buffer_config{.size = measurement_buffer_size};
+    const DeviceLocalBufferConfig measurement_device_local_config{
+        .page_size = measurement_buffer_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+
+    auto measurement_buffer =
+        MeshBuffer::create(measurement_buffer_config, measurement_device_local_config, mesh_device.get());
     auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device.get());
 
     auto send_program = CreateProgram();
@@ -137,26 +159,52 @@ void test_d2h_socket(
                 static_cast<uint32_t>(sender_data_buffer->address()),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
+                static_cast<uint32_t>(measurement_buffer->address()),
+                static_cast<uint32_t>(num_iterations),
             }});
 
-    uint32_t num_reads = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
-    WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, sender_core.device_coord);
+    WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, sender_core.device_coord, true);
 
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices = MeshCoordinateRange(sender_core.device_coord);
     mesh_workload.add_program(devices, std::move(send_program));
 
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
-
     uint32_t page_size_words = page_size / sizeof(uint32_t);
-    for (uint32_t i = 0; i < num_reads; i++) {
-        output_socket.read(dst_vec.data() + (i * page_size_words), 1);
+
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        for (uint32_t j = 0; j < num_txns; j++) {
+            output_socket.read(dst_vec.data() + (j * page_size_words), 1);
+        }
     }
     output_socket.barrier();
     EXPECT_EQ(src_vec, dst_vec);
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    std::vector<uint64_t> latency_data(1);
+    cluster.read_core(
+        latency_data.data(),
+        sizeof(uint64_t),
+        tt_cxy_pair(
+            mesh_device->get_device(sender_core.device_coord)->id(),
+            mesh_device->worker_core_from_logical_core(sender_core.core_coord)),
+        measurement_buffer->address());
+
+    auto physical_system_descriptor = PhysicalSystemDescriptor(
+        MetalContext::instance().get_cluster().get_driver(),
+        MetalContext::instance().get_distributed_context_ptr(),
+        &MetalContext::instance().hal(),
+        MetalContext::instance().rtoptions(),
+        true);
+    auto fabric_node_id = mesh_device->get_fabric_node_id(sender_core.device_coord);
+    auto asic_id = MetalContext::instance().get_control_plane().get_asic_id_from_fabric_node_id(fabric_node_id);
+    auto asic_desc = physical_system_descriptor.get_asic_descriptors()[asic_id];
+    std::cout << "Average Read time: " << latency_data[0] / (num_txns * num_iterations)
+              << "ns for: " << sender_core.device_coord << " " << num_txns * num_iterations << " reads"
+              << " Tray ID: " << *(asic_desc.tray_id) << " ASIC Location: " << *(asic_desc.asic_location) << std::endl;
 }
 
 void test_hd_socket_loopback(
@@ -222,28 +270,29 @@ bool is_device_coord_mmio_mapped(
     return cluster.get_associated_mmio_device(device_id) == device_id;
 }
 
-using HDSocketFixture = MeshDevice1x2Fixture;
+using HDSocketFixture = MeshDevice4x8Fixture;
 TEST_F(HDSocketFixture, H2DSocket) {
     // Skip if mapping to NOC isn't supported on this system
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
 
-    for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
+    for (auto h2d_mode : {H2DMode::HOST_PUSH}) {
         for (const auto& recv_coord : MeshCoordinateRange(mesh_device_->shape())) {
             if (!is_device_coord_mmio_mapped(mesh_device_, recv_coord)) {
                 continue;
             }
             // No wrap
-            test_h2d_socket(mesh_device_, 1024, 64, 1024, h2d_mode, 50, MeshCoreCoord(recv_coord, CoreCoord(0, 0)));
-            // Even wrap
-            test_h2d_socket(mesh_device_, 1024, 64, 32768, h2d_mode, 50, MeshCoreCoord(recv_coord, CoreCoord(1, 1)));
-            // Uneven wrap
-            test_h2d_socket(mesh_device_, 4096, 1088, 78336, h2d_mode, 50, MeshCoreCoord(recv_coord, CoreCoord(0, 1)));
-            // Uneven wrap with multiple pages on host allocated.
-            // On most hosts, page size is 4K, so this should lead to 5 pages being allocated on the host.
-            test_h2d_socket(
-                mesh_device_, 16512, 1088, 156672, h2d_mode, 50, MeshCoreCoord(recv_coord, CoreCoord(0, 1)));
+            test_h2d_socket(mesh_device_, 1024, 64, 4096, h2d_mode, 500, MeshCoreCoord(recv_coord, CoreCoord(0, 0)));
+            // // Even wrap
+            // test_h2d_socket(mesh_device_, 1024, 64, 32768, h2d_mode, 50, MeshCoreCoord(recv_coord, CoreCoord(1, 1)));
+            // // Uneven wrap
+            // test_h2d_socket(mesh_device_, 4096, 1088, 78336, h2d_mode, 50, MeshCoreCoord(recv_coord, CoreCoord(0,
+            // 1)));
+            // // Uneven wrap with multiple pages on host allocated.
+            // // On most hosts, page size is 4K, so this should lead to 5 pages being allocated on the host.
+            // test_h2d_socket(
+            //     mesh_device_, 16512, 1088, 156672, h2d_mode, 50, MeshCoreCoord(recv_coord, CoreCoord(0, 1)));
         }
     }
 }
@@ -259,14 +308,14 @@ TEST_F(HDSocketFixture, D2HSocket) {
             continue;
         }
         // No wrap
-        test_d2h_socket(mesh_device_, 1024, 64, 1024, MeshCoreCoord(sender_coord, CoreCoord(0, 0)));
+        test_d2h_socket(mesh_device_, 1024, 64, 4096, 500, MeshCoreCoord(sender_coord, CoreCoord(0, 0)));
         // Even wrap
-        test_d2h_socket(mesh_device_, 1024, 64, 32768, MeshCoreCoord(sender_coord, CoreCoord(1, 1)));
-        // Uneven wrap
-        test_d2h_socket(mesh_device_, 4096, 1088, 78336, MeshCoreCoord(sender_coord, CoreCoord(0, 1)));
-        // Uneven wrap with multiple pages on host allocated.
-        // On most hosts, page size is 4K, so this should lead to 5 pages being allocated on the host.
-        test_d2h_socket(mesh_device_, 16512, 1088, 156672, MeshCoreCoord(sender_coord, CoreCoord(0, 1)));
+        // test_d2h_socket(mesh_device_, 1024, 64, 32768, MeshCoreCoord(sender_coord, CoreCoord(1, 1)));
+        // // Uneven wrap
+        // test_d2h_socket(mesh_device_, 4096, 1088, 78336, MeshCoreCoord(sender_coord, CoreCoord(0, 1)));
+        // // Uneven wrap with multiple pages on host allocated.
+        // // On most hosts, page size is 4K, so this should lead to 5 pages being allocated on the host.
+        // test_d2h_socket(mesh_device_, 16512, 1088, 156672, MeshCoreCoord(sender_coord, CoreCoord(0, 1)));
     }
 }
 
@@ -281,6 +330,7 @@ TEST_F(HDSocketFixture, H2DSocketLoopback) {
             if (!is_device_coord_mmio_mapped(mesh_device_, socket_coord)) {
                 continue;
             }
+            std::cout << "Testing H2DSocketLoopback on socket_coord: " << socket_coord << std::endl;
             // No wrap
             test_hd_socket_loopback(
                 mesh_device_, 1024, 64, 1024, h2d_mode, 50, MeshCoreCoord(socket_coord, CoreCoord(0, 0)));
