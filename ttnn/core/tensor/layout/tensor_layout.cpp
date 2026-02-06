@@ -172,6 +172,12 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
         return {};
     }
 
+    log_debug(tt::LogOp, "Computing buffer sharding args for shape {}", shape);
+    log_debug(tt::LogOp, "Memory config: {}", memory_config_);
+    log_debug(tt::LogOp, "Alignment: {}", alignment_);
+    log_debug(tt::LogOp, "Page config: {}", page_config_);
+    log_debug(tt::LogOp, "Dtype: {}", dtype_);
+
     TT_FATAL(
         memory_config_.shard_spec().has_value() || memory_config_.nd_shard_spec().has_value(),
         "MemoryConfig must have Shard Spec specified for sharded memory layout");

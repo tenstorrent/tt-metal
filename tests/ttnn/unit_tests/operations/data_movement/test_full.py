@@ -79,9 +79,12 @@ def test_full_float(device, input_shape, fill_value, tt_dtype):
 # TODO (issue #16579): Add program cache test when ttnn.full is run on device
 
 
-@pytest.mark.parametrize("fill_value", [1])
+@pytest.mark.parametrize("fill_value", FILL_FLOAT_VALUES)
 @pytest.mark.parametrize("tt_dtype", [ttnn.float32, ttnn.bfloat16])
-@pytest.mark.parametrize("tensor_shape", [[2, 2, 256, 512]])
+@pytest.mark.parametrize(
+    "tensor_shape",
+    [[2, 2, 256, 512], [32, 32]],
+)
 @pytest.mark.parametrize(
     "shard_orientation",
     [
@@ -89,6 +92,7 @@ def test_full_float(device, input_shape, fill_value, tt_dtype):
         ttnn.ShardOrientation.COL_MAJOR,
     ],
 )
+@pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize(
     "buffer_type,shard_core_grid",
     [
@@ -114,16 +118,30 @@ def test_full_float(device, input_shape, fill_value, tt_dtype):
         ),
     ],
 )
-def test_full_nd_sharded(device, tensor_shape, fill_value, tt_dtype, shard_orientation, shard_core_grid, buffer_type):
+def test_full_nd_sharded(
+    device,
+    tensor_shape,
+    fill_value,
+    tt_dtype,
+    shard_orientation,
+    shard_core_grid,
+    buffer_type,
+    tensor_layout,
+):
     torch_dtype = tt_dtype_to_torch_dtype[tt_dtype]
     torch_output = torch.full(tensor_shape, fill_value, dtype=torch_dtype)
-    import logging
+    shard_dims = list(range(len(tensor_shape) - 2, len(tensor_shape)))
 
-    shard_dims = list(range(len(tensor_shape) - 2, len(tensor_shape)))  # shard last two dims
-    logging.info(f"shard_dims: {shard_dims}")
     tensor_spec = ttnn.TensorSpec(
-        shape=tensor_shape, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, buffer_type=buffer_type
-    ).sharded_across_dims(shard_dims, shard_core_grid, shard_orientation)
+        shape=tensor_shape,
+        dtype=tt_dtype,
+        layout=tensor_layout,
+        buffer_type=buffer_type,
+    ).sharded_across_dims(
+        shard_dims,
+        shard_core_grid,
+        shard_orientation,
+    )
 
     assert tensor_spec.memory_config.nd_shard_spec is not None
 
@@ -135,13 +153,14 @@ def test_full_nd_sharded(device, tensor_shape, fill_value, tt_dtype, shard_orien
         device=device,
         memory_config=tensor_spec.memory_config,
     )
+
     assert ttnn.is_tensor_storage_on_device(tt_output)
     tt_output_cpu = ttnn.to_torch(tt_output)
 
     assert torch.equal(torch_output, tt_output_cpu)
 
 
-@pytest.mark.parametrize("fill_value", [1])
+@pytest.mark.parametrize("fill_value", FILL_FLOAT_VALUES)
 @pytest.mark.parametrize("tt_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "shard_orientation",
@@ -151,21 +170,31 @@ def test_full_nd_sharded(device, tensor_shape, fill_value, tt_dtype, shard_orien
     ],
 )
 @pytest.mark.parametrize(
-    "tensor_shape,shard_shape,buffer_type,shard_core_grid",
+    "tensor_layout,tensor_shape,shard_shape,buffer_type,shard_core_grid",
     [
         (
+            ttnn.TILE_LAYOUT,
             [2, 2, 256, 512],
             [32, 32],
             ttnn.BufferType.L1,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
         ),
         (
+            ttnn.ROW_MAJOR_LAYOUT,
+            [2, 2, 256, 512],
+            [32, 32],
+            ttnn.BufferType.L1,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+        (
+            ttnn.TILE_LAYOUT,
             [8192, 512],
             [32, 32],
             ttnn.BufferType.DRAM,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
         ),
         (
+            ttnn.TILE_LAYOUT,
             [32, 32],
             [512, 512],
             ttnn.BufferType.L1,
@@ -182,6 +211,7 @@ def test_full_nd_sharded_manual_sharding(
     shard_orientation,
     shard_core_grid,
     buffer_type,
+    tensor_layout,
 ):
     torch_dtype = tt_dtype_to_torch_dtype[tt_dtype]
     torch_output = torch.full(tensor_shape, fill_value, dtype=torch_dtype)
@@ -192,7 +222,7 @@ def test_full_nd_sharded_manual_sharding(
         tensor_shape,
         fill_value,
         dtype=tt_dtype,
-        layout=ttnn.TILE_LAYOUT,
+        layout=tensor_layout,
         device=device,
         memory_config=memory_config,
     )
