@@ -45,14 +45,14 @@ jobs:
 
       - name: Run Falcon7b Demo via tt-metalium-models
         shell: bash
-        timeout-minutes: 30
+        timeout-minutes: 60
         env:
           HF_CACHE_DIR: ${{ runner.temp }}/hf_cache
         run: |
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
           tt-metalium-models \
-            -c "pytest --disable-warnings -q -s \
+            -c "pytest --timeout=1200 --disable-warnings -q -s \
               --input-method=json \
               --input-path='models/demos/ttnn_falcon7b/demo/input_data.json' \
               models/demos/ttnn_falcon7b/demo/demo.py::test_demo"

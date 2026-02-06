@@ -87,6 +87,7 @@ on:
       - "(APC) Select and Run Post-Commit Tests"
       - "Git bisect dispatch"
       - "Custom test dispatch"
+      - "Validate installation step from instructions"
     types:
       - completed
 
