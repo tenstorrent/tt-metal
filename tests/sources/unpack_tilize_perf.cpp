@@ -57,7 +57,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
                 const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000); // TODO SS<-LP use PERF_ADDRESS here
                 for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
                 {
-                    _llk_unpack_tilize_(tile_row_addr, j, formats.unpack_src, 0, FACE_R_DIM, 4, false);
+                    _llk_unpack_tilize_(tile_row_addr, j, formats.unpack_src, formats.unpack_dst, 0, FACE_R_DIM, 4, false);
                 }
             }
         }

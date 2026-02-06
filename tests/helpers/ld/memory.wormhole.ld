@@ -13,7 +13,7 @@ NCRISC_IMEM = 0xFFC00000;
 NCRISC_IMEM_LENGTH = 16K;
 
 L1_BASE = 0x0;
-RUNTIME_ARGS_START = 0x64000;
+RUNTIME_ARGS_START = 0x20000;
 UNDEFINED = 0;
 
 /* The address space layout goes as follows:

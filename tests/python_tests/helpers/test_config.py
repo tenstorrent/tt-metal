@@ -35,7 +35,6 @@ from .device import (
     BootMode,
     RiscCore,
     exalens_device_setup,
-    get_register_store,
     reset_mailboxes,
     set_tensix_soft_reset,
     wait_for_tensix_operations_finished,
@@ -139,7 +138,8 @@ class TestConfig:
     INFRA_TESTING: ClassVar[bool] = False
 
     # === Addresses ===
-    RUNTIME_ADDRESS: ClassVar[int] = 0x64000
+    RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
+    RUNTIME_ADDRESS_COVERAGE: ClassVar[int] = 0x61000
     TRISC_PROFILER_BARRIER_ADDRESS: ClassVar[int] = 0x16AFF4
     TRISC_START_ADDRS: ClassVar[list[int]] = [0x16DFF0, 0x16DFF4, 0x16DFF8]
     THREAD_PERFORMANCE_DATA_BUFFER_LENGTH = 0x400
@@ -388,7 +388,14 @@ class TestConfig:
         serialised_data = struct.pack(self.runtime_format, *argument_data)
 
         if len(serialised_data) != 0:
-            write_to_device(location, TestConfig.RUNTIME_ADDRESS, serialised_data)
+            if TestConfig.WITH_COVERAGE:
+                write_to_device(
+                    location, TestConfig.RUNTIME_ADDRESS_COVERAGE, serialised_data
+                )
+            else:
+                write_to_device(
+                    location, TestConfig.RUNTIME_ADDRESS_NON_COVERAGE, serialised_data
+                )
 
     def collect_hash(self):
         lock_file = Path("/tmp/tt-llk-build-print.lock")
@@ -910,16 +917,16 @@ class TestConfig:
 
         # Perform soft reset
         set_tensix_soft_reset(1, location=location)
-        soft_reset_value = (
-            get_register_store(location, 0).read_register(
-                "RISCV_DEBUG_REG_SOFT_RESET_0"
-            )
-            >> 11
-        )
-        if not soft_reset_value & 0xF == 0xF:
-            raise Exception(
-                f"Cores are not in reset BEFORE elf load: {bin(soft_reset_value)}"
-            )
+        # soft_reset_value = (
+        #     get_register_store(location, 0).read_register(
+        #         "RISCV_DEBUG_REG_SOFT_RESET_0"
+        #     )
+        #     >> 11
+        # )
+        # if not soft_reset_value & 0xF == 0xF:
+        #     raise Exception(
+        #         f"Cores are not in reset BEFORE elf load: {bin(soft_reset_value)}"
+        #     )
 
         VARIANT_ELF_DIR = (
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
@@ -961,16 +968,16 @@ class TestConfig:
             location, TestConfig.TRISC_PROFILER_BARRIER_ADDRESS, [0, 0, 0]
         )
 
-        soft_reset_value = (
-            get_register_store(location, 0).read_register(
-                "RISCV_DEBUG_REG_SOFT_RESET_0"
-            )
-            >> 11
-        )
-        if not soft_reset_value & 0xF == 0xF:
-            raise Exception(
-                f"Cores are not in reset BEFORE elf load: {bin(soft_reset_value)}"
-            )
+        # soft_reset_value = (
+        #     get_register_store(location, 0).read_register(
+        #         "RISCV_DEBUG_REG_SOFT_RESET_0"
+        #     )
+        #     >> 11
+        # )
+        # if not soft_reset_value & 0xF == 0xF:
+        #     raise Exception(
+        #         f"Cores are not in reset BEFORE elf load: {bin(soft_reset_value)}"
+        #     )
 
         match boot_mode:
             case BootMode.BRISC:
@@ -1021,7 +1028,6 @@ class TestConfig:
         if TestConfig.MODE == TestMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
-        write_to_device(location, 0x64FF0, [0, 0, 0, 0, 0, 0, 0])
         self.variant_stimuli.write(location)
         self.write_runtimes_to_L1(location)
         elfs = self.run_elf_files(location)

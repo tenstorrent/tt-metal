@@ -136,7 +136,7 @@ jobs:
                 --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}-compile.xml .
 
           echo "Running tests"
-          pytest $COVERAGE_FLAG --compile-consumer -n 10 \
+          pytest $COVERAGE_FLAG --compile-consumer -x \
                 -m "${{ inputs.pytest_markers }}" \
                 ${{ inputs.random_order && '--random-order-bucket=global' || '' }} \
                 --splits $SPLITS --group ${{ matrix.test_group }} $DURATIONS_FLAG \
