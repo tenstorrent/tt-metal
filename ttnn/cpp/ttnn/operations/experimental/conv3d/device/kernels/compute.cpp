@@ -10,6 +10,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
