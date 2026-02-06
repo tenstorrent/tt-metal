@@ -6,11 +6,11 @@
 
 #include <array>
 #include <cstddef>
-#include <limits>
 #include <optional>
 #include <type_traits>
 
 #include "new_dprint_structures.h"
+#include "hostdevcommon/dprint_common.h"
 
 #define NEW_DPRINT_STRINGS_SECTION_NAME ".dprint_strings"
 #define NEW_DPRINT_STRINGS_INFO_SECTION_NAME ".dprint_strings_info"
@@ -117,9 +117,10 @@
             "Too many DPRINT calls, exceeds limit");                                                                 \
         header.info_id = dprint_info_index;                                                                          \
         uint16_t header_value = header.value;                                                                        \
-        /* TODO: Get buffer read and write pointers */                                                               \
-        /* TODO: Write dprint message header to dprint buffer */                                                     \
-        /* TODO: Write dprint message to dprint buffer */                                                            \
+        /* Get dprint buffer and write header and arguments */                                                       \
+        volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer = get_debug_print_buffer();                            \
+        dprint_detail::serialization::serialize_argument(dprint_buffer, header_value);                               \
+        dprint_detail::serialization::serialize_arguments(dprint_buffer, ##__VA_ARGS__);                             \
         /* TODO: Release buffer lock */                                                                              \
     }
 
@@ -716,5 +717,83 @@ constexpr auto update_format_string_from_args(const char (&format)[N], const Arg
 }
 
 }  // namespace formatting
+
+namespace serialization {
+
+void serialize_argument(
+    volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer, const uint8_t* argument_data, uint32_t size) {
+    volatile uint8_t* start_pointer = dprint_buffer->data;
+    volatile uint8_t* end_pointer = dprint_buffer->data + sizeof(dprint_buffer->data);
+    volatile uint8_t* write_pointer = dprint_buffer->data + dprint_buffer->aux.wpos;
+    volatile uint8_t* read_pointer = dprint_buffer->data + dprint_buffer->aux.rpos;
+
+    if (write_pointer >= read_pointer) {
+        if (write_pointer + size <= end_pointer) {
+            // We have enough space to write the argument
+            for (uint32_t i = 0; i < size; ++i) {
+                write_pointer[i] = argument_data[i];
+            }
+            write_pointer += size;
+            dprint_buffer->aux.wpos = write_pointer - start_pointer;
+            return;
+        }
+
+        // Write what we can and then wrap around
+        uint32_t space_to_end = end_pointer - write_pointer;
+        if (space_to_end > 0) {
+            for (uint32_t i = 0; i < space_to_end; ++i) {
+                write_pointer[i] = argument_data[i];
+            }
+            argument_data += space_to_end;
+            size -= space_to_end;
+        }
+        write_pointer = start_pointer;  // Wrap around to the beginning of the buffer
+    }
+
+    // Now write the remaining argument data at the beginning of the buffer
+    if (write_pointer + size > read_pointer) {
+        // We need to wait for the reader to advance, so that we don't overwrite unread data.
+        WAYPOINT("DPW");
+        while (dprint_buffer->aux.wpos + size > dprint_buffer->aux.rpos) {
+            invalidate_l1_cache();
+#if defined(COMPILE_FOR_ERISC)
+            internal_::risc_context_switch();
+#endif
+            // If we've closed the device, we've now disabled printing on it, don't hang.
+            if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+                return;
+            };  // wait for host to catch up to wpos with it's rpos
+        }
+        WAYPOINT("DPD");
+    }
+
+    for (uint32_t i = 0; i < size; ++i) {
+        write_pointer[i] = argument_data[i];
+    }
+    write_pointer += size;
+    dprint_buffer->aux.wpos = write_pointer - start_pointer;
+}
+
+// Helper to serialize a single argument based on its type info
+template <typename ArgumentType>
+void serialize_argument(volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer, const ArgumentType& argument) {
+    serialize_argument(
+        dprint_buffer,
+        reinterpret_cast<const uint8_t*>(&argument),
+        formatting::get_type_info<ArgumentType>().size_in_bytes);
+}
+
+template <>
+void serialize_argument(volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer, const bool& argument) {
+    serialize_argument(dprint_buffer, static_cast<uint8_t>(argument ? 1 : 0));
+}
+
+// Variadic template to serialize all arguments in order
+template <typename... Args>
+void serialize_arguments(volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer, Args&&... args) {
+    (serialize_argument(dprint_buffer, std::forward<Args>(args)), ...);
+}
+
+}  // namespace serialization
 
 }  // namespace dprint_detail

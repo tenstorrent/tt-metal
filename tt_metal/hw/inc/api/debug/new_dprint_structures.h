@@ -14,7 +14,7 @@ struct DPrintStringInfo {
     const char* format_string_ptr;
     const char* file;
     std::uint32_t line;
-};
+} __attribute__((packed));
 
 struct DPrintHeader {
     static constexpr uint16_t max_info_id_value = 1023;
@@ -23,10 +23,10 @@ struct DPrintHeader {
             uint8_t is_kernel : 1;  // 0 = firmware, 1 = kernel
             uint8_t risc_id : 5;    // 0-31 risc id (supporting quasar)
             uint16_t info_id : 10;  // Index into .dprint_strings_info (max 1024 entries)
-        };
+        } __attribute__((packed));
         uint16_t value;
     };
-};
+} __attribute__((packed));
 
 static_assert(sizeof(DPrintHeader) == sizeof(uint16_t));
 
