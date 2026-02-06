@@ -1,4 +1,4 @@
-name: Auto Triage
+name: (triage) Auto Triage
 
 on:
   workflow_dispatch:
