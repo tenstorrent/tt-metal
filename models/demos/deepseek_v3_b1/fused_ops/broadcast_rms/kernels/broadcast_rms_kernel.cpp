@@ -40,9 +40,9 @@ void kernel_main() {
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
 
     bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
-        get_arg_val<uint32_t>(0),  // tensor_address0
-        get_arg_val<uint32_t>(1),  // tile_id_start
-        get_arg_val<uint32_t>(2),  // tile_id_end
+        get_common_arg_val<uint32_t>(0),  // tensor_address0
+        get_common_arg_val<uint32_t>(1),  // tile_id_start
+        get_common_arg_val<uint32_t>(2),  // tile_id_end
     };
 #endif
 
@@ -76,23 +76,23 @@ void kernel_main() {
 
     deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
 
-        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
-            get_arg_val<uint32_t>(0),   // tensor_address0
-            get_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-            get_arg_val<uint32_t>(2),   // tile_id_start
-            get_arg_val<uint32_t>(3),   // tile_id_end
-            get_arg_val<uint32_t>(4),   // wait_output_semaphore
-            get_arg_val<uint32_t>(5),   // reset_global_semaphore
-            get_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
-            get_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
-            get_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
-            get_arg_val<uint32_t>(9),   // barrier_sem
-            get_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
-            get_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
-            get_arg_val<uint32_t>(12),  // ring_index
-            get_arg_val<uint32_t>(13),  // secondary_sync_sem
-            get_arg_val<uint32_t>(14),  // num_connections
-        };
+    bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
+        get_common_arg_val<uint32_t>(0),   // tensor_address0
+        get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
+        get_common_arg_val<uint32_t>(2),   // tile_id_start
+        get_common_arg_val<uint32_t>(3),   // tile_id_end
+        get_common_arg_val<uint32_t>(4),   // wait_output_semaphore
+        get_common_arg_val<uint32_t>(5),   // reset_global_semaphore
+        get_common_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
+        get_common_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
+        get_common_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
+        get_common_arg_val<uint32_t>(9),   // barrier_sem
+        get_common_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
+        get_common_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
+        get_common_arg_val<uint32_t>(12),  // ring_index
+        get_common_arg_val<uint32_t>(13),  // secondary_sync_sem
+        get_common_arg_val<uint32_t>(14),  // num_connections
+    };
 #endif
 
         using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
@@ -112,8 +112,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("rmsnorm_input_cb"),
         get_named_compile_time_arg_val("rmsnorm_gamma_cb"),
         get_named_compile_time_arg_val("rmsnorm_output_cb"),
-        get_arg_val<uint32_t>(0),  // epsilon (runtime arg 0)
-        get_arg_val<float>(1),     // scalar (1/N)
+        get_common_arg_val<uint32_t>(0),  // epsilon (common runtime arg 0)
+        get_common_arg_val<float>(1),     // scalar (1/N)
     };
 
 #if !defined(SKIP_CCL)
