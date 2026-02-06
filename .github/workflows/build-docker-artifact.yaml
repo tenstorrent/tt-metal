@@ -90,6 +90,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+            .github/workflows/build-docker-artifact.yaml
+            dockerfile
+          sparse-checkout-cone-mode: false
 
       - name: Parse platform
         id: platform
@@ -292,6 +298,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/push-latest-image-to-ghcr
+          sparse-checkout-cone-mode: false
 
       - name: "Push latest CI Build tag"
         if: needs.check-docker-images.outputs.ci-build-exists == 'true'

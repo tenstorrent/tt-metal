@@ -41,6 +41,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          sparse-checkout: .github
+          sparse-checkout-cone-mode: false
 
       - name: Run auto triage
         uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@main

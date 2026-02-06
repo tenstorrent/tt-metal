@@ -282,6 +282,9 @@ jobs:
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
 
       - name: Download artifacts from workflow run
         id: download

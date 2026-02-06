@@ -34,6 +34,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+            infra
+          sparse-checkout-cone-mode: false
 
       - name: Calculate start date (default to 3 days ago)
         id: calc-date

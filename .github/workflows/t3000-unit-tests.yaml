@@ -63,9 +63,17 @@ permissions:
 
 jobs:
   build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
+    runs-on: ubuntu-latest
     permissions:
       packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/workflows/build-artifact.yaml
+            .github/actions
+          sparse-checkout-cone-mode: false
+    uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}

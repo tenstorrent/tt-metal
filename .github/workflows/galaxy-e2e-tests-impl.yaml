@@ -27,7 +27,12 @@ jobs:
       - name: Checkout the repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          sparse-checkout: |
+            .github/scripts
+            .github/time_budget.yaml
+            .github/sku_config.yaml
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: false
       - name: Install dependencies
         run: |
           pip3 install PyYAML

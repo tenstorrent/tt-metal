@@ -21,6 +21,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Fetch all history for git tag operations
+          sparse-checkout: .github/actions/calculate-version
+          sparse-checkout-cone-mode: false
 
       # Clean up existing tags to simulate a repository with no tags
       - name: Remove all existing tags for clean test
@@ -143,6 +145,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          sparse-checkout: .github/actions/calculate-version
+          sparse-checkout-cone-mode: false
 
       - name: Setup git
         run: |
@@ -251,6 +255,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          sparse-checkout: .github/actions/calculate-version
+          sparse-checkout-cone-mode: false
 
       - name: Setup git
         run: |
@@ -400,6 +406,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          sparse-checkout: .github/actions/calculate-version
+          sparse-checkout-cone-mode: false
 
       - name: Setup git
         run: |
@@ -554,6 +562,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          sparse-checkout: .github/actions/calculate-version
+          sparse-checkout-cone-mode: false
 
       - name: Setup git
         run: |
@@ -624,6 +634,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          sparse-checkout: .github/actions/calculate-version
+          sparse-checkout-cone-mode: false
 
       - name: Setup git
         run: |
@@ -682,6 +694,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          sparse-checkout: .github/actions/calculate-version
+          sparse-checkout-cone-mode: false
 
       - name: Setup git
         run: |
@@ -911,6 +925,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          sparse-checkout: .github/actions/calculate-version
+          sparse-checkout-cone-mode: false
 
       - name: Setup git
         run: |
