@@ -205,14 +205,14 @@ class RunTimeOptions {
     // Dispatch kernel progress update period in milliseconds (default 100ms)
     uint32_t dispatch_progress_update_ms = 100;
 
-    // Consolidated target device selection
-    TargetDevice runtime_target_device_ = TargetDevice::Silicon;
-
     std::atomic<bool> test_mode_enabled = false;
     // Force disables using DMA for reads and writes
     std::atomic<bool> disable_dma_ops = false;
 
-    // 1-byte aligned: bool
+    // 1-byte aligned: bool, uint8_t enums
+    // Consolidated target device selection
+    TargetDevice runtime_target_device_ = TargetDevice::Silicon;
+
     bool is_cache_dir_env_var_set = false;
     bool is_kernel_dir_env_var_set = false;
     bool is_core_grid_override_todeprecate_env_var_set = false;
