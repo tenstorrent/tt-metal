@@ -30,7 +30,12 @@ import ml_dtypes
 
 import ttnn
 import ttml
-from ttml.models.nanogpt import NanoGPT, NanoGPTConfig, create_nanogpt
+from ttml.models.nanogpt import (
+    NanoGPT,
+    NanoGPTConfig,
+    NanoGPTExperimentalConfig,
+    create_nanogpt,
+)
 from ttml.modules import Parameter
 from ttml.common.utils import round_up_to_tile, get_tt_metal_home
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
@@ -381,36 +386,42 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
     config.model_type = transformer_config.get("model_type", config.model_type)
     config.model_path = transformer_config.get("model_path", config.model_path)
 
-    if config.model_type != "gpt2":
-        raise ValueError(f"Unsupported model type: {config.model_type}")
-
-    # GPT2 config fields are directly under transformer_config
-    config.vocab_size = transformer_config.get("vocab_size", config.vocab_size)
-    config.embedding_dim = transformer_config.get("embedding_dim", config.embedding_dim)
-    config.num_blocks = transformer_config.get("num_blocks", config.num_blocks)
-    config.num_heads = transformer_config.get("num_heads", config.num_heads)
-    config.dropout_prob = transformer_config.get("dropout_prob", config.dropout_prob)
-    config.bias = transformer_config.get("bias", config.bias)
-    config.max_sequence_length = transformer_config.get(
-        "max_sequence_length", config.max_sequence_length
-    )
-    config.positional_embedding_type = transformer_config.get(
-        "positional_embedding_type", config.positional_embedding_type
-    )
-
-    tc_runner_type = transformer_config.get("runner_type")
-    if tc_runner_type is not None:
-        config.runner_type = ttml.models.RunnerType.from_string(tc_runner_type)
-
-    tc_weight_tying = transformer_config.get("weight_tying")
-    if tc_weight_tying is not None:
-        config.weight_tying = ttml.models.WeightTyingType.from_string(tc_weight_tying)
-
-    exp_config = transformer_config.get("experimental")
-    if isinstance(exp_config, dict):
-        config.experimental.use_composite_layernorm = exp_config.get(
-            "use_composite_layernorm", config.experimental.use_composite_layernorm
+    if config.model_type == "gpt2":
+        # GPT2 config fields are directly under transformer_config
+        config.vocab_size = transformer_config.get("vocab_size", config.vocab_size)
+        config.embedding_dim = transformer_config.get(
+            "embedding_dim", config.embedding_dim
         )
+        config.num_blocks = transformer_config.get("num_blocks", config.num_blocks)
+        config.num_heads = transformer_config.get("num_heads", config.num_heads)
+        config.dropout_prob = transformer_config.get(
+            "dropout_prob", config.dropout_prob
+        )
+        config.bias = transformer_config.get("bias", config.bias)
+        config.max_sequence_length = transformer_config.get(
+            "max_sequence_length", config.max_sequence_length
+        )
+        config.positional_embedding_type = transformer_config.get(
+            "positional_embedding_type", config.positional_embedding_type
+        )
+
+        tc_runner_type = transformer_config.get("runner_type")
+        if tc_runner_type is not None:
+            config.runner_type = ttml.models.RunnerType.from_string(tc_runner_type)
+
+        tc_weight_tying = transformer_config.get("weight_tying")
+        if tc_weight_tying is not None:
+            config.weight_tying = ttml.models.WeightTyingType.from_string(
+                tc_weight_tying
+            )
+
+        exp_config = transformer_config.get("experimental")
+        if isinstance(exp_config, dict):
+            config.experimental.use_composite_layernorm = exp_config.get(
+                "use_composite_layernorm", config.experimental.use_composite_layernorm
+            )
+    else:
+        raise ValueError(f"Unsupported model type: {config.model_type}")
 
     return config
 
@@ -807,6 +818,9 @@ def load_model_from_checkpoint(
     step = checkpoint.get("step", 0)
 
     # Create model config (map aligned names to NanoGPTConfig fields)
+    nanogpt_exp_config = NanoGPTExperimentalConfig(
+        use_composite_layernorm=model_config.experimental.use_composite_layernorm,
+    )
     nanogpt_config = NanoGPTConfig(
         vocab_size=model_config.vocab_size,
         block_size=model_config.max_sequence_length,
@@ -818,9 +832,7 @@ def load_model_from_checkpoint(
         runner_type=model_config.runner_type,
         weight_tying=model_config.weight_tying,
         positional_embedding_type=model_config.positional_embedding_type,
-    )
-    nanogpt_config.experimental.use_composite_layernorm = (
-        model_config.experimental.use_composite_layernorm
+        experimental=nanogpt_exp_config,
     )
 
     # Create model
@@ -1215,6 +1227,9 @@ def main():
             model_config.vocab_size = round_up_to_tile(model_config.vocab_size, 32)
 
             # Create model config (map aligned names to NanoGPTConfig fields)
+            nanogpt_exp_config = NanoGPTExperimentalConfig(
+                use_composite_layernorm=model_config.experimental.use_composite_layernorm,
+            )
             nanogpt_config = NanoGPTConfig(
                 vocab_size=model_config.vocab_size,
                 block_size=model_config.max_sequence_length,
@@ -1226,9 +1241,7 @@ def main():
                 runner_type=model_config.runner_type,
                 weight_tying=model_config.weight_tying,
                 positional_embedding_type=model_config.positional_embedding_type,
-            )
-            nanogpt_config.experimental.use_composite_layernorm = (
-                model_config.experimental.use_composite_layernorm
+                experimental=nanogpt_exp_config,
             )
 
             # Create model
