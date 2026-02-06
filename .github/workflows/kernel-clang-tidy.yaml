@@ -1,0 +1,105 @@
+name: "Kernel Clang Tidy"
+
+on:
+  schedule:
+    # Run daily at 6 PM PST (2 AM UTC next day)
+    - cron: "0 2 * * *"
+  workflow_call:
+    inputs:
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 24.04"
+        description: "Platform to analyze"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
+      ci-build-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built CI Build Docker image tag"
+  workflow_dispatch:
+    inputs:
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 24.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to analyze"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
+
+jobs:
+  build-docker-image:
+    if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
+
+  kernel-clang-tidy:
+    name: 🔬 Kernel Clang Tidy
+    needs: [build-docker-image]
+    if: ${{ always() && !failure() && !cancelled() }}
+    timeout-minutes: 120
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    container:
+      image: >-
+        harbor.ci.tenstorrent.net/${{
+          inputs.ci-build-docker-image ||
+          needs.build-docker-image.outputs.ci-build-tag ||
+          'docker-image-unresolved!'}}
+      volumes:
+        - ${{ github.workspace }}:/work
+      options: --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
+      - name: 🔧 CMake configure
+        run: cmake --preset clang-tidy-kernels
+
+      - name: 🔍 Run kernel clang-tidy analysis
+        run: |
+          set -uo pipefail
+
+          echo "=== Running clang-tidy on kernel (device) code ==="
+
+          # Build the kernel_clang_tidy target; clang-tidy runs during compilation.
+          # Some errors are expected (SFPI builtins, dummy compile-time args) so
+          # we don't fail on a non-zero exit code from cmake.  The diagnostics
+          # are captured in the log artifact for review.
+          cmake --build --preset clang-tidy-kernels 2>&1 | tee /work/.build/clang-tidy-kernels/kernel-clang-tidy.log || true
+
+          # Summary
+          WARNINGS=$(grep -c 'warning:.*\[' /work/.build/clang-tidy-kernels/kernel-clang-tidy.log || echo 0)
+          ERRORS=$(grep -c ' error:' /work/.build/clang-tidy-kernels/kernel-clang-tidy.log || echo 0)
+          echo "📊 clang-tidy found ${WARNINGS} warnings and ${ERRORS} errors"
+          echo "✅ Kernel clang-tidy analysis complete"
+
+      - name: Upload analysis log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Kernel-Clang-Tidy-Log
+          path: /work/.build/clang-tidy-kernels/kernel-clang-tidy.log
+          retention-days: 14
