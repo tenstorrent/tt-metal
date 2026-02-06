@@ -91,6 +91,7 @@ void kernel_main() {
     uint64_t remote_credit_addr =
         get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, credit_address);
     volatile tt_l1_ptr uint32_t* credit_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_address);
+    DPRINT << "socket forward wait for handshake" << ENDL();
     while (*credit_addr == 0) {
         invalidate_l1_cache();
     }

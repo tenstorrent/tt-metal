@@ -119,6 +119,7 @@ void kernel_main() {
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
     // 2. Wait for credit from producer of this kernel
+    DPRINT << "Send async waiting for credit " << ENDL();
     while (*credit_addr == 0) {
         invalidate_l1_cache();
     }

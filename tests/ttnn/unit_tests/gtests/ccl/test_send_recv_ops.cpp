@@ -147,26 +147,33 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     distributed::SocketConnection socket_connection_01 = distributed::SocketConnection(
         distributed::MeshCoreCoord(start_device_coord, sender_logical_coord),
         distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord));
-    distributed::SocketConnection socket_connection_12 = distributed::SocketConnection(
+    distributed::SocketConnection socket_connection_10 = distributed::SocketConnection(
         distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord),
-        distributed::MeshCoreCoord(intermed_device_coord_2, copy_logical_coord));
-    distributed::SocketConnection socket_connection_23 = distributed::SocketConnection(
-        distributed::MeshCoreCoord(intermed_device_coord_2, copy_logical_coord),
-        distributed::MeshCoreCoord(intermed_device_coord_3, copy_logical_coord));
-    distributed::SocketConnection socket_connection_34 = distributed::SocketConnection(
-        distributed::MeshCoreCoord(intermed_device_coord_3, copy_logical_coord),
         distributed::MeshCoreCoord(end_device_coord, recv_logical_coord));
+    // distributed::SocketConnection socket_connection_12 = distributed::SocketConnection(
+    //     distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord),
+    //     distributed::MeshCoreCoord(intermed_device_coord_2, copy_logical_coord));
+    // distributed::SocketConnection socket_connection_23 = distributed::SocketConnection(
+    //     distributed::MeshCoreCoord(intermed_device_coord_2, copy_logical_coord),
+    //     distributed::MeshCoreCoord(intermed_device_coord_3, copy_logical_coord));
+    // distributed::SocketConnection socket_connection_34 = distributed::SocketConnection(
+    //     distributed::MeshCoreCoord(intermed_device_coord_3, copy_logical_coord),
+    //     distributed::MeshCoreCoord(end_device_coord, recv_logical_coord));
 
     distributed::SocketMemoryConfig socket_mem_config =
         distributed::SocketMemoryConfig(BufferType::L1, socket_fifo_size);
 
     distributed::SocketConfig socket_config_01 = distributed::SocketConfig({socket_connection_01}, socket_mem_config);
+    distributed::SocketConfig socket_config_10 = distributed::SocketConfig({socket_connection_10}, socket_mem_config);
 
-    distributed::SocketConfig socket_config_12 = distributed::SocketConfig({socket_connection_12}, socket_mem_config);
+    // distributed::SocketConfig socket_config_12 = distributed::SocketConfig({socket_connection_12},
+    // socket_mem_config);
 
-    distributed::SocketConfig socket_config_23 = distributed::SocketConfig({socket_connection_23}, socket_mem_config);
+    // distributed::SocketConfig socket_config_23 = distributed::SocketConfig({socket_connection_23},
+    // socket_mem_config);
 
-    distributed::SocketConfig socket_config_34 = distributed::SocketConfig({socket_connection_34}, socket_mem_config);
+    // distributed::SocketConfig socket_config_34 = distributed::SocketConfig({socket_connection_34},
+    // socket_mem_config);
 
     auto input_tensor_spec = TensorSpec(
         ttnn::Shape({1, 1, 1, 3584}),
@@ -193,14 +200,16 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     auto [send_socket_0, recv_socket_1] =
         distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_01);
 
-    auto [send_socket_1, recv_socket_2] =
-        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_12);
+    auto [send_socket_1, recv_socket_end] =
+        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_10);
+    // auto [send_socket_1, recv_socket_2] =
+    //     distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_12);
 
-    auto [send_socket_2, recv_socket_3] =
-        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_23);
+    // auto [send_socket_2, recv_socket_3] =
+    //     distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_23);
 
-    auto [send_socket_3, recv_socket_end] =
-        distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_34);
+    // auto [send_socket_3, recv_socket_end] =
+    //     distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config_34);
 
     // Create Barrier Buffer
     auto barrier_buffer_size = 832;
@@ -231,8 +240,9 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     // Sender forwards downstream and waits for ack from last receiver
     ttnn::experimental::send_async(input_tensor, send_socket_0, recv_socket_end);
     ttnn::experimental::socket_forward(output_tensor, recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t));
-    ttnn::experimental::socket_forward(output_tensor, recv_socket_2, send_socket_2, num_elems * sizeof(uint32_t));
-    ttnn::experimental::socket_forward(output_tensor, recv_socket_3, send_socket_3, num_elems * sizeof(uint32_t));
+    // ttnn::experimental::socket_forward(output_tensor, recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t));
+    // ttnn::experimental::socket_forward(output_tensor, recv_socket_2, send_socket_2, num_elems * sizeof(uint32_t));
+    // ttnn::experimental::socket_forward(output_tensor, recv_socket_3, send_socket_3, num_elems * sizeof(uint32_t));
     Synchronize(mesh_device.get(), std::nullopt);
 
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -245,9 +255,9 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
 
     int freq_mhz = cluster.get_device_aiclk(start_device_id);
     for (uint32_t i = 0; i < 100; i++) {
-        double latency_us = (float)latencies[i] / freq_mhz;
-        std::cout << "Iteration " << i << " RTT latency (us): " << latency_us
-                  << " Per hop latency (us): " << latency_us / 4.0f << std::endl;
+        double latency_ns = 1000 * ((float)latencies[i] / freq_mhz);
+        std::cout << "Iteration " << i << " RTT latency (ns): " << latency_ns
+                  << " Per hop latency (ns): " << latency_ns / 4.0f << std::endl;
     }
 }
 
