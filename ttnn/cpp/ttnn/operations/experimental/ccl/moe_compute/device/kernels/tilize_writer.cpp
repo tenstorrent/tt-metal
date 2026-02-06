@@ -80,6 +80,7 @@ void kernel_main() {
     // Compile-time arguments
 
     // CBs
+    constexpr uint32_t tilize_input_cb_id = get_named_compile_time_arg_val("tilize_input_cb_id");
     constexpr uint32_t tilize_output_cb_id = get_named_compile_time_arg_val("tilize_output_cb_id");
     constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
     constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
@@ -154,13 +155,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("tilize_chunk_ready_semaphore_id");
     constexpr uint32_t matmul_chunk_ready_semaphore_id =
         get_named_compile_time_arg_val("matmul_chunk_ready_semaphore_id");
-    constexpr uint32_t previous_chunk_sent_semaphore_id =
-        get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
 
     uint32_t matmul_chunk_available_semaphore_addr = get_semaphore(matmul_chunk_available_semaphore_id);
     uint32_t tilize_chunk_ready_semaphore_addr = get_semaphore(tilize_chunk_ready_semaphore_id);
     uint32_t matmul_chunk_ready_semaphore_addr = get_semaphore(matmul_chunk_ready_semaphore_id);
-    uint32_t previous_chunk_sent_semaphore_addr = get_semaphore(previous_chunk_sent_semaphore_id);
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;
@@ -465,7 +463,7 @@ void kernel_main() {
              * 4) T drain-sync-core waits until all T non-drain-sync cores have sent their chunk
              * 5) T drain-sync-core signals to MM cores that chunks have arrived
              * 6) T non-drain-sync cores wait until T drain-sync core signals that all chunks have been sent
-             * 7) All T writers signal to their reader that they can read in another set of tokens
+             * 7) All T writers pop their tilize input CB (allowing readers to read in another set of tokens)
              */
 
             // == 1 ==
@@ -557,8 +555,8 @@ void kernel_main() {
 
             // == 7 ==
             // signal to reader that they can start reading in another set of tokens
-            noc_semaphore_set(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(previous_chunk_sent_semaphore_addr), num_chunks_sent);
+            // pop input from reader (tokens_per_chunk pages)
+            cb_pop_front(tilize_input_cb_id, tokens_per_chunk);
         }
     }
 

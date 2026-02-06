@@ -116,9 +116,6 @@ void MAIN {
 
         fast_tilize_block(tilize_input_cb_id, tiles_per_chunk, tilize_output_cb_id);
 
-        // Pop input from reader (tokens_per_chunk pages)
-        cb_pop_front(tilize_input_cb_id, tokens_per_chunk);
-
         // DEBUG: Print first and last tiles of output (tilized format)
         // PACK(({
         //     DPRINT << "=== CHUNK " << chunk << " OUTPUT ===" << ENDL();
