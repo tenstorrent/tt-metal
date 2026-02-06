@@ -16,7 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
-        # Perf variant (with tracing)
+        # Perf variant (with tracing).
         (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),
         # Check variant (without tracing)
         (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),
