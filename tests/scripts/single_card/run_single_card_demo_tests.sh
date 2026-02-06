@@ -87,9 +87,9 @@ run_gemma3_func() {
 }
 
 run_gemma3_perf() {
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/multimodal/gemma3/demo/text_demo.py --timeout=600 -k "performance and ci-1"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/multimodal/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text only)"
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/multimodal/gemma3/demo/vision_demo.py --timeout=600 -k "performance and batch1-multi-image-trace"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it $PYTEST_CMD models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
 }
 

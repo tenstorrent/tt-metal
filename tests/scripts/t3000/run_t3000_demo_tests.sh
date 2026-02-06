@@ -359,7 +359,7 @@ run_t3000_gemma3_tests() {
   gemma27b=google/gemma-3-27b-it
   tt_cache_gemma27b=$TT_CACHE_HOME/$gemma27b
 
-  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/multimodal/gemma3/demo/text_demo.py --timeout=600 -k "performance and ci-1"
+  HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 27B tests completed (text only)"
   HF_MODEL=$gemma27b TT_CACHE_PATH=$tt_cache_gemma27b pytest models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
   echo "LOG_METAL: Gemma3 27B tests completed (text and vision)"
