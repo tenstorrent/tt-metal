@@ -1132,10 +1132,6 @@ class Attention1D(LightweightModule):
         decoders_opt = model_config.get("DECODERS_OPTIMIZATIONS")
 
         layer_name = configuration.get_state_dict_prefix("Attention", layer_num)
-        if configuration.dummy_weights or weight_cache_path is None:
-            cache_name = lambda _: None
-        else:
-            cache_name = lambda name: weight_cache_path / f"{layer_name}.{name}"
 
         wq_str = f"{layer_name}.wq"
         wk_str = f"{layer_name}.wk"
