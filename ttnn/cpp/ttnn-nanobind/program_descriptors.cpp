@@ -367,16 +367,26 @@ void py_module_types(nb::module_& mod) {
             "Collection of format descriptors for different sections of the buffer")
         .def(
             "set_buffer_from_tensor",
-            [](tt::tt_metal::CBDescriptor& self, const ttnn::Tensor& tensor) { self.buffer = tensor.buffer(); },
+            [](tt::tt_metal::CBDescriptor& self, const ttnn::Tensor& tensor) {
+                auto buffer = tensor.buffer();
+                if (buffer == nullptr) {
+                    throw std::runtime_error("Tensor buffer is null - tensor must be device-backed");
+                }
+                self.buffer = buffer;
+            },
             nb::arg("tensor"),
+            nb::keep_alive<1, 2>(),  // Keep tensor alive as long as CBDescriptor is alive
             R"pbdoc(
                 Set the CB's buffer pointer from a tensor's buffer.
 
                 This allows creating a CB with custom format (e.g., different tile dimensions)
                 that points to an existing tensor's memory.
 
+                Note: The tensor must remain alive as long as the CBDescriptor is in use.
+
                 Args:
-                    tensor: The tensor whose buffer address should be used for this CB
+                    tensor: The tensor whose buffer address should be used for this CB.
+                           Must be a device-backed tensor with a valid buffer.
             )pbdoc");
 
     // Helper function for creating CBDescriptor from sharded tensor
