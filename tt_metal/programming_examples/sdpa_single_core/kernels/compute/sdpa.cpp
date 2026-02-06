@@ -51,57 +51,67 @@ void sub_exp_block_bcast_cols_inplace_2x4(
     //     cb_reserve_back(reduce_cb, tiles_per_row);
     // }
 
-    tile_regs_acquire();
-    uint32_t dst_index = 0;
-    for (uint32_t i = 0; i < tiles_per_row; i++) {
-        for (uint32_t j = 0; j < tiles_per_column; j++) {
-            uint32_t in0_tile_index =
-                (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for in0_cb
-            sub_tiles_bcast_cols(in0_cb, in1_cb, in0_tile_index, global_row_base + i, dst_index++);
-        }
-    }
-    tile_regs_commit();
-
-    tile_regs_wait();
-    dst_index = 0;
-    for (uint32_t i = 0; i < tiles_per_row; i++) {
-        for (uint32_t j = 0; j < tiles_per_column; j++) {
-            exp_packthread_tile<true, true>(dst_index++, vector_mode);
-        }
-    }
-    PACK(TTI_STALLWAIT(p_stall ::STALL_PACK, p_stall ::WAIT_SFPU));
-
-    dst_index = 0;
-    for (uint32_t i = 0; i < tiles_per_row; i++) {
-        for (uint32_t j = 0; j < tiles_per_column; ++j) {
-            uint32_t in0_tile_index =
-                (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for in0_cb
-            pack_tile<true>(dst_index++, in0_cb, in0_tile_index);      // Pack back to original position in in0_cb
-        }
-    }
-
-    if constexpr (do_reduce) {
-        dst_index = 0;
+    {
+        DeviceZoneScopedN("SUB");
+        tile_regs_acquire();
+        uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
-            // While we have results in DST, take advantage of L1 accumulation
-            // to reduce row x cols tiles to rows x 1 tiles.
-            if (global_col_base > 0) {
-                // If on the same row, keep accumulating
-                PACK((llk_pack_reconfig_l1_acc(1)));
+            for (uint32_t j = 0; j < tiles_per_column; j++) {
+                uint32_t in0_tile_index =
+                    (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for in0_cb
+                sub_tiles_bcast_cols(in0_cb, in1_cb, in0_tile_index, global_row_base + i, dst_index++);
             }
+        }
+        tile_regs_commit();
+    }
+
+    {
+        DeviceZoneScopedN("EXP");
+        tile_regs_wait();
+        uint32_t dst_index = 0;
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            for (uint32_t j = 0; j < tiles_per_column; j++) {
+                exp_packthread_tile<true, true>(dst_index++, vector_mode);
+            }
+        }
+        PACK(TTI_STALLWAIT(p_stall ::STALL_PACK, p_stall ::WAIT_SFPU));
+    }
+
+    {
+        DeviceZoneScopedN("EXP PACK");
+        tile_regs_wait();
+        uint32_t dst_index = 0;
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; ++j) {
-                // Pack to local_row's position in reduce_cb (0 or 1 within this pair)
-                pack_tile<true>(dst_index++, reduce_cb, global_col_base + i);
-                if (global_col_base == 0 && j == 0) {
-                    // If this was the first tile of a row, start accumulating
+                uint32_t in0_tile_index =
+                    (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for in0_cb
+                pack_tile<true>(dst_index++, in0_cb, in0_tile_index);      // Pack back to original position in in0_cb
+            }
+        }
+
+        if constexpr (do_reduce) {
+            dst_index = 0;
+            for (uint32_t i = 0; i < tiles_per_row; i++) {
+                // While we have results in DST, take advantage of L1 accumulation
+                // to reduce row x cols tiles to rows x 1 tiles.
+                if (global_col_base > 0) {
+                    // If on the same row, keep accumulating
                     PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+                for (uint32_t j = 0; j < tiles_per_column; ++j) {
+                    // Pack to local_row's position in reduce_cb (0 or 1 within this pair)
+                    pack_tile<true>(dst_index++, reduce_cb, global_col_base + i);
+                    if (global_col_base == 0 && j == 0) {
+                        // If this was the first tile of a row, start accumulating
+                        PACK((llk_pack_reconfig_l1_acc(1)));
+                    }
                 }
             }
         }
-    }
-    tile_regs_release();
-    if constexpr (do_reduce) {  // todo: move up?
-        PACK((llk_pack_reconfig_l1_acc(0)));
+        tile_regs_release();
+        if constexpr (do_reduce) {  // todo: move up?
+            PACK((llk_pack_reconfig_l1_acc(0)));
+        }
     }
 }
 
@@ -229,7 +239,6 @@ void sdpa_inner_loop_8x4x16(
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
                 MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
-                DeviceZoneScopedN("SUB_EXP");
                 sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
                     cb_qkt_im, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
             }
@@ -312,7 +321,6 @@ void sdpa_inner_loop_8x4x16(
     for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
         uint32_t prev_q_subblock = q_num_subblocks - 1;
         MATH(DPRINT << "SUB EXP for Q[" << prev_q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
-        DeviceZoneScopedN("SUB_EXP");
         sub_exp_block_bcast_cols_inplace_2x4<cb_qkt_im, scale_fp32, true>(
             cb_qkt_im, alias_cur_sum, Sk_chunk_t, prev_q_subblock, kt_subblock);
     }
