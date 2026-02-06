@@ -49,11 +49,10 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpA_face_r_dim,
         unpB_face_r_dim,
         unpA_num_faces,
-        unpB_num_faces);
+        unpB_num_faces,
+        80 /* nop_count */);
 
-    if (isUnpackerConfiguredCorrectly) {
-        DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul_init - Unpacker already configured correctly." << ENDL());
-    } else {
+    if (!isUnpackerConfiguredCorrectly) {
         DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul_init - Need to reconfigure unpacker for AB matmul." << ENDL());
         LLK_ASSERT(false, "Unpacker not configured correctly for llk_unpack_AB_matmul.");
     }
@@ -114,11 +113,10 @@ inline void llk_unpack_AB_matmul(
         unpA_face_r_dim,
         unpB_face_r_dim,
         unpA_num_faces,
-        unpB_num_faces);
+        unpB_num_faces,
+        0 /* nop_count */);
 
-    if (isUnpackerConfiguredCorrectly) {
-        DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul - Unpacker already configured correctly." << ENDL());
-    } else {
+    if (!isUnpackerConfiguredCorrectly) {
         DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul - Need to reconfigure unpacker for AB matmul." << ENDL());
         LLK_ASSERT(false, "Unpacker not configured correctly for llk_unpack_AB_matmul.");
     }
