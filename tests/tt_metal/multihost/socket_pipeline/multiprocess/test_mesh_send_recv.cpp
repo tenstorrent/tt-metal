@@ -254,8 +254,8 @@ TEST_P(MeshDeviceNanoExabox2x4SendRecvFixture, MultiSendRecvAsync) {
 // Test using migrated code (metal-level APIs) from multiprocess utils instead of ttnn APIs
 // This test mirrors the SRTest from test_send_recv_ops.cpp in the ccl directory
 // but uses MeshBuffer and metal-level send_async/socket_forward instead of Tensor and ttnn APIs
-// Uses single-host fixture (MeshDevice4x8Fabric2DFixture) for single-host execution
-class FabricSendRecv2x4MigratedFixture : public MeshDevice4x8Fabric2DFixture {};
+// Uses GenericMeshDeviceFabric2DFixture to open all devices (fabric requires all devices active)
+class FabricSendRecvMigratedFixture : public GenericMeshDeviceFabric2DFixture {};
 
 void run_sr_test_migrated(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, bool enable_correctness_check) {
@@ -418,11 +418,11 @@ void run_sr_test_migrated(
     std::cout << "Average latency in microseconds: " << avg_latency_us << std::endl;
 }
 
-TEST_F(FabricSendRecv2x4MigratedFixture, SRTestMigrated) {
+TEST_F(FabricSendRecvMigratedFixture, SRTestMigrated) {
     run_sr_test_migrated(get_mesh_device(), /*enable_correctness_check=*/false);
 }
 
-TEST_F(FabricSendRecv2x4MigratedFixture, SRTestMigratedWithCorrectnessCheck) {
+TEST_F(FabricSendRecvMigratedFixture, SRTestMigratedWithCorrectnessCheck) {
     run_sr_test_migrated(get_mesh_device(), /*enable_correctness_check=*/true);
 }
 
