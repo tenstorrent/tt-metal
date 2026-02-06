@@ -70,11 +70,8 @@ class EltwiseAdd:
         Returns:
             Output tensor with down_proj_out + fused_add (indexed per core)
         """
-        device = down_proj_out_tensor.device()
-
         # Get tensor info
         down_proj_dtype = down_proj_out_tensor.dtype
-        down_proj_tile = down_proj_out_tensor.get_tile()
 
         # Get shard shapes
         down_proj_shard_shape = down_proj_out_tensor.memory_config().shard_spec.shape
@@ -110,9 +107,6 @@ class EltwiseAdd:
         cb_in0 = 0  # down_proj output (32x32 view, backed by tensor)
         cb_in1 = 1  # fused_add (32x32 view, backed by tensor, read ptr updated to offset)
         cb_out = 2  # output (32x32 view, backed by tensor)
-
-        # down_proj output tiles (in 1x32 format)
-        down_proj_num_tiles_1x32 = width_per_core // 32  # 896 / 32 = 28
 
         # Number of 32x32 tiles (for CB view)
         num_tiles_32x32 = 1  # We view the data as 1 tile of 32x32

@@ -158,7 +158,6 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
     tile_1x32 = ttnn.Tile([1, 32])
     tile_32x32 = ttnn.Tile([32, 32])  # For weights
     tile_16x16 = ttnn.Tile([16, 16])  # For gate 16x16 tensors
-    tile_1x16 = ttnn.Tile([1, 16])  # For gate output tensors
 
     logger.info(f"Testing MoE routed expert: [{M}, {K}] x [{K}, {N}] with {num_cores} cores")
     logger.info(f"DRAM matmul + SiLU: [{M}, {gate_proj_K}] x [{gate_proj_K}, {gate_proj_N}] with {num_experts} experts")

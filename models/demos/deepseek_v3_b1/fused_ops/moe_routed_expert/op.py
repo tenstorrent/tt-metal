@@ -883,7 +883,6 @@ class MoeRoutedExpert:
         input_core_grid = input_memory_config.shard_spec.grid
         input_core_ranges = list(input_core_grid.ranges())
         sender_core = input_core_ranges[0].start
-        sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
 
         # Get device and compute grid
         mesh_device = input_tensor.device()
