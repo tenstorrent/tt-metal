@@ -29,18 +29,18 @@ namespace ttnn_dtype_traits::detail {
 // bfloat16      -> bfloat16
 // uint64        -> N/A
 // int64         -> uint32
-// uint32        -> N/A
+// uint32        -> uint32
 // int32         -> int32
-// uint16        -> N/A
+// uint16        -> uint16
 // int16         -> uint16
 // uint8         -> uint8
 // int8          -> N/A
 
 // ttnn label    -> torch convert egress
 // uint8         -> uint8
-// uint16        -> int16
+// uint16        -> uint16
 // int32         -> int32
-// uint32        -> int32
+// uint32        -> int32  (legacy)
 // bfloat4_b     -> float32
 // bfloat8_b     -> float32
 // bfloat16      -> bfloat16
@@ -51,18 +51,18 @@ namespace ttnn_dtype_traits::detail {
 // float16       -> N/A
 // uint64        -> N/A
 // int64         -> uint32
-// uint32        -> N/A
+// uint32        -> uint32
 // int32         -> int32
-// uint16        -> N/A
+// uint16        -> uint16
 // int16         -> uint16
 // uint8         -> ubyte
 // int8          -> N/A
 
 // ttnn label    -> numpy convert egress
 // uint8         -> ubyte
-// uint16        -> int16
+// uint16        -> uint16
 // int32         -> int32
-// uint32        -> int32
+// uint32        -> uint32
 // bfloat4_b     -> float32
 // bfloat8_b     -> float32
 // float32       -> float32
@@ -150,6 +150,16 @@ struct py_to_<DtypeID::INT32> {
 template <>
 struct py_to_<DtypeID::INT16> {
     constexpr static auto ttnn_DataType = DataType::UINT16;
+};
+
+template <>
+struct py_to_<DtypeID::UINT16> {
+    constexpr static auto ttnn_DataType = DataType::UINT16;
+};
+
+template <>
+struct py_to_<DtypeID::UINT32> {
+    constexpr static auto ttnn_DataType = DataType::UINT32;
 };
 
 template <>
