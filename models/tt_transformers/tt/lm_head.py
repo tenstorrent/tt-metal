@@ -43,19 +43,22 @@ class LMHead(LightweightModule):
         padded_vocab_size = math.ceil(self.vocab_size / (tile_size)) * (tile_size)
         size_per_device = padded_vocab_size // self.num_devices
 
-        max_columns_per_device_decode = math.ceil((max_columns_per_device) / tile_size) * tile_size
-        max_columns_per_device_prefill = max_columns_per_device
+        max_columns_per_device_ring_mm = math.ceil((max_columns_per_device) / tile_size) * tile_size
+        max_columns_per_device_dram_sharded = max_columns_per_device
 
         self.model_config = args.get_model_config()
 
-        num_splits_decode = math.ceil(size_per_device / max_columns_per_device_decode)
-        num_splits_prefill = math.ceil(size_per_device / max_columns_per_device_prefill)
+        num_splits_ring_mm = math.ceil(size_per_device / max_columns_per_device_ring_mm)
+        num_splits_dram_sharded = math.ceil(size_per_device / max_columns_per_device_dram_sharded)
 
-        self.split_sizes_prefill = [min(size_per_device, max_columns_per_device_prefill)] * (num_splits_prefill - 1)
-        self.split_sizes_prefill.append(size_per_device - sum(self.split_sizes_prefill))  # remaining columns
+        self.split_sizes_dram_sharded = [min(size_per_device, max_columns_per_device_dram_sharded)] * (
+            num_splits_dram_sharded - 1
+        )
+        self.split_sizes_dram_sharded.append(size_per_device - sum(self.split_sizes_dram_sharded))  # remaining columns
 
-        self.split_sizes_decode = [min(size_per_device, max_columns_per_device_decode)] * (num_splits_decode - 1)
-        self.split_sizes_decode.append(size_per_device - sum(self.split_sizes_decode))  # remaining columns
+        self.split_sizes_ring_mm = [min(size_per_device, max_columns_per_device_ring_mm)] * (num_splits_ring_mm - 1)
+        self.split_sizes_ring_mm.append(size_per_device - sum(self.split_sizes_ring_mm))  # remaining columns
+
         # Split the output weights
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
 
@@ -70,10 +73,14 @@ class LMHead(LightweightModule):
                 dim=-1,
             )
 
-        self.output_weights_prefill = []
-        self.output_weights_decode = []
+        self.output_weights_dram_sharded = []
+        self.output_weights_ring_mm = []
 
-        for mode, split_sizes in enumerate([self.split_sizes_prefill, self.split_sizes_decode]):
+        self.split_sizes = [self.split_sizes_dram_sharded]
+        if self.prefetcher is not None:
+            self.split_sizes.append(self.split_sizes_ring_mm)
+
+        for mode, split_sizes in enumerate(self.split_sizes):
             for i, split_size in enumerate(split_sizes):
                 # Create a list to store the split tensors for each device
                 device_splits = []
@@ -101,7 +108,7 @@ class LMHead(LightweightModule):
                     memory_config = args.create_dram_sharded_mem_config(
                         k=args.dim, n=math.ceil(combined_split.shape[-1] / self.num_devices)
                     )
-                    self.output_weights_prefill.append(
+                    self.output_weights_dram_sharded.append(
                         ttnn.as_tensor(
                             combined_split,
                             device=mesh_device,
@@ -116,7 +123,7 @@ class LMHead(LightweightModule):
                     memory_config = args.create_dram_sharded_mem_config(
                         k=args.dim, n=pad_to_power_of_2(math.ceil(combined_split.shape[-1] / self.num_devices))
                     )
-                    self.output_weights_decode.append(
+                    self.output_weights_ring_mm.append(
                         ttnn.as_tensor(
                             combined_split,
                             device=mesh_device,
@@ -138,13 +145,13 @@ class LMHead(LightweightModule):
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
         use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == Mode.DECODE
-        split_sizes = self.split_sizes_decode if use_prefetcher else self.split_sizes_prefill
+        split_sizes = self.split_sizes_ring_mm if use_prefetcher else self.split_sizes_dram_sharded
         program_configs = [
             self.args.get_lm_head_program_config(split_size, self.prefetcher if use_prefetcher else None)
             for split_size in split_sizes
         ]
 
-        output_weights = self.output_weights_decode if use_prefetcher else self.output_weights_prefill
+        output_weights = self.output_weights_ring_mm if use_prefetcher else self.output_weights_dram_sharded
 
         self.lm_head_output_memory_config = self.args.get_lm_head_output_mem_config(
             Mode.DECODE if use_prefetcher else Mode.PREFILL, self.prefetcher if use_prefetcher else None
@@ -180,7 +187,7 @@ class LMHead(LightweightModule):
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if use_prefetcher else None,
         )
 
-        # Only use reshard mem config for decode mode
+        # Only use reshard mem config for ring_mm mode
         if use_prefetcher:
             output = ttnn.to_memory_config(
                 output,
