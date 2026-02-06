@@ -347,15 +347,21 @@ class Attention1D(LightweightModule):
         Prefill forward - multiple tokens.
 
         Args:
-            x: Input tensor (1, 1, seq_len, dim)
-            rot_mats: Tuple of (cos, sin) rotation matrices
-            user_id: User ID for KV cache fill
-            page_table: Page table for paged attention
-            chunk_page_table: Page table for chunked prefill
-            chunk_start_idx: Start index for chunked prefill
+            x: Input tensor, shape (1, 1, seq_len, dim), TILE_LAYOUT.
+                Memory config: DRAM interleaved (default ``prefill_input_memcfg``).
+                If ``LazyWeight``, it is automatically placed with the correct memory config.
+            rot_mats: Tuple of (cos, sin) rotation matrices for rotary embedding,
+                each shape (1, 1, head_dim, head_dim), TILE_LAYOUT, DRAM interleaved.
+            user_id: User ID for KV cache fill (selects which user's cache to write).
+            page_table: Page table for paged attention (optional).
+            chunk_page_table: Page table for chunked prefill (optional).
+            chunk_start_idx: Start index for chunked prefill (optional).
 
         Returns:
-            Output tensor (1, 1, seq_len, dim)
+            Output tensor (1, 1, seq_len, dim), DRAM interleaved.
+
+        Note:
+            seq_len must be divisible by 128 and > 0.
         """
         self.load_device_weights()
         x = _load_input_device_tensor(x, self.config, mode="prefill")
@@ -544,13 +550,17 @@ class Attention1D(LightweightModule):
         Decode forward - single token per user.
 
         Args:
-            x: Input tensor (seq_len, 1, batch, dim)
-            current_pos: Current position tensor (batch_size,)
-            rot_mats: Tuple of (cos, sin) rotation matrices for rotary embedding
-            page_table: Page table for paged attention (optional)
+            x: Input tensor, shape (seq_len, 1, batch, dim), TILE_LAYOUT.
+                Memory config: DRAM WIDTH_SHARDED (default ``decode_input_memcfg``).
+                If ``LazyWeight``, it is automatically placed with the correct memory config.
+            current_pos: Current position tensor, shape (batch_size,) on host.
+            rot_mats: Tuple of (cos, sin) rotation matrices for rotary embedding,
+                each shape (1, batch, head_dim, head_dim), TILE_LAYOUT, L1 interleaved.
+            page_table: Page table for paged attention (optional).
 
         Returns:
-            Output tensor with same shape as input
+            Output tensor (seq_len, 1, batch, dim), DRAM WIDTH_SHARDED
+            (``decode_residual_memcfg``).
         """
         self.load_device_weights()
         x = _load_input_device_tensor(x, self.config, mode="decode")
