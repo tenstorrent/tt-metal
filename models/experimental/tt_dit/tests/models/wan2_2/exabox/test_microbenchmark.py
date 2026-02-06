@@ -57,7 +57,7 @@ from tracy.process_model_log import (
 
 from .....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from .....layers.normalization import DistributedLayerNorm, DistributedRMSNorm
-from .....layers.linear import ColParallelLinear
+from .....layers.linear import ColParallelLinear, RowParallelLinear
 from .....parallel.manager import CCLManager
 from .....utils.test import line_params
 
@@ -727,6 +727,300 @@ def test_run_ring_attention(
     ttnn.synchronize_device(mesh_device)
 
 
+@MESH_DEVICE_PARAMS
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_run_spatial_dense_single(
+    mesh_device: ttnn.MeshDevice,
+    config_name: str,
+    seq_len: int,
+    reset_seeds,
+) -> None:
+    """
+    Run spatial dense out / unfused Q proj: AllGather on TP axis followed by single matmul.
+    This pattern occurs 3 times: cross-attn Q proj, self-attn dense out, cross-attn dense out.
+    Profiled via test_spatial_dense_single_perf.
+    """
+    tp_factor = MESH_SHAPE[TP_AXIS]
+    sp_factor = MESH_SHAPE[SP_AXIS]
+    seq_len_local = seq_len // sp_factor
+
+    logger.info(f"Running spatial dense single: {config_name}, seq_len={seq_len}")
+
+    ccl_manager = create_ccl_manager(mesh_device)
+
+    # Create single projection layer (ColParallelLinear)
+    projection = create_col_parallel_linear(mesh_device, ccl_manager)
+
+    # Input: spatial tensor fractured on SP (dim 2) and TP (dim 3)
+    # Shape: [1, B, N_local, D_local]
+    batch_size = 1
+    local_dim = WAN_DIM // tp_factor
+    input_torch = torch.randn((1, batch_size, seq_len_local, local_dim), dtype=torch.float32)
+    tt_spatial = bf16_tensor(input_torch, device=mesh_device)
+
+    def run_spatial_dense_single(spatial):
+        # AllGather on TP axis to get full D dimension
+        if tp_factor > 1:
+            spatial_gathered = ccl_manager.all_gather_persistent_buffer(spatial, dim=3, mesh_axis=TP_AXIS)
+        else:
+            spatial_gathered = spatial
+
+        # Single projection
+        output = projection(spatial_gathered)
+        return output
+
+    # Warmup
+    for _ in range(NUM_WARMUP_ITERS):
+        _ = run_spatial_dense_single(tt_spatial)
+    ttnn.synchronize_device(mesh_device)
+
+    # Measurement
+    for _ in range(NUM_MEASUREMENT_ITERS):
+        _ = run_spatial_dense_single(tt_spatial)
+    ttnn.synchronize_device(mesh_device)
+
+
+@MESH_DEVICE_PARAMS
+@CONFIG_ONLY_PARAMS
+def test_run_prompt_kv(
+    mesh_device: ttnn.MeshDevice,
+    config_name: str,
+    reset_seeds,
+) -> None:
+    """
+    Run prompt KV projection: K and V projections on prompt.
+    Profiled via test_prompt_kv_perf.
+    """
+    logger.info(f"Running prompt KV: {config_name}")
+
+    ccl_manager = create_ccl_manager(mesh_device)
+
+    # Create K, V projection layers (ColParallelLinear)
+    to_k = create_col_parallel_linear(mesh_device, ccl_manager)
+    to_v = create_col_parallel_linear(mesh_device, ccl_manager)
+
+    # Input: prompt tensor replicated across all devices
+    # Shape: [1, B, L, D]
+    batch_size = 1
+    input_torch = torch.randn((1, batch_size, PROMPT_SEQ_LEN, WAN_DIM), dtype=torch.float32)
+    tt_prompt = bf16_tensor(input_torch, device=mesh_device)
+
+    def run_prompt_kv(prompt):
+        k = to_k(prompt)
+        v = to_v(prompt)
+        return k, v
+
+    # Warmup
+    for _ in range(NUM_WARMUP_ITERS):
+        _ = run_prompt_kv(tt_prompt)
+    ttnn.synchronize_device(mesh_device)
+
+    # Measurement
+    for _ in range(NUM_MEASUREMENT_ITERS):
+        _ = run_prompt_kv(tt_prompt)
+    ttnn.synchronize_device(mesh_device)
+
+
+@MESH_DEVICE_PARAMS
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_run_cross_attention(
+    mesh_device: ttnn.MeshDevice,
+    config_name: str,
+    seq_len: int,
+    reset_seeds,
+) -> None:
+    """
+    Run cross attention: scaled_dot_product_attention of spatial Q against prompt KV.
+    Profiled via test_cross_attention_perf.
+    """
+    tp_factor = MESH_SHAPE[TP_AXIS]
+    sp_factor = MESH_SHAPE[SP_AXIS]
+    n_local_heads = WAN_NUM_HEADS // tp_factor
+    seq_len_local = seq_len // sp_factor
+
+    logger.info(f"Running cross attention: {config_name}, seq_len={seq_len}")
+
+    # Create Q, K, V tensors in BHNE format
+    # Q: spatial sequence (fractured on SP), K/V: prompt sequence (replicated on SP)
+    batch_size = 1
+    q_shape = (batch_size, n_local_heads, seq_len_local, WAN_HEAD_DIM)
+    k_shape = (batch_size, n_local_heads, PROMPT_SEQ_LEN, WAN_HEAD_DIM)
+    v_shape = (batch_size, n_local_heads, PROMPT_SEQ_LEN, WAN_HEAD_DIM)
+
+    torch.manual_seed(0)
+    q_torch = torch.randn(q_shape, dtype=torch.float32)
+    k_torch = torch.randn(k_shape, dtype=torch.float32)
+    v_torch = torch.randn(v_shape, dtype=torch.float32)
+
+    tt_q = bf16_tensor(q_torch, device=mesh_device)
+    tt_k = bf16_tensor(k_torch, device=mesh_device)
+    tt_v = bf16_tensor(v_torch, device=mesh_device)
+
+    # SDPA config for cross attention (no ring attention needed since prompt is replicated)
+    full_grid = mesh_device.compute_with_storage_grid_size()
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=full_grid,
+        q_chunk_size=256,
+        k_chunk_size=256,
+        exp_approx_mode=False,
+    )
+
+    sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+    )
+
+    def run_cross_attention():
+        output = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=False,
+            program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_kernel_config,
+        )
+        return output
+
+    # Warmup
+    for _ in range(NUM_WARMUP_ITERS):
+        _ = run_cross_attention()
+    ttnn.synchronize_device(mesh_device)
+
+    # Measurement
+    for _ in range(NUM_MEASUREMENT_ITERS):
+        _ = run_cross_attention()
+    ttnn.synchronize_device(mesh_device)
+
+
+@MESH_DEVICE_PARAMS
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_run_spatial_ff1(
+    mesh_device: ttnn.MeshDevice,
+    config_name: str,
+    seq_len: int,
+    reset_seeds,
+) -> None:
+    """
+    Run spatial FF1: AllGather on TP axis followed by ColParallelLinear (with activation).
+    Profiled via test_spatial_ff1_perf.
+    """
+    tp_factor = MESH_SHAPE[TP_AXIS]
+    sp_factor = MESH_SHAPE[SP_AXIS]
+    seq_len_local = seq_len // sp_factor
+
+    logger.info(f"Running spatial FF1: {config_name}, seq_len={seq_len}")
+
+    ccl_manager = create_ccl_manager(mesh_device)
+
+    # Create FF1 layer (ColParallelLinear with activation)
+    # FF1: dim -> ffn_dim with activation
+    ff1 = ColParallelLinear(
+        WAN_DIM,
+        WAN_FFN_DIM,
+        bias=True,
+        activation_fn="gelu",
+        mesh_device=mesh_device,
+        mesh_axis=TP_AXIS,
+        ccl_manager=ccl_manager,
+    )
+
+    # Load dummy weights
+    dummy_weight = torch.randn(WAN_FFN_DIM, WAN_DIM, dtype=torch.float32)
+    dummy_bias = torch.randn(WAN_FFN_DIM, dtype=torch.float32)
+    dummy_state_dict = {"weight": dummy_weight, "bias": dummy_bias}
+    ff1.load_state_dict(dummy_state_dict)
+
+    # Input: spatial tensor fractured on SP (dim 2) and TP (dim 3)
+    # Shape: [1, B, N_local, D_local]
+    batch_size = 1
+    local_dim = WAN_DIM // tp_factor
+    input_torch = torch.randn((1, batch_size, seq_len_local, local_dim), dtype=torch.float32)
+    tt_spatial = bf16_tensor(input_torch, device=mesh_device)
+
+    def run_spatial_ff1(spatial):
+        # AllGather on TP axis to get full D dimension
+        if tp_factor > 1:
+            spatial_gathered = ccl_manager.all_gather_persistent_buffer(spatial, dim=3, mesh_axis=TP_AXIS)
+        else:
+            spatial_gathered = spatial
+
+        # FF1 projection with activation
+        output = ff1(spatial_gathered)
+        return output
+
+    # Warmup
+    for _ in range(NUM_WARMUP_ITERS):
+        _ = run_spatial_ff1(tt_spatial)
+    ttnn.synchronize_device(mesh_device)
+
+    # Measurement
+    for _ in range(NUM_MEASUREMENT_ITERS):
+        _ = run_spatial_ff1(tt_spatial)
+    ttnn.synchronize_device(mesh_device)
+
+
+@MESH_DEVICE_PARAMS
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_run_spatial_ff2(
+    mesh_device: ttnn.MeshDevice,
+    config_name: str,
+    seq_len: int,
+    reset_seeds,
+) -> None:
+    """
+    Run spatial FF2: RowParallelLinear (matmul + ReduceScatter on TP axis).
+    Profiled via test_spatial_ff2_perf.
+    """
+    tp_factor = MESH_SHAPE[TP_AXIS]
+    sp_factor = MESH_SHAPE[SP_AXIS]
+    seq_len_local = seq_len // sp_factor
+
+    logger.info(f"Running spatial FF2: {config_name}, seq_len={seq_len}")
+
+    ccl_manager = create_ccl_manager(mesh_device)
+
+    # Create FF2 layer (RowParallelLinear)
+    # FF2: ffn_dim -> dim with ReduceScatter
+    ff2 = RowParallelLinear(
+        WAN_FFN_DIM,
+        WAN_DIM,
+        bias=True,
+        mesh_device=mesh_device,
+        mesh_axis=TP_AXIS,
+        ccl_manager=ccl_manager,
+    )
+
+    # Load dummy weights
+    dummy_weight = torch.randn(WAN_DIM, WAN_FFN_DIM, dtype=torch.float32)
+    dummy_bias = torch.randn(WAN_DIM, dtype=torch.float32)
+    dummy_state_dict = {"weight": dummy_weight, "bias": dummy_bias}
+    ff2.load_state_dict(dummy_state_dict)
+
+    # Input: FF1 output, fractured on SP (dim 2) and TP (dim 3)
+    # Shape: [1, B, N_local, FFN_DIM_local]
+    batch_size = 1
+    local_ffn_dim = WAN_FFN_DIM // tp_factor
+    input_torch = torch.randn((1, batch_size, seq_len_local, local_ffn_dim), dtype=torch.float32)
+    tt_ff1_output = bf16_tensor(input_torch, device=mesh_device)
+
+    def run_spatial_ff2(ff1_output):
+        # RowParallelLinear: matmul + ReduceScatter on TP axis
+        output = ff2(ff1_output)
+        return output
+
+    # Warmup
+    for _ in range(NUM_WARMUP_ITERS):
+        _ = run_spatial_ff2(tt_ff1_output)
+    ttnn.synchronize_device(mesh_device)
+
+    # Measurement
+    for _ in range(NUM_MEASUREMENT_ITERS):
+        _ = run_spatial_ff2(tt_ff1_output)
+    ttnn.synchronize_device(mesh_device)
+
+
 # =============================================================================
 # Op group definitions
 # =============================================================================
@@ -754,6 +1048,35 @@ SPATIAL_QKV_OPS = [
 # Ring Attention: ring_joint_scaled_dot_product_attention
 RING_ATTENTION_OPS = [
     ("RingJointSDPADeviceOperation", "ring_sdpa"),
+]
+
+# Spatial dense out / unfused Q proj: AllGather + single matmul
+# This pattern occurs 3x: cross-attn Q proj, self-attn dense out, cross-attn dense out
+SPATIAL_DENSE_SINGLE_OPS = [
+    ("AllGatherAsyncDeviceOperation", "all_gather"),
+    ("MinimalMatmulDeviceOperation", "matmul"),
+]
+
+# Prompt KV projection: 2x matmul (K, V projections on prompt)
+PROMPT_KV_OPS = [
+    ("MinimalMatmulDeviceOperation", "matmul", 2),  # K + V matmuls
+]
+
+# Cross Attention: scaled_dot_product_attention (spatial Q x prompt KV)
+CROSS_ATTENTION_OPS = [
+    ("SDPAOperation", "sdpa"),
+]
+
+# Spatial FF1: AllGather + single matmul with activation
+SPATIAL_FF1_OPS = [
+    ("AllGatherAsyncDeviceOperation", "all_gather"),
+    ("MinimalMatmulDeviceOperation", "matmul"),
+]
+
+# Spatial FF2: matmul + ReduceScatter
+SPATIAL_FF2_OPS = [
+    ("MinimalMatmulDeviceOperation", "matmul"),
+    ("ReduceScatterMinimalAsyncDeviceOperation", "reduce_scatter"),
 ]
 
 
@@ -790,3 +1113,35 @@ def test_spatial_qkv_perf(config_name: str, seq_len: int) -> None:
 def test_ring_attention_perf(config_name: str, seq_len: int) -> None:
     """Measure device performance for ring attention (spatial self-attention)."""
     run_perf_test("test_run_ring_attention", config_name, seq_len, "RING ATTENTION", RING_ATTENTION_OPS)
+
+
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_spatial_dense_single_perf(config_name: str, seq_len: int) -> None:
+    """Measure device performance for spatial dense out / unfused Q proj (AllGather + matmul)."""
+    run_perf_test(
+        "test_run_spatial_dense_single", config_name, seq_len, "SPATIAL DENSE SINGLE", SPATIAL_DENSE_SINGLE_OPS
+    )
+
+
+@CONFIG_ONLY_PARAMS
+def test_prompt_kv_perf(config_name: str) -> None:
+    """Measure device performance for prompt KV projection (K + V matmuls)."""
+    run_perf_test("test_run_prompt_kv", config_name, PROMPT_SEQ_LEN, "PROMPT KV", PROMPT_KV_OPS)
+
+
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_cross_attention_perf(config_name: str, seq_len: int) -> None:
+    """Measure device performance for cross attention (spatial Q x prompt KV)."""
+    run_perf_test("test_run_cross_attention", config_name, seq_len, "CROSS ATTENTION", CROSS_ATTENTION_OPS)
+
+
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_spatial_ff1_perf(config_name: str, seq_len: int) -> None:
+    """Measure device performance for spatial FF1 (AllGather + matmul with activation)."""
+    run_perf_test("test_run_spatial_ff1", config_name, seq_len, "SPATIAL FF1", SPATIAL_FF1_OPS)
+
+
+@CONFIG_WITH_SEQ_LEN_PARAMS
+def test_spatial_ff2_perf(config_name: str, seq_len: int) -> None:
+    """Measure device performance for spatial FF2 (matmul + ReduceScatter)."""
+    run_perf_test("test_run_spatial_ff2", config_name, seq_len, "SPATIAL FF2", SPATIAL_FF2_OPS)
