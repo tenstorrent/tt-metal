@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt_stl/overloaded.hpp>
+#include <tt_stl/reflection_visitors.hpp>
 
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/types.hpp"

@@ -11,6 +11,7 @@
 
 #include <nlohmann/json.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/reflection_visitors.hpp>
 #include <tuple>
 #include <variant>
 #include "ttnn/graph/graph_processor.hpp"
