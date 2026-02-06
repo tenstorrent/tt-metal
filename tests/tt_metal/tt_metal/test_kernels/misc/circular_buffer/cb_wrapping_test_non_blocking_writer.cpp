@@ -17,10 +17,8 @@ void core_agnostic_main();
 
 #ifdef COMPILE_FOR_TRISC
 #include "api/compute/common.h"
-void kernel_main() { core_agnostic_main(); }
 #else
 #include "api/dataflow/dataflow_api.h"
-void kernel_main() { core_agnostic_main(); }
 #endif
 
 #include "experimental/circular_buffer.h"
@@ -58,3 +56,5 @@ void core_agnostic_main() {
     }
 #endif
 }
+
+void kernel_main() { core_agnostic_main(); }
