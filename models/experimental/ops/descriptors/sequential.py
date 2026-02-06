@@ -61,6 +61,7 @@ from typing import List, Optional, Dict, Tuple, Set, Any
 from copy import deepcopy
 
 import ttnn
+from ttnn._ttnn.program_descriptor import UnpackToDestMode
 
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
@@ -1247,14 +1248,15 @@ def _generate_fused_compute(
     # since they operate on the same data. Use phase 0's args.
     fused_compute.runtime_args = base_compute.runtime_args
 
-    # Merge compute config from all phases.
-    fused_compute.config = _merge_compute_configs(phase_kernels)
+    # Merge compute config from all phases (including unpack_to_dest_mode).
+    fused_compute.config = _merge_compute_configs(phase_kernels, phases)
 
     return fused_compute
 
 
 def _merge_compute_configs(
     phase_kernels: List[Dict[str, Any]],
+    phases: Optional[List[PhaseInfo]] = None,
 ) -> "ttnn.ComputeConfigDescriptor":
     """
     Merge compute configs from all phases.
@@ -1268,6 +1270,11 @@ def _merge_compute_configs(
     fp32 dest registers accommodate up to blk=8.
 
     For math_approx_mode: use True if ANY phase uses it (safe superset).
+
+    For unpack_to_dest_mode: builds a merged vector (indexed by physical CB
+    index) from each phase's per-CB modes, remapped through cb_remapping.
+    Validates that shared CBs (same physical index across phases) have
+    consistent unpack modes.
     """
     base = phase_kernels[0]["compute"].config
 
@@ -1281,7 +1288,15 @@ def _merge_compute_configs(
             if pk["compute"].config.math_approx_mode:
                 need_approx = True
 
-    if need_fp32 == base.fp32_dest_acc_en and need_approx == base.math_approx_mode:
+    # Build merged unpack_to_dest_mode vector across all phases.
+    # Each phase's original CB indices are remapped to physical indices;
+    # the merged vector must have the correct mode at each physical index.
+    merged_unpack = _merge_unpack_to_dest_modes(phase_kernels, phases)
+
+    needs_new_config = (
+        need_fp32 != base.fp32_dest_acc_en or need_approx != base.math_approx_mode or merged_unpack is not None
+    )
+    if not needs_new_config:
         return base
 
     # Need a modified config
@@ -1291,6 +1306,94 @@ def _merge_compute_configs(
     merged.math_approx_mode = need_approx
     merged.dst_full_sync_en = base.dst_full_sync_en
     merged.bfp8_pack_precise = base.bfp8_pack_precise
+    if merged_unpack is not None:
+        merged.unpack_to_dest_mode = merged_unpack
+    elif base.unpack_to_dest_mode:
+        merged.unpack_to_dest_mode = base.unpack_to_dest_mode
+    return merged
+
+
+NUM_CIRCULAR_BUFFERS = 32
+
+
+def _merge_unpack_to_dest_modes(
+    phase_kernels: List[Dict[str, Any]],
+    phases: Optional[List[PhaseInfo]] = None,
+) -> Optional[List]:
+    """
+    Build a merged unpack_to_dest_mode vector for the fused kernel.
+
+    Each phase may have its own unpack_to_dest_mode vector indexed by
+    *original* CB index.  After CB remapping, these must be translated
+    to *physical* CB indices.  If any physical CB gets UnpackToDestFp32
+    from any phase, the merged vector must reflect that.
+
+    Validates that shared CBs (multiple phases mapping different original
+    indices to the same physical index) have consistent unpack modes.
+
+    Returns None if all phases use Default for all CBs (no vector needed).
+    """
+    if not phases:
+        return None
+
+    # Collect per-physical-CB unpack modes from all phases.
+    # Track which phase set each mode for error reporting.
+    physical_modes: Dict[int, "ttnn.UnpackToDestMode"] = {}
+    # For conflict detection: physical_cb -> list of (phase_idx, original_cb, mode)
+    physical_sources: Dict[int, List[tuple]] = {}
+
+    for phase_idx, pk in enumerate(phase_kernels):
+        compute = pk.get("compute")
+        if compute is None:
+            continue
+
+        config = compute.config
+        unpack_modes = config.unpack_to_dest_mode
+        if not unpack_modes:
+            continue
+
+        # Get this phase's CB remapping
+        if phase_idx < len(phases):
+            remapping = phases[phase_idx].cb_remapping
+        else:
+            continue
+
+        for original_cb, physical_cb in remapping.items():
+            if original_cb >= len(unpack_modes):
+                continue
+
+            mode = unpack_modes[original_cb]
+
+            if physical_cb not in physical_sources:
+                physical_sources[physical_cb] = []
+            physical_sources[physical_cb].append((phase_idx, original_cb, mode))
+
+            if physical_cb in physical_modes:
+                existing = physical_modes[physical_cb]
+                if mode != existing:
+                    # Conflict: same physical CB, different unpack modes
+                    prev_entries = [e for e in physical_sources[physical_cb] if e[2] != mode]
+                    raise ValueError(
+                        f"UnpackToDestMode conflict on physical CB {physical_cb}: "
+                        f"phase {phase_idx} (original CB {original_cb}) requires "
+                        f"{mode}, but previous phase(s) set it to {existing}. "
+                        f"Previous: {prev_entries}. "
+                        f"Shared CBs must have consistent UnpackToDestMode settings."
+                    )
+            else:
+                physical_modes[physical_cb] = mode
+
+    # Check if any CB needs non-Default mode
+    has_non_default = any(mode != UnpackToDestMode.Default for mode in physical_modes.values())
+    if not has_non_default:
+        return None
+
+    # Build the full vector
+    merged = [UnpackToDestMode.Default] * NUM_CIRCULAR_BUFFERS
+    for physical_cb, mode in physical_modes.items():
+        if physical_cb < NUM_CIRCULAR_BUFFERS:
+            merged[physical_cb] = mode
+
     return merged
 
 
