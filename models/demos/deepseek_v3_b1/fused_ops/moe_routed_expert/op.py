@@ -743,12 +743,10 @@ class MoeRoutedExpert:
             scaling_factor: Scaling factor for gate scores
 
         Returns:
-            If gate_proj_weights_dict is None:
-                Tuple of (top8_scores, top8_indices) tensors
-            Else:
-                Tuple of (top8_scores, top8_indices, final_output) tensors
-                final_output = down_proj_output + fused_add (if fused_add provided)
-                down_proj_output = (silu(gate_proj) * up_proj) @ down_proj_weights
+            Tuple of (top8_scores, top8_indices, final_output) tensors
+            final_output is None if gate_proj_weights_dict is None
+            final_output = down_proj_output + fused_add (if fused_add provided)
+            down_proj_output = (silu(gate_proj) * up_proj) @ down_proj_weights
         """
         import torch
 
@@ -805,7 +803,7 @@ class MoeRoutedExpert:
 
             return top8_scores, top8_indices, fused_output
 
-        return top8_scores, top8_indices
+        return top8_scores, top8_indices, None
 
     @staticmethod
     def op(
