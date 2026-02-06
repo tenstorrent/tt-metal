@@ -30,9 +30,10 @@ from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
 from ...parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache, tensor
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import bf16_tensor_2dshard
+from ...utils.tracing import Tracer
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -317,6 +318,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             is_fsdp=self.is_fsdp,
             model_type=self.model_type,
         )
+        self._transformer_tracer = Tracer(self.transformer.inner_step, device=self.mesh_device)
 
         cache.load_model(
             self.transformer,
@@ -347,6 +349,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             is_fsdp=self.is_fsdp,
             model_type=self.model_type,
         )
+        self._transformer_2_tracer = Tracer(self.transformer_2.inner_step, device=self.mesh_device)
 
         cache.load_model(
             self.transformer_2,
@@ -798,10 +801,13 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     if self.dynamic_load:
                         if hasattr(self, "transformer_2"):
                             del self.transformer_2
+                            self._transformer_2_tracer.release_trace()
+                            self._transformer_2_tracer = None
                         if not hasattr(self, "transformer"):
                             self._load_transformer1()
                     # wan2.1 or high-noise stage in wan2.2
                     current_model = self.transformer
+                    forward = self._transformer_tracer if traced else self.transformer.inner_step
                     current_model_name = "transformer"
                     current_guidance_scale = guidance_scale
                 else:
@@ -810,9 +816,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         if hasattr(self, "transformer"):
                             # Offload transformer1 to make space for transformer2
                             del self.transformer
+                            self._transformer_tracer.release_trace()
+                            self._transformer_tracer = None
                         if not hasattr(self, "transformer_2"):
                             self._load_transformer2()
                     current_model = self.transformer_2
+                    forward = self._transformer_2_tracer if traced else self.transformer_2.inner_step
                     current_model_name = "transformer_2"
                     current_guidance_scale = guidance_scale_2
 
@@ -832,10 +841,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
                 # Cache text conditioning
                 if prompt_embeds_map[current_model_name] is None:
-                    prompt_embeds_map[current_model_name] = current_model.prepare_text_conditioning(prompt_embeds)
+                    prompt_embeds_map[current_model_name] = current_model.prepare_text_conditioning(
+                        prompt_embeds, on_host=traced
+                    )
                 if self.do_classifier_free_guidance and negative_prompt_embeds_map[current_model_name] is None:
                     negative_prompt_embeds_map[current_model_name] = current_model.prepare_text_conditioning(
-                        negative_prompt_embeds
+                        negative_prompt_embeds, on_host=traced
                     )
 
                 # latent_model_input = latents.to(transformer_dtype)
@@ -850,22 +861,35 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
                 permuted_model_input = self.get_model_input(permuted_latent, cond_latents)
 
-                permuted_noise_pred = current_model.inner_step(
-                    spatial_1BNI_torch=permuted_model_input,
-                    prompt_1BLP=prompt_embeds_map[current_model_name],
-                    N=patchified_seqlen,
-                    timestep_torch=timestep,
-                    **rope_args,
+                permuted_model_input_tt = tensor.from_torch(
+                    permuted_model_input,
+                    device=self.mesh_device,
+                    mesh_axes=[None, None, self.parallel_config.sequence_parallel.mesh_axis, None],
+                    on_host=traced,
                 )
 
+                temb_11BD, timestep_proj_1BTD = current_model.prepare_timestep_conditioning(timestep, on_host=traced)
+
+                permuted_noise_pred_tt = forward(
+                    spatial_1BNI=permuted_model_input_tt,
+                    prompt_1BLP=prompt_embeds_map[current_model_name],
+                    N=patchified_seqlen,
+                    temb_11BD=temb_11BD,
+                    timestep_proj_1BTD=timestep_proj_1BTD,
+                    **rope_args,
+                )
+                permuted_noise_pred = ttnn.to_torch(ttnn.get_device_tensors(permuted_noise_pred_tt)[0])
+
                 if self.do_classifier_free_guidance:
-                    permuted_noise_uncond = current_model.inner_step(
-                        spatial_1BNI_torch=permuted_model_input,
+                    permuted_noise_uncond_tt = forward(
+                        spatial_1BNI=permuted_model_input_tt,
                         prompt_1BLP=negative_prompt_embeds_map[current_model_name],
                         N=patchified_seqlen,
-                        timestep_torch=timestep,
+                        temb_11BD=temb_11BD,
+                        timestep_proj_1BTD=timestep_proj_1BTD,
                         **rope_args,
                     )
+                    permuted_noise_uncond = ttnn.to_torch(ttnn.get_device_tensors(permuted_noise_uncond_tt)[0])
                     permuted_noise_pred = permuted_noise_uncond + current_guidance_scale * (
                         permuted_noise_pred - permuted_noise_uncond
                     )

@@ -125,6 +125,8 @@ class QwenImageTransformer(Module):
         self._tp_axis = parallel_config.tensor_parallel.mesh_axis
         self._ccl_manager = ccl_manager
 
+        self.device = device
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "norm_out.linear", "time_embed_out")
         rename_substate(state, "norm_out.norm", "norm_out")

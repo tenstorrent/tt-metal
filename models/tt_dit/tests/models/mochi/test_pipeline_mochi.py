@@ -124,7 +124,16 @@ def test_mochi_diffusers_pipeline():
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 24000000,
+        }
+    ],
+    indirect=True,
+)
 def test_tt_mochi_pipeline(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -198,6 +207,7 @@ def test_tt_mochi_pipeline(
         height=480,  # Reduced resolution for faster testing
         width=848,  # Reduced resolution for faster testing
         seed=0,  # Make deterministic
+        traced=True,
     ).frames[0]
 
     # Validate output

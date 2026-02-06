@@ -13,16 +13,18 @@ from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 
 from ....utils.test import line_params, ring_params
 
+DEVICE_PARAMS = {"trace_region_size": 31000000}
+
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        ((2, 2), (2, 2), 0, 1, 2, False, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, False),
+        ((2, 4), (2, 4), 0, 1, 1, True, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, True),
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        ((4, 8), (4, 8), 1, 0, 4, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, True),
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        ((4, 8), (4, 8), 1, 0, 2, False, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, False),
     ],
     ids=[
         "2x2sp0tp1",
@@ -98,6 +100,8 @@ def test_pipeline_inference(
             width=width,
             num_frames=num_frames,
             num_inference_steps=num_inference_steps,
+            seed=0,
+            traced=True,
         )
 
     # Check output

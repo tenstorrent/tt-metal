@@ -190,7 +190,7 @@ def test_transformer_accuracy(
 
         # 1. Teacher forcing with ground truth inputs
         logger.info("\n--- Teacher Forcing ---")
-        tt_output_uncond_gt = tt_model(
+        tt_output_uncond_gt = tt_model.forward_full(
             spatial=hidden_states_uncond,
             prompt=encoder_hidden_states_uncond,
             timestep=timestep_uncond,
@@ -211,7 +211,7 @@ def test_transformer_accuracy(
         )
 
         # 1.ii. Cond with ground truth input
-        tt_output_cond_gt = tt_model(
+        tt_output_cond_gt = tt_model.forward_full(
             spatial=hidden_states_cond,
             prompt=encoder_hidden_states_cond,
             timestep=timestep_cond,

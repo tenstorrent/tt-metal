@@ -20,6 +20,7 @@ from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import DistributedLayerNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils import tensor
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.substate import pop_substate, rename_substate
@@ -431,24 +432,26 @@ class WanTransformer3DModel(Module):
 
         return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
 
-    def prepare_text_conditioning(self, encoder_hidden_states):
+    def prepare_text_conditioning(self, encoder_hidden_states: torch.Tensor, *, on_host: bool = False) -> ttnn.Tensor:
         encoder_hidden_states = self.condition_embedder.forward_text(encoder_hidden_states)
-        tt_prompt_1BLP = bf16_tensor(encoder_hidden_states.unsqueeze(0), device=self.mesh_device)
+        tt_prompt_1BLP = tensor.from_torch(encoder_hidden_states.unsqueeze(0), device=self.mesh_device, on_host=on_host)
 
         logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
         return tt_prompt_1BLP
 
-    def prepare_timestep_conditioning(self, timestep):
+    def prepare_timestep_conditioning(
+        self, timestep: torch.Tensor, *, on_host: bool = False
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         assert timestep.ndim == 1, "Wan2.2-T2V requires a 1D timestep tensor"
         temb, timestep_proj = self.condition_embedder.forward_timestep(timestep, timestep_seq_len=None)
 
         timestep_proj = timestep_proj.unflatten(1, (6, -1))
-        tt_temb_11BD = bf16_tensor(temb.unsqueeze(0).unsqueeze(0), device=self.mesh_device)
-        tt_timestep_proj_1BTD = bf16_tensor(
+        tt_temb_11BD = tensor.from_torch(temb.unsqueeze(0).unsqueeze(0), device=self.mesh_device, on_host=on_host)
+        tt_timestep_proj_1BTD = tensor.from_torch(
             timestep_proj.unsqueeze(0),
             device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            shard_dim=-1,
+            mesh_axes=[None, None, None, self.parallel_config.tensor_parallel.mesh_axis],
+            on_host=on_host,
         )
 
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
@@ -616,7 +619,9 @@ class WanTransformer3DModel(Module):
 
         return spatial_out
 
-    def inner_step(self, spatial_1BNI_torch, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, timestep_torch):
+    def inner_step(
+        self, spatial_1BNI, prompt_1BLP, rope_cos_1HND, rope_sin_1HND, trans_mat, N, temb_11BD, timestep_proj_1BTD
+    ):
         """
         Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
             - prompt_1BLP
@@ -625,19 +630,9 @@ class WanTransformer3DModel(Module):
             - trans_mat
             - N
 
-        Spatial input is a torch tensor with layout `1 B (patch_F patch_H patch_W) (pF pH pW C)`.
-        Spatial output is a torch tensor with same layout.
+        Spatial input is a TT-NN tensor with layout `1 B (patch_F patch_H patch_W) (pF pH pW C)`.
+        Spatial output is a TT-NN tensor with same layout.
         """
-
-        # Push spatial input to device
-        spatial_1BNI = bf16_tensor(
-            spatial_1BNI_torch,
-            device=self.mesh_device,
-            mesh_axis=self.parallel_config.sequence_parallel.mesh_axis,
-            shard_dim=-2,
-        )
-        temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep_torch)
-
         spatial_1BND = self.patch_embedding(spatial_1BNI)
 
         for idx, block in enumerate(self.blocks):
@@ -670,6 +665,4 @@ class WanTransformer3DModel(Module):
             proj_out_1BNI, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
         )
 
-        spatial_1BNI_torch = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BNI)[0])
-
-        return spatial_1BNI_torch
+        return spatial_1BNI
