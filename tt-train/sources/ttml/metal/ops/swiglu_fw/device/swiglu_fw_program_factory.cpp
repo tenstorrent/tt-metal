@@ -572,7 +572,13 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
     };
 
     kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        program,
+        core_group_1,
+        compute_group_1_args,
+        defines,
+        kComputeKernelPath,
+        /*fp32_dest_acc_en=*/true,
+        /*packer_l1_acc=*/true);
 
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
@@ -585,7 +591,13 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         };
 
         kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+            program,
+            core_group_2,
+            compute_group_2_args,
+            defines,
+            kComputeKernelPath,
+            /*fp32_dest_acc_en=*/true,
+            /*packer_l1_acc=*/true);
     }
 
     // -------------------------------------------------------------------------

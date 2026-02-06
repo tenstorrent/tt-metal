@@ -77,7 +77,13 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
     const std::vector<uint32_t>& compile_time_args,
     const std::map<std::string, std::string>& defines,
     const std::string& kernel_path,
-    const bool fp32_dest_acc_en) {
+    const bool fp32_dest_acc_en,
+    const bool packer_l1_acc = false) {
+    // Merge packer_l1_acc define if requested
+    auto merged_defines = defines;
+    if (packer_l1_acc) {
+        merged_defines["PACKER_L1_ACC"] = "1";
+    }
     return tt::tt_metal::CreateKernel(
         program,
         kernel_path,
@@ -87,5 +93,5 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = false,
             .compile_args = compile_time_args,
-            .defines = defines});
+            .defines = merged_defines});
 }

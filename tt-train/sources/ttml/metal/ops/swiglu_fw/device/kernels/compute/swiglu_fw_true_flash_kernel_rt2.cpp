@@ -78,6 +78,11 @@ constexpr auto cb_y_idx = tt::CBIndex::c_10;           // Final Y[r:r+rt_dim, c_
 // Phase 3: X is cached in CB for full row. x_p_block_offset tells us where
 // in the cached X to read for this p_block.
 //
+// Phase 4: L1 Accumulation
+//   - Instead of loading partial from CB into DST, we use packer L1 accumulation
+//   - Packer reads from CB, adds DST value, writes back to CB
+//   - Reserve CB ONCE at first_p_block, push ONCE at last_p_block
+//
 // With rt_dim=2, ct_dim=2:
 // - Process 2 rows × 2 k-columns per matmul_block call
 // - Need 2 calls per p to cover all 4 k-columns (k=0,1 and k=2,3)
@@ -103,23 +108,25 @@ inline void accumulate_XW_for_k_block_rt2(
     constexpr uint32_t tiles_per_row = block_size;                // k-dimension tiles per row
     constexpr uint32_t total_output_tiles = rt_dim * block_size;  // 8 tiles for 2 rows × 4 k
 
+    const uint32_t output_tiles = actual_rows * block_size;
+
+    // Phase 4: L1 Accumulation
+    // - Always accumulate into partial CB using L1 acc
+    // - On last_p_block: copy final result to final CB
+    //
+    // Why not accumulate directly to final CB?
+    // - Partial CB is configured for L1 acc (may have different memory layout)
+    // - Final CB is consumer-facing and needs standard layout
+
+    // Reserve CB space ONCE at start of p_block accumulation
+    if (first_p_block) {
+        cb_reserve_back(cb_partial_idx, output_tiles);
+    }
+
     tile_regs_acquire();
 
-    // Load previous partial results if not first p_block
-    // Layout in CB: row-major [r0_k0, r0_k1, r0_k2, r0_k3, r1_k0, r1_k1, r1_k2, r1_k3]
-    if (!first_p_block) {
-        cb_wait_front(cb_partial_idx, total_output_tiles);
-        copy_tile_init(cb_partial_idx);
-        // Load row 0's k tiles into DST 0,1,2,3
-        for (uint32_t k = 0; k < block_size; ++k) {
-            copy_tile(cb_partial_idx, k, k);
-        }
-        // Load row 1's k tiles into DST 4,5,6,7
-        for (uint32_t k = 0; k < block_size; ++k) {
-            copy_tile(cb_partial_idx, block_size + k, block_size + k);
-        }
-        cb_pop_front(cb_partial_idx, total_output_tiles);
-    }
+    // Phase 4: No need to manually load partial from CB into DST!
+    // The packer will handle this via L1 accumulation
 
     // Wait for W tiles (batched: block_size rows × block_size cols)
     // W layout in CB: row-major [p0_k0, p0_k1, p0_k2, p0_k3, p1_k0, ...]
@@ -138,20 +145,10 @@ inline void accumulate_XW_for_k_block_rt2(
         /*rt_dim=*/rt_dim,
         /*kt_dim=*/p_block_size);
 
-    // Phase 3: X is cached as full rows in CB
-    // X layout in CB: [r0_p0, r0_p1, ..., r0_pWt-1, r1_p0, r1_p1, ..., r1_pWt-1]
-    // For this p_block: X[r0, p] at x_p_block_offset + p, X[r1, p] at Wt + x_p_block_offset + p
-    // For rt_dim=2: in0 reads tiles at in0_index (r0) and in0_index + Wt (r1)
-
     // --- First k-half: k=0,1 ---
-    // DST output positions: [0,1,2,3] = [r0_k0, r0_k1, r1_k0, r1_k1]
     for (uint32_t p = 0; p < p_block_size; ++p) {
-        // in0_index: X tile for this p within the cached row
-        // X[r0, p_block_start + p] at (x_p_block_offset + p)
-        // X[r1, p_block_start + p] at (Wt + x_p_block_offset + p)
         const uint32_t in0_index = x_p_block_offset + p;
-        // in1_index: W[p, k=0] - first k-half
-        const uint32_t in1_index = p * block_size + 0;  // W row p, cols 0,1
+        const uint32_t in1_index = p * block_size + 0;
         matmul_block(
             cb_x_idx,
             cb_w_idx,
@@ -165,35 +162,16 @@ inline void accumulate_XW_for_k_block_rt2(
     }
 
     // --- Second k-half: k=2,3 ---
-    // DST output positions: [4,5,6,7] mapped as [r0_k2, r0_k3, r1_k2, r1_k3]
-    // But we need to pack as: [r0_k0, r0_k1, r0_k2, r0_k3, r1_k0, r1_k1, r1_k2, r1_k3]
-    // So second half goes to DST 2,3 for r0 and DST 6,7 for r1
-    //
-    // Actually, matmul_block with rt_dim=2 produces:
-    // DST[dst_index + 0] = row0, col0
-    // DST[dst_index + 1] = row0, col1  (when ct_dim=2)
-    // DST[dst_index + ct_dim] = row1, col0
-    // DST[dst_index + ct_dim + 1] = row1, col1
-    //
-    // So for dst_index=0, ct_dim=2: [0]=r0_k0, [1]=r0_k1, [2]=r1_k0, [3]=r1_k1
-    // For dst_index=4, ct_dim=2: [4]=r0_k2, [5]=r0_k3, [6]=r1_k2, [7]=r1_k3
-    //
-    // We want final layout: [r0_k0, r0_k1, r0_k2, r0_k3, r1_k0, r1_k1, r1_k2, r1_k3]
-    // But matmul_block gives: [r0_k0, r0_k1, r1_k0, r1_k1, r0_k2, r0_k3, r1_k2, r1_k3]
-    //
-    // Need to rearrange before packing, or adjust the pack order
-
     for (uint32_t p = 0; p < p_block_size; ++p) {
-        // Phase 3: Use cached X offset
         const uint32_t in0_index = x_p_block_offset + p;
-        const uint32_t in1_index = p * block_size + ct_dim;  // W row p, cols 2,3
+        const uint32_t in1_index = p * block_size + ct_dim;
         matmul_block(
             cb_x_idx,
             cb_w_idx,
             in0_index,
             in1_index,
             /*dst_index=*/4,
-            /*transpose=*/false,  // Second half of DST
+            /*transpose=*/false,
             /*ct_dim=*/ct_dim,
             /*rt_dim=*/rt_dim,
             /*kt_dim=*/p_block_size);
@@ -202,24 +180,70 @@ inline void accumulate_XW_for_k_block_rt2(
     cb_pop_front(cb_w_idx, tiles_per_w_batch);
 
     tile_regs_commit();
+    tile_regs_wait();
+
+    // Phase 4: Configure L1 accumulation before packing
+    // - first_p_block: l1_acc=0 (write, not accumulate)
+    // - subsequent p_blocks: l1_acc=1 (read-add-write)
+    pack_reconfig_data_format(cb_partial_idx);
+    if (!first_p_block) {
+        PACK((llk_pack_reconfig_l1_acc(1)));
+    }
 
     // Pack to CB in row-major order: [r0_k0, r0_k1, r0_k2, r0_k3, r1_k0, r1_k1, r1_k2, r1_k3]
     // DST has: [r0_k0, r0_k1, r1_k0, r1_k1, r0_k2, r0_k3, r1_k2, r1_k3]
-    // Pack order: 0, 1, 4, 5, 2, 3, 6, 7
-    const auto output_cb_idx = last_p_block ? cb_final_idx : cb_partial_idx;
+    // Use pack_tile<true> to pack to specific positions for L1 accumulation
+    // dst_index -> cb_position mapping:
+    //   DST 0 -> CB pos 0 (r0_k0)
+    //   DST 1 -> CB pos 1 (r0_k1)
+    //   DST 4 -> CB pos 2 (r0_k2)
+    //   DST 5 -> CB pos 3 (r0_k3)
+    //   DST 2 -> CB pos 4 (r1_k0)
+    //   DST 3 -> CB pos 5 (r1_k1)
+    //   DST 6 -> CB pos 6 (r1_k2)
+    //   DST 7 -> CB pos 7 (r1_k3)
 
-    // Row 0: DST 0, 1, 4, 5 -> k0, k1, k2, k3
-    pack_and_push(0, output_cb_idx);
-    pack_and_push(1, output_cb_idx);
-    pack_and_push(4, output_cb_idx);
-    pack_and_push(5, output_cb_idx);
+    // Row 0: DST 0, 1, 4, 5 -> CB positions 0, 1, 2, 3
+    pack_tile<true>(0, cb_partial_idx, 0);
+    pack_tile<true>(1, cb_partial_idx, 1);
+    pack_tile<true>(4, cb_partial_idx, 2);
+    pack_tile<true>(5, cb_partial_idx, 3);
 
-    // Row 1: DST 2, 3, 6, 7 -> k0, k1, k2, k3 (only if actual_rows == 2)
+    // Row 1: DST 2, 3, 6, 7 -> CB positions 4, 5, 6, 7 (only if actual_rows == 2)
     if (actual_rows == rt_dim) {
-        pack_and_push(2, output_cb_idx);
-        pack_and_push(3, output_cb_idx);
-        pack_and_push(6, output_cb_idx);
-        pack_and_push(7, output_cb_idx);
+        pack_tile<true>(2, cb_partial_idx, 4);
+        pack_tile<true>(3, cb_partial_idx, 5);
+        pack_tile<true>(6, cb_partial_idx, 6);
+        pack_tile<true>(7, cb_partial_idx, 7);
+    }
+
+    tile_regs_release();
+
+    // Phase 4: Reset L1 acc and finalize on last p_block
+    if (last_p_block) {
+        PACK((llk_pack_reconfig_l1_acc(0)));
+        cb_push_back(cb_partial_idx, output_tiles);
+
+        // Copy from partial to final CB
+        cb_wait_front(cb_partial_idx, output_tiles);
+        cb_reserve_back(cb_final_idx, output_tiles);
+
+        tile_regs_acquire();
+        copy_tile_init(cb_partial_idx);
+        for (uint32_t i = 0; i < output_tiles; ++i) {
+            copy_tile(cb_partial_idx, i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+
+        pack_reconfig_data_format(cb_final_idx);
+        for (uint32_t i = 0; i < output_tiles; ++i) {
+            pack_tile(i, cb_final_idx);
+        }
+        tile_regs_release();
+
+        cb_pop_front(cb_partial_idx, output_tiles);
+        cb_push_back(cb_final_idx, output_tiles);
     }
 }
 
