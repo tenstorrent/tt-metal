@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "tt_cluster.hpp"
 #include "tt_metal/fabric/topology_solver_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -31,7 +32,8 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogical) {
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
 
     // Create mesh graph from descriptor
-    auto mesh_graph = MeshGraph(mesh_graph_desc_path.string());
+    const tt::Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto mesh_graph = MeshGraph(cluster, mesh_graph_desc_path.string());
 
     // Build adjacency map logical
     auto adjacency_map = build_adjacency_map_logical(mesh_graph);
@@ -83,7 +85,9 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     asic_id_to_mesh_rank[MeshId{1}][tt::tt_metal::AsicID{103}] = MeshHostRankId{0};
 
     // Build adjacency map physical
-    auto adjacency_map = build_adjacency_map_physical(physical_system_descriptor, asic_id_to_mesh_rank);
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto adjacency_map =
+        build_adjacency_map_physical(cluster.get_cluster_type(), physical_system_descriptor, asic_id_to_mesh_rank);
 
     // Verify that we have adjacency graphs for each mesh
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes";
@@ -2115,7 +2119,8 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogical_WithSwitchMeshes) {
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_ttswitch_mgd.textproto";
 
     // Create mesh graph from descriptor
-    auto mesh_graph = MeshGraph(mesh_graph_desc_path.string());
+    const tt::Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto mesh_graph = MeshGraph(cluster, mesh_graph_desc_path.string());
 
     // Build adjacency map logical - this should include both regular meshes and switch meshes
     auto adjacency_map = build_adjacency_map_logical(mesh_graph);

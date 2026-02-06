@@ -30,9 +30,13 @@ constexpr auto kFabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D;
 constexpr auto kReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
-    control_plane->initialize_fabric_context(kFabricConfig, tt::tt_fabric::FabricRouterConfig{});
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
+        cluster, rtoptions, hal, distributed_context, graph_desc.string(), kFabricConfig, kReliabilityMode);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     return control_plane;
 }
@@ -40,10 +44,20 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
     const std::filesystem::path& graph_desc,
     const std::map<tt::tt_fabric::FabricNodeId, tt::ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
-        graph_desc.string(), logical_mesh_chip_id_to_physical_chip_id_mapping);
-    control_plane->initialize_fabric_context(kFabricConfig, tt::tt_fabric::FabricRouterConfig{});
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
+        cluster,
+        rtoptions,
+        hal,
+        distributed_context,
+        graph_desc.string(),
+        logical_mesh_chip_id_to_physical_chip_id_mapping,
+        kFabricConfig,
+        kReliabilityMode);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     return control_plane;
 }
@@ -71,7 +85,7 @@ struct RoutingTableGeneratorTestHelper {
         local_mesh_binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
 
         topology_mapper = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            *mesh_graph, *physical_system_descriptor, local_mesh_binding);
+            cluster, *distributed_context, *mesh_graph, *physical_system_descriptor, local_mesh_binding);
 
         routing_table_generator = std::make_unique<tt::tt_fabric::RoutingTableGenerator>(*topology_mapper);
     }
@@ -83,9 +97,13 @@ std::unique_ptr<RoutingTableGeneratorTestHelper> make_routing_table_generator(co
 }
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::filesystem::path& graph_desc) {
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
-    control_plane->initialize_fabric_context(kFabricConfig1D, tt::tt_fabric::FabricRouterConfig{});
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig1D, kReliabilityMode);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
+        cluster, rtoptions, hal, distributed_context, graph_desc.string(), kFabricConfig1D, kReliabilityMode);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     return control_plane;
 }
@@ -1244,8 +1262,8 @@ TEST_F(ControlPlaneFixture, TestSerializeEthCoordinatesToFile) {
     local_mesh_binding.mesh_ids = {mesh_id};
     local_mesh_binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
 
-    auto topology_mapper =
-        std::make_unique<tt::tt_fabric::TopologyMapper>(mesh_graph, *physical_system_descriptor, local_mesh_binding);
+    auto topology_mapper = std::make_unique<tt::tt_fabric::TopologyMapper>(
+        cluster, *distributed_context, mesh_graph, *physical_system_descriptor, local_mesh_binding);
 
     // Create a temporary directory for the output file
     std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "test_eth_coords";

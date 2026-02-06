@@ -318,9 +318,6 @@ public:
     void configure_ethernet_cores_for_fabric_routers(
         tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
-    void initialize_fabric_config(
-        tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
-
     // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
 
