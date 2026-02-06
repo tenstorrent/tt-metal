@@ -34,9 +34,13 @@ WorkerMemoryLayout allocate_worker_memory() {
     // Get L1 alignment requirement
     size_t l1_alignment = hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
+    // Calculate addresses before struct initialization to avoid using uninitialized values
+    uint32_t source_buffer_addr = tt::align(l1_unreserved_base, l1_alignment);
+    uint32_t teardown_signal_addr = tt::align(source_buffer_addr + SOURCE_BUFFER_SIZE, l1_alignment);
+
     WorkerMemoryLayout layout = {
-        .source_buffer_address = tt::align(l1_unreserved_base, l1_alignment),
-        .teardown_signal_address = tt::align(layout.source_buffer_address + SOURCE_BUFFER_SIZE, l1_alignment),
+        .source_buffer_address = source_buffer_addr,
+        .teardown_signal_address = teardown_signal_addr,
         .packet_payload_size_bytes = PACKET_PAYLOAD_SIZE_DEFAULT};
 
     return layout;
