@@ -40,7 +40,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             10,
             640,
             1,
-            0.993,
+            0.994,
         ),
         # 512x512 image resolution
         (
@@ -53,7 +53,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             20,
             1280,
             0,
-            0.983,
+            0.985,
         ),
         (
             (512, 512),

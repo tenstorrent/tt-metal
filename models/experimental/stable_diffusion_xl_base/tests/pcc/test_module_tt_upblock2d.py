@@ -24,7 +24,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             (1, 1280),
             ((1, 320, 128, 128), (1, 320, 128, 128), (1, 320, 128, 128)),
             2,
-            0.996,
+            0.997,
         ),
         # 512x512 image resolution
         (
@@ -33,7 +33,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             (1, 1280),
             ((1, 320, 64, 64), (1, 320, 64, 64), (1, 320, 64, 64)),
             2,
-            0.992,
+            0.997,
         ),
     ],
 )

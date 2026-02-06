@@ -744,13 +744,12 @@ class TtSDXLPipeline(LightweightModule):
 
         profiler.start("load_tt_componenets")
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
-            # 2. Load tt_unet, tt_vae and tt_scheduler
+            # 1. Load tt_unet
             self.tt_unet_model_config = (
                 load_model_optimisations(self.pipeline_config.image_resolution)
                 if not self.torch_pipeline.unet.state_dict()["conv_in.weight"].shape[0] == 384
                 else load_refiner_model_optimisations(self.pipeline_config.image_resolution)
             )
-            self.tt_vae_model_config = load_vae_model_optimisations(self.pipeline_config.image_resolution)
             self.tt_unet = TtUNet2DConditionModel(
                 self.ttnn_device,
                 self.torch_pipeline.unet.state_dict(),
@@ -758,17 +757,20 @@ class TtSDXLPipeline(LightweightModule):
                 model_config=self.tt_unet_model_config,
                 debug_mode=pipeline_config._debug_mode,
             )
-            # Skip VAE for refiner pipelines
-            self.tt_vae = (
-                TtAutoencoderKL(
+
+            # 2. Load tt_vae
+            if self.pipeline_config.vae_on_device:
+                self.tt_vae_model_config = load_vae_model_optimisations(self.pipeline_config.image_resolution)
+                self.tt_vae = TtAutoencoderKL(
                     self.ttnn_device,
                     self.torch_pipeline.vae.state_dict(),
                     self.tt_vae_model_config,
                     debug_mode=pipeline_config._debug_mode,
                 )
-                if pipeline_config.vae_on_device
-                else None
-            )
+            else:
+                self.tt_vae = None
+
+            # 3. Load tt_scheduler
             if tt_scheduler is not None:
                 self.tt_scheduler = tt_scheduler
             else:
@@ -794,6 +796,7 @@ class TtSDXLPipeline(LightweightModule):
                 )
         self.torch_pipeline.scheduler = self.tt_scheduler
 
+        # 4. Load encoders
         if pipeline_config.encoders_on_device:
             self.tt_text_encoder, self.tt_text_encoder_2 = create_tt_clip_text_encoders(
                 self.torch_pipeline, self.ttnn_device

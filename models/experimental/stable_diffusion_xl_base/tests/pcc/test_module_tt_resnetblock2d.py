@@ -43,7 +43,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         ((512, 512), (1, 1280, 32, 32), (1, 1280), 1, 1, True, "up_blocks", 0.999),
         ((512, 512), (1, 960, 32, 32), (1, 1280), 1, 2, True, "up_blocks", 0.999),
         ((512, 512), (1, 960, 64, 64), (1, 1280), 2, 0, True, "up_blocks", 0.999),
-        ((512, 512), (1, 640, 64, 64), (1, 1280), 2, 1, True, "up_blocks", 0.986),
+        ((512, 512), (1, 640, 64, 64), (1, 1280), 2, 1, True, "up_blocks", 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)

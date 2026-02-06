@@ -26,7 +26,10 @@ import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
 # TODO: test 20 instead of 10 unet iterations
-UNET_LOOP_PCC = {"10": 0.92, "50": 0.92}
+UNET_LOOP_PCC = {
+    "1024x1024": {"10": 0.92, "50": 0.92},
+    "512x512": {"10": 0.92, "50": 0.92},
+}
 
 
 @torch.no_grad()
@@ -299,7 +302,9 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
         plt.savefig("pcc_plot.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, UNET_LOOP_PCC.get(str(num_inference_steps), 0))
+    resolution_key = f"{height}x{width}"
+    pcc_threshold = UNET_LOOP_PCC.get(resolution_key, {}).get(str(num_inference_steps), 0)
+    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, pcc_threshold)
     logger.info(f"PCC of the last iteration is: {pcc_message}")
 
 
@@ -312,6 +317,7 @@ def run_unet_inference(ttnn_device, is_ci_env, image_resolution, prompts, num_in
         # 512x512 image resolution
         (512, 512),
     ],
+    ids=["1024x1024", "512x512"],
 )
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
