@@ -52,7 +52,7 @@ jobs:
           set -euo pipefail
           export PATH=~/.local/bin:$PATH
           tt-metalium-models \
-            -c "pytest --disable-warnings -q -s \
+            -c "pytest --timeout=1200 --disable-warnings -q -s \
               --input-method=json \
               --input-path='models/demos/ttnn_falcon7b/demo/input_data.json' \
               models/demos/ttnn_falcon7b/demo/demo.py::test_demo"
