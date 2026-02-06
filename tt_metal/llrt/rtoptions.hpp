@@ -154,7 +154,8 @@ class RunTimeOptions {
     std::string mock_cluster_desc_path;
     std::string dispatch_timeout_command_to_execute;
 
-    // Watcher feature name strings (used in env vars + defines in the device code)
+    // Watcher feature name strings (used in env vars + defines in the device code), as well as a
+    // set to track disabled features.
     const std::string watcher_waypoint_str = "WAYPOINT";
     const std::string watcher_noc_sanitize_str = "NOC_SANITIZE";
     const std::string watcher_assert_str = "ASSERT";
