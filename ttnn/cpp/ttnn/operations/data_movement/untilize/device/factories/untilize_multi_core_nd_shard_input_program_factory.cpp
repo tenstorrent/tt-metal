@@ -131,21 +131,23 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Writer compile-time args
+    uint32_t output_element_size = output.element_size();
+    uint32_t output_page_width =
+        tensor_width;  // In height-sharded and interleaved cases, the output page is the entire tensor row
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        uint32_t output_shard_width;
         if (output.shard_spec().has_value()) {
-            output_shard_width = output.shard_spec().value().shape[1];
+            output_page_width = output.shard_spec().value().shape[1];
         } else {
-            output_shard_width = output.nd_shard_spec().value().shard_shape[-1];
+            output_page_width = output.nd_shard_spec().value().shard_shape[-1];
         }
-        output_num_blocks_across_width = tensor_width / output_shard_width;
+        output_num_blocks_across_width = tt::div_up(tensor_width, output_page_width);
     }
-    uint32_t output_stick_size = tensor_width * output.element_size() / output_num_blocks_across_width;
-    uint32_t output_element_size = output.element_size();
+
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
-    uint32_t num_cols_per_output_block = tensor_width / output_num_blocks_across_width;
+    uint32_t num_cols_per_output_block = output_page_width;
+    uint32_t output_stick_size = num_cols_per_output_block * output_element_size;
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)output_cb_index,
         (uint32_t)output_stick_size,
@@ -247,24 +249,15 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
             uint32_t page_offset = 0;
             const uint32_t total_pages = host_page_indices.size();
 
-            // Find first non-padding page
-            if (host_page_indices[page_offset] !=
-                UncompressedBufferPageMapping::PADDING) {  // First page is non-padding, so this core has at least one
-                                                           // shard on it
-
-                while (page_offset < total_pages) {
-                    // This page is valid (non-padding), count this block
+            while (page_offset < total_pages) {
+                if (host_page_indices[page_offset] != UncompressedBufferPageMapping::PADDING) {
                     num_input_blocks_to_process++;
-
-                    // Advance by num_tiles_per_input_block
-                    page_offset += num_tiles_per_input_block;
-
-                    // Find next non-padding page
-                    while (page_offset < total_pages &&
-                           host_page_indices[page_offset] == UncompressedBufferPageMapping::PADDING) {
-                        page_offset += num_tiles_per_input_block;
-                    }
+                } else if (page_offset == 0) {  // First page is PADDING means this core has no shards, no need to
+                                                // iterate further
+                    break;
                 }
+                // Advance by num_tiles_per_input_block
+                page_offset += num_tiles_per_input_block;
             }
         }
         // Reader run-time args
