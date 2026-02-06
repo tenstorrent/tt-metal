@@ -443,7 +443,6 @@ KernelGroup::KernelGroup(
             kernel_config.watcher_kernel_ids()[processor_index] = kernel->get_watcher_kernel_id();
             kernel_config.enables() |= 1u << processor_index;
         }
-        auto class_id = kernel->dispatch_class();
 
         // Dynamic NOC assignment is only supported on certain core types
         const bool is_tensix_core =
@@ -458,7 +457,7 @@ KernelGroup::KernelGroup(
                     if constexpr (std::is_same_v<T, DataMovementConfig> || std::is_same_v<T, EthernetConfig>) {
                         // The code below sets the brisc_noc_id for use by the device firmware
                         // Use 0 if neither brisc nor ncrisc specify a noc
-                        if (class_id ==
+                        if (kernel->get_kernel_processor_type(0) ==
                             ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
                             noc_modes.insert(arg.noc_mode);
                             // Use brisc's noc if brisc specifies a noc
@@ -469,7 +468,7 @@ KernelGroup::KernelGroup(
                                 kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
                             }
                         } else if (
-                            class_id ==
+                            kernel->get_kernel_processor_type(0) ==
                             ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                             noc_modes.insert(arg.noc_mode);
                             // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
@@ -693,8 +692,18 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
             local_cb_mask = (num_dfbs > 0 && local_cb_mask == 0) ? num_dfbs : local_cb_mask;
             std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
             // Sort kernel ids by dispatch class, so loops over this array will be in dispatch class order
-            std::sort(kernel_ids.begin(), kernel_ids.end(), [&handle_to_kernel](KernelHandle a, KernelHandle b) {
-                return handle_to_kernel.at(a)->dispatch_class() < handle_to_kernel.at(b)->dispatch_class();
+            std::sort(kernel_ids.begin(), kernel_ids.end(), [&](KernelHandle a, KernelHandle b) {
+                auto ka = handle_to_kernel.at(a);
+                auto kb = handle_to_kernel.at(b);
+                auto idx_a = hal.get_processor_index(
+                    hal.get_programmable_core_type(programmable_core_type_index),
+                    ka->get_kernel_processor_class(),
+                    ka->get_kernel_processor_type(0));
+                auto idx_b = hal.get_processor_index(
+                    hal.get_programmable_core_type(programmable_core_type_index),
+                    kb->get_kernel_processor_class(),
+                    kb->get_kernel_processor_type(0));
+                return idx_a < idx_b;
             });
             kernel_groups_[programmable_core_type_index].push_back(std::make_shared<KernelGroup>(
                 *this,
@@ -1196,12 +1205,13 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                     KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
                     kernel_ids.push_back(device_local_kernel_id);
                     auto kernel = this->get_kernel(device_local_kernel_id);
-                    auto dispatch_class = kernel->dispatch_class();
-                    int proc_sub_class = 0;
-                    for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
-                        // TODO: ditch this w/ linear writes based on program config kernel_text_offset and size
-                        dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
-                        proc_sub_class++;
+                    auto processor_class = kernel->get_kernel_processor_class();
+                    for (uint32_t bin_idx = 0; bin_idx < kernel->expected_num_binaries(); bin_idx++) {
+                        auto processor_type = kernel->get_kernel_processor_type(bin_idx);
+                        auto processor_index = hal.get_processor_index(
+                            hal.get_programmable_core_type(index), processor_class, processor_type);
+                        kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs[bin_idx] =
+                            kernel_group->kernel_text_offsets[processor_index];
                     }
                 }
 
@@ -1223,15 +1233,17 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 for (auto kernel_id : kernel_group->kernel_ids) {
                     KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
                     auto kernel = this->get_kernel(device_local_kernel_id);
-                    auto dispatch_class = kernel->dispatch_class();
                     kernel_ids.push_back(device_local_kernel_id);
 
                     // Update destination address by kernel config offset
                     if (hal.get_core_kernel_stored_in_config_buffer(hal.get_programmable_core_type(index))) {
-                        int proc_sub_class = 0;
-                        for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
-                            dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
-                            proc_sub_class++;
+                        auto processor_class = kernel->get_kernel_processor_class();
+                        for (uint32_t bin_idx = 0; bin_idx < kernel->expected_num_binaries(); bin_idx++) {
+                            auto processor_type = kernel->get_kernel_processor_type(bin_idx);
+                            auto processor_index = hal.get_processor_index(
+                                hal.get_programmable_core_type(index), processor_class, processor_type);
+                            kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs[bin_idx] =
+                                kernel_group->kernel_text_offsets[processor_index];
                         }
                     }
                 }
@@ -1666,8 +1678,6 @@ detail::ProgramImpl::get_cached_program_command_sequences() noexcept {
 void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state) {
     auto& program_config = get_program_config(index);
     program_config.rta_offset = state.rta_offset;
-    program_config.crta_offsets = state.crta_offsets;
-    program_config.crta_sizes = state.crta_sizes;
     program_config.sem_offset = state.sem_offset;
     program_config.sem_size = state.sem_size;
     program_config.cb_offset = state.cb_offset;
@@ -1738,13 +1748,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
         state.offset = program_dispatch::finalize_rt_args(
-            kernels_getter(index),
-            kernel_groups_getter(index),
-            state.config_base_offset,
-            index,
-            state.rta_offset,
-            state.crta_offsets,
-            state.crta_sizes);
+            kernels_getter(index), kernel_groups_getter(index), state.config_base_offset, index, state.rta_offset);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

@@ -145,7 +145,7 @@ uint32_t configure_rta_offsets_for_kernel_groups(
     const auto& hal = MetalContext::instance().hal();
     // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
     // whereas the RTA allocation is separate for DM0/DM1/COMPUTE.
-    std::vector<uint32_t> max_rtas(DISPATCH_CLASS_MAX);
+    std::vector<uint32_t> max_rtas(kernels.size());
     uint32_t max_unique_rta_size = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
@@ -161,29 +161,27 @@ uint32_t configure_rta_offsets_for_kernel_groups(
             }
         }
         std::ranges::fill(max_rtas, 0);
-        for (auto kernel_id : kg->kernel_ids) {
-            const auto& kernel = kernels.at(kernel_id);
-            auto dispatch_class = kernel->dispatch_class();
+        for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
+            const auto& kernel = kernels.at(kg->kernel_ids[idx]);
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord core_coord(x, y);
-                        max_rtas[dispatch_class] =
-                            std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
+                        max_rtas[idx] = std::max<uint32_t>(max_rtas[idx], kernel->runtime_args(core_coord).size());
                     }
                 }
             }
         }
         uint32_t offset = 0;
-        for (auto kernel_id : kg->kernel_ids) {
-            const auto& kernel = kernels.at(kernel_id);
-            auto dispatch_class = kernel->dispatch_class();
-            kg->rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
+        kg->rta_sizes.resize(kg->kernel_ids.size());
+        for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
+            const auto& kernel = kernels.at(kg->kernel_ids[idx]);
+            kg->rta_sizes[idx] = max_rtas[idx] * sizeof(uint32_t);
             uint32_t rta_offset = base_offset + offset;
-            offset += max_rtas[dispatch_class] * sizeof(uint32_t);
-            kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
+            offset += max_rtas[idx] * sizeof(uint32_t);
+            kernel->set_runtime_args_count(kg->core_ranges, max_rtas[idx]);
             // Per-kernel check: Only set actual offset if this kernel has RTAs
-            if (max_rtas[dispatch_class] > 0) {
+            if (max_rtas[idx] > 0) {
                 for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
                     uint32_t processor_index = hal.get_processor_index(
                         kernel->get_kernel_programmable_core_type(),
@@ -201,69 +199,68 @@ uint32_t configure_rta_offsets_for_kernel_groups(
         offset = tt::align(offset, l1_alignment);
         max_unique_rta_size = std::max(offset, max_unique_rta_size);
     }
-    return max_unique_rta_size;
+    return max_unique_rta_size;  // worst-case KG determines L1 reservation
 }
 
 uint32_t configure_crta_offsets_for_kernel_groups(
     uint32_t /*programmable_core_type_index*/,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
-    uint32_t crta_base_offset,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
+    uint32_t crta_base_offset) {
     const auto& hal = MetalContext::instance().hal();
-    // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
-    // whereas the CRTA allocation is separate for DM0/DM1/COMPUTE.
-    std::vector<uint32_t> max_crtas(DISPATCH_CLASS_MAX, 0);
-
-    // Find the max # common RTAs across all kernels for each dispatch class
-    for (auto& kernel_info : kernels) {
-        auto kernel = kernel_info.second;
-        uint32_t dispatch_class = kernel->dispatch_class();
-        max_crtas[dispatch_class] = std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
-    }
-
-    // Derive crta offsets and sizes per dispatch class
-    uint32_t offset = 0;
+    std::vector<uint32_t> max_crtas(kernels.size(), 0);
+    uint32_t max_crta_size = 0;
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-        uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
-        crta_offsets[dispatch_class] = crta_base_offset + offset;
-        crta_sizes[dispatch_class] = size;
-        offset += size;
-        offset = tt::align(offset, l1_alignment);
-    }
-    uint32_t total_crta_size = offset;
 
-    // Set the runtime_args_data sizing info based on the shared max
+    // Find the max # common RTAs across all KGs
+    for (auto& kg : kernel_groups) {
+        std::ranges::fill(max_crtas, 0);
+        for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
+            const auto& kernel = kernels.at(kg->kernel_ids[idx]);
+            max_crtas[idx] = std::max<uint32_t>(max_crtas[idx], kernel->common_runtime_args().size());
+        }
+
+        // Derive crta offsets and sizes for this KG
+        uint32_t offset = 0;
+        kg->crta_offsets.resize(kg->kernel_ids.size());
+        kg->crta_sizes.resize(kg->kernel_ids.size());
+        for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
+            uint32_t size = max_crtas[idx] * sizeof(uint32_t);
+            kg->crta_offsets[idx] = crta_base_offset + offset;
+            kg->crta_sizes[idx] = size;
+            offset += size;
+            offset = tt::align(offset, l1_alignment);
+        }
+        max_crta_size = std::max(max_crta_size, offset);
+    }
+
     for (auto& kernel_info : kernels) {
         auto kernel = kernel_info.second;
-        uint32_t dispatch_class = kernel->dispatch_class();
-        kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
+        kernel->set_common_runtime_args_count(kernel->common_runtime_args().size());
     }
+
     // Set the kernel group common runtime arg offsets use in the launch message
     for (auto& kg : kernel_groups) {
-        for (auto kernel_id : kg->kernel_ids) {
-            const auto& kernel = kernels.at(kernel_id);
-            auto dispatch_class = kernel->dispatch_class();
+        for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
+            const auto& kernel = kernels.at(kg->kernel_ids[idx]);
             // Per-kernel check: Only set actual offset if this kernel has CRTAs
-            if (max_crtas[dispatch_class] > 0) {
+            if (max_crtas[idx] > 0) {
                 for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
                     uint32_t processor_index = hal.get_processor_index(
                         kernel->get_kernel_programmable_core_type(),
                         kernel->get_kernel_processor_class(),
                         kernel->get_kernel_processor_type(i));
                     TT_FATAL(
-                        crta_offsets[dispatch_class] <= std::numeric_limits<uint16_t>::max(),
+                        kg->crta_offsets[idx] <= std::numeric_limits<uint16_t>::max(),
                         "CRTA offset {} overflows uint16_t",
-                        crta_offsets[dispatch_class]);
+                        kg->crta_offsets[idx]);
                     kg->launch_msg.view().kernel_config().rta_offset()[processor_index].crta_offset() =
-                        crta_offsets[dispatch_class];
+                        kg->crta_offsets[idx];
                 }
             }
         }
     }
-    return total_crta_size;
+    return max_crta_size;
 }
 
 uint32_t finalize_rt_args(
@@ -271,16 +268,14 @@ uint32_t finalize_rt_args(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
     uint32_t programmable_core_type_index,
-    uint32_t& rta_offset,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
+    uint32_t& rta_offset) {
     uint32_t max_unique_rta_size = program_dispatch::configure_rta_offsets_for_kernel_groups(
         programmable_core_type_index, kernels, kernel_groups, base_offset);
     uint32_t crta_base_offset = base_offset + max_unique_rta_size;
-    uint32_t total_crta_size = program_dispatch::configure_crta_offsets_for_kernel_groups(
-        programmable_core_type_index, kernels, kernel_groups, crta_base_offset, crta_offsets, crta_sizes);
+    uint32_t max_crta_size = program_dispatch::configure_crta_offsets_for_kernel_groups(
+        programmable_core_type_index, kernels, kernel_groups, crta_base_offset);
 
-    uint32_t offset = max_unique_rta_size + total_crta_size;
+    uint32_t offset = max_unique_rta_size + max_crta_size;
 
     rta_offset = base_offset;
     return offset;
@@ -655,128 +650,73 @@ BatchedTransfers assemble_runtime_args_commands(
     }
 
     uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
-    // Calculate the best way to multicast common RTAs.
 
-    // Per-kernel is best when there are a lot of kernel groups and few kernels (which should be rare).
-    uint32_t per_kernel_crta_multicast_count = 0;
-    for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
-        auto kernel_id = get_device_local_kernel_handle(kernel_index);
-        auto kernel = program.get_kernel(kernel_id);
-        if (kernel->get_kernel_core_type() != CoreType::WORKER) {
-            continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
-        }
-
-        const auto& common_rt_args = kernel->common_runtime_args();
-        if (common_rt_args.empty()) {
-            continue;
-        }
-        TT_ASSERT(kernel->common_runtime_args_data().data() == common_rt_args.data() + count_word_offset);
-        TT_ASSERT(kernel->common_runtime_args_data().size() == common_rt_args.size() - count_word_offset);
-        per_kernel_crta_multicast_count += kernel->logical_coreranges().size();
-    }
-
-    // kernel_group multicast is best when multiple kernels on the same kernel group have common RTAs. It may also merge
-    // CRTA writes with CB and semaphore writes.
-    uint32_t kernel_group_crta_multicast_count = 0;
-    {
-        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        for (auto& kg : program.get_kernel_groups(index)) {
-            bool has_crtas = false;
-            for (auto kernel_id : kg->kernel_ids) {
-                auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
-                auto kernel = program.get_kernel(device_local_kernel_handle);
-                if (!kernel->common_runtime_args().empty()) {
-                    has_crtas = true;
-                    break;
-                }
-            }
-            if (has_crtas) {
-                kernel_group_crta_multicast_count += kg->core_ranges.size();
-            }
-        }
-    }
-
-    // kernel group multicast can merge with CB multicast, so prefer it in general.
-    bool use_kernel_group_crta_multicast = kernel_group_crta_multicast_count <= per_kernel_crta_multicast_count;
-
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = program.get_kernel(kernel_id);
-        auto programmable_core_type = kernel->get_kernel_programmable_core_type();
-        if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
+    // Ethernet only: unicast to each core
+    for (uint32_t p_idx = 0; p_idx < hal.get_programmable_core_type_count(); p_idx++) {
+        auto programmable_core_type = hal.get_programmable_core_type(p_idx);
+        if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH ||
+            programmable_core_type == HalProgrammableCoreType::TENSIX) {
             // Fast dispatch not supported on IDLE_ETH yet
             continue;
         }
-        if ((programmable_core_type == HalProgrammableCoreType::TENSIX) && use_kernel_group_crta_multicast) {
-            continue;
-        }
-        uint32_t programmable_core_type_index = hal.get_programmable_core_type_index(programmable_core_type);
-        uint32_t common_size =
-            program.get_program_config(programmable_core_type_index).crta_sizes[kernel->dispatch_class()];
-        if (common_size != 0) {
-            uint32_t max_runtime_args_len = common_size / sizeof(uint32_t);
-            const auto& common_rt_args = kernel->common_runtime_args();
 
-            if (!common_rt_args.empty()) {
-                if (!tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(
-                        programmable_core_type_index)) {
-                    uint32_t num_sub_cmds = kernel->logical_cores().size();
-                    uint32_t max_packed_cmds =
-                        calculator.get_max_write_packed_sub_cmds<CQDispatchWritePackedUnicastSubCmd>(
-                            max_runtime_args_len,
-                            constants.max_prefetch_command_size,
-                            constants.packed_write_max_unicast_sub_cmds,
-                            true);
-                    command_count += div_up(num_sub_cmds, max_packed_cmds);
-                } else {
-                    uint32_t num_sub_cmds = kernel->logical_coreranges().size();
-                    uint32_t max_packed_cmds =
-                        calculator.get_max_write_packed_sub_cmds<CQDispatchWritePackedMulticastSubCmd>(
-                            max_runtime_args_len,
-                            constants.max_prefetch_command_size,
-                            constants.packed_write_max_unicast_sub_cmds,
-                            true);
-                    command_count += div_up(num_sub_cmds, max_packed_cmds);
+        for (auto& kg : program.get_kernel_groups(p_idx)) {
+            for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
+                uint32_t common_size = kg->crta_sizes[idx];
+                if (common_size == 0) {
+                    continue;
                 }
+                uint32_t max_runtime_args_len = common_size / sizeof(uint32_t);
+                auto kernel_id = get_device_local_kernel_handle(kg->kernel_ids[idx]);
+                auto kernel = program.get_kernel(kernel_id);
+                if (kernel->common_runtime_args().empty()) {
+                    continue;
+                }
+
+                uint32_t num_sub_cmds = kg->core_ranges.num_cores();
+                uint32_t max_packed_cmds = calculator.get_max_write_packed_sub_cmds<CQDispatchWritePackedUnicastSubCmd>(
+                    max_runtime_args_len,
+                    constants.max_prefetch_command_size,
+                    constants.packed_write_max_unicast_sub_cmds,
+                    true);
+                command_count += div_up(num_sub_cmds, max_packed_cmds);
             }
         }
     }
 
     program_command_sequence.runtime_args_command_sequences.reserve(command_count);
 
-    if (use_kernel_group_crta_multicast) {
-        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        for (auto& kg : program.get_kernel_groups(index)) {
-            for (auto kernel_id : kg->kernel_ids) {
-                auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
-                auto kernel = program.get_kernel(device_local_kernel_handle);
-                if (kernel->common_runtime_args().empty()) {
-                    continue;
-                }
-                uint32_t dispatch_class = kernel->dispatch_class();
-                const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
-                for (auto& transfer_info :
-                     extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
-                    const auto& core_range = std::get<CoreRange>(transfer_info.cores);
-                    auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, core_range);
-                    size_t size = kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
-                    LOG_TRACE_LAZY(
-                        tt::LogDispatch,
-                        "Common RTA (MCAST via kernel_group): core_range={}, noc_xy=0x{:x}, "
-                        "num_dests={}, L1_addr=0x{:x}, crta_size={} bytes",
-                        core_range,
-                        noc_xy_addr,
-                        transfer_info.num_dests,
-                        crta_offset,
-                        size);
-                    RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
-                    transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
-                        std::vector<Transfer>{Transfer{
-                            .start = crta_offset,
-                            .data = tt::stl::Span<const uint8_t>(
-                                reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
-                            .cbs = {},
-                            .rta_data = &kernel->common_runtime_args_data()}};
-                }
+    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    for (auto& kg : program.get_kernel_groups(index)) {
+        for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
+            auto device_local_kernel_handle = get_device_local_kernel_handle(kg->kernel_ids[idx]);
+            auto kernel = program.get_kernel(device_local_kernel_handle);
+            if (kernel->common_runtime_args().empty()) {
+                continue;
+            }
+            const uint32_t crta_offset = kg->crta_offsets[idx];
+            for (auto& transfer_info :
+                 extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
+                const auto& core_range = std::get<CoreRange>(transfer_info.cores);
+                auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, core_range);
+                size_t size = kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
+                LOG_TRACE_LAZY(
+                    tt::LogDispatch,
+                    "Common RTA (MCAST via kernel_group): core_range={}, noc_xy=0x{:x}, "
+                    "num_dests={}, L1_addr=0x{:x}, crta_size={} bytes",
+                    core_range,
+                    noc_xy_addr,
+                    transfer_info.num_dests,
+                    crta_offset,
+                    size);
+                RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
+                transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
+                    std::vector<Transfer>{Transfer{
+                        .start = crta_offset,
+                        .data = tt::stl::Span<const uint8_t>(
+                            reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
+                        .cbs = {},
+                        .rta_data = &kernel->common_runtime_args_data()}};
             }
         }
     }
@@ -801,22 +741,20 @@ BatchedTransfers assemble_runtime_args_commands(
 
                             unique_rt_args_data.resize(unique_rt_args_data.size() + 1);
                             unique_rt_data_and_sizes.resize(unique_rt_data_and_sizes.size() + 1);
-                            for (auto kernel_id : kg->kernel_ids) {
-                                auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
+                            for (uint32_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
+                                auto device_local_kernel_handle = get_device_local_kernel_handle(kg->kernel_ids[idx]);
                                 auto kernel = program.get_kernel(device_local_kernel_handle);
                                 if (!kernel->cores_with_runtime_args().empty()) {
-                                    auto dispatch_class = kernel->dispatch_class();
                                     const auto& runtime_args_data = kernel->runtime_args(core_coord);
                                     unique_rt_args_data.back().emplace_back(
                                         RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
-                                    TT_ASSERT(
-                                        runtime_args_data.size() * sizeof(uint32_t) <= kg->rta_sizes[dispatch_class]);
+                                    TT_ASSERT(runtime_args_data.size() * sizeof(uint32_t) <= kg->rta_sizes[idx]);
                                     // Back up pointer to include count word for dispatch
                                     // Device expects [count | args...] layout for watcher bounds checking
                                     unique_rt_data_and_sizes.back().emplace_back(
                                         kernel->runtime_args_data(core_coord).rt_args_data - count_word_offset,
                                         runtime_args_data.size() * sizeof(uint32_t),
-                                        kg->rta_sizes[dispatch_class]);
+                                        kg->rta_sizes[idx]);
                                 }
                             }
                             CoreCoord virtual_core = device->virtual_core_from_logical_core(core_coord, core_type);
@@ -858,32 +796,20 @@ BatchedTransfers assemble_runtime_args_commands(
 
         // Common RTAs
         // Set by the user based on the kernel ID. All cores running that kernel ID will get these RTAs
-        // On ETH use unicast
-        if (!use_kernel_group_crta_multicast ||
-            !tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(index)) {
-            // Note: it's wrong to use HAL processor classes here, because it only has DM/COMPUTE,
-            // whereas CRTA is separate for DM0/DM1/COMPUTE.
-            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-                const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
-                uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
-                if (common_size == 0) {
-                    continue;
-                }
-
-                for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
-                    auto kernel_id = get_device_local_kernel_handle(kernel_index);
+        // Ethernet only: unicast to each core
+        if (!tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(index)) {
+            for (auto& kg : program.get_kernel_groups(index)) {
+                for (size_t idx = 0; idx < kg->kernel_ids.size(); idx++) {
+                    auto kernel_id = get_device_local_kernel_handle(kg->kernel_ids[idx]);
                     auto kernel = program.get_kernel(kernel_id);
-                    if (kernel->get_kernel_core_type() != core_type) {
-                        continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
-                    }
-                    if (kernel->dispatch_class() != dispatch_class) {
-                        continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
-                    }
 
                     const auto& common_rt_args = kernel->common_runtime_args();
                     if (common_rt_args.empty()) {
                         continue;
                     }
+
+                    uint32_t crta_offset = kg->crta_offsets[idx];
+                    uint32_t common_size = kg->crta_sizes[idx];
 
                     common_rt_args_data.resize(common_rt_args_data.size() + 1);
                     common_rt_data_and_sizes.resize(common_rt_data_and_sizes.size() + 1);
@@ -901,58 +827,32 @@ BatchedTransfers assemble_runtime_args_commands(
                     common_rt_args_data.back().emplace_back(
                         RtaDataPair(kernel->common_runtime_args_data(), common_rt_args));
 
-                    // Target core cannot receive multicast commands -> send unicast
-                    if (!tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(index)) {
-                        common_sub_cmds.emplace<std::vector<CQDispatchWritePackedUnicastSubCmd>>(
-                            std::vector<CQDispatchWritePackedUnicastSubCmd>());
-                        auto& unicast_sub_cmd =
-                            std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds);
-                        unicast_sub_cmd.reserve(kernel->logical_cores().size());
-                        LOG_TRACE_LAZY(
-                            tt::LogDispatch,
-                            "Common RTA (UNICAST per-kernel): num_cores={}, L1_addr=0x{:x}, crta_size={} bytes",
-                            kernel->logical_cores().size(),
-                            crta_offset,
-                            common_size);
-                        for (const auto& core_coord : kernel->logical_cores()) {
-                            // can make a vector of unicast encodings here
-                            CoreCoord virtual_core_coords =
-                                device->virtual_core_from_logical_core(core_coord, core_type);
-                            LOG_TRACE_LAZY(
-                                tt::LogDispatch,
-                                "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
-                                core_coord,
-                                virtual_core_coords,
-                                device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords));
-                            unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                .noc_xy_addr =
-                                    device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords)});
-                        }
-                    } else {
-                        std::vector<multicast_transfer_info> dst_noc_multicast_info =
-                            extract_dst_noc_multicast_info(device, kernel->logical_coreranges(), core_type);
-                        common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
-                            std::vector<CQDispatchWritePackedMulticastSubCmd>());
-                        auto& multicast_sub_cmd =
-                            std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds);
-                        multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
-                        LOG_TRACE_LAZY(
-                            tt::LogDispatch,
-                            "Common RTA (MCAST per-kernel): num_ranges={}, L1_addr=0x{:x}, crta_size={} bytes",
-                            dst_noc_multicast_info.size(),
-                            crta_offset,
-                            common_size);
-                        for (const auto& mcast_dests : dst_noc_multicast_info) {
-                            const auto& core_range = std::get<CoreRange>(mcast_dests.cores);
-                            auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, core_range);
-                            LOG_TRACE_LAZY(
-                                tt::LogDispatch,
-                                "  core_range={}, noc_xy=0x{:x}, num_dests={}",
-                                core_range,
-                                noc_xy,
-                                mcast_dests.num_dests);
-                            multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                                .noc_xy_addr = noc_xy, .num_mcast_dests = mcast_dests.num_dests});
+                    common_sub_cmds.emplace<std::vector<CQDispatchWritePackedUnicastSubCmd>>(
+                        std::vector<CQDispatchWritePackedUnicastSubCmd>());
+                    auto& unicast_sub_cmd = std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds);
+                    unicast_sub_cmd.reserve(kernel->logical_cores().size());
+                    LOG_TRACE_LAZY(
+                        tt::LogDispatch,
+                        "Common RTA (UNICAST per-kernel): num_cores={}, L1_addr=0x{:x}, crta_size={} bytes",
+                        kernel->logical_cores().size(),
+                        crta_offset,
+                        common_size);
+                    for (const CoreRange& core_range : kg->core_ranges.ranges()) {
+                        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                                CoreCoord core_coord(x, y);
+                                CoreCoord virtual_core_coords =
+                                    device->virtual_core_from_logical_core(core_coord, core_type);
+                                LOG_TRACE_LAZY(
+                                    tt::LogDispatch,
+                                    "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
+                                    core_coord,
+                                    virtual_core_coords,
+                                    device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords));
+                                unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
+                                    .noc_xy_addr =
+                                        device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords)});
+                            }
                         }
                     }
 
@@ -977,12 +877,6 @@ BatchedTransfers assemble_runtime_args_commands(
                         common_sub_cmds);
                     common_rt_data_and_sizes.clear();
                     common_rt_args_data.clear();
-                }
-
-                for (auto& data_per_kernel : common_rt_data_and_sizes) {
-                    for (auto& data_and_sizes : data_per_kernel) {
-                        RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
-                    }
                 }
             }
         }
