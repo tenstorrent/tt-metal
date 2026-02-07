@@ -1951,26 +1951,27 @@ def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
 
-                # Warmup
-                out = ttnn.experimental.conv3d(
-                    input_tensor=tt_input,
-                    weight_tensor=tt_weight,
-                    bias_tensor=tt_bias,
-                    config=conv_config,
-                    output_channels=C_out,
-                    kernel_size=kernel_size,
-                    stride=(1, 1, 1),
-                    padding=padding,
-                    padding_mode="zeros",
-                    dtype=ttnn.bfloat16,
-                    compute_kernel_config=compute_kernel_config,
-                )
-                ttnn.synchronize_device(mesh_device)
-                ttnn.deallocate(out)
+                # Warmup runs (2 iterations to ensure kernel compilation is complete)
+                for _ in range(2):
+                    out = ttnn.experimental.conv3d(
+                        input_tensor=tt_input,
+                        weight_tensor=tt_weight,
+                        bias_tensor=tt_bias,
+                        config=conv_config,
+                        output_channels=C_out,
+                        kernel_size=kernel_size,
+                        stride=(1, 1, 1),
+                        padding=padding,
+                        padding_mode="zeros",
+                        dtype=ttnn.bfloat16,
+                        compute_kernel_config=compute_kernel_config,
+                    )
+                    ttnn.synchronize_device(mesh_device)
+                    ttnn.deallocate(out)
 
-                # Timed runs
+                # Timed runs (5 iterations for more accurate timing)
                 times = []
-                for _ in range(3):
+                for _ in range(5):
                     start = time.perf_counter()
                     out = ttnn.experimental.conv3d(
                         input_tensor=tt_input,
