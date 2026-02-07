@@ -273,6 +273,9 @@ struct Conv2dInputs {
 struct conv_op_l1_usage {
     uint32_t tensor_allocation_size;
     uint32_t CB_allocation_size;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("tensor_allocation_size", "CB_allocation_size");
+    auto attribute_values() const { return std::forward_as_tuple(tensor_allocation_size, CB_allocation_size); }
 };
 
 }  // namespace ttnn::prim
