@@ -28,6 +28,7 @@
 #include <tt-metalium/bfloat8.hpp>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/stl_fmt.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
@@ -605,7 +606,7 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
-    tt::stl::reflection::operator<<(os, tensor);
+    ttsl::stl_fmt::operator<<(os, tensor);
     return os;
 }
 

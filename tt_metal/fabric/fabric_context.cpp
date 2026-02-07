@@ -25,7 +25,7 @@
 namespace tt::tt_fabric {
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_fabric::Topology& topology) {
-    tt::stl::reflection::operator<<(os, topology);
+    ttsl::stl_fmt::operator<<(os, topology);
     return os;
 }
 

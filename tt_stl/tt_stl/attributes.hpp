@@ -208,11 +208,11 @@ struct visit_object_of_type_t<T> {
         callback(value);
     }
 
+    // Types without attribute_names cannot be traversed further.
+    // This is a no-op: the object is silently skipped during visitation.
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    void operator()(auto&& /*callback*/, T&& /*value*/) const {
-        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
-    }
+    void operator()(auto&& /*callback*/, T&& /*value*/) const {}
 
     template <typename object_t>
         requires std::same_as<std::decay_t<T>, object_t>
@@ -220,11 +220,11 @@ struct visit_object_of_type_t<T> {
         callback(value);
     }
 
+    // Types without attribute_names cannot be traversed further.
+    // This is a no-op: the object is silently skipped during visitation.
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    void operator()(auto&& /*callback*/, const T& /*value*/) const {
-        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
-    }
+    void operator()(auto&& /*callback*/, const T& /*value*/) const {}
 };
 
 template <typename T>

@@ -100,7 +100,7 @@ bool Tile::operator==(const Tile& other) const {
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tile& tile) {
-    tt::stl::reflection::operator<<(os, tile);
+    ttsl::stl_fmt::operator<<(os, tile);
     return os;
 }
 

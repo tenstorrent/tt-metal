@@ -155,7 +155,7 @@ const std::vector<std::pair<CoreCoord, CoreRangeSet>>& GlobalCircularBuffer::sen
 }
 
 std::ostream& operator<<(std::ostream& os, const GlobalCircularBuffer& value) {
-    tt::stl::reflection::operator<<(os, value);
+    ttsl::stl_fmt::operator<<(os, value);
     return os;
 }
 

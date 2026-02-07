@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <boost/algorithm/string/replace.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <tt_stl/stl_fmt.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt_stl/optional_reference.hpp>
 #include <type_traits>
@@ -26,7 +27,7 @@ std::ostream& operator<<(std::ostream& os, const std::vector<bool>& value) {
 namespace ttnn::graph {
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
-    tt::stl::reflection::operator<<(os, tensor);
+    ttsl::stl_fmt::operator<<(os, tensor);
     return os;
 }
 
@@ -40,20 +41,20 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::IDevice* device) 
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::stl::StrongType<unsigned char, tt::tt_metal::QueueIdTag>& value) {
-    tt::stl::reflection::operator<<(os, value);
+    ttsl::stl_fmt::operator<<(os, value);
     return os;
 }
 
 std::ostream& operator<<(
     std::ostream& os, const tt::stl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag>& value) {
-    tt::stl::reflection::operator<<(os, value);
+    ttsl::stl_fmt::operator<<(os, value);
     return os;
 }
 
 std::ostream& operator<<(
     std::ostream& os,
     const tt::stl::StrongType<unsigned long, tt::tt_metal::experimental::GlobalCircularBuffer>& value) {
-    tt::stl::reflection::operator<<(os, value);
+    ttsl::stl_fmt::operator<<(os, value);
     return os;
 }
 
@@ -67,27 +68,27 @@ std::ostream& operator<<(
     std::ostream& os,
     const std::set<tt::tt_metal::distributed::MeshCoordinate, std::less<tt::tt_metal::distributed::MeshCoordinate>>&
         value) {
-    tt::stl::reflection::operator<<(os, value);
+    ttsl::stl_fmt::operator<<(os, value);
     return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor>& value) {
-    tt::stl::reflection::operator<<(os, value);
+    ttsl::stl_fmt::operator<<(os, value);
     return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const ttnn::types::CoreRangeSet& value) {
-    tt::stl::reflection::operator<<(os, value);
+    os << fmt::format("{}", value);
     return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::GlobalSemaphore& value) {
-    tt::stl::reflection::operator<<(os, value);
+    ttsl::stl_fmt::operator<<(os, value);
     return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::experimental::GlobalCircularBuffer& value) {
-    tt::stl::reflection::operator<<(os, value);
+    ttsl::stl_fmt::operator<<(os, value);
     return os;
 }
 
