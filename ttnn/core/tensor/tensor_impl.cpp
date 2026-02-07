@@ -448,59 +448,57 @@ std::string to_string_impl(const Tensor& tensor) {
         return to_layout_impl<T>(tensor, Layout::ROW_MAJOR);
     };
 
-    auto get_device_buffers = [&](const HostStorage& storage) {
+    auto get_host_buffers = [&](const HostStorage& storage) {
         std::vector<HostBuffer> buffers;
         storage.buffer().apply([&](const HostBuffer& shard) { buffers.push_back(shard); });
         return buffers;
     };
 
-    return std::visit(
-        tt::stl::overloaded{
-            [&](const HostStorage& /*storage*/) -> std::string {
-                const Tensor row_major_tensor = get_row_major_tensor(tensor);
-                const auto strides = row_major_tensor.tensor_spec().compute_strides();
-                const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
-                std::stringstream ss;
-                for (size_t i = 0; i < buffers.size(); i++) {
-                    detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
-                    if (i + 1 != buffers.size()) {
-                        ss << std::endl;
-                    }
-                }
-                return ss.str();
-            },
-            [&](const DeviceStorage& storage) -> std::string {
-                auto cpu_tensor = tensor.cpu();
-                if (storage.mesh_buffer == nullptr) {
-                    // Use owned buffer path above.
-                    return to_string_impl<T>(cpu_tensor);
-                }
+    if (is_cpu_tensor(tensor)) {
+        const Tensor row_major_tensor = get_row_major_tensor(tensor);
+        const auto strides = row_major_tensor.tensor_spec().compute_strides();
+        const std::vector<HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
+        std::stringstream ss;
+        for (size_t i = 0; i < buffers.size(); i++) {
+            detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+            if (i + 1 != buffers.size()) {
+                ss << std::endl;
+            }
+        }
+        return ss.str();
+    }
 
-                auto* mesh_device = storage.mesh_buffer->device();
-                // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
-                // if (mesh_device->num_devices() == 1) {
-                //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
-                // }
+    TT_FATAL(is_device_tensor(tensor), "Unsupported storage type");
+    const auto& storage = tensor.device_storage();
+    auto cpu_tensor = tensor.cpu();
+    if (storage.mesh_buffer == nullptr) {
+        // Use owned buffer path above.
+        return to_string_impl<T>(cpu_tensor);
+    }
 
-                const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
-                const auto strides = row_major_tensor.tensor_spec().compute_strides();
-                const auto& coords = storage.coords;
-                auto coords_it = coords.begin();
-                const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
-                std::stringstream ss;
-                for (size_t i = 0; i < buffers.size(); i++) {
-                    const distributed::MeshCoordinate coord = *coords_it++;
-                    if (mesh_device->is_local(coord)) {
-                        ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
-                        detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
-                    }
-                    if (i + 1 != buffers.size()) {
-                        ss << std::endl;
-                    }
-                }
-                return ss.str();
-            }},
-        tensor.storage());
+    auto* mesh_device = storage.mesh_buffer->device();
+    // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
+    // if (mesh_device->num_devices() == 1) {
+    //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
+    // }
+
+    const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
+    const auto strides = row_major_tensor.tensor_spec().compute_strides();
+    const auto& coords = storage.coords;
+    auto coords_it = coords.begin();
+    const std::vector<HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
+    std::stringstream ss;
+    for (size_t i = 0; i < buffers.size(); i++) {
+        const distributed::MeshCoordinate coord = *coords_it++;
+        if (mesh_device->is_local(coord)) {
+            ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
+            detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+        }
+        if (i + 1 != buffers.size()) {
+            ss << std::endl;
+        }
+    }
+    return ss.str();
 }
 
 template <>
@@ -612,36 +610,27 @@ DeviceStorage write_to_mesh_buffer(
 }  // namespace
 
 std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
-    const Storage& host_storage,
+    const HostStorage& host_storage,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
     const TensorTopology& tensor_topology,
     std::optional<tt::tt_metal::QueueId> cq_id) {
-    return std::visit(
-        tt::stl::overloaded{
-            [&mesh_buffer, &tensor_spec, cq_id, &tensor_topology](
-                const HostStorage& storage) -> std::pair<DeviceStorage, TensorTopology> {
-                const auto& host_storage_shape = storage.buffer().shape();
-                const auto& mesh_device_shape = mesh_buffer->device()->shape();
-                if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
-                    host_storage_shape == distributed::MeshShape(1, 1)) {
-                    // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
-                    const auto device_buffer = storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
-                    return {
-                        replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id),
-                        TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape)};
-                }
-                TT_FATAL(
-                    host_storage_shape == mesh_device_shape,
-                    "Distributed host buffer has different shape {} than the mesh device {}",
-                    host_storage_shape,
-                    mesh_device_shape);
-                return {write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id), tensor_topology};
-            },
-            [](const auto& s) -> std::pair<DeviceStorage, TensorTopology> {
-                TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s));
-            }},
-        host_storage);
+    const auto& host_storage_shape = host_storage.buffer().shape();
+    const auto& mesh_device_shape = mesh_buffer->device()->shape();
+    if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
+        host_storage_shape == distributed::MeshShape(1, 1)) {
+        // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
+        const auto device_buffer = host_storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
+        return {
+            replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id),
+            TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape)};
+    }
+    TT_FATAL(
+        host_storage_shape == mesh_device_shape,
+        "Distributed host buffer has different shape {} than the mesh device {}",
+        host_storage_shape,
+        mesh_device_shape);
+    return {write_to_mesh_buffer(host_storage.buffer(), mesh_buffer, cq_id), tensor_topology};
 }
 
 Tensor to_device(
@@ -665,7 +654,7 @@ Tensor to_device(
                                   : &tensor.tensor_spec();
     auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
     auto [mesh_storage, topology] =
-        to_device_mesh_buffer(tensor.storage(), mesh_buffer, *tensor_spec, tensor.tensor_topology(), cq_id);
+        to_device_mesh_buffer(tensor.host_storage(), mesh_buffer, *tensor_spec, tensor.tensor_topology(), cq_id);
     return Tensor(std::move(mesh_storage), *tensor_spec, topology);
 }
 
@@ -754,7 +743,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     auto mesh_buffer = device_tensor.device_storage().mesh_buffer;
 
     auto [mesh_storage, topology] = to_device_mesh_buffer(
-        host_tensor.storage(), mesh_buffer, device_tensor.tensor_spec(), host_tensor.tensor_topology(), cq_id);
+        host_tensor.host_storage(), mesh_buffer, device_tensor.tensor_spec(), host_tensor.tensor_topology(), cq_id);
     device_tensor = Tensor(
         std::move(mesh_storage), host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
 }
