@@ -36,10 +36,6 @@ public:
     constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t tensor_id{INVALID_TENSOR_ID};
 
-    // Shared pointer to all attributes associated with this tensor
-    // Can be safely passed between threads when the tensor is copied
-    std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
-
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
@@ -243,10 +239,7 @@ public:
     uint32_t element_size() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
-    auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
-    }
+    auto attribute_values() const { return std::forward_as_tuple(storage(), tensor_spec()); }
 
     static std::uint64_t get_tensor_id_counter();
 
@@ -263,6 +256,10 @@ private:
 
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
+
+    // Shared pointer to all attributes associated with this tensor
+    // Can be safely passed between threads when the tensor is copied
+    std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
 };
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors

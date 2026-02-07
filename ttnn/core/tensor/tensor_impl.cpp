@@ -615,12 +615,11 @@ std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
     const Storage& host_storage,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
-    const TensorAttributes& host_tensor_attributes,
     const TensorTopology& tensor_topology,
     std::optional<tt::tt_metal::QueueId> cq_id) {
     return std::visit(
         tt::stl::overloaded{
-            [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes, &tensor_topology](
+            [&mesh_buffer, &tensor_spec, cq_id, &tensor_topology](
                 const HostStorage& storage) -> std::pair<DeviceStorage, TensorTopology> {
                 const auto& host_storage_shape = storage.buffer().shape();
                 const auto& mesh_device_shape = mesh_buffer->device()->shape();
@@ -665,8 +664,8 @@ Tensor to_device(
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &tensor.tensor_spec();
     auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
-    auto [mesh_storage, topology] = to_device_mesh_buffer(
-        tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, tensor.tensor_topology(), cq_id);
+    auto [mesh_storage, topology] =
+        to_device_mesh_buffer(tensor.storage(), mesh_buffer, *tensor_spec, tensor.tensor_topology(), cq_id);
     return Tensor(std::move(mesh_storage), *tensor_spec, topology);
 }
 
@@ -755,12 +754,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     auto mesh_buffer = device_tensor.device_storage().mesh_buffer;
 
     auto [mesh_storage, topology] = to_device_mesh_buffer(
-        host_tensor.storage(),
-        mesh_buffer,
-        device_tensor.tensor_spec(),
-        *host_tensor.tensor_attributes,
-        host_tensor.tensor_topology(),
-        cq_id);
+        host_tensor.storage(), mesh_buffer, device_tensor.tensor_spec(), host_tensor.tensor_topology(), cq_id);
     device_tensor = Tensor(
         std::move(mesh_storage), host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
 }
