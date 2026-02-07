@@ -113,6 +113,15 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/tensor/host_tensor.hpp
     api/tt-metalium/experimental/tensor/device_tensor.hpp
+    api/tt-metalium/experimental/tensor/tensor_types.hpp
+    api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/layout.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/page_config.hpp
+    api/tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp
+    api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
+    api/tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp
+    api/tt-metalium/experimental/tensor/topology/tensor_topology.hpp
 )
 target_sources(
     tt_metal
