@@ -66,7 +66,7 @@ void kernel_main() {
 
     const uint32_t A_slab_size_bytes = A_slab_tiles * tile_size_bytes_0;
     uint64_t a_slab_sent_sem_mcast_addr = get_noc_multicast_addr(
-        a_receiver_end_x, a_receiver_end_y, a_receiver_start_x, a_receiver_start_y, a_tile_sent_semaphore_addr);
+        a_receiver_start_x, a_receiver_start_y, a_receiver_end_x, a_receiver_end_y, a_tile_sent_semaphore_addr);
 
     volatile tt_l1_ptr uint32_t* b_tile_sent_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(b_tile_sent_semaphore_addr);
@@ -92,7 +92,7 @@ void kernel_main() {
         noc_semaphore_set(a_receivers_ready_sem_ptr, 0);
 
         uint64_t a_slab_mcast_addr = get_noc_multicast_addr(
-            a_receiver_end_x, a_receiver_end_y, a_receiver_start_x, a_receiver_start_y, cb_in0_start_addr);
+            a_receiver_start_x, a_receiver_start_y, a_receiver_end_x, a_receiver_end_y, cb_in0_start_addr);
         noc_async_write_multicast(cb_in0_start_addr, a_slab_mcast_addr, A_slab_size_bytes, a_num_receivers);
         noc_async_writes_flushed();
 

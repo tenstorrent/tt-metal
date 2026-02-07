@@ -80,9 +80,9 @@ void kernel_main() {
 
     // Precompute multicast addresses (these don't change per slab)
     uint64_t a_slab_sent_sem_mcast_addr = get_noc_multicast_addr(
-        a_receiver_end_x, a_receiver_end_y, a_receiver_start_x, a_receiver_start_y, a_tile_sent_semaphore_addr);
+        a_receiver_start_x, a_receiver_start_y, a_receiver_end_x, a_receiver_end_y, a_tile_sent_semaphore_addr);
     uint64_t b_slab_sent_sem_mcast_addr = get_noc_multicast_addr(
-        b_receiver_end_x, b_receiver_end_y, b_receiver_start_x, b_receiver_start_y, b_tile_sent_semaphore_addr);
+        b_receiver_start_x, b_receiver_start_y, b_receiver_end_x, b_receiver_end_y, b_tile_sent_semaphore_addr);
 
     const uint32_t A_slab_size_bytes = A_slab_tiles * tile_size_bytes_0;
     const uint32_t B_slab_size_bytes = B_slab_tiles * tile_size_bytes_1;
@@ -110,7 +110,7 @@ void kernel_main() {
         noc_semaphore_set(a_receivers_ready_sem_ptr, 0);
 
         uint64_t a_slab_mcast_addr = get_noc_multicast_addr(
-            a_receiver_end_x, a_receiver_end_y, a_receiver_start_x, a_receiver_start_y, cb_in0_start_addr);
+            a_receiver_start_x, a_receiver_start_y, a_receiver_end_x, a_receiver_end_y, cb_in0_start_addr);
         noc_async_write_multicast(cb_in0_start_addr, a_slab_mcast_addr, A_slab_size_bytes, a_num_receivers);
         noc_async_writes_flushed();
 
@@ -139,7 +139,7 @@ void kernel_main() {
         noc_semaphore_set(b_receivers_ready_sem_ptr, 0);
 
         uint64_t b_slab_mcast_addr = get_noc_multicast_addr(
-            b_receiver_end_x, b_receiver_end_y, b_receiver_start_x, b_receiver_start_y, cb_in1_start_addr);
+            b_receiver_start_x, b_receiver_start_y, b_receiver_end_x, b_receiver_end_y, cb_in1_start_addr);
         noc_async_write_multicast(cb_in1_start_addr, b_slab_mcast_addr, B_slab_size_bytes, b_num_receivers);
         noc_async_writes_flushed();
 
