@@ -14,7 +14,6 @@
 #define STREAM_REG_CFG_DATA_WIDTH 24
 #endif
 
-
 /*
  * The following table defines the credit packing policy for each fabric type
  *
@@ -25,15 +24,16 @@
 Wormhole: Sender -> Receiver "packet sent"
 | WORMHOLE PACKING POLICY: Receiver "packet sent"; sender tells receiver "you have a new packet"
 |----------------------|-------------|----------------------------------------------------------------------------------------|
-| Topology             | # Registers |                      Channel Packing (bits, inclusive)                                 |
-|                      |             |----------------------------------------------------------------------------------------|
-|                      |             |                    VC = 0                  |                 VC = 1                    |
-|                      |             |--------------------------------------------|-------------------------------------------|
-|                      |             |         0 |        1 |      2   |        3 |        4 |        5 |        6 |        7 |
+| Topology             | # Registers |                      Channel Packing (bits, inclusive) | |                      |
+|----------------------------------------------------------------------------------------| |                      | | VC
+= 0                  |                 VC = 1                    | |                      |
+|--------------------------------------------|-------------------------------------------| |                      | | 0
+|        1 |      2   |        3 |        4 |        5 |        6 |        7 |
 |----------------------|-------------|-----------|----------|----------|----------|----------|----------|----------|----------|
-| Ring                 |          1  |   R0[0-7] | R0[8-15] |    N/A   |      N/A |      N/A |      N/A |      N/A |      N/A |
-| 2D Torus             |          2  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15] |      N/A |      N/A |      N/A |      N/A |
-| 2D Torus + Intermesh |          4  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15] |  R2[0-7] | R2[8-15] |  R3[0-7] | R3[8-15] |
+| Ring                 |          1  |   R0[0-7] | R0[8-15] |    N/A   |      N/A |      N/A |      N/A |      N/A | N/A
+| | 2D Torus             |          2  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15] |      N/A |      N/A |      N/A |
+N/A | | 2D Torus + Intermesh |          4  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15] |  R2[0-7] | R2[8-15] |  R3[0-7]
+| R3[8-15] |
 
 
 Wormhole: Receiver Local Memory Packing
@@ -70,26 +70,26 @@ Wormhole: Receiver -> Sender ack "first level ack, I got a packet"
 We get the following mapping from receiver channel packets receiver to first level ack packing:
 
 VC0:
-    Packets Receiver Reg[0]                                                 Sender Acks ReceiverReg[0]   
-   -------------------|                                                    -------------------|       
- 0 | sender 0 credit  |  -----                                       --> 0 | sender 0 credit  |       
-   |------------------|       \                Receiver Channel     /      |------------------|       
- 1 | credit 1 credit  |  ----  \               Local Memory        /  -> 1 | credit 1 credit  |       
-   |------------------|      \  \              Credit Storage     /  /     |------------------|       
- 2 | 00               |       \  \          -------------------| /  /    2 | 00               |       
-   |------------------|        \  ----->  0 | sender 0 credit  |-  /       |------------------|       
- 3 | 00               |         \           |------------------|  /      3 | 00               |       
-   |-------------------          ------>  1 | credit 1 credit  |--         |-------------------       
-    Packets Receiver Reg[1]                 |------------------|            Sender Acks ReceiverReg[1]   
-   -------------------|                   2 | sender 2 credit  |           -------------------|       
- 0 | sender 2 credit  |  ---                |------------------|         0 | sender 2 credit  |       
-   |------------------|                   3 | sender 3 credit  |           |------------------|       
- 1 | credit 3 credit  |  ---                |-------------------         1 | credit 3 credit  |       
-   |------------------|                                                    |------------------|       
- 2 | 00               |                                                  2 | 00               |       
-   |------------------|                                                    |------------------|       
- 3 | 00               |                                                  3 | 00               |       
-   |-------------------                                                    |-------------------       
+    Packets Receiver Reg[0]                                                 Sender Acks ReceiverReg[0]
+   -------------------|                                                    -------------------|
+ 0 | sender 0 credit  |  -----                                       --> 0 | sender 0 credit  |
+   |------------------|       \                Receiver Channel     /      |------------------|
+ 1 | credit 1 credit  |  ----  \               Local Memory        /  -> 1 | credit 1 credit  |
+   |------------------|      \  \              Credit Storage     /  /     |------------------|
+ 2 | 00               |       \  \          -------------------| /  /    2 | 00               |
+   |------------------|        \  ----->  0 | sender 0 credit  |-  /       |------------------|
+ 3 | 00               |         \           |------------------|  /      3 | 00               |
+   |-------------------          ------>  1 | credit 1 credit  |--         |-------------------
+    Packets Receiver Reg[1]                 |------------------|            Sender Acks ReceiverReg[1]
+   -------------------|      /----------> 2 | sender 2 credit  |--\        -------------------|
+ 0 | sender 2 credit  |  ---/               |------------------|   \---> 0 | sender 2 credit  |
+   |------------------|       /---------> 3 | sender 3 credit  |-\         |------------------|
+ 1 | credit 3 credit  |  ----/              |-------------------  \----> 1 | credit 3 credit  |
+   |------------------|                                                    |------------------|
+ 2 | 00               |                                                  2 | 00               |
+   |------------------|                                                    |------------------|
+ 3 | 00               |                                                  3 | 00               |
+   |-------------------                                                    |-------------------
 
 Wormhole: Reciever -> Sender completion "Receiver says: I am done with a packet"
 * no packing; for first level ack, this is a single credit per receiver channel
@@ -100,64 +100,64 @@ Blackhole
 
 | Blackhole PACKING POLICY: Sender -> Receiver "packet sent"; sender tells receiver "you have a new packet"
 |--------------------------|-------------|----------------------------------------------------------------------------------------|
-| Topology                 | # Registers |                      Channel Packing (bits, inclusive)                                 |
-|                          |             |----------------------------------------------------------------------------------------|
-|                          |             |                    VC = 0                  |                 VC = 1                    |
-|                          |             |--------------------------------------------|-------------------------------------------|
-|                          |             |         0 |        1 |      2   |        3 |        4 |        5 |        6 |        7 |
+| Topology                 | # Registers |                      Channel Packing (bits, inclusive) | | |
+|----------------------------------------------------------------------------------------| |                          |
+|                    VC = 0                  |                 VC = 1                    | |                          |
+|--------------------------------------------|-------------------------------------------| |                          |
+|         0 |        1 |      2   |        3 |        4 |        5 |        6 |        7 |
 |--------------------------|-------------|-----------|----------|----------|----------|----------|----------|----------|----------|
-| Ring                     |          1  |   R0[0-7] | R0[8-15] |    N/A   |      N/A |      N/A |      N/A |      N/A |      N/A |
-| 2D Torus                 |          2  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15] |      N/A |      N/A |      N/A |      N/A |
-| 2D Torus + Intermesh(!Z) |          4  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15] |  R2[0-7] | R2[8-15] |  R3[0-7] | R3[8-15] |
-| 2D Torus + Intermesh(Z)  |          4  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15] |  R2[0-7] | R2[8-15] |  R3[0-7] | R3[8-15] |
-| 2D Torus + Intermesh(Z)  |          4  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15] |  R2[0-7] | R2[8-15] |  R3[0-7] | R3[8-15] |
+| Ring                     |          1  |   R0[0-7] | R0[8-15] |    N/A   |      N/A |      N/A |      N/A |      N/A |
+N/A | | 2D Torus                 |          2  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15] |      N/A |      N/A | N/A
+|      N/A | | 2D Torus + Intermesh(!Z) |          4  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15] |  R2[0-7] | R2[8-15]
+|  R3[0-7] | R3[8-15] | | 2D Torus + Intermesh(Z)  |          4  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15] |  R2[0-7]
+| R2[8-15] |  R3[0-7] | R3[8-15] | | 2D Torus + Intermesh(Z)  |          4  |   R0[0-7] | R0[8-15] |  R1[0-7] | R1[8-15]
+|  R2[0-7] | R2[8-15] |  R3[0-7] | R3[8-15] |
 
 These credits are packed into overlay registers.
 -----------------------------------
 
 | Blackhole PACKING POLICY: Receiver -> Sender 1st Level Ack; Receiver tells Sender "I got a packet"
 |--------------------------|-------------|----------------------------------------------------------------------------------------------------------|
-| Topology                 | # Registers |                              Channel Packing (bits, inclusive)                                           |
-|                          |             |----------------------------------------------------------------------------------------------------------|
-|                          |             |                    VC = 0                     |                 VC = 1                                   |
-|                          |             |---------------------------------------------- |----------------------------------------------------------|
-|                          |             |         0 |        1 |      2     |        3  |        4 |        5 |        6   |         7 |         8 |
+| Topology                 | # Registers |                              Channel Packing (bits, inclusive) | | |
+|----------------------------------------------------------------------------------------------------------| | | | VC =
+0                     |                 VC = 1                                   | |                          |
+|---------------------------------------------- |----------------------------------------------------------| | | | 0 |
+1 |      2     |        3  |        4 |        5 |        6   |         7 |         8 |
 |--------------------------|-------------|-----------|----------|------------|-----------|----------|----------|------------|-----------|-----------|
-| Ring                     |          1  |   W0[0-7] | W0[8-15] |    N/A     |       N/A |      N/A |      N/A |       N/A  |       N/A |       N/A |
-| 2D Torus                 |          2  |   W0[0-7] | W0[8-15] |  W0[16-23] | W0[24-31] |      N/A |      N/A |       N/A  |       N/A |       N/A |
-| 2D Torus + Intermesh(!Z) |          4  |   W0[0-7] | W0[8-15] |  W0[16-23] | W0[24-31] |  W1[0-7] | W1[8-15] |  W1[16-23] | W1[24-31] |       N/A |
-| 2D Torus + Intermesh(Z)  |          4  |   W0[0-7] | W0[8-15] |  W0[16-23] | W0[24-31] |  W1[0-7] | W1[8-15] |  W1[16-23] | W1[24-31] |   W2[0-7] |
-| Z Router                 |          4  |   W0[0-7] | W0[8-15] |  W0[16-23] | W0[24-31] |  W1[0-7] | W1[8-15] |  W1[16-23] | W1[24-31] |       N/A |
+| Ring                     |          1  |   W0[0-7] | W0[8-15] |    N/A     |       N/A |      N/A |      N/A | N/A  |
+N/A |       N/A | | 2D Torus                 |          2  |   W0[0-7] | W0[8-15] |  W0[16-23] | W0[24-31] |      N/A |
+N/A |       N/A  |       N/A |       N/A | | 2D Torus + Intermesh(!Z) |          4  |   W0[0-7] | W0[8-15] |  W0[16-23]
+| W0[24-31] |  W1[0-7] | W1[8-15] |  W1[16-23] | W1[24-31] |       N/A | | 2D Torus + Intermesh(Z)  |          4  |
+W0[0-7] | W0[8-15] |  W0[16-23] | W0[24-31] |  W1[0-7] | W1[8-15] |  W1[16-23] | W1[24-31] |   W2[0-7] | | Z Router | 4
+|   W0[0-7] | W0[8-15] |  W0[16-23] | W0[24-31] |  W1[0-7] | W1[8-15] |  W1[16-23] | W1[24-31] |       N/A |
 
 These credits are packed into L1 memory
- 
+
 The following
 
 VC0:
-    Packets Receiver Reg[0]                                             
-   -------------------|                                                 
- 0 | sender 0 credit  |  -----                                          
-   |------------------|       \                Receiver Channel         
- 1 | credit 1 credit  |  ----  \               Local Memory             
-   |------------------|      \  \              Credit Storage               Sender Acks ReceiverReg[0]   
- 2 | 00               |       \  \          -------------------|           -------------------|       
-   |------------------|        \  ----->  0 | sender 0 credit  | ----->  0 | sender 0 credit  |       
- 3 | 00               |         \           |------------------|           |------------------|       
-   |-------------------          ------>  1 | credit 1 credit  | ----->  1 | credit 1 credit  |       
-    Packets Receiver Reg[1]                 |------------------|           |------------------|       
-   -------------------|                   2 | sender 2 credit  | ----->  2 | sender 2 credit  |       
- 0 | sender 2 credit  |  ---                |------------------|           |------------------|       
-   |------------------|                   3 | sender 3 credit  | ----->  3 | sender 3 credit  |       
- 1 | credit 3 credit  |  ---                |-------------------           |-------------------       
-   |------------------|                                                 
- 2 | 00               |                                                 
-   |------------------|                                                 
- 3 | 00               |                                                 
-   |-------------------                                                 
-
+    Packets Receiver Reg[0]
+   -------------------|
+ 0 | sender 0 credit  |  -----
+   |------------------|       \                Receiver Channel
+ 1 | credit 1 credit  |  ----  \               Local Memory
+   |------------------|      \  \              Credit Storage               Sender Acks ReceiverReg[0]
+ 2 | 00               |       \  \          -------------------|           -------------------|
+   |------------------|        \  ----->  0 | sender 0 credit  | ----->  0 | sender 0 credit  |
+ 3 | 00               |         \           |------------------|           |------------------|
+   |-------------------          ------>  1 | credit 1 credit  | ----->  1 | credit 1 credit  |
+    Packets Receiver Reg[1]                 |------------------|           |------------------|
+   -------------------|                   2 | sender 2 credit  | ----->  2 | sender 2 credit  |
+ 0 | sender 2 credit  |  ---                |------------------|           |------------------|
+   |------------------|                   3 | sender 3 credit  | ----->  3 | sender 3 credit  |
+ 1 | credit 3 credit  |  ---                |-------------------           |-------------------
+   |------------------|
+ 2 | 00               |
+   |------------------|
+ 3 | 00               |
+   |-------------------
  */
 
- 
 constexpr uint32_t MAX_ACK_CREDITS_PER_OVERLAY_REGISTER = 2;
 // Max credits are stored in each L1 word that is read by the sender channel to
 // understand acks received
@@ -168,7 +168,7 @@ constexpr uint32_t MAX_PACKETS_RECEIVED_CREDITS_PER_OVERLAY_REGISTER = 2;
 // Max credits the receiver will pack into each local memory word
 // for internal book-keeping
 constexpr uint32_t MAX_PACKETS_RECEIVED_CREDITS_PER_LOCAL_MEMORY_WORD = 4;
- 
+
 namespace tt::tt_fabric {
 
 // Compile-time log2 ceiling
