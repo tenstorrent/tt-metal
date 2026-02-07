@@ -135,7 +135,7 @@ run_t3000_llama3_vision_tests() {
   tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
   for mesh_device in "N300" "T3K"; do
     CI=true MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b \
-    pytest models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace" || record_failure "llama3_vision_11b_${mesh_device}"
+    pytest models/tt_transformers/demo/simple_vision_demo.py --timeout=900 -k "not batch1-notrace" || record_failure "llama3_vision_11b_${mesh_device}"
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
 }
@@ -144,7 +144,7 @@ run_t3000_llama3_90b_vision_tests() {
   export PYTEST_ADDOPTS="--tb=short"
   llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
   tt_cache_llama90b=$TT_CACHE_HOME/llama/3.2-90b
-  CI=true MESH_DEVICE=T3K HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" || record_failure "llama3_vision_90b_t3k"
+  CI=true MESH_DEVICE=T3K HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/demo/simple_vision_demo.py --timeout=900 -k "batch1-trace" || record_failure "llama3_vision_90b_t3k"
   echo "LOG_METAL: Llama3.2-90B vision tests for T3K completed"
 }
 
