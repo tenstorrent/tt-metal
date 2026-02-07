@@ -276,7 +276,7 @@ TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureNoMask) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureWithMask) {
-    // TODO: Accuracy issue with BH. Remove once issue is fixed.
+    // TODO: Accuracy issue with BH. Tracking issue: https://github.com/tenstorrent/tt-metal/issues/37342
     auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
     if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
         GTEST_SKIP() << "Skipping on P100/P150 boards";
