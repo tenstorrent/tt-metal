@@ -7,6 +7,7 @@ from loguru import logger
 def test_deadlock_repro(device):
     """
     Reproduces deadlock from deadlock.mlir.
+    Issue: https://github.com/tenstorrent/tt-mlir/issues/6848
     f32 output buffer with si32 input causes type mismatch deadlock.
     """
 
@@ -147,6 +148,7 @@ def test_deadlock_repro(device):
 def test_no_deadlock_repro(device):
     """
     Reproduces no_deadlock case from no_deadlock.mlir.
+    Issue: https://github.com/tenstorrent/tt-mlir/issues/6848
     si32 output buffer matches si32 input
     """
 
