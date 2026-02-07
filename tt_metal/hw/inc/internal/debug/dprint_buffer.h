@@ -18,3 +18,7 @@ inline volatile tt_l1_ptr DebugPrintMemLayout* get_debug_print_buffer() {
     return GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[PROCESSOR_INDEX]);
 #endif
 }
+
+inline volatile tt_l1_ptr NewDebugPrintMemLayout* get_new_debug_print_buffer() {
+    return GET_MAILBOX_ADDRESS_DEV(dprint_buf.new_data);
+}

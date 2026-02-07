@@ -11,6 +11,7 @@
 
 #include "new_dprint_structures.h"
 #include "hostdevcommon/dprint_common.h"
+#include "stream_io_map.h"
 
 #define NEW_DPRINT_STRINGS_SECTION_NAME ".dprint_strings"
 #define NEW_DPRINT_STRINGS_INFO_SECTION_NAME ".dprint_strings_info"
@@ -107,7 +108,8 @@
             dprint_detail::formatting::update_format_string_from_args(format, ##__VA_ARGS__);                        \
         /* Store updated format string in a special section for dprint */                                            \
         NEW_DPRINT_GET_STRING_INDEX(dprint_info_index, updated_format);                                              \
-        /* TODO: Get buffer lock (once we change to be single buffer per L1 instead of per risc)*/                   \
+        /* Get buffer lock (once we change to be single buffer per L1 instead of per risc)*/                         \
+        dprint_detail::locking::acquire_lock();                                                                      \
         /* Generate dprint message header */                                                                         \
         dprint_detail::structures::DPrintHeader header = {};                                                         \
         header.is_kernel = NEW_DPRINT_IS_KERNEL;                                                                     \
@@ -118,10 +120,11 @@
         header.info_id = dprint_info_index;                                                                          \
         uint16_t header_value = header.value;                                                                        \
         /* Get dprint buffer and write header and arguments */                                                       \
-        volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer = get_debug_print_buffer();                            \
+        volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer = get_new_debug_print_buffer();                     \
         dprint_detail::serialization::serialize_argument(dprint_buffer, header_value);                               \
         dprint_detail::serialization::serialize_arguments(dprint_buffer, ##__VA_ARGS__);                             \
-        /* TODO: Release buffer lock */                                                                              \
+        /* Release buffer lock */                                                                                    \
+        dprint_detail::locking::release_lock();                                                                      \
     }
 
 namespace dprint_detail {
@@ -718,10 +721,60 @@ constexpr auto update_format_string_from_args(const char (&format)[N], const Arg
 
 }  // namespace formatting
 
+namespace locking {
+
+// TODO: IMPORTANT!!! We need to initialize dprint sync register to 0 during startup (probably on brisc).
+
+void acquire_lock() {
+    volatile uint32_t* lock_ptr = get_dprint_sync_register_ptr();
+
+    while (true) {
+        // Wait until lock is free (0)
+        while (*lock_ptr != 0) {
+#if defined(COMPILE_FOR_ERISC)
+            internal_::risc_context_switch();
+#endif
+        }
+
+        // Write risc_id to lock to attempt to acquire it
+        *lock_ptr = PROCESSOR_INDEX + 1;  // Use 1-based index to avoid writing 0 which is the free state
+
+        // TODO: Figure out how many queries we need here to ensure the write has propagated and other riscs see the
+        // updated value.
+        if (*lock_ptr != PROCESSOR_INDEX + 1) {
+            continue;
+        }
+        if (*lock_ptr != PROCESSOR_INDEX + 1) {
+            continue;
+        }
+        if (*lock_ptr != PROCESSOR_INDEX + 1) {
+            continue;
+        }
+
+        // If after several checks the lock value is still what we set, we have successfully acquired the lock.
+        if (*lock_ptr == PROCESSOR_INDEX + 1) {
+            break;  // Successfully acquired lock
+        }
+    }
+}
+
+void release_lock() {
+    volatile uint32_t* lock_ptr = get_dprint_sync_register_ptr();
+
+    *lock_ptr = 0;  // Release lock by setting to 0
+}
+
+void initialize_lock() {
+    volatile uint32_t* lock_ptr = get_dprint_sync_register_ptr();
+    *lock_ptr = 0;  // Ensure lock starts in free state
+}
+
+}  // namespace locking
+
 namespace serialization {
 
 void serialize_argument(
-    volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer, const uint8_t* argument_data, uint32_t size) {
+    volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, const uint8_t* argument_data, uint32_t size) {
     volatile uint8_t* start_pointer = dprint_buffer->data;
     volatile uint8_t* end_pointer = dprint_buffer->data + sizeof(dprint_buffer->data);
     volatile uint8_t* write_pointer = dprint_buffer->data + dprint_buffer->aux.wpos;
@@ -776,7 +829,7 @@ void serialize_argument(
 
 // Helper to serialize a single argument based on its type info
 template <typename ArgumentType>
-void serialize_argument(volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer, const ArgumentType& argument) {
+void serialize_argument(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, const ArgumentType& argument) {
     serialize_argument(
         dprint_buffer,
         reinterpret_cast<const uint8_t*>(&argument),
@@ -784,13 +837,13 @@ void serialize_argument(volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer, c
 }
 
 template <>
-void serialize_argument(volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer, const bool& argument) {
+void serialize_argument(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, const bool& argument) {
     serialize_argument(dprint_buffer, static_cast<uint8_t>(argument ? 1 : 0));
 }
 
 // Variadic template to serialize all arguments in order
 template <typename... Args>
-void serialize_arguments(volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer, Args&&... args) {
+void serialize_arguments(volatile tt_l1_ptr NewDebugPrintMemLayout* dprint_buffer, Args&&... args) {
     (serialize_argument(dprint_buffer, std::forward<Args>(args)), ...);
 }
 

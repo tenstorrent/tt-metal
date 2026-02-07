@@ -315,7 +315,12 @@ struct watcher_msg_t {
 // Host code does not need to use dprint_buf_msg_t (it uses DebugPrintMemLayout directly), skip because codegen can't
 // see DebugPrintMemLayout.
 struct dprint_buf_msg_t {
-    DebugPrintMemLayout data[PROCESSOR_COUNT];
+    union {
+        DebugPrintMemLayout data[PROCESSOR_COUNT];
+        NewDebugPrintMemLayout new_data;
+    };
+
+    static_assert(sizeof(data) == sizeof(new_data));
 };
 #endif
 
