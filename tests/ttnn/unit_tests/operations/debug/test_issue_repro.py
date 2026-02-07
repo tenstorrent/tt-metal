@@ -344,7 +344,11 @@ def test_issue_6849_repro(device):
 
     float32_tile_size = 4 * 1024
     int32_tile_size = 4 * 1024
-    cb_num_tiles = 3
+    cb_31_num_tiles = 1
+    cb_0_num_tiles = 1
+    cb_1_num_tiles = 3
+    cb_2_num_tiles = 3
+    cb_3_num_tiles = 3
 
     # CB 31: f32
     cb_31_format = ttnn.CBFormatDescriptor(
@@ -353,7 +357,7 @@ def test_issue_6849_repro(device):
         page_size=float32_tile_size,
     )
     cb_31_desc = ttnn.CBDescriptor(
-        total_size=cb_num_tiles * float32_tile_size,
+        total_size=cb_31_num_tiles * float32_tile_size,
         core_ranges=core_range,
         format_descriptors=[cb_31_format],
     )
@@ -365,7 +369,7 @@ def test_issue_6849_repro(device):
         page_size=float32_tile_size,
     )
     cb_0_desc = ttnn.CBDescriptor(
-        total_size=cb_num_tiles * float32_tile_size,
+        total_size=cb_0_num_tiles * float32_tile_size,
         core_ranges=core_range,
         format_descriptors=[cb_0_format],
     )
@@ -377,7 +381,7 @@ def test_issue_6849_repro(device):
         page_size=int32_tile_size,
     )
     cb_1_desc = ttnn.CBDescriptor(
-        total_size=cb_num_tiles * int32_tile_size,
+        total_size=cb_1_num_tiles * int32_tile_size,
         core_ranges=core_range,
         format_descriptors=[cb_1_format],
     )
@@ -389,7 +393,7 @@ def test_issue_6849_repro(device):
         page_size=float32_tile_size,
     )
     cb_2_desc = ttnn.CBDescriptor(
-        total_size=cb_num_tiles * float32_tile_size,
+        total_size=cb_2_num_tiles * float32_tile_size,
         core_ranges=core_range,
         format_descriptors=[cb_2_format],
     )
@@ -401,7 +405,7 @@ def test_issue_6849_repro(device):
         page_size=float32_tile_size,
     )
     cb_3_desc = ttnn.CBDescriptor(
-        total_size=cb_num_tiles * float32_tile_size,
+        total_size=cb_3_num_tiles * float32_tile_size,
         core_ranges=core_range,
         format_descriptors=[cb_3_format],
     )
