@@ -33,28 +33,36 @@ bool all_tensors_have_uniform_storage(const TensorArgs& tensor_args) {
 }
 
 // Filters shards from `tensor_return_value` that are in `tensor_coordinates`.
+// Returns a new TensorReturnValue with filtered coordinates (immutable operation).
 template <typename TensorReturnValue>
-void filter_tensor_shards(
-    const std::vector<ttnn::MeshCoordinate>& tensor_coordinates, TensorReturnValue& tensor_return_value) {
-    tt::stl::reflection::visit_object_of_type<Tensor>(
-        [&](const Tensor& tensor_to_return) {
-            auto& tensor_storage =
-                std::get<tt::tt_metal::DeviceStorage>(tensor_to_return.tensor_attributes->get_storage());
+TensorReturnValue filter_tensor_shards(
+    const std::vector<ttnn::MeshCoordinate>& tensor_coordinates, const TensorReturnValue& tensor_return_value) {
+    return tt::stl::reflection::transform_object_of_type<Tensor>(
+        [&](const Tensor& tensor) -> Tensor {
+            const auto& old_storage = tensor.device_storage();
+
+            // Build filtered coords list
+            std::vector<ttnn::MeshCoordinate> filtered_coords;
+            filtered_coords.reserve(tensor_coordinates.size());
 
             auto coord_it = tensor_coordinates.cbegin();
-            auto storage_it = tensor_storage.coords.begin();
-            auto insert_it = tensor_storage.coords.begin();
-            while (coord_it != tensor_coordinates.end() && storage_it != tensor_storage.coords.end()) {
+            auto storage_it = old_storage.coords.cbegin();
+            while (coord_it != tensor_coordinates.end() && storage_it != old_storage.coords.end()) {
                 if (*storage_it == *coord_it) {
-                    std::swap(*insert_it, *storage_it);
-                    ++insert_it;
+                    filtered_coords.push_back(*storage_it);
                     ++coord_it;
                     ++storage_it;
                 } else {
                     ++storage_it;
                 }
             }
-            tensor_storage.coords.erase(insert_it, tensor_storage.coords.end());
+
+            // Create new storage with filtered coords, sharing the mesh_buffer
+            tt::tt_metal::DeviceStorage new_storage(old_storage.mesh_buffer, std::move(filtered_coords));
+
+            // Return new tensor with new storage
+            return Tensor(
+                tt::tt_metal::Storage(std::move(new_storage)), tensor.tensor_spec(), tensor.tensor_topology());
         },
         tensor_return_value);
 }
