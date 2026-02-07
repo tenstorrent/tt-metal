@@ -264,7 +264,7 @@ void MetalContext::initialize(
                 }
                 [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
                 log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
-                generate_device_bank_to_noc_tables(device_id, num_hw_cqs_);
+                generate_device_bank_to_noc_tables(device_id);
                 generate_worker_logical_to_virtual_map(device_id);
 
                 // Skip firmware building for mock devices
@@ -1151,11 +1151,11 @@ CoreCoord MetalContext::virtual_noc0_coordinate(ChipId device_id, uint8_t noc_in
     return virtual_coord;
 }
 
-void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id, uint8_t num_hw_cqs) {
+void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
     // Create a dummy allocator to generate the bank/noc tables. Specifically, these depend on l1_bank_remap.
     auto config = L1BankingAllocator::generate_config(
         device_id,
-        num_hw_cqs,
+        num_hw_cqs_,
         DEFAULT_L1_SMALL_SIZE,      // Not required for noc table gen
         DEFAULT_TRACE_REGION_SIZE,  // Not required for noc table gen
         worker_l1_unreserved_start_,

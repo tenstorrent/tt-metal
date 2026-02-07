@@ -175,7 +175,7 @@ private:
 
     // Functions used to init/run firmware on devices
     CoreCoord virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord);
-    void generate_device_bank_to_noc_tables(ChipId device_id, uint8_t num_hw_cqs);
+    void generate_device_bank_to_noc_tables(ChipId device_id);
     void generate_worker_logical_to_virtual_map(ChipId device_id);
     void initialize_device_bank_to_noc_tables(
         ChipId device_id,

@@ -37,13 +37,6 @@ TEST(DispatchContext, TestWritesAndWorkloads) {
     const MeshShape system_shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
     auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
 
-    // SD→FD transition requires dispatch core reallocation. On single-device setups with SD's
-    // expanded grid, all dispatch cores are reclaimed for compute, leaving none available for FD.
-    if (system_shape.mesh_size() == 1) {
-        GTEST_SKIP() << "SD→FD→SD transition requires multi-device cluster (single-device lacks dispatch cores for FD "
-                        "after SD grid expansion).";
-    }
-
     // Terminating without initializing should throw
     EXPECT_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get()), std::runtime_error);
 
@@ -116,26 +109,45 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
             << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
     }
 
-    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
-    Finish(mesh_device_->mesh_command_queue());
-    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
-
     uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     const uint32_t num_tiles = 64;
-    DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
-    ReplicatedBufferConfig global_buffer_config{.size = num_tiles * single_tile_size};
-    auto l1_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
 
-    std::vector<uint32_t> src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
-    std::iota(src_vec.begin(), src_vec.end(), 42);
-    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), l1_buf, src_vec);
+    // Step 1: Write sharded buffer while FD is enabled
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+
+    DeviceLocalBufferConfig fd_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    ReplicatedBufferConfig fd_global_config{.size = num_tiles * single_tile_size};
+    auto fd_buf = MeshBuffer::create(fd_global_config, fd_buffer_config, mesh_device_.get());
+
+    std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
+    std::iota(fd_src_vec.begin(), fd_src_vec.end(), 100);
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
     Finish(mesh_device_->mesh_command_queue());
 
+    // Step 2: Disable FD (dispatch cores reclaimed for compute)
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+
+    // Step 3: Write buffer to L1 (which now includes reclaimed dispatch cores)
+    DeviceLocalBufferConfig sd_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
+    ReplicatedBufferConfig sd_global_config{.size = num_tiles * single_tile_size};
+    auto sd_buf = MeshBuffer::create(sd_global_config, sd_buffer_config, mesh_device_.get());
+
+    std::vector<uint32_t> sd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
+    std::iota(sd_src_vec.begin(), sd_src_vec.end(), 200);
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
+    Finish(mesh_device_->mesh_command_queue());
+
+    // Step 4: Verify both buffers (from FD and SD modes)
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        std::vector<uint32_t> dst_vec = {};
-        ReadShard(mesh_device_->mesh_command_queue(), dst_vec, l1_buf, coord);
-        EXPECT_EQ(dst_vec, src_vec);
+        std::vector<uint32_t> fd_dst_vec = {};
+        ReadShard(mesh_device_->mesh_command_queue(), fd_dst_vec, fd_buf, coord);
+        EXPECT_EQ(fd_dst_vec, fd_src_vec) << "FD buffer verification failed";
+
+        std::vector<uint32_t> sd_dst_vec = {};
+        ReadShard(mesh_device_->mesh_command_queue(), sd_dst_vec, sd_buf, coord);
+        EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD buffer verification failed (reclaimed dispatch cores)";
     }
 }
 
