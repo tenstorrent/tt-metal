@@ -2146,6 +2146,7 @@ def test_untilize_multi_core_nd_shard_to_interleaved_uneven_input_shard_spec(
     "output_shard_shape",
     [
         ttnn.Shape([2, 64, 64]),
+        ttnn.Shape([2, 96, 96]),  # test for output unevenly sharded case
     ],
 )
 @pytest.mark.parametrize(
