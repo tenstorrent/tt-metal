@@ -1691,3 +1691,287 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         assert_quality(torch_output, tt_output_torch, pcc=0.995_000, relative_rmse=0.1)
     else:
         logger.warning("Skipping check")
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 8)],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
+    """
+    Sweep over blocking configurations for conv3d to find optimal settings.
+    Uses configurations from utils/conv3d.py and settings from WanDecoder.
+    """
+    from models.tt_dit.utils.conv3d import aligned_channels, prepare_conv3d_weights
+
+    # Configurations from utils/conv3d.py::get_conv3d_config
+    # (C_in, C_out, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
+    baseline_blockings = {
+        (96, 32, (3, 3, 3)): (96, 32, 1, 32, 2),
+        (192, 96, (1, 3, 3)): (192, 96, 1, 4, 4),
+        (96, 96, (3, 3, 3)): (96, 96, 1, 32, 2),
+        (384, 192, (1, 3, 3)): (192, 96, 1, 16, 1),
+        (192, 192, (3, 3, 3)): (96, 96, 1, 64, 1),
+        (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
+        (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
+        (384, 384, (3, 3, 3)): (128, 128, 1, 16, 2),
+        (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
+    }
+
+    # Test configurations with representative input shapes from VAE decoder
+    # (C_in, C_out, kernel_size, T, H, W)
+    conv_configs = [
+        (96, 32, (3, 3, 3), 4, 720, 1280),
+        (192, 96, (1, 3, 3), 4, 360, 640),
+        (96, 96, (3, 3, 3), 4, 720, 1280),
+        (384, 192, (1, 3, 3), 2, 180, 320),
+        (192, 192, (3, 3, 3), 4, 360, 640),
+        (32, 384, (3, 3, 3), 1, 90, 160),
+        (192, 384, (3, 3, 3), 2, 180, 320),
+        (384, 384, (3, 3, 3), 1, 90, 160),
+        (384, 768, (3, 3, 3), 1, 90, 160),
+    ]
+
+    grid_size = mesh_device.compute_with_storage_grid_size()
+
+    # Use same compute kernel config as WanCausalConv3d (HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    # Generate H_out_block and W_out_block variations (keep C_in/C_out at baseline)
+    hw_variations = [
+        (1, 1),
+        (1, 2),
+        (1, 4),
+        (1, 8),
+        (1, 16),
+        (2, 1),
+        (2, 2),
+        (2, 4),
+        (2, 8),
+        (2, 16),
+        (4, 1),
+        (4, 2),
+        (4, 4),
+        (4, 8),
+        (4, 16),
+        (8, 1),
+        (8, 2),
+        (8, 4),
+        (8, 8),
+        (8, 16),
+        (16, 1),
+        (16, 2),
+        (16, 4),
+        (16, 8),
+        (32, 1),
+        (32, 2),
+        (32, 4),
+        (64, 1),
+        (64, 2),
+    ]
+
+    results = []
+
+    print("\n" + "=" * 100)
+    print("CONV3D BLOCKING SWEEP - Blackhole 4x8")
+    print("=" * 100)
+
+    for C_in, C_out, kernel_size, T, H, W in conv_configs:
+        config_key = (C_in, C_out, kernel_size)
+        baseline = baseline_blockings.get(config_key)
+        if baseline is None:
+            print(f"SKIP: No baseline for {config_key}")
+            continue
+
+        C_in_block, C_out_block, T_base, H_base, W_base = baseline
+
+        print(f"\n{'='*80}")
+        print(f"Config: C_in={C_in}, C_out={C_out}, kernel={kernel_size}, shape=({T},{H},{W})")
+        print(f"Baseline blocking: C_in={C_in_block}, C_out={C_out_block}, T={T_base}, H={H_base}, W={W_base}")
+        print(f"{'='*80}")
+
+        # Calculate padding (same as WanCausalConv3d: causal temporal, symmetric spatial)
+        padding = (0, (kernel_size[1] - 1) // 2, (kernel_size[2] - 1) // 2)
+
+        # Create weights and input ONCE per config (outside blocking loop)
+        torch_weight = torch.randn(C_out, C_in, *kernel_size, dtype=torch.float32)
+        torch_bias = torch.randn(C_out, dtype=torch.float32)
+
+        padded_C_in = aligned_channels(C_in)
+        T_padded = T + kernel_size[0] - 1  # Causal padding
+
+        torch_input = torch.randn(1, T_padded, H, W, padded_C_in, dtype=torch.float32)
+
+        # Track best result for this config
+        best_time = float("inf")
+        best_blocking = None
+        baseline_time = None
+
+        # Build list of blockings to test: baseline + variations
+        blockings_to_test = []
+
+        # Add baseline first
+        blockings_to_test.append((H_base, W_base, True))
+
+        # Add H/W variations (skip if same as baseline)
+        for h, w in hw_variations:
+            if (h, w) != (H_base, W_base):
+                blockings_to_test.append((h, w, False))
+
+        for H_out_block, W_out_block, is_baseline in blockings_to_test:
+            blocking = (C_in_block, C_out_block, T_base, H_out_block, W_out_block)
+
+            try:
+                # Create conv config
+                conv_config = ttnn.Conv3dConfig(
+                    weights_dtype=ttnn.bfloat16,
+                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                    T_out_block=T_base,
+                    W_out_block=W_out_block,
+                    H_out_block=H_out_block,
+                    C_out_block=C_out_block,
+                    C_in_block=C_in_block,
+                    compute_with_storage_grid_size=grid_size,
+                )
+
+                # Prepare weights (depends on C_in_block)
+                tt_weight, tt_bias = prepare_conv3d_weights(mesh_device, torch_weight, torch_bias, conv_config)
+
+                # Create input tensor
+                tt_input = ttnn.from_torch(
+                    torch_input,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+
+                # Warmup
+                out = ttnn.experimental.conv3d(
+                    input_tensor=tt_input,
+                    weight_tensor=tt_weight,
+                    bias_tensor=tt_bias,
+                    config=conv_config,
+                    output_channels=C_out,
+                    kernel_size=kernel_size,
+                    stride=(1, 1, 1),
+                    padding=padding,
+                    padding_mode="zeros",
+                    dtype=ttnn.bfloat16,
+                    compute_kernel_config=compute_kernel_config,
+                )
+                ttnn.synchronize_device(mesh_device)
+                ttnn.deallocate(out)
+
+                # Timed runs
+                times = []
+                for _ in range(3):
+                    start = time.perf_counter()
+                    out = ttnn.experimental.conv3d(
+                        input_tensor=tt_input,
+                        weight_tensor=tt_weight,
+                        bias_tensor=tt_bias,
+                        config=conv_config,
+                        output_channels=C_out,
+                        kernel_size=kernel_size,
+                        stride=(1, 1, 1),
+                        padding=padding,
+                        padding_mode="zeros",
+                        dtype=ttnn.bfloat16,
+                        compute_kernel_config=compute_kernel_config,
+                    )
+                    ttnn.synchronize_device(mesh_device)
+                    elapsed = time.perf_counter() - start
+                    times.append(elapsed)
+                    ttnn.deallocate(out)
+
+                avg_ms = sum(times) / len(times) * 1000
+                min_ms = min(times) * 1000
+
+                # Track best
+                if avg_ms < best_time:
+                    best_time = avg_ms
+                    best_blocking = blocking
+
+                if is_baseline:
+                    baseline_time = avg_ms
+                    marker = " [BASELINE]"
+                else:
+                    marker = ""
+
+                # Print result immediately
+                print(f"  H={H_out_block:2d}, W={W_out_block:2d}: avg={avg_ms:7.2f}ms, min={min_ms:7.2f}ms{marker}")
+
+                results.append(
+                    {
+                        "config": config_key,
+                        "shape": (T, H, W),
+                        "blocking": blocking,
+                        "avg_ms": avg_ms,
+                        "min_ms": min_ms,
+                        "is_baseline": is_baseline,
+                        "status": "OK",
+                    }
+                )
+
+                # Cleanup
+                ttnn.deallocate(tt_input)
+                ttnn.deallocate(tt_weight)
+                if tt_bias is not None:
+                    ttnn.deallocate(tt_bias)
+
+            except Exception as e:
+                print(f"  H={H_out_block:2d}, W={W_out_block:2d}: FAILED - {str(e)[:60]}")
+                results.append(
+                    {
+                        "config": config_key,
+                        "shape": (T, H, W),
+                        "blocking": blocking,
+                        "avg_ms": None,
+                        "min_ms": None,
+                        "is_baseline": is_baseline,
+                        "status": f"FAILED",
+                    }
+                )
+
+        # Print summary for this config
+        if baseline_time and best_blocking:
+            print(f"\n  Summary: baseline={baseline_time:.2f}ms, best={best_time:.2f}ms @ {best_blocking}")
+            if best_time < baseline_time:
+                print(f"  Speedup: {baseline_time/best_time:.2f}x")
+
+    # Final summary
+    print("\n" + "=" * 100)
+    print("FINAL SUMMARY")
+    print("=" * 100)
+
+    successful = [r for r in results if r["status"] == "OK"]
+    print(f"Total: {len(successful)}/{len(results)} configurations succeeded")
+
+    # Group by config and find best for each
+    from collections import defaultdict
+
+    by_config = defaultdict(list)
+    for r in successful:
+        by_config[r["config"]].append(r)
+
+    for config_key, config_results in by_config.items():
+        baseline_r = next((r for r in config_results if r["is_baseline"]), None)
+        best_r = min(config_results, key=lambda x: x["avg_ms"])
+        print(f"\n{config_key}:")
+        if baseline_r:
+            print(
+                f"  Baseline: H={baseline_r['blocking'][3]}, W={baseline_r['blocking'][4]} -> {baseline_r['avg_ms']:.2f}ms"
+            )
+        print(f"  Best:     H={best_r['blocking'][3]}, W={best_r['blocking'][4]} -> {best_r['avg_ms']:.2f}ms")
+
+    assert len(successful) > 0, "All blocking configurations failed!"
