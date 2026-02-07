@@ -184,7 +184,6 @@ public:
     //                                      Getters
     // ======================================================================================
     const Storage& storage() const;
-    Storage& storage();
     DataType dtype() const;
     Layout layout() const;
     const tt::tt_metal::Shape& logical_shape() const;

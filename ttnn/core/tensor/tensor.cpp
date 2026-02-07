@@ -555,8 +555,6 @@ Tensor set_tensor_id(const Tensor& tensor) {
     return output;
 };
 
-Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
-
 const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
 
 const tt::tt_metal::Shape& Tensor::logical_shape() const {
