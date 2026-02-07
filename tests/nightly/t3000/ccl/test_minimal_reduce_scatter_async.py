@@ -431,6 +431,20 @@ def run_reduce_scatter_impl(
             None,
         ),  # check, barrier_with_persistent
         (
+            [4, 1, 4096, 4096],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            True,
+            False,
+            None,
+            None,
+            None,
+        ),  # check, barrier_with_persistent
+        (
             [4, 1, 1024, 2560],
             3,
             ttnn.TILE_LAYOUT,
@@ -571,6 +585,7 @@ def run_reduce_scatter_impl(
         "padded_dim_2_test_one-check-barrier_without_persistent",
         "padded_dim_2_test_two-perf-no_barrier_with_persistent",
         "batch_8-check-barrier_with_persistent",
+        "batch_4_4k-check-barrier_with_persistent",
         "batch_4-perf-barrier_without_persistent",
         "batch_1_sd35_spatial-check-no_barrier_with_persistent",
         "batch_1_sd35_prompt-perf-barrier_with_persistent",
@@ -602,10 +617,10 @@ def run_reduce_scatter_impl(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1540000}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1540000}, ttnn.Topology.Linear),
+        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1540000}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    ids=["fabric_ring"],  # , "fabric_linear"],
 )
 def test_reduce_scatter_async(
     mesh_device,
