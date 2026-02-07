@@ -61,8 +61,7 @@ TensorReturnValue filter_tensor_shards(
             tt::tt_metal::DeviceStorage new_storage(old_storage.mesh_buffer, std::move(filtered_coords));
 
             // Return new tensor with new storage
-            return Tensor(
-                tt::tt_metal::Storage(std::move(new_storage)), tensor.tensor_spec(), tensor.tensor_topology());
+            return Tensor(std::move(new_storage), tensor.tensor_spec(), tensor.tensor_topology());
         },
         tensor_return_value);
 }

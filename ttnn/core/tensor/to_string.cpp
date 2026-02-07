@@ -5,6 +5,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/graph_tracking.hpp>
 
@@ -24,8 +25,8 @@ std::string to_string(const tt::tt_metal::Tensor& tensor) {
             tensor.layout());
     }
 
-    if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
-        auto storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
+    if (is_device_tensor(tensor)) {
+        const auto& storage = tensor.device_storage();
         if (storage.mesh_buffer != nullptr) {
             auto* mesh_device = storage.mesh_buffer->device();
 

@@ -562,8 +562,8 @@ inline void log_gcores_info(
  */
 inline tt::tt_metal::experimental::udm::MeshTensorBuilder create_tensor_builder(const ttnn::Tensor& tensor) {
     // Extract MeshBuffer from the distributed tensor
-    TT_FATAL(std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage()), "Tensor must be on device");
-    const auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
+    TT_FATAL(is_device_tensor(tensor), "Tensor must be on device");
+    const auto& device_storage = tensor.device_storage();
     TT_FATAL(device_storage.mesh_buffer != nullptr, "Tensor must have a MeshBuffer");
 
     // Extract distribution info from tensor topology

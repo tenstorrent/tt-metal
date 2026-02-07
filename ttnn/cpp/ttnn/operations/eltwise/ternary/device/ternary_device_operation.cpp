@@ -8,6 +8,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
@@ -427,10 +428,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     const auto& a_shape = input_a.padded_shape();
     TernaryVariant variant = args.ternary_variant;
 
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_a.storage()));
+    TT_ASSERT(is_device_tensor(input_a), "Unexpected type {}", input_a.storage_type());
 
     auto program_factory = select_program_factory(args, tensor_args);
 
@@ -438,14 +436,8 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         args, program_factory.index(), input_a.dtype(), input_a.memory_config(), a_shape.volume());
 
     if (variant == TernaryVariant::TTT) {
-        TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_b->storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_b->storage()));
-        TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_c->storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_c->storage()));
+        TT_ASSERT(is_device_tensor(*input_b), "Unexpected type {}", input_b->storage_type());
+        TT_ASSERT(is_device_tensor(*input_c), "Unexpected type {}", input_c->storage_type());
 
         const auto shard_volumes = get_shard_volumes(
             input_a.tensor_spec(),
@@ -466,10 +458,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             shard_volumes);
 
     } else if (variant == TernaryVariant::TTS) {
-        TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_b->storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_b->storage()));
+        TT_ASSERT(is_device_tensor(*input_b), "Unexpected type {}", input_b->storage_type());
 
         const auto shard_volumes = get_shard_volumes(
             input_a.tensor_spec(), input_b->tensor_spec(), std::nullopt, compute_output_specs(args, tensor_args));
@@ -484,10 +473,7 @@ tt::stl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
             a_shape.volume(),
             shard_volumes);
     } else if (variant == TernaryVariant::TST) {
-        TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_c->storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_c->storage()));
+        TT_ASSERT(is_device_tensor(*input_c), "Unexpected type {}", input_c->storage_type());
 
         const auto shard_volumes = get_shard_volumes(
             input_a.tensor_spec(), std::nullopt, input_c->tensor_spec(), compute_output_specs(args, tensor_args));
