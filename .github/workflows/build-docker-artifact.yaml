@@ -292,6 +292,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/push-latest-image-to-ghcr
+          sparse-checkout-cone-mode: false
 
       - name: "Push latest CI Build tag"
         if: needs.check-docker-images.outputs.ci-build-exists == 'true'
