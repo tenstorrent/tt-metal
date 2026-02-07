@@ -84,7 +84,7 @@ void RunOneTest(
 
     fixture->RunProgram(mesh_device, workload, true);
 
-    EXPECT_TRUE(FileContainsAllStringsInOrder(fixture->log_file_name(), expected));
+    EXPECT_TRUE(FileContainsAllStringsInOrder(fixture->log_file_name, expected));
 }
 
 template <uint32_t Free>

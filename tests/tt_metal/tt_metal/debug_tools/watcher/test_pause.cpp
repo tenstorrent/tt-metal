@@ -156,7 +156,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             expected_strings.push_back(expected);
         }
     }
-    EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name(), expected_strings));
+    EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected_strings));
 }
 }
 }

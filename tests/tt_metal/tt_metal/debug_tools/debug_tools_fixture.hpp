@@ -184,9 +184,7 @@ protected:
 // A version of MeshDispatchFixture with watcher enabled
 class MeshWatcherFixture : public DebugToolsMeshFixture {
 public:
-    inline static std::string log_file_name() {
-        return tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + "generated/watcher/watcher.log";
-    }
+    std::string log_file_name;
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.
@@ -214,6 +212,9 @@ protected:
     bool watcher_previous_noinline{};
     bool test_mode_previous{};
     void SetUp() override {
+        // Initialize log file name once during setup
+        log_file_name = tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + "generated/watcher/watcher.log";
+
         // Enable watcher for this test, save the previous state so we can restore it later.
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
         watcher_previous_interval = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_interval();

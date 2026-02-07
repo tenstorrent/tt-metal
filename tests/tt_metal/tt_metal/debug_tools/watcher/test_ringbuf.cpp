@@ -121,12 +121,12 @@ void RunTest(
     // Run the program
     fixture->RunProgram(mesh_device, workload, true);
 
-    log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name());
+    log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
     // Check log
     EXPECT_TRUE(
         FileContainsAllStringsInOrder(
-            fixture->log_file_name(),
+            fixture->log_file_name,
             expected
         )
     );
