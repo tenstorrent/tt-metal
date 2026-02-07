@@ -51,7 +51,7 @@ def check_arc_block(arc: NocBlock, postcode: int, heartbeat_sample: HeartbeatSam
     device_id = arc.location.device_id
     # Heartbeat must be increasing
     current_heartbeat_sample = HeartbeatSample(
-        heartbeat=read_arc_telemetry_entry(device_id, "TIMER_HEARTBEAT"), timestamp=time.time()
+        heartbeat=read_arc_telemetry_entry(device_id, "TIMER_HEARTBEAT"), timestamp=time.monotonic()
     )
     arcclk_mhz = read_arc_telemetry_entry(device_id, "ARCCLK")
     heartbeats_per_second = (current_heartbeat_sample.heartbeat - heartbeat_sample.heartbeat) / (
@@ -96,7 +96,7 @@ def check_arc_block(arc: NocBlock, postcode: int, heartbeat_sample: HeartbeatSam
 def get_heartbeat_sample(device: Device) -> HeartbeatSample:
     return HeartbeatSample(
         heartbeat=read_arc_telemetry_entry(device.arc_block.location.device_id, "TIMER_HEARTBEAT"),
-        timestamp=time.time(),
+        timestamp=time.monotonic(),
     )
 
 
