@@ -71,6 +71,7 @@ struct GatedReduce {
 #if defined(COMPILE_FOR_TRISC)
             constexpr uint32_t tiles_per_k = CTArgs::tiles_per_k;
             constexpr uint32_t k_num_tiles = CTArgs::k_num_tiles;
+            static_assert(tiles_per_k >= 2 && tiles_per_k % 2 == 0, "tiles_per_k must be even and >= 2");
 
             // Init add + silu for group1 once before the loop
             binary_op_init_common(args.group1_cb, args.group1_cb, args.intermed_cb);

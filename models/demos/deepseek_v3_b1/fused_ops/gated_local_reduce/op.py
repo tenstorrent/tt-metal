@@ -95,7 +95,7 @@ class GatedLocalReduceOp:
         # Get tile info from output tensor for intermediate buffer
         output_tile = output_tensor.tile
         tile_h, tile_w = output_tile.tile_shape
-        data_format = ttnn.DataType.BFLOAT16
+        data_format = output_tensor.dtype
         tile_size = output_tile.get_tile_size(data_format)
         tile_descriptor = ttnn.TileDescriptor(tile_h, tile_w, False)
 

@@ -8,7 +8,7 @@ Tests for gated local reduce with SiLU activation.
 Two parallel reductions:
     group1_result = SiLU(group1[0] + group1[1] + ... + group1[n-1])
     group2_result = group2[0] + group2[1] + ... + group2[m-1]
-    output = group1_result + group2_result
+    output = group1_result * group2_result
 
 This pattern is used in gated MLP where:
   - Group 1 is the "gate" path (with SiLU)
@@ -153,7 +153,7 @@ def test_gated_local_reduce_moe_pattern(device, group1_num_tiles, group2_num_til
     In MoE, we often compute:
         gate_output = SiLU(sum of gate projections)
         up_output = sum of up projections
-        final = gate_output * up_output  (element-wise, but here we test addition)
+        final = gate_output * up_output  (element-wise multiplication)
 
     This test verifies the gated local reduce pattern works for MoE-like workloads.
     """

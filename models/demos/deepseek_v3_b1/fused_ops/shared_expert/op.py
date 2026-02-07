@@ -279,6 +279,10 @@ class SharedExpertOp:
         K_gate_tiles = K_gate // tile_w
 
         num_compute_cores = 64
+        assert (
+            K_gate_tiles % k_parallel == 0
+        ), f"K_gate_tiles ({K_gate_tiles}) must be divisible by k_parallel ({k_parallel})"
+        assert k_parallel * n_parallel == num_compute_cores, f"k_parallel * n_parallel must equal {num_compute_cores}"
         k_per_core = K_gate_tiles // k_parallel
         K_down_tiles = n_parallel
 
@@ -364,7 +368,7 @@ class SharedExpertOp:
 
         ag_dummy_tensor = ttnn.from_torch(
             torch.zeros(total_gather_tiles, 32, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=data_format,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ag_dummy_mem,
@@ -372,7 +376,7 @@ class SharedExpertOp:
         )
         bg_dummy_tensor = ttnn.from_torch(
             torch.zeros(total_gather_tiles, 32, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=data_format,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ag_dummy_mem,

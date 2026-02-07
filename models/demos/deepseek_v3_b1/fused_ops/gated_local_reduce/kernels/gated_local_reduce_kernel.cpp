@@ -46,30 +46,20 @@ void kernel_main() {
         constexpr uint32_t group1_num_tiles = get_named_compile_time_arg_val("gated_local_reduce_group1_num_tiles");
         constexpr uint32_t group2_num_tiles = get_named_compile_time_arg_val("gated_local_reduce_group2_num_tiles");
 
-        using LocalReduceCTArgs = deepseek_b1_ops::LocalReduce::ComputeCTArgs;
-
         // ================================================================
         // Phase 1: reduce(group1) + SiLU -> intermed[0]  (ADD with SiLU)
         // ================================================================
-        deepseek_b1_ops::LocalReduce::ComputeArgs group1_args{
-            .in_cb = in0_cb,
-            .out_cb = intermed_cb,
-            .num_tiles = group1_num_tiles,
-            .apply_silu = true,
-        };
-        deepseek_b1_ops::LocalReduce::Op<LocalReduceCTArgs, true> group1_reduce;
+        using Group1CTArgs = deepseek_b1_ops::LocalReduce::ComputeCTArgs<group1_num_tiles, true>;
+        deepseek_b1_ops::LocalReduce::ComputeArgs group1_args{in0_cb, intermed_cb};
+        deepseek_b1_ops::LocalReduce::Op<Group1CTArgs, true> group1_reduce;
         group1_reduce(group1_args);
 
         // ================================================================
         // Phase 2: reduce(group2) -> intermed[1]  (ADD)
         // ================================================================
-        deepseek_b1_ops::LocalReduce::ComputeArgs group2_args{
-            .in_cb = in1_cb,
-            .out_cb = intermed_cb,
-            .num_tiles = group2_num_tiles,
-            .apply_silu = false,
-        };
-        deepseek_b1_ops::LocalReduce::Op<LocalReduceCTArgs, true> group2_reduce;
+        using Group2CTArgs = deepseek_b1_ops::LocalReduce::ComputeCTArgs<group2_num_tiles, false>;
+        deepseek_b1_ops::LocalReduce::ComputeArgs group2_args{in1_cb, intermed_cb};
+        deepseek_b1_ops::LocalReduce::Op<Group2CTArgs, true> group2_reduce;
         group2_reduce(group2_args);
 
         // ================================================================
