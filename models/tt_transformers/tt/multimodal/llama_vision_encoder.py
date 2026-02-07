@@ -97,6 +97,7 @@ class TtLlamaVisionEncoder(LightweightModule):
             kernel_size=self.patch_size,
             stride=self.patch_size,
             bias=False,
+            model_name=configuration.model_name if hasattr(configuration, "model_name") else "unknown",
         )
 
         self.class_embedding = TtLlamaClassEmbedding(
@@ -125,6 +126,7 @@ class TtLlamaVisionEncoder(LightweightModule):
             weight_cache_path=weight_cache_path,
             weight_dtype=dtype,
             eps=configuration.norm_eps,
+            model_name=configuration.model_name if hasattr(configuration, "model_name") else "unknown",
         )
 
         self.ln_pre = TtLayerNorm(
@@ -135,6 +137,7 @@ class TtLlamaVisionEncoder(LightweightModule):
             weight_cache_path=weight_cache_path,
             weight_dtype=dtype,
             eps=configuration.norm_eps,
+            model_name=configuration.model_name if hasattr(configuration, "model_name") else "unknown",
         )
 
         self.transformer = TtLlamaImageTransformer(
@@ -169,6 +172,7 @@ class TtLlamaVisionEncoder(LightweightModule):
             num_tiles=self.max_num_tiles,
             width=self.width,
             gated=True,
+            model_name=configuration.model_name if hasattr(configuration, "model_name") else "unknown",
         )
 
         self.post_tile_pos_embed = TtLlamaTilePositionEmbedding(
@@ -179,6 +183,7 @@ class TtLlamaVisionEncoder(LightweightModule):
             num_tiles=self.max_num_tiles,
             width=self.width,
             gated=True,
+            model_name=configuration.model_name if hasattr(configuration, "model_name") else "unknown",
         )
 
     def forward(self, images, ar, max_actual_num_chunks=None):
