@@ -8,6 +8,7 @@ import os
 from datetime import datetime
 from typing import Optional, Union
 
+import yaml
 from loguru import logger
 
 from infra.data_collection.github.workflows import is_job_hanging_from_job_log
@@ -247,16 +248,14 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
         logger.info("Seems to have no config- label, so assuming no special config requested")
         detected_config = None
 
-    if labels_have_overlap(["E150", "grayskull", "arch-grayskull"], labels):
-        detected_arch = "grayskull"
-    elif labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0", "config-t3000"], labels):
+    if labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0", "config-t3000"], labels):
         detected_arch = "wormhole_b0"
     elif labels_have_overlap(["BH", "arch-blackhole"], labels):
         detected_arch = "blackhole"
     else:
         detected_arch = None
 
-    single_cards_list = ("E150", "N150", "N300", "BH")
+    single_cards_list = ("N150", "N300", "BH")
     single_cards_overlap = get_overlap(single_cards_list, labels)
 
     # In order of preference
@@ -350,11 +349,15 @@ def get_job_rows_from_github_info(workflow_outputs_dir, github_jobs_json, github
     return [x for x in job_rows if x is not None]
 
 
+def _get_repo_root() -> pathlib.Path:
+    """Return the repository root directory (parent of infra/)."""
+    return pathlib.Path(__file__).resolve().parents[3]
+
+
 def get_github_partial_benchmark_data_filenames():
     logger.info("We are assuming generated/benchmark_data exists from previous passing test")
 
-    current_utils_path = pathlib.Path(__file__)
-    benchmark_data_dir = current_utils_path.parent.parent.parent.parent / "generated/benchmark_data"
+    benchmark_data_dir = _get_repo_root() / "generated/benchmark_data"
     assert benchmark_data_dir.exists()
     assert benchmark_data_dir.is_dir()
 
@@ -378,7 +381,62 @@ def get_github_runner_environment():
     }
 
 
-def create_json_with_github_benchmark_environment(github_partial_benchmark_data_filename):
+def _get_device_type_from_runner_environment(sku_from_test: Optional[str] = None) -> str:
+    """
+    Infer device/card type (wormhole_b0, blackhole) from runner environment.
+    RUNNER_NAME is a GitHub Actions env var that must be set.
+
+    When sku_from_test is provided (e.g. from workflow), look up sku_config for that SKU's
+    runs_on labels; if any label contains "blackhole" or "wormhole", return the arch.
+    """
+    assert "RUNNER_NAME" in os.environ, "RUNNER_NAME must be set (GitHub Actions env var)"
+    runner_name = os.environ["RUNNER_NAME"]
+    runner_lower = runner_name.lower()
+
+    # This assumes all CIv2 runner names start with tt-ubuntu
+    if runner_lower.startswith("tt-ubuntu"):
+        if "blackhole" in runner_lower or "bh-" in runner_lower or "p100" in runner_lower or "p150" in runner_lower:
+            return "blackhole"
+        if "n150" in runner_lower or "n300" in runner_lower or "wormhole" in runner_lower:
+            return "wormhole_b0"
+        return "unknown"
+
+    # Not tt-ubuntu: check .github/sku_config.yaml for arch from runs_on labels matching runner
+    if sku_from_test:
+        sku_config_path = _get_repo_root() / ".github" / "sku_config.yaml"
+        if sku_config_path.exists():
+            with open(sku_config_path) as f:
+                config = yaml.safe_load(f)
+            skus = config.get("skus") or {}
+
+            if sku_from_test in skus:
+                # Use sku_from_test from workflow: get runs_on labels for this SKU
+                runs_on = skus.get(sku_from_test, {}).get("runs_on") or []
+                for label in runs_on:
+                    label_lower = label.lower()
+                    # Only checks CIv1 style labels in sku_config for now
+                    if "blackhole" in label_lower:
+                        return "blackhole"
+                    if "wormhole" in label_lower:
+                        return "wormhole_b0"
+
+    # Failed to parse from CIv2 runner name and failed to parse from sku_config:
+    # Fallback to using ARCH_NAME env var
+    if "ARCH_NAME" in os.environ:
+        arch = os.environ["ARCH_NAME"]
+        if arch in ("wormhole_b0", "blackhole"):
+            return arch
+
+    logger.warning(
+        f"Could not infer device type from RUNNER_NAME={runner_name!r}. "
+        "Set ARCH_NAME env var (wormhole_b0, blackhole) for accurate benchmark data."
+    )
+    return "unknown"
+
+
+def create_json_with_github_benchmark_environment(
+    github_partial_benchmark_data_filename, sku_from_test: Optional[str] = None
+):
     assert "GITHUB_REPOSITORY" in os.environ
     git_repo_name = os.environ["GITHUB_REPOSITORY"]
 
@@ -411,9 +469,7 @@ def create_json_with_github_benchmark_environment(github_partial_benchmark_data_
     logger.warning("Hardcoded null for device_ip")
     device_ip = ""
 
-    assert "ARCH_NAME" in os.environ
-    device_type = os.environ["ARCH_NAME"]
-    assert device_type in ("grayskull", "wormhole_b0", "blackhole")
+    device_type = _get_device_type_from_runner_environment(sku_from_test=sku_from_test)
 
     logger.warning("Hardcoded null for device_memory_size")
     device_memory_size = ""

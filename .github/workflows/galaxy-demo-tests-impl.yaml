@@ -130,7 +130,7 @@ jobs:
         run: |
           if [ -d "generated/benchmark_data" ]; then
             echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
-            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py "${{ matrix.test-group.sku }}"
           else
             echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
             echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
