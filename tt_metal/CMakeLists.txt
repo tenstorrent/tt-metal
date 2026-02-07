@@ -72,64 +72,7 @@ target_sources(
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            api/tt-metalium/buffer_types.hpp
-            api/tt-metalium/circular_buffer_constants.h
-            api/tt-metalium/constants.hpp
-            api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
-            api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
-            core_descriptors/blackhole_140_arch.yaml
-            core_descriptors/blackhole_140_arch_eth_dispatch.yaml
-            core_descriptors/blackhole_140_arch_fabric_mux.yaml
-            core_descriptors/wormhole_b0_80_arch.yaml
-            core_descriptors/wormhole_b0_80_arch_fabric_mux.yaml
-            core_descriptors/wormhole_b0_80_arch_eth_dispatch.yaml
-            fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/n300_x2_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/single_galaxy_torus_y_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto
-            fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto
-            fabric/fabric_edm_packet_header.hpp
-            ${FABRIC_HW_INC}
-            impl/dispatch/kernels/cq_commands.hpp
-            impl/dispatch/kernels/cq_common.hpp
-            impl/dispatch/kernels/cq_relay.hpp
-            impl/dispatch/kernels/cq_helpers.hpp
-            ${COMPUTE_KERNEL_API}
-            soc_descriptors/blackhole_140_arch.yaml
-            soc_descriptors/wormhole_b0_80_arch.yaml
-            tools/profiler/kernel_profiler.hpp
-            tools/profiler/fabric_event_profiler.hpp
-            tools/profiler/noc_event_profiler.hpp
-            tools/profiler/cpp_device_analyses.json
-            # Kernel sources
-            impl/dispatch/kernels/cq_dispatch.cpp
-            impl/dispatch/kernels/cq_dispatch_subordinate.cpp
-            impl/dispatch/kernels/cq_prefetch.cpp
-            fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
-            fabric/impl/kernels/tt_fabric_mux.cpp
-            kernels/compute/blank.cpp
-            kernels/compute/eltwise_binary.cpp
-            kernels/compute/eltwise_sfpu.cpp
-            kernels/dataflow/blank.cpp
-            kernels/dataflow/reader_binary_diff_lengths.cpp
-            kernels/dataflow/reader_unary.cpp
-            kernels/dataflow/writer_unary.cpp
-            kernels/dataflow/writer_unary_1.cpp
-            ${TT_LLK_HEADERS}
+        FILES ${JITAPI_HEADERS} ${FABRIC_HW_INC} ${COMPUTE_KERNEL_API} ${JITAPI_KERNEL_SOURCES} ${TT_LLK_HEADERS}
 )
 
 include(CheckFunctionExists)

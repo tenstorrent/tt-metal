@@ -155,6 +155,9 @@ set(JITAPI_KERNEL_SOURCES
     impl/dispatch/kernels/cq_dispatch_subordinate.cpp
     impl/dispatch/kernels/cq_prefetch.cpp
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
+    fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp
+    fabric/impl/kernels/edm_fabric/fabric_router_relay_extension.cpp
+    fabric/impl/kernels/edm_fabric/fabric_router_udm_mux_extension.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
     kernels/compute/blank.cpp
     kernels/compute/eltwise_binary.cpp
