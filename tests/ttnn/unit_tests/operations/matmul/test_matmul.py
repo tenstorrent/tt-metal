@@ -2737,3 +2737,62 @@ def test_matmul_activation_with_sharded_input(device):
         assert_with_pcc(torch_output_tensor, output_tensor)
     except Exception as e:
         pytest.fail(f"Got unexpected exception {e}")
+
+
+@pytest.mark.parametrize(
+    "weight_dtype, pcc_threshold",
+    [
+        (ttnn.bfloat8_b, 0.99),
+        (ttnn.bfloat4_b, 0.98),
+    ],
+)
+@pytest.mark.parametrize(
+    "M, K, N",
+    [
+        (32, 64, 32),
+        (128, 256, 128),
+        (64, 512, 256),
+    ],
+)
+def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc_threshold, M, K, N):
+    torch.manual_seed(0)
+    torch_A = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    torch_W = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+
+    # Golden in float32
+    golden = torch.matmul(torch_A.float(), torch_W.float())
+
+    # Conventional path: row-wise BFP grouping (along N)
+    tt_A_conv = ttnn.from_torch(torch_A, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_W_conv = ttnn.from_torch(torch_W, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    result_conv = ttnn.to_torch(ttnn.matmul(tt_A_conv, tt_W_conv))
+
+    # Column-tilize path: use col_tilize=True instead of manual torch transpose
+    tt_A_col = ttnn.from_torch(torch_A, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_W_col = ttnn.from_torch(torch_W, dtype=weight_dtype, device=device, col_tilize=True)
+    result_col = ttnn.to_torch(ttnn.matmul(tt_A_col, tt_W_col, transpose_b=True))
+
+    # Both paths should match golden
+    assert_with_pcc(golden, result_conv, pcc=pcc_threshold)
+    assert_with_pcc(golden, result_col, pcc=pcc_threshold)
+
+    # The two paths should match each other
+    assert_with_pcc(result_conv, result_col, pcc=pcc_threshold)
+
+
+def test_from_torch_col_tilize_validation():
+    torch_tensor_2d = torch.randn(32, 64, dtype=torch.bfloat16)
+    torch_tensor_1d = torch.randn(64, dtype=torch.bfloat16)
+
+    # col_tilize requires BFP dtype
+    with pytest.raises(RuntimeError, match="col_tilize=True requires BFP dtype"):
+        ttnn.from_torch(torch_tensor_2d, dtype=ttnn.bfloat16, col_tilize=True)
+
+    # col_tilize requires ndim >= 2
+    with pytest.raises(RuntimeError, match="col_tilize=True requires tensor.ndim >= 2"):
+        ttnn.from_torch(torch_tensor_1d, dtype=ttnn.bfloat8_b, col_tilize=True)
+
+    # col_tilize not supported with spec
+    spec = ttnn.TensorSpec((32, 64), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)
+    with pytest.raises(RuntimeError, match="col_tilize=True is not supported with spec"):
+        ttnn.from_torch(torch_tensor_2d, spec=spec, col_tilize=True)
