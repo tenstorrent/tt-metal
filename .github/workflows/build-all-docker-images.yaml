@@ -365,6 +365,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/push-latest-image-to-ghcr
+          sparse-checkout-cone-mode: false
 
       - name: "Push latest Ubuntu 22.04 Dev tag"
         if: needs.check-images.outputs.ubuntu-2204-needs-build != 'true' || needs.build-ubuntu-2204.result == 'success'
