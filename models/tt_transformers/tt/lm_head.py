@@ -164,15 +164,13 @@ class LMHead(LightweightModule):
             if not _file_exists:
                 _f.write(
                     "cluster_shape_x,cluster_shape_y,x_dtype,"
-                    "x_shape_0,x_shape_1,x_shape_2,x_shape_3,"
-                    "num_weight_splits,weight_shapes,weights_dtype,"
+                    "x_shape,num_output_weights,output_weights_shapes,output_weights_dtype,"
                     "model_name\n"
                 )
             _w_shapes = ";".join("x".join(str(d) for d in w.shape) for w in self.output_weights)
             _entry = (
                 f"{self.args.cluster_shape[0]},{self.args.cluster_shape[1]},{x.dtype},"
-                f"{x.shape[0]},{x.shape[1]},{x.shape[2]},{x.shape[3]},"
-                f"{len(self.output_weights)},{_w_shapes},{self.dtype},"
+                f"{'x'.join(str(d) for d in x.shape)},{len(self.output_weights)},{_w_shapes},{self.dtype},"
                 f"{self.args.model_name}"
             )
             if _entry not in _lmhead_collected:

@@ -55,13 +55,13 @@ class Embedding(LightweightModule):
         with open("embedding_1d_performance.csv", "a") as _f:
             if not _file_exists:
                 _f.write(
-                    "class_name,cluster_shape_x,cluster_shape_y,weights_dtype,embed_scale,x_shape_0,x_shape_1,weights_shape_0,weights_shape_1,weights_shape_2,weights_shape_3,model_name\n"
+                    "class_name,cluster_shape_x,cluster_shape_y,weights_dtype,embed_scale,x_shape,weights_shape,model_name\n"
                 )
             _entry = (
                 f"{self.__class__.__name__},{self._cluster_shape[0]},{self._cluster_shape[1]},"
                 f"{self._weights_dtype},{self._embed_scale},"
-                f"{x.shape[0]},{x.shape[1]},"
-                f"{self.weights.shape[0]},{self.weights.shape[1]},{self.weights.shape[2]},{self.weights.shape[3]},"
+                f"{'x'.join(str(d) for d in x.shape)},"
+                f"{'x'.join(str(d) for d in self.weights.shape)},"
                 f"{self._model_name}"
             )
             if _entry not in _emb_collected:

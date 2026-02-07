@@ -425,6 +425,7 @@ class RotarySetup(LightweightModule):
                 _f.write(f"{_entry}\n")
 
         self.use_qk_fused = use_qk_fused
+        self.model_name = model_name
         self.original_batch_size = batch_size
 
         # NOTE: If qk fused ops (rotary embedding + paged cache update) are used
@@ -497,11 +498,11 @@ class RotarySetup(LightweightModule):
         _file_exists = os.path.exists("rope_1d_api_calls.csv")
         with open("rope_1d_api_calls.csv", "a") as _f:
             if not _file_exists:
-                _f.write("api,device_shape_x,device_shape_y,batch_size,head_dim,use_qk_fused,extra\n")
+                _f.write("api,device_shape_x,device_shape_y,batch_size,head_dim,use_qk_fused,extra,model_name\n")
             _device_shape = list(self.device.shape) if self.is_mesh_device else [1, 1]
             _entry = (
                 f"{api_name},{_device_shape[0]},{_device_shape[1]},"
-                f"{self.original_batch_size},{self.head_dim},{self.use_qk_fused},{extra}"
+                f"{self.original_batch_size},{self.head_dim},{self.use_qk_fused},{extra},{self.model_name}"
             )
             if _entry not in _rope_collected:
                 _rope_collected.add(_entry)
