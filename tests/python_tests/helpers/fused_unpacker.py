@@ -438,7 +438,7 @@ class UnpackerA(Unpacker):
         stage = operation.stage_id
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
-        eltwise_reuse_type = "NONE"
+        reuse_dest = f"EltwiseBinaryReuseDestType::{compute_unit.reuse_dest.value}"
         face_r_dim = operation.face_r_dim
         num_faces = operation.num_faces
         transpose_faces = (
@@ -449,7 +449,7 @@ class UnpackerA(Unpacker):
         )
 
         return (
-            f"    _llk_unpack_A_init_<{broadcast_type}, false, EltwiseBinaryReuseDestType::{eltwise_reuse_type}, {unpack_to_dest}>(\n"
+            f"    _llk_unpack_A_init_<{broadcast_type}, false, {reuse_dest}, {unpack_to_dest}>(\n"
             f"        {transpose_faces}, {transpose_within_face}, {face_r_dim}, {num_faces}, unpack_a_src_format{stage}, unpack_a_dst_format{stage}\n"
             f"    );\n"
         )
@@ -464,9 +464,10 @@ class UnpackerA(Unpacker):
         stage = operation.stage_id
         unpack_to_dest = "true" if operation.unpack_to_dest else "false"
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
+        reuse_dest = f"EltwiseBinaryReuseDestType::{compute_unit.reuse_dest.value}"
 
         return (
-            f"_llk_unpack_A_<{broadcast_type}, false, EltwiseBinaryReuseDestType::NONE, {unpack_to_dest}>(\n"
+            f"_llk_unpack_A_<{broadcast_type}, false, {reuse_dest}, {unpack_to_dest}>(\n"
             f"    L1_ADDRESS(buffer_A{stage}[{tile_idx_expr}]), unpack_a_src_format{stage}, unpack_a_dst_format{stage}\n"
             f");\n"
         )

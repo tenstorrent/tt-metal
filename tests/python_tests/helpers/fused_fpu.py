@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 from .chip_architecture import ChipArchitecture
 from .llk_params import (
     BroadcastType,
+    EltwiseBinaryReuseDestType,
     MathOperation,
     ReduceDimension,
     ReducePool,
@@ -194,6 +195,14 @@ class EltwiseFpu(Fpu):
         output_format = operation.output.data_format
         math_fidelity = operation.math_fidelity
 
+        if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
+            tensor_a = tensor_dst
+            tensor_dst = torch.zeros_like(tensor_dst)
+
+        if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCB:
+            tensor_b = tensor_dst
+            tensor_dst = torch.zeros_like(tensor_dst)
+
         generate_golden = get_golden_generator(EltwiseBinaryGolden)
         golden_tensor = generate_golden(
             self.operation, tensor_a, tensor_b, output_format, math_fidelity
@@ -218,10 +227,11 @@ class EltwiseFpu(Fpu):
         op = self.operation.cpp_enum_value
         num_faces = operation.num_faces
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
+        reuse_dest = f"EltwiseBinaryReuseDestType::{compute_unit.reuse_dest.value}"
 
         return (
             f"    // Operation {stage}: Eltwise {op} FPU\n"
-            f"    _llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {math_fidelity}>({num_faces}, 0);\n"
+            f"    _llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {math_fidelity}, {reuse_dest}>({num_faces}, 0);\n"
         )
 
     def calculate(
@@ -237,10 +247,11 @@ class EltwiseFpu(Fpu):
         op = self.operation.cpp_enum_value
         num_faces = operation.num_faces
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
+        reuse_dest = f"EltwiseBinaryReuseDestType::{compute_unit.reuse_dest.value}"
 
         return (
             f"    _llk_math_eltwise_binary_<{op}, {broadcast_type}, dest_sync{stage},\n"
-            f"        {dest_acc}, {math_fidelity}, EltwiseBinaryReuseDestType::NONE>({num_faces}, {tile_idx}, false\n"
+            f"        {dest_acc}, {math_fidelity}, {reuse_dest}>({num_faces}, {tile_idx}, false\n"
             f"    );\n"
         )
 

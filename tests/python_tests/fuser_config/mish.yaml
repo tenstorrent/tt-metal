@@ -1,0 +1,37 @@
+operations:
+  - src_a: "input_A"
+    src_b: "input_B"
+    output: "mish"
+    src_a_dims: [256, 256]
+    src_b_dims: [256, 256]
+    output_dims: [256, 256]
+    input_format: "Float16_b"
+    output_format: "Float16_b"
+    math:
+      - type: "Fpu"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+      - type: "UnarySfpu"
+        operation: "Exp"
+        approximation_mode: "No"
+        iterations: 32
+        dst_dest_tile_index: 0
+      - type: "UnarySfpu"
+        operation: "Log1p"
+        approximation_mode: "No"
+        iterations: 32
+        dst_dest_tile_index: 0
+      - type: "UnarySfpu"
+        operation: "Tanh"
+        approximation_mode: "No"
+        iterations: 32
+        dst_dest_tile_index: 0
+      - type: "Fpu"
+        operation: "Elwmul"
+        unpacker: "UnpackerA"
+        reuse_dest: "DEST_TO_SRCB"
+    packer: "Packer"
+    math_fidelity: "LoFi"
+    unpack_transpose_within_face: "No"
+    unpack_transpose_faces: "No"
+    batch_size: 1

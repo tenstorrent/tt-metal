@@ -25,6 +25,7 @@ from helpers.llk_params import (
     ApproximationMode,
     BroadcastType,
     DestSync,
+    EltwiseBinaryReuseDestType,
     MathOperation,
     ReducePool,
     Transpose,
@@ -107,6 +108,7 @@ SFPU_UNARY_OPERATION_MAP: Dict[str, MathOperation] = {
     "Sin": MathOperation.Sin,
     "Sqrt": MathOperation.Sqrt,
     "Square": MathOperation.Square,
+    "Tanh": MathOperation.Tanh,
     "Threshold": MathOperation.Threshold,
 }
 
@@ -151,6 +153,12 @@ BROADCAST_TYPE_MAP: Dict[str, BroadcastType] = {
     "Scalar": BroadcastType.Scalar,
 }
 
+ELTWISE_BINARY_REUSE_DEST_TYPE_MAP: Dict[str, EltwiseBinaryReuseDestType] = {
+    "NONE": EltwiseBinaryReuseDestType.NONE,
+    "DEST_TO_SRCA": EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+    "DEST_TO_SRCB": EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+}
+
 
 def parse_math_operation(
     math_config: Dict[str, Any], operands: OperandRegistry
@@ -191,6 +199,11 @@ def parse_math_operation(
             ]
         if "broadcast_type" in math_config:
             kwargs["broadcast_type"] = BROADCAST_TYPE_MAP[math_config["broadcast_type"]]
+
+        if "reuse_dest" in math_config:
+            kwargs["reuse_dest"] = ELTWISE_BINARY_REUSE_DEST_TYPE_MAP[
+                math_config["reuse_dest"]
+            ]
 
         return ComputeNode(
             fpu=fpu,

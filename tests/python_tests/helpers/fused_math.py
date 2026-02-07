@@ -12,11 +12,12 @@ if TYPE_CHECKING:
 
 from .fused_fpu import Fpu, MatmulFpu, ReduceFpu
 from .fused_sfpu import Sfpu
-from .fused_unpacker import MatmulUnpacker, Unpacker
+from .fused_unpacker import MatmulUnpacker, Unpacker, UnpackerA
 from .llk_params import (
     BroadcastType,
     DataCopyType,
     DestSync,
+    EltwiseBinaryReuseDestType,
     PerfRunType,
     Transpose,
 )
@@ -33,6 +34,7 @@ class ComputeNode:
         unpack_transpose_within_face: Transpose = Transpose.No,
         broadcast_type: BroadcastType = BroadcastType.None_,
         data_copy_type: DataCopyType = DataCopyType.A2D,
+        reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE,
     ):
         if fpu is None and sfpu is None:
             raise ValueError("Compute unit needs an fpu or sfpu unit")
@@ -47,12 +49,16 @@ class ComputeNode:
         ):
             raise ValueError(f"{fpu} does not support {unpacker}")
 
+        if reuse_dest != EltwiseBinaryReuseDestType.NONE and unpacker != UnpackerA:
+            raise ValueError("Reuse dest is only supported with UnpackerA")
+
         self.unpacker = unpacker
         self.fpu = fpu
         self.sfpu = sfpu
         self.unpack_transpose_faces = unpack_transpose_faces
         self.unpack_transpose_within_face = unpack_transpose_within_face
         self.broadcast_type = broadcast_type
+        self.reuse_dest = reuse_dest
 
         if (
             self.broadcast_type != BroadcastType.None_
