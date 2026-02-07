@@ -106,6 +106,42 @@ FORCE_INLINE uint32_t slice_coordinates_to_global_tile_index(
     return slice_row * global_Wt + global_col;
 }
 
+struct TileIndices {
+    uint32_t slice;
+    uint32_t global;
+};
+
+FORCE_INLINE TileIndices coordinates_to_tile_indices(
+    uint32_t tile_row_in_mm_M_block,
+    uint32_t chunk_col_in_tiles,
+    uint32_t mm_core_idx,
+    uint32_t N_block_idx,
+    uint32_t M_block_idx,
+    uint32_t chunk_idx,
+    uint32_t N_block_wt,
+    uint32_t tiles_ht_per_core,
+    uint32_t mm_block_unit_ht,
+    uint32_t chunk_width_in_tiles,
+    uint32_t actual_slice_idx,
+    uint32_t slice_Wt,
+    uint32_t input_tensor_Wt) {
+    auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
+        tile_row_in_mm_M_block,
+        chunk_col_in_tiles,
+        mm_core_idx,
+        N_block_idx,
+        M_block_idx,
+        chunk_idx,
+        N_block_wt,
+        tiles_ht_per_core,
+        mm_block_unit_ht,
+        chunk_width_in_tiles);
+    return {
+        .slice = slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt),
+        .global =
+            slice_coordinates_to_global_tile_index(slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt)};
+}
+
 FORCE_INLINE uint32_t
 get_effective_chunk_width_in_tiles(uint32_t chunk_idx, uint32_t chunk_width_in_tiles, uint32_t N_block_wt) {
     uint32_t start_col = chunk_idx * chunk_width_in_tiles;
