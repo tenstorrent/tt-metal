@@ -1802,15 +1802,15 @@ def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
 
     results = []
 
-    print("\n" + "=" * 100)
-    print("CONV3D BLOCKING SWEEP - Blackhole 4x8")
-    print("=" * 100)
+    print("\n" + "=" * 100, flush=True)
+    print("CONV3D BLOCKING SWEEP - Blackhole 4x8", flush=True)
+    print("=" * 100, flush=True)
 
     for C_in, C_out, kernel_size, T, H, W in conv_configs:
         config_key = (C_in, C_out, kernel_size)
         baseline = baseline_blockings.get(config_key)
         if baseline is None:
-            print(f"SKIP: No baseline for {config_key}")
+            print(f"SKIP: No baseline for {config_key}", flush=True)
             continue
 
         C_in_block_base, C_out_block_base, T_base, H_base, W_base = baseline
@@ -1818,11 +1818,11 @@ def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
         # Get C_in/C_out variations (~1-5 options)
         cin_cout_variations = get_cin_cout_variations(C_in, C_out, C_in_block_base, C_out_block_base)
 
-        print(f"\n{'='*80}")
-        print(f"Config: C_in={C_in}, C_out={C_out}, kernel={kernel_size}, shape=({T},{H},{W})")
-        print(f"Baseline: Cin_blk={C_in_block_base}, Cout_blk={C_out_block_base}, T={T_base}, H={H_base}, W={W_base}")
-        print(f"Cin/Cout variations: {cin_cout_variations}")
-        print(f"{'='*80}")
+        print(f"\n{'='*80}", flush=True)
+        print(f"Config: C_in={C_in}, C_out={C_out}, kernel={kernel_size}, shape=({T},{H},{W})", flush=True)
+        print(f"Baseline: Cin_blk={C_in_block_base}, Cout_blk={C_out_block_base}, T={T_base}, H={H_base}, W={W_base}", flush=True)
+        print(f"Cin/Cout variations: {cin_cout_variations}", flush=True)
+        print(f"{'='*80}", flush=True)
 
         # Calculate padding (same as WanCausalConv3d: causal temporal, symmetric spatial)
         padding = (0, (kernel_size[1] - 1) // 2, (kernel_size[2] - 1) // 2)
@@ -1858,7 +1858,7 @@ def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
                 for h, w in hw_promising:
                     blockings_to_test.append((C_in_block, C_out_block, h, w, False))
 
-        print(f"Testing {len(blockings_to_test)} blocking configurations...")
+        print(f"Testing {len(blockings_to_test)} blocking configurations...", flush=True)
 
         for C_in_block, C_out_block, H_out_block, W_out_block, is_baseline in blockings_to_test:
             blocking = (C_in_block, C_out_block, T_base, H_out_block, W_out_block)
@@ -1944,7 +1944,7 @@ def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
 
                 # Print result immediately
                 cin_cout_info = "" if (C_in_block == C_in_block_base and C_out_block == C_out_block_base) else f" [Cin={C_in_block}, Cout={C_out_block}]"
-                print(f"  H={H_out_block:2d}, W={W_out_block:2d}: avg={avg_ms:7.2f}ms, min={min_ms:7.2f}ms{marker}{cin_cout_info}")
+                print(f"  H={H_out_block:2d}, W={W_out_block:2d}: avg={avg_ms:7.2f}ms, min={min_ms:7.2f}ms{marker}{cin_cout_info}", flush=True)
 
                 results.append(
                     {
@@ -1966,7 +1966,7 @@ def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
 
             except Exception as e:
                 cin_cout_info = "" if (C_in_block == C_in_block_base and C_out_block == C_out_block_base) else f" [Cin={C_in_block}, Cout={C_out_block}]"
-                print(f"  H={H_out_block:2d}, W={W_out_block:2d}: FAILED - {str(e)[:50]}{cin_cout_info}")
+                print(f"  H={H_out_block:2d}, W={W_out_block:2d}: FAILED - {str(e)[:50]}{cin_cout_info}", flush=True)
                 results.append(
                     {
                         "config": config_key,
@@ -1981,17 +1981,17 @@ def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
 
         # Print summary for this config
         if baseline_time and best_blocking:
-            print(f"\n  Summary: baseline={baseline_time:.2f}ms, best={best_time:.2f}ms @ {best_blocking}")
+            print(f"\n  Summary: baseline={baseline_time:.2f}ms, best={best_time:.2f}ms @ {best_blocking}", flush=True)
             if best_time < baseline_time:
-                print(f"  Speedup: {baseline_time/best_time:.2f}x")
+                print(f"  Speedup: {baseline_time/best_time:.2f}x", flush=True)
 
     # Final summary
-    print("\n" + "=" * 100)
-    print("FINAL SUMMARY")
-    print("=" * 100)
+    print("\n" + "=" * 100, flush=True)
+    print("FINAL SUMMARY", flush=True)
+    print("=" * 100, flush=True)
 
     successful = [r for r in results if r["status"] == "OK"]
-    print(f"Total: {len(successful)}/{len(results)} configurations succeeded")
+    print(f"Total: {len(successful)}/{len(results)} configurations succeeded", flush=True)
 
     # Group by config and find best for each
     from collections import defaultdict
@@ -2003,13 +2003,13 @@ def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
     for config_key, config_results in by_config.items():
         baseline_r = next((r for r in config_results if r["is_baseline"]), None)
         best_r = min(config_results, key=lambda x: x["avg_ms"])
-        print(f"\n{config_key}:")
+        print(f"\n{config_key}:", flush=True)
         if baseline_r:
             b = baseline_r['blocking']
-            print(f"  Baseline: Cin={b[0]}, Cout={b[1]}, H={b[3]}, W={b[4]} -> {baseline_r['avg_ms']:.2f}ms")
+            print(f"  Baseline: Cin={b[0]}, Cout={b[1]}, H={b[3]}, W={b[4]} -> {baseline_r['avg_ms']:.2f}ms", flush=True)
         b = best_r['blocking']
-        print(f"  Best:     Cin={b[0]}, Cout={b[1]}, H={b[3]}, W={b[4]} -> {best_r['avg_ms']:.2f}ms")
+        print(f"  Best:     Cin={b[0]}, Cout={b[1]}, H={b[3]}, W={b[4]} -> {best_r['avg_ms']:.2f}ms", flush=True)
         if baseline_r and best_r['avg_ms'] < baseline_r['avg_ms']:
-            print(f"  Speedup:  {baseline_r['avg_ms']/best_r['avg_ms']:.2f}x")
+            print(f"  Speedup:  {baseline_r['avg_ms']/best_r['avg_ms']:.2f}x", flush=True)
 
     assert len(successful) > 0, "All blocking configurations failed!"
