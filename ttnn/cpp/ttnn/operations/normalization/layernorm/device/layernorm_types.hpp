@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 
 #include <tt-metalium/buffer.hpp>
@@ -20,6 +22,9 @@ struct LayerNormDefaultProgramConfig {
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
     bool use_welford = false;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("legacy_reduction", "legacy_rsqrt", "use_welford");
+    auto attribute_values() const { return std::forward_as_tuple(legacy_reduction, legacy_rsqrt, use_welford); }
 };
 struct LayerNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
@@ -30,6 +35,27 @@ struct LayerNormShardedMultiCoreProgramConfig {
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
     bool use_welford = false;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "compute_with_storage_grid_size",
+        "subblock_w",
+        "block_h",
+        "block_w",
+        "inplace",
+        "legacy_reduction",
+        "legacy_rsqrt",
+        "use_welford");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            compute_with_storage_grid_size,
+            subblock_w,
+            block_h,
+            block_w,
+            inplace,
+            legacy_reduction,
+            legacy_rsqrt,
+            use_welford);
+    }
 };
 
 using LayerNormProgramConfig = std::variant<LayerNormDefaultProgramConfig, LayerNormShardedMultiCoreProgramConfig>;

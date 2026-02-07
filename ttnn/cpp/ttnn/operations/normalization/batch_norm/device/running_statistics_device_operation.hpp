@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -18,6 +20,12 @@ struct RunningStatistics {
         DataType input_dtype;
         std::optional<DataType> dtype;
         DataType get_dtype() const;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("momentum", "memory_config", "compute_kernel_config", "input_dtype", "dtype");
+        auto attribute_values() const {
+            return std::forward_as_tuple(momentum, memory_config, compute_kernel_config, input_dtype, dtype);
+        }
     };
 
     struct tensor_args_t {
@@ -25,6 +33,12 @@ struct RunningStatistics {
         const Tensor& batch_var;
         std::optional<Tensor> running_mean;
         std::optional<Tensor> running_var;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("batch_mean", "batch_var", "running_mean", "running_var");
+        auto attribute_values() const {
+            return std::forward_as_tuple(batch_mean, batch_var, running_mean, running_var);
+        }
     };
 
     using spec_return_value_t = TensorSpec;

@@ -14,6 +14,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -228,12 +229,44 @@ struct Conv2dHashableParams {
     bool enable_activation_reuse = false;
     bool config_tensors_in_dram = false;
     std::optional<bool> force_split_reader;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "output_channels",
+        "untilize_out",
+        "has_bias",
+        "activation",
+        "memory_config",
+        "dtype",
+        "compute_kernel_config",
+        "enable_act_double_buffer",
+        "enable_weights_double_buffer",
+        "enable_activation_reuse",
+        "config_tensors_in_dram",
+        "force_split_reader");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            output_channels,
+            untilize_out,
+            has_bias,
+            activation,
+            memory_config,
+            dtype,
+            compute_kernel_config,
+            enable_act_double_buffer,
+            enable_weights_double_buffer,
+            enable_activation_reuse,
+            config_tensors_in_dram,
+            force_split_reader);
+    }
 };
 
 struct Conv2dInputs {
     Tensor a;
     Tensor b;
     std::optional<Tensor> bias;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("a", "b", "bias");
+    auto attribute_values() const { return std::forward_as_tuple(a, b, bias); }
 };
 
 // Both CB and tensor allocation sizes are per per tensix core and in bytes.

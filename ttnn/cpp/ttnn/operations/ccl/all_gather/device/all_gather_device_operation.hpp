@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 #include <optional>
 #include <vector>
@@ -39,6 +41,9 @@ struct AllGatherDeviceOperation {
     struct tensor_args_t {
         const Tensor input_tensor;
         std::optional<Tensor> optional_output_tensor;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "optional_output_tensor");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor, optional_output_tensor); }
     };
 
     using spec_return_value_t = ttnn::TensorSpec;

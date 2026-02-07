@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/distributed/types.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -27,6 +28,12 @@ struct PagedUpdateCacheInputs {
     Tensor input_tensor;
     std::optional<Tensor> update_idxs_tensor;
     std::optional<Tensor> page_table;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("cache_tensor", "input_tensor", "update_idxs_tensor", "page_table");
+    auto attribute_values() const {
+        return std::forward_as_tuple(cache_tensor, input_tensor, update_idxs_tensor, page_table);
+    }
 };
 
 }  // namespace ttnn::experimental::prim

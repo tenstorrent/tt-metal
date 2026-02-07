@@ -4,11 +4,18 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::cross_entropy_fw::device {
 
-struct operation_attributes_t {};
+struct operation_attributes_t {
+    static constexpr auto attribute_names = std::make_tuple();
+    auto attribute_values() const {
+        return std::make_tuple();
+    }
+};
 
 struct tensor_args_t {
     const ttnn::Tensor& input;

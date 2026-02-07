@@ -6,6 +6,7 @@
 
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -13,6 +14,10 @@ struct GeluBackwardParams {
     const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
     const tt::tt_metal::MemoryConfig output_memory_config;
     const std::string approximate = "none";
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("output_dtype", "output_memory_config", "approximate");
+    auto attribute_values() const { return std::forward_as_tuple(output_dtype, output_memory_config, approximate); }
 };
 
 struct GeluBackwardInputs {

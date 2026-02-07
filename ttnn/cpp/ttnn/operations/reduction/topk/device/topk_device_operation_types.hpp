@@ -18,11 +18,20 @@ struct TopkParams {
     bool sorted{};
     tt::tt_metal::MemoryConfig output_memory_config;
     tt::tt_metal::CoreRangeSet sub_core_grids;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("k", "dim", "largest", "sorted", "output_memory_config", "sub_core_grids");
+    auto attribute_values() const {
+        return std::forward_as_tuple(k, dim, largest, sorted, output_memory_config, sub_core_grids);
+    }
 };
 
 struct TopkInputs {
     Tensor input;
     std::optional<Tensor> indices;
     std::optional<std::tuple<Tensor, Tensor>> preallocated_outputs;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "indices", "preallocated_outputs");
+    auto attribute_values() const { return std::forward_as_tuple(input, indices, preallocated_outputs); }
 };
 }  // namespace ttnn::prim

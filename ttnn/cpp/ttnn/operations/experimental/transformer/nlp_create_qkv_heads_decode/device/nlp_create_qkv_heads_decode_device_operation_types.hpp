@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -16,11 +17,33 @@ struct NlpCreateQkvHeadsDecodeParams {
     bool input_on_subcoregrids;
     std::optional<uint32_t> slice_size;
     tt::tt_metal::MemoryConfig output_mem_config;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "num_q_heads",
+        "num_kv_heads",
+        "head_dim",
+        "overlap_qk_coregrid",
+        "input_on_subcoregrids",
+        "slice_size",
+        "output_mem_config");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            num_q_heads,
+            num_kv_heads,
+            head_dim,
+            overlap_qk_coregrid,
+            input_on_subcoregrids,
+            slice_size,
+            output_mem_config);
+    }
 };
 
 struct NlpCreateQkvHeadsDecodeInputs {
     Tensor input_tensor;
     std::optional<Tensor> batch_offset;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "batch_offset");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, batch_offset); }
 };
 
 }  // namespace ttnn::experimental::prim

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 #include <vector>
 #include <cstdint>
@@ -25,9 +27,15 @@ struct ApplyDeviceDelayDeviceOperation {
         const std::vector<std::vector<uint32_t>> delays;
         const CoreRangeSet worker_core_range_set;
         ttnn::MeshDevice* mesh_device;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("delays", "worker_core_range_set", "mesh_device");
+        auto attribute_values() const { return std::forward_as_tuple(delays, worker_core_range_set, mesh_device); }
     };
 
-    struct tensor_args_t {};
+    struct tensor_args_t {
+        static constexpr auto attribute_names = std::make_tuple();
+        auto attribute_values() const { return std::make_tuple(); }
+    };
 
     // Return a minimal dummy tensor since the infrastructure doesn't support void
     using tensor_return_value_t = std::vector<ttnn::Tensor>;

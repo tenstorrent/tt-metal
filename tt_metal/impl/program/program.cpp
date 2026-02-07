@@ -77,7 +77,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
 #include "kernels/kernel.hpp"
-#include "tt_stl/reflection.hpp"
+#include "tt_stl/attributes.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"

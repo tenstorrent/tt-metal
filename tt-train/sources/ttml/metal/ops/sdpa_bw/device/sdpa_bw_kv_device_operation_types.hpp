@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
@@ -12,6 +14,11 @@ namespace ttml::metal::ops::sdpa_bw::device::kv {
 struct operation_attributes_t {
     AttentionMaskType mask_type{AttentionMaskType::Arbitrary};
     float dropout_probability{0.0F};
+
+    static constexpr auto attribute_names = std::forward_as_tuple("mask_type", "dropout_probability");
+    auto attribute_values() const {
+        return std::forward_as_tuple(mask_type, dropout_probability);
+    }
 };
 
 struct tensor_args_t {

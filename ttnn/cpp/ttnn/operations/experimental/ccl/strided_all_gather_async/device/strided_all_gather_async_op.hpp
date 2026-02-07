@@ -24,6 +24,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -44,6 +45,9 @@ struct StridedAllGatherAsync {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    static constexpr auto attribute_names = std::make_tuple();
+    auto attribute_values() const { return std::make_tuple(); }
 };
 }  // namespace ttnn::experimental::prim
 

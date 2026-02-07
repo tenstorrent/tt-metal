@@ -16,6 +16,7 @@
 
 #include <bitset>
 #include <optional>
+#include <tuple>
 
 /**
  * TODO (#34009): Move to experimental namespace
@@ -74,12 +75,21 @@ struct SemaphoreDescriptor {
     uint32_t initial_value = 0;
 };
 
-struct ReaderConfigDescriptor {};
-struct WriterConfigDescriptor {};
+struct ReaderConfigDescriptor {
+    static constexpr auto attribute_names = std::make_tuple();
+    auto attribute_values() const { return std::make_tuple(); }
+};
+struct WriterConfigDescriptor {
+    static constexpr auto attribute_names = std::make_tuple();
+    auto attribute_values() const { return std::make_tuple(); }
+};
 struct DataMovementConfigDescriptor {
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
     NOC noc = NOC::RISCV_0_default;
     NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("processor", "noc", "noc_mode");
+    auto attribute_values() const { return std::forward_as_tuple(processor, noc, noc_mode); }
 };
 struct ComputeConfigDescriptor {
     using UnpackToDestModes = std::vector<UnpackToDestMode>;
@@ -90,16 +100,35 @@ struct ComputeConfigDescriptor {
     UnpackToDestModes unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "math_fidelity",
+        "fp32_dest_acc_en",
+        "dst_full_sync_en",
+        "unpack_to_dest_mode",
+        "bfp8_pack_precise",
+        "math_approx_mode");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            math_fidelity,
+            fp32_dest_acc_en,
+            dst_full_sync_en,
+            unpack_to_dest_mode,
+            bfp8_pack_precise,
+            math_approx_mode);
+    }
 };
 struct EthernetConfigDescriptor {
     Eth eth_mode = Eth::SENDER;
     NOC noc = NOC::NOC_0;
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("eth_mode", "noc", "processor");
+    auto attribute_values() const { return std::forward_as_tuple(eth_mode, noc, processor); }
 };
 
 struct KernelDescriptor {
     // TODO: investigate using SmallVector here, using std::vector for now to abide size constraint
-    // in tt_stl/tt_stl/reflection.hpp:185:23
     using CompileTimeArgs = std::vector<uint32_t>;
     using NamedCompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
     using Defines = std::vector<std::pair<std::string, std::string>>;

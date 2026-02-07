@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -22,6 +24,21 @@ struct MorehGroupNormBackwardGammaBetaGradOperation {
         const MemoryConfig gamma_grad_memory_config;
         const MemoryConfig beta_grad_memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "num_groups",
+            "are_required_outputs",
+            "gamma_grad_memory_config",
+            "beta_grad_memory_config",
+            "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                num_groups,
+                are_required_outputs,
+                gamma_grad_memory_config,
+                beta_grad_memory_config,
+                compute_kernel_config);
+        }
     };
     struct tensor_args_t {
         const Tensor& output_grad;
@@ -30,6 +47,12 @@ struct MorehGroupNormBackwardGammaBetaGradOperation {
         const Tensor& rstd;
         const std::optional<const Tensor> gamma_grad;
         const std::optional<const Tensor> beta_grad;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("output_grad", "input", "mean", "rstd", "gamma_grad", "beta_grad");
+        auto attribute_values() const {
+            return std::forward_as_tuple(output_grad, input, mean, rstd, gamma_grad, beta_grad);
+        }
     };
 
     using spec_return_value_t = std::vector<std::optional<TensorSpec>>;

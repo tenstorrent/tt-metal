@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <optional>
 #include <variant>
 
@@ -20,10 +22,16 @@ struct FullLikeOperation {
         const DataType dtype;
         const Layout layout;
         const MemoryConfig memory_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("fill_value", "dtype", "layout", "memory_config");
+        auto attribute_values() const { return std::forward_as_tuple(fill_value, dtype, layout, memory_config); }
     };
 
     struct tensor_args_t {
         const Tensor& input;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input");
+        auto attribute_values() const { return std::forward_as_tuple(input); }
     };
 
     using spec_return_value_t = TensorSpec;

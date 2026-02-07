@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -31,6 +32,12 @@ struct StridedAllGatherMinimalMatmulAsyncInputs {
     const Tensor weight_tensor;
     const std::optional<Tensor> persistent_output_buffer;
     const std::optional<const Tensor> bias = std::nullopt;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensor", "weight_tensor", "persistent_output_buffer", "bias");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input_tensor, weight_tensor, persistent_output_buffer, bias);
+    }
 };
 
 }  // namespace ttnn::experimental::prim

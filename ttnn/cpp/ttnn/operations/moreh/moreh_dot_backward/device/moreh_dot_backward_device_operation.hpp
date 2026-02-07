@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <optional>
 #include <variant>
 
@@ -17,6 +19,9 @@ namespace ttnn::operations::moreh::moreh_dot_backward {
 struct MorehDotBackwardOperation {
     struct operation_attributes_t {
         const MemoryConfig memory_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
+        auto attribute_values() const { return std::forward_as_tuple(memory_config); }
     };
 
     struct tensor_args_t {
@@ -26,6 +31,10 @@ struct MorehDotBackwardOperation {
 
         // (o2buzzle): May I present: thanhnguyen's mistake that costed me 3 hours.
         const std::vector<std::optional<Tensor>> output_tensors;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("output_grad", "input", "other", "output_tensors");
+        auto attribute_values() const { return std::forward_as_tuple(output_grad, input, other, output_tensors); }
     };
 
     using spec_return_value_t = std::vector<std::optional<ttnn::TensorSpec>>;

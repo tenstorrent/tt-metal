@@ -8,6 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -16,6 +17,10 @@ struct DitLayernormPostAllGatherParams {
     tt::tt_metal::MemoryConfig memory_config;
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<tt::tt_metal::DataType> dtype;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("eps", "memory_config", "compute_kernel_config", "dtype");
+    auto attribute_values() const { return std::forward_as_tuple(eps, memory_config, compute_kernel_config, dtype); }
 };
 
 struct DitLayernormPostAllGatherInputs {
@@ -23,6 +28,9 @@ struct DitLayernormPostAllGatherInputs {
     Tensor stats;
     std::optional<Tensor> gamma;
     std::optional<Tensor> beta;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "stats", "gamma", "beta");
+    auto attribute_values() const { return std::forward_as_tuple(input, stats, gamma, beta); }
 };
 
 }  // namespace ttnn::experimental::prim

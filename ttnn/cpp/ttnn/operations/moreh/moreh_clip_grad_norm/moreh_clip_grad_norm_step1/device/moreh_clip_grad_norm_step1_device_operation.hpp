@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <vector>
 
 #include "ttnn/decorators.hpp"
@@ -19,11 +21,20 @@ struct MorehClipGradNormStep1Operation {
         const uint32_t tile_offset_of_tmp_pow_sum;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("norm_type", "tile_offset_of_tmp_pow_sum", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(norm_type, tile_offset_of_tmp_pow_sum, memory_config, compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {
         const std::vector<Tensor>& inputs;
         const Tensor& tmp_pow_sum;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("inputs", "tmp_pow_sum");
+        auto attribute_values() const { return std::forward_as_tuple(inputs, tmp_pow_sum); }
     };
 
     using spec_return_value_t = TensorSpec;

@@ -9,11 +9,12 @@
 #include <vector>
 
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -75,6 +76,9 @@ struct AllReduceAsyncParams {
 struct AllReduceAsyncInputs {
     Tensor input_tensor;
     Tensor buffer_tensor;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "buffer_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, buffer_tensor); }
 };
 
 }  // namespace ttnn::experimental::prim

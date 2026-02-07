@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "tt-metalium/kernel_types.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -17,11 +18,33 @@ struct TilizeParams {
     bool enough_space_height = false;
     const bool use_low_perf = false;
     const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "output_mem_config",
+        "output_dtype",
+        "use_multicore",
+        "enough_space_width",
+        "enough_space_height",
+        "use_low_perf",
+        "sub_core_grids");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            output_mem_config,
+            output_dtype,
+            use_multicore,
+            enough_space_width,
+            enough_space_height,
+            use_low_perf,
+            sub_core_grids);
+    }
 };
 
 struct TilizeInputs {
     Tensor input_tensor;
     std::optional<Tensor> optional_input_tensor;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "optional_input_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, optional_input_tensor); }
 };
 
 struct MultiCoreSharedVariables {

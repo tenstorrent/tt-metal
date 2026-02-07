@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -18,11 +20,20 @@ struct MorehFoldOperation {
         const std::vector<uint32_t> padding;
         const std::vector<uint32_t> stride;
         const MemoryConfig memory_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("output_size", "kernel_size", "dilation", "padding", "stride", "memory_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(output_size, kernel_size, dilation, padding, stride, memory_config);
+        }
     };
 
     struct tensor_args_t {
         const Tensor& input;
         const std::optional<Tensor>& output;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input", "output");
+        auto attribute_values() const { return std::forward_as_tuple(input, output); }
     };
 
     using spec_return_value_t = TensorSpec;

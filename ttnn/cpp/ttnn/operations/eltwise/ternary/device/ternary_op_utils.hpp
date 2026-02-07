@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ternary_device_operation.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -82,6 +84,13 @@ struct AllShardVolumes {
     std::optional<std::uint32_t> true_shard_volume;
     std::optional<std::uint32_t> false_shard_volume;
     std::optional<std::uint32_t> output_shard_volume;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "predicate_shard_volume", "true_shard_volume", "false_shard_volume", "output_shard_volume");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            predicate_shard_volume, true_shard_volume, false_shard_volume, output_shard_volume);
+    }
 };
 
 tt::tt_metal::ShardSpec adjust_to_shape(

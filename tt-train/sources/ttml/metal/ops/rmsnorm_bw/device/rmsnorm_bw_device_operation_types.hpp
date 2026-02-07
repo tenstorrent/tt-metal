@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::rmsnorm_bw::device {
@@ -11,6 +13,11 @@ namespace ttml::metal::ops::rmsnorm_bw::device {
 // Attributes for the backward operation (add more if needed)
 struct operation_attributes_t {
     float epsilon = 1e-6F;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("epsilon");
+    auto attribute_values() const {
+        return std::forward_as_tuple(epsilon);
+    }
 };
 
 // Tensors required for backward

@@ -16,7 +16,6 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
-#include <reflect>
 
 #include "ttnn/core.hpp"
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
@@ -39,13 +38,43 @@ void py_module(nb::module_& mod) {
     py_config.def(nb::init<const ttnn::Config&>()).def("__repr__", [](const ttnn::Config& config) {
         return fmt::format("{}", config);
     });
-    reflect::for_each<ttnn::Config::attributes_t>([&py_config](auto I) {
-        py_config.def_prop_rw(
-            std::string{reflect::member_name<I, ttnn::Config::attributes_t>()}.c_str(),
-            &ttnn::Config::get<I>,
-            &ttnn::Config::set<I>);
-    });
-    py_config.def_prop_ro("report_path", &ttnn::Config::get<"report_path">);
+
+    // Register each config property explicitly
+    py_config.def_prop_rw("cache_path", &ttnn::Config::get_cache_path, &ttnn::Config::set_cache_path);
+    py_config.def_prop_rw("model_cache_path", &ttnn::Config::get_model_cache_path, &ttnn::Config::set_model_cache_path);
+    py_config.def_prop_rw("tmp_dir", &ttnn::Config::get_tmp_dir, &ttnn::Config::set_tmp_dir);
+    py_config.def_prop_rw(
+        "enable_model_cache", &ttnn::Config::get_enable_model_cache, &ttnn::Config::set_enable_model_cache);
+    py_config.def_prop_rw(
+        "enable_fast_runtime_mode",
+        &ttnn::Config::get_enable_fast_runtime_mode,
+        &ttnn::Config::set_enable_fast_runtime_mode);
+    py_config.def_prop_rw(
+        "throw_exception_on_fallback",
+        &ttnn::Config::get_throw_exception_on_fallback,
+        &ttnn::Config::set_throw_exception_on_fallback);
+    py_config.def_prop_rw("enable_logging", &ttnn::Config::get_enable_logging, &ttnn::Config::set_enable_logging);
+    py_config.def_prop_rw(
+        "enable_graph_report", &ttnn::Config::get_enable_graph_report, &ttnn::Config::set_enable_graph_report);
+    py_config.def_prop_rw(
+        "enable_detailed_buffer_report",
+        &ttnn::Config::get_enable_detailed_buffer_report,
+        &ttnn::Config::set_enable_detailed_buffer_report);
+    py_config.def_prop_rw(
+        "enable_detailed_tensor_report",
+        &ttnn::Config::get_enable_detailed_tensor_report,
+        &ttnn::Config::set_enable_detailed_tensor_report);
+    py_config.def_prop_rw(
+        "enable_comparison_mode", &ttnn::Config::get_enable_comparison_mode, &ttnn::Config::set_enable_comparison_mode);
+    py_config.def_prop_rw(
+        "comparison_mode_should_raise_exception",
+        &ttnn::Config::get_comparison_mode_should_raise_exception,
+        &ttnn::Config::set_comparison_mode_should_raise_exception);
+    py_config.def_prop_rw(
+        "comparison_mode_pcc", &ttnn::Config::get_comparison_mode_pcc, &ttnn::Config::set_comparison_mode_pcc);
+    py_config.def_prop_rw("root_report_path", &ttnn::Config::get_root_report_path, &ttnn::Config::set_root_report_path);
+    py_config.def_prop_rw("report_name", &ttnn::Config::get_report_name, &ttnn::Config::set_report_name);
+    py_config.def_prop_ro("report_path", &ttnn::Config::get_report_path);
 
     nb::class_<lightmetal::LightMetalBinary>(mod, "LightMetalBinary")
         .def(nb::init<>())

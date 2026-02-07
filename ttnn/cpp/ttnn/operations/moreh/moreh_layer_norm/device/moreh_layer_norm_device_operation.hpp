@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -17,6 +19,12 @@ struct MorehLayerNormOperation {
 
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("normalized_dims", "eps", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(normalized_dims, eps, memory_config, compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {
@@ -27,6 +35,10 @@ struct MorehLayerNormOperation {
         const std::optional<const Tensor>& output;
         const std::optional<const Tensor>& mean;
         const std::optional<const Tensor>& rstd;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input", "gamma", "beta", "output", "mean", "rstd");
+        auto attribute_values() const { return std::forward_as_tuple(input, gamma, beta, output, mean, rstd); }
     };
 
     using spec_return_value_t = std::vector<std::optional<TensorSpec>>;

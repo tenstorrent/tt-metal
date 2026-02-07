@@ -5,7 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <core_coord.hpp>
 #include <nlohmann/json.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstdint>

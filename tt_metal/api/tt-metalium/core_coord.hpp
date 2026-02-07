@@ -7,7 +7,7 @@
 #include <fmt/base.h>
 #include <nlohmann/json.hpp>
 #include <stdint.h>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstddef>

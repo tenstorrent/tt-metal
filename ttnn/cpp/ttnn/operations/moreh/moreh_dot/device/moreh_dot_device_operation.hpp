@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -17,12 +19,19 @@ struct MorehDotOperation {
         const DataType dtype;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("dtype", "memory_config", "compute_kernel_config");
+        auto attribute_values() const { return std::forward_as_tuple(dtype, memory_config, compute_kernel_config); }
     };
 
     struct tensor_args_t {
         const Tensor& input_a;
         const Tensor& input_b;
         const std::optional<Tensor>& output;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_a", "input_b", "output");
+        auto attribute_values() const { return std::forward_as_tuple(input_a, input_b, output); }
     };
 
     using spec_return_value_t = TensorSpec;

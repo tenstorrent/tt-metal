@@ -10,6 +10,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "layernorm_types.hpp"
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -21,6 +22,19 @@ struct LayerNormParams {
     LayerNormProgramConfig program_config;
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "norm_type",
+        "distributed_norm_stage",
+        "eps",
+        "output_mem_config",
+        "program_config",
+        "compute_kernel_config",
+        "dtype");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            norm_type, distributed_norm_stage, eps, output_mem_config, program_config, compute_kernel_config, dtype);
+    }
 };
 
 struct LayerNormInputs {
@@ -29,6 +43,10 @@ struct LayerNormInputs {
     std::optional<Tensor> weight;                 // gamma
     std::optional<Tensor> bias;                   // beta
     std::optional<Tensor> stats;                  // for POST_ALL_GATHER
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input", "residual_input_tensor", "weight", "bias", "stats");
+    auto attribute_values() const { return std::forward_as_tuple(input, residual_input_tensor, weight, bias, stats); }
 };
 
 }  // namespace ttnn::prim

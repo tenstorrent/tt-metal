@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <optional>
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -16,11 +17,20 @@ struct ArgmaxParams {
     std::optional<CoreRangeSet> sub_core_grids;
     bool use_multicore{};
     tt::tt_metal::MemoryConfig output_mem_config;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("output_dtype", "dim", "keepdim", "sub_core_grids", "use_multicore", "output_mem_config");
+    auto attribute_values() const {
+        return std::forward_as_tuple(output_dtype, dim, keepdim, sub_core_grids, use_multicore, output_mem_config);
+    }
 };
 
 struct ArgmaxInputs {
     Tensor input;
     std::optional<Tensor> optional_output_tensor;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "optional_output_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(input, optional_output_tensor); }
 };
 
 }  // namespace ttnn::prim

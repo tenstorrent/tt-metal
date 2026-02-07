@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -13,6 +15,12 @@ struct MorehGroupNormBackwardInputGradOperation {
         const uint32_t num_groups;
         const MemoryConfig input_grad_memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("num_groups", "input_grad_memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(num_groups, input_grad_memory_config, compute_kernel_config);
+        }
     };
     struct tensor_args_t {
         const Tensor& output_grad;
@@ -21,6 +29,12 @@ struct MorehGroupNormBackwardInputGradOperation {
         const Tensor& rstd;
         const std::optional<const Tensor> gamma;
         const std::optional<const Tensor> input_grad;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("output_grad", "input", "mean", "rstd", "gamma", "input_grad");
+        auto attribute_values() const {
+            return std::forward_as_tuple(output_grad, input, mean, rstd, gamma, input_grad);
+        }
     };
 
     using spec_return_value_t = TensorSpec;

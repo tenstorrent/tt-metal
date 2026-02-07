@@ -4,12 +4,19 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::cross_entropy_bw::device {
 
 struct operation_attributes_t {
     const float scaler{1.0F};
+
+    static constexpr auto attribute_names = std::forward_as_tuple("scaler");
+    auto attribute_values() const {
+        return std::forward_as_tuple(scaler);
+    }
 };
 
 struct tensor_args_t {

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <vector>
 
 #include "tt-metalium/kernel_types.hpp"
@@ -20,10 +22,19 @@ struct Fold {
         uint32_t stride_w{};
         bool is_sharded{};
         bool is_dram_interleaved = false;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("stride_h", "stride_w", "is_sharded", "is_dram_interleaved");
+        auto attribute_values() const {
+            return std::forward_as_tuple(stride_h, stride_w, is_sharded, is_dram_interleaved);
+        }
     };
 
     struct tensor_args_t {
         const Tensor& input_tensor;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_tensor");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor); }
     };
 
     using spec_return_value_t = TensorSpec;

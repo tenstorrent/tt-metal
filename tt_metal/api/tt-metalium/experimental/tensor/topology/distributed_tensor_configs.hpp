@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <ostream>
+#include <tuple>
 #include <variant>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -69,6 +70,9 @@ struct MeshMapperConfig {
     // either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
     // entirely).
     std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape_override = std::nullopt;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("placements", "mesh_shape_override");
+    auto attribute_values() const { return std::forward_as_tuple(placements, mesh_shape_override); }
 };
 
 bool operator==(const MeshMapperConfig::Placement& lhs, const MeshMapperConfig::Placement& rhs);
@@ -83,6 +87,9 @@ struct MeshComposerConfig {
     // in either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
     // entirely).
     std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape_override = std::nullopt;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("dims", "mesh_shape_override");
+    auto attribute_values() const { return std::forward_as_tuple(dims, mesh_shape_override); }
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config);

@@ -3,8 +3,6 @@ project(tt_stl)
 add_library(tt_stl SHARED)
 add_library(TT::STL ALIAS tt_stl)
 
-# FIXME: TT-STL should support down to C++17 (so that TT-Metalium can), but we have headers (eg: <reflect>) in our
-#        public API that is pushing C++20 on consumers
 target_compile_features(tt_stl INTERFACE cxx_std_20)
 
 target_sources(
@@ -20,7 +18,11 @@ target_sources(
             tt_stl/indestructible.hpp
             tt_stl/optional_reference.hpp
             tt_stl/overloaded.hpp
-            tt_stl/reflection.hpp
+            tt_stl/attributes.hpp
+            tt_stl/fixed_string.hpp
+            tt_stl/hash.hpp
+            tt_stl/stl_fmt.hpp
+            tt_stl/stl_json.hpp
             tt_stl/small_vector.hpp
             tt_stl/llvm/llvm_small_vector.hpp
             tt_stl/span.hpp
@@ -38,7 +40,6 @@ target_sources(
 target_link_libraries(
     tt_stl
     INTERFACE
-        Reflect::Reflect
         enchantum::enchantum
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
@@ -48,8 +49,7 @@ target_link_libraries(
 target_precompile_headers(
     metal_common_pch # TT::CommonPCH
     PUBLIC
-        <reflect>
-        tt_stl/reflection.hpp
+        tt_stl/attributes.hpp
 )
 
 target_link_libraries(metal_common_pch PRIVATE tt_stl)

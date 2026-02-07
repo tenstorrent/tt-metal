@@ -4,6 +4,8 @@
 ///
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -31,6 +33,12 @@ struct PointToPointOp {
         const Tensor input_tensor;
         const std::optional<ttnn::Tensor> optional_output_tensor;
         const std::optional<ttnn::Tensor> optional_intermediate_tensor;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input_tensor", "optional_output_tensor", "optional_intermediate_tensor");
+        auto attribute_values() const {
+            return std::forward_as_tuple(input_tensor, optional_output_tensor, optional_intermediate_tensor);
+        }
     };
 
     // entry 0 is the intermediate. Entry 1 is the final output

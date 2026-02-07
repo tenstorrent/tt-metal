@@ -4,12 +4,19 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::softmax::device {
 
 struct operation_attributes_t {
     const int32_t dim{3U};  // Use last dimension by default
+
+    static constexpr auto attribute_names = std::forward_as_tuple("dim");
+    auto attribute_values() const {
+        return std::forward_as_tuple(dim);
+    }
 };
 
 struct tensor_args_t {

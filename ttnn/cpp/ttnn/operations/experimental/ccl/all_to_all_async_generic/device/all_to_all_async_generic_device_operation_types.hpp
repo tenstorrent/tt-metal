@@ -8,6 +8,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <optional>
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -25,6 +26,9 @@ struct AllToAllAsyncGenericParams {
 struct AllToAllAsyncGenericInputs {
     Tensor input_tensor;
     std::optional<Tensor> persistent_output_buffer;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "persistent_output_buffer");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, persistent_output_buffer); }
 };
 
 }  // namespace ttnn::experimental::prim

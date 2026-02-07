@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::rmsnorm_fw::device {
@@ -11,6 +13,11 @@ namespace ttml::metal::ops::rmsnorm_fw::device {
 struct operation_attributes_t {
     bool return_intermediates{false};
     float epsilon{1e-6F};
+
+    static constexpr auto attribute_names = std::forward_as_tuple("return_intermediates", "epsilon");
+    auto attribute_values() const {
+        return std::forward_as_tuple(return_intermediates, epsilon);
+    }
 };
 
 struct tensor_args_t {

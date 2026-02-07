@@ -138,26 +138,6 @@ CPMAddPackage(
 )
 
 ############################################################################################################################
-# boost-ext reflect : https://github.com/boost-ext/reflect
-############################################################################################################################
-
-CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.2.6)
-if(reflect_ADDED)
-    add_library(reflect INTERFACE)
-    add_library(Reflect::Reflect ALIAS reflect)
-    target_include_directories(reflect SYSTEM INTERFACE "$<BUILD_INTERFACE:${reflect_SOURCE_DIR}>")
-
-    target_sources(
-        reflect
-        INTERFACE
-            FILE_SET api
-            TYPE HEADERS
-            BASE_DIRS ${reflect_SOURCE_DIR}
-            FILES ${reflect_SOURCE_DIR}/reflect
-    )
-endif()
-
-############################################################################################################################
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 

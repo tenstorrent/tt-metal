@@ -10,8 +10,9 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -44,6 +45,9 @@ struct DeepseekMoEReduceScatterParams {
 
 struct DeepseekMoEReduceScatterInputs {
     std::vector<ttnn::Tensor> input_tensors;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensors");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensors); }
 };
 
 }  // namespace ttnn::experimental::prim

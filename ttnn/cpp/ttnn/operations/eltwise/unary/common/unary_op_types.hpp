@@ -12,7 +12,7 @@
 #include <vector>
 #include <variant>
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 namespace ttnn::operations::unary {
 

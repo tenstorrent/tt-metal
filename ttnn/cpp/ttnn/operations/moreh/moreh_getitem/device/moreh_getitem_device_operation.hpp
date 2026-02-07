@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -19,12 +21,18 @@ struct MorehGetItemOperation {
         const ttnn::SmallVector<uint32_t> index_dims;
         // const CoreRange core_range;
         const MemoryConfig memory_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("index_dims", "memory_config");
+        auto attribute_values() const { return std::forward_as_tuple(index_dims, memory_config); }
     };
 
     struct tensor_args_t {
         const Tensor& input;
         const std::vector<Tensor>& index_tensors;
         const std::optional<Tensor>& output;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input", "index_tensors", "output");
+        auto attribute_values() const { return std::forward_as_tuple(input, index_tensors, output); }
     };
 
     using spec_return_value_t = ttnn::TensorSpec;

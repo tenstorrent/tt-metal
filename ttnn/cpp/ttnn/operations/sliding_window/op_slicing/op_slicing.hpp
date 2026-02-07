@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <cstdint>
 #include "ttnn/tensor/tensor.hpp"
 namespace ttnn::operations::op_slicing {
@@ -25,6 +27,9 @@ struct Op2DSliceConfig {
 
     // Number of slices that the output tensor should be divided into.
     uint32_t num_slices = 0;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("slice_type", "num_slices");
+    auto attribute_values() const { return std::forward_as_tuple(slice_type, num_slices); }
 };
 
 class OpSliceAttr {

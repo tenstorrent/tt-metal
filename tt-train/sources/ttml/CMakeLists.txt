@@ -363,7 +363,7 @@ if(NOT TARGET TT::Metalium)
             "$ENV{TT_METAL_HOME}/ttnn"
             "$ENV{TT_METAL_HOME}/ttnn/api"
             "$ENV{TT_METAL_HOME}/ttnn/cpp"
-            "${reflect_SOURCE_DIR}"
+            # reflect library removed
         )
 
         message(STATUS "Metalium not found, attempting to locate")

@@ -25,7 +25,7 @@
 #include "hal_types.hpp"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 

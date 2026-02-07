@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 #include <vector>
 
@@ -18,12 +20,19 @@ struct MorehBiasAddBackwardOperation {
     struct operation_attributes_t {
         const MemoryConfig bias_grad_memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("bias_grad_memory_config", "compute_kernel_config");
+        auto attribute_values() const { return std::forward_as_tuple(bias_grad_memory_config, compute_kernel_config); }
     };
 
     struct tensor_args_t {
         const Tensor& output_grad;
         const std::optional<Tensor>& bias;
         const std::optional<Tensor>& bias_grad;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("output_grad", "bias", "bias_grad");
+        auto attribute_values() const { return std::forward_as_tuple(output_grad, bias, bias_grad); }
     };
 
     using spec_return_value_t = TensorSpec;

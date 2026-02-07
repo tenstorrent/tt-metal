@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
+#include <tt_stl/stl_fmt.hpp>
 #include <sstream>
 #include <string>
 
@@ -11,10 +12,13 @@
 // This is the scenario that triggers the ordering issue
 namespace test_types {
 
-// A simple Reflectable struct (uses reflect library)
+// A struct with compile-time attributes
 struct ReflectablePoint {
     int x;
     int y;
+
+    static constexpr auto attribute_names = std::make_tuple("x", "y");
+    auto attribute_values() const { return std::forward_as_tuple(x, y); }
 };
 
 // A struct with compile-time attributes that contains a Reflectable field
@@ -26,10 +30,13 @@ struct ContainerWithReflectable {
     ReflectablePoint point;
 };
 
-// Another Reflectable struct to test nested scenarios
+// Another struct with compile-time attributes to test nested scenarios
 struct ReflectableRect {
     ReflectablePoint top_left;
     ReflectablePoint bottom_right;
+
+    static constexpr auto attribute_names = std::make_tuple("top_left", "bottom_right");
+    auto attribute_values() const { return std::forward_as_tuple(top_left, bottom_right); }
 };
 
 // Enum for testing enum printing
@@ -48,6 +55,7 @@ using ::testing::HasSubstr;
 TEST(ReflectionTest, PrintReflectableStruct) {
     ReflectablePoint p{10, 20};
     std::stringstream ss;
+    using ttsl::stl_fmt::operator<<;
     ss << p;
     std::string result = ss.str();
 
@@ -59,6 +67,7 @@ TEST(ReflectionTest, PrintReflectableStruct) {
 TEST(ReflectionTest, PrintNestedReflectableStruct) {
     ReflectableRect rect{{1, 2}, {3, 4}};
     std::stringstream ss;
+    using ttsl::stl_fmt::operator<<;
     ss << rect;
     std::string result = ss.str();
 
@@ -70,9 +79,10 @@ TEST(ReflectionTest, PrintNestedReflectableStruct) {
 TEST(ReflectionTest, PrintStructWithCompileTimeAttributesContainingReflectable) {
     // This test verifies that the template ordering is correct.
     // ContainerWithReflectable uses compile-time attributes (supports_conversion_to_string_v),
-    // and contains a ReflectablePoint field that needs the Reflectable operator<<.
+    // and contains a ReflectablePoint field that needs the compile-time attributes operator<<.
     ContainerWithReflectable container{"test", {5, 10}};
     std::stringstream ss;
+    using ttsl::stl_fmt::operator<<;
     ss << container;
     std::string result = ss.str();
 
@@ -87,6 +97,7 @@ TEST(ReflectionTest, PrintStructWithCompileTimeAttributesContainingReflectable) 
 TEST(ReflectionTest, PrintVectorOfReflectable) {
     std::vector<ReflectablePoint> points{{1, 2}, {3, 4}};
     std::stringstream ss;
+    using ttsl::stl_fmt::operator<<;
     ss << points;
     std::string result = ss.str();
 
@@ -99,6 +110,7 @@ TEST(ReflectionTest, PrintVectorOfReflectable) {
 TEST(ReflectionTest, PrintOptionalReflectable) {
     std::optional<ReflectablePoint> opt_point = ReflectablePoint{7, 8};
     std::stringstream ss;
+    using ttsl::stl_fmt::operator<<;
     ss << opt_point;
     std::string result = ss.str();
 
@@ -109,6 +121,7 @@ TEST(ReflectionTest, PrintOptionalReflectable) {
 TEST(ReflectionTest, PrintOptionalNullopt) {
     std::optional<ReflectablePoint> opt_point = std::nullopt;
     std::stringstream ss;
+    using ttsl::stl_fmt::operator<<;
     ss << opt_point;
     EXPECT_EQ(ss.str(), "std::nullopt");
 }

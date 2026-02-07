@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
@@ -13,6 +15,12 @@ struct operation_attributes_t {
     bool return_intermediates{false};
     AttentionMaskType mask_type{AttentionMaskType::Causal};
     float dropout_probability{0.0F};
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("return_intermediates", "mask_type", "dropout_probability");
+    auto attribute_values() const {
+        return std::forward_as_tuple(return_intermediates, mask_type, dropout_probability);
+    }
 };
 
 struct tensor_args_t {

@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -14,6 +15,12 @@ struct RotaryEmbeddingLlamaFusedQkParams {
     tt::tt_metal::MemoryConfig k_output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     bool row_major_QK{};
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("q_output_mem_config", "k_output_mem_config", "compute_kernel_config", "row_major_QK");
+    auto attribute_values() const {
+        return std::forward_as_tuple(q_output_mem_config, k_output_mem_config, compute_kernel_config, row_major_QK);
+    }
 };
 
 struct RotaryEmbeddingLlamaFusedQkInputs {
@@ -22,6 +29,9 @@ struct RotaryEmbeddingLlamaFusedQkInputs {
     Tensor cos;
     Tensor sin;
     Tensor trans_mat;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("q_input", "k_input", "cos", "sin", "trans_mat");
+    auto attribute_values() const { return std::forward_as_tuple(q_input, k_input, cos, sin, trans_mat); }
 };
 
 using RotaryEmbeddingLlamaFusedQkResult = std::tuple<Tensor, Tensor>;

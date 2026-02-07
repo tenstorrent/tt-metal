@@ -6,13 +6,13 @@
 
 #include <filesystem>
 #include <optional>
-#include <reflect>
 #include <string>
 #include <string_view>
 #include <tuple>
 
+#include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/stl_fmt.hpp>
 
 namespace ttnn {
 
@@ -45,20 +45,89 @@ private:
 public:
     Config(auto&&... args) : attributes{std::forward<decltype(args)>(args)...} {}
 
-    template <reflect::fixed_string name>
-        requires requires { reflect::get<name>(std::declval<attributes_t>()); }
-    auto get() const {
-        return reflect::get<name>(this->attributes);
+    // Named getters
+    auto get_cache_path() const { return attributes.cache_path; }
+    auto get_model_cache_path() const { return attributes.model_cache_path; }
+    auto get_tmp_dir() const { return attributes.tmp_dir; }
+    auto get_enable_model_cache() const { return attributes.enable_model_cache; }
+    auto get_enable_fast_runtime_mode() const { return attributes.enable_fast_runtime_mode; }
+    auto get_throw_exception_on_fallback() const { return attributes.throw_exception_on_fallback; }
+    auto get_enable_logging() const { return attributes.enable_logging; }
+    auto get_enable_graph_report() const { return attributes.enable_graph_report; }
+    auto get_enable_detailed_buffer_report() const { return attributes.enable_detailed_buffer_report; }
+    auto get_enable_detailed_tensor_report() const { return attributes.enable_detailed_tensor_report; }
+    auto get_enable_comparison_mode() const { return attributes.enable_comparison_mode; }
+    auto get_comparison_mode_should_raise_exception() const {
+        return attributes.comparison_mode_should_raise_exception;
+    }
+    auto get_comparison_mode_pcc() const { return attributes.comparison_mode_pcc; }
+    auto get_root_report_path() const { return attributes.root_report_path; }
+    auto get_report_name() const { return attributes.report_name; }
+
+    // Named setters
+    void set_cache_path(const std::filesystem::path& v) {
+        attributes.cache_path = v;
+        validate("cache_path");
+    }
+    void set_model_cache_path(const std::filesystem::path& v) {
+        attributes.model_cache_path = v;
+        validate("model_cache_path");
+    }
+    void set_tmp_dir(const std::filesystem::path& v) {
+        attributes.tmp_dir = v;
+        validate("tmp_dir");
+    }
+    void set_enable_model_cache(bool v) {
+        attributes.enable_model_cache = v;
+        validate("enable_model_cache");
+    }
+    void set_enable_fast_runtime_mode(bool v) {
+        attributes.enable_fast_runtime_mode = v;
+        validate("enable_fast_runtime_mode");
+    }
+    void set_throw_exception_on_fallback(bool v) {
+        attributes.throw_exception_on_fallback = v;
+        validate("throw_exception_on_fallback");
+    }
+    void set_enable_logging(bool v) {
+        attributes.enable_logging = v;
+        validate("enable_logging");
+    }
+    void set_enable_graph_report(bool v) {
+        attributes.enable_graph_report = v;
+        validate("enable_graph_report");
+    }
+    void set_enable_detailed_buffer_report(bool v) {
+        attributes.enable_detailed_buffer_report = v;
+        validate("enable_detailed_buffer_report");
+    }
+    void set_enable_detailed_tensor_report(bool v) {
+        attributes.enable_detailed_tensor_report = v;
+        validate("enable_detailed_tensor_report");
+    }
+    void set_enable_comparison_mode(bool v) {
+        attributes.enable_comparison_mode = v;
+        validate("enable_comparison_mode");
+    }
+    void set_comparison_mode_should_raise_exception(bool v) {
+        attributes.comparison_mode_should_raise_exception = v;
+        validate("comparison_mode_should_raise_exception");
+    }
+    void set_comparison_mode_pcc(float v) {
+        attributes.comparison_mode_pcc = v;
+        validate("comparison_mode_pcc");
+    }
+    void set_root_report_path(const std::filesystem::path& v) {
+        attributes.root_report_path = v;
+        validate("root_report_path");
+    }
+    void set_report_name(const std::optional<std::filesystem::path>& v) {
+        attributes.report_name = v;
+        validate("report_name");
     }
 
-    template <std::size_t index>
-    auto get() const {
-        return reflect::get<index>(this->attributes);
-    }
-
-    template <reflect::fixed_string name>
-        requires(name == reflect::fixed_string{"report_path"})
-    std::optional<std::filesystem::path> get() const {
+    // report_path getter (computed property)
+    std::optional<std::filesystem::path> get_report_path() const {
         if (this->attributes.report_name.has_value()) {
             std::string name_str = this->attributes.report_name.value().string();
 
@@ -121,20 +190,6 @@ public:
         return std::nullopt;
     }
 
-    template <
-        reflect::fixed_string name,
-        typename T = std::decay_t<decltype(reflect::get<name>(std::declval<attributes_t>()))>>
-    void set(const T& value) {
-        reflect::get<name>(this->attributes) = value;
-        this->validate(name);
-    }
-
-    template <std::size_t index, typename T = std::decay_t<decltype(reflect::get<index>(std::declval<attributes_t>()))>>
-    void set(const T& value) {
-        reflect::get<index>(this->attributes) = value;
-        this->validate(reflect::member_name<index>(this->attributes));
-    }
-
     void validate(std::string_view name) const {
         if (name == "enable_fast_runtime_mode" or name == "enable_logging") {
             if (this->attributes.enable_fast_runtime_mode) {
@@ -176,13 +231,23 @@ public:
 
     friend std::ostream& operator<<(std::ostream& os, const Config& config) {
         os << "Config{";
-        reflect::for_each(
-            [&](auto I) {
-                os << reflect::member_name<I>(config.attributes) << "="
-                   << fmt::format("{}", reflect::get<I>(config.attributes)) << ",";
-            },
-            config.attributes);
-        os << fmt::format("{}", config.get<"report_path">());
+        os << "cache_path=" << fmt::format("{}", config.attributes.cache_path) << ",";
+        os << "model_cache_path=" << fmt::format("{}", config.attributes.model_cache_path) << ",";
+        os << "tmp_dir=" << fmt::format("{}", config.attributes.tmp_dir) << ",";
+        os << "enable_model_cache=" << config.attributes.enable_model_cache << ",";
+        os << "enable_fast_runtime_mode=" << config.attributes.enable_fast_runtime_mode << ",";
+        os << "throw_exception_on_fallback=" << config.attributes.throw_exception_on_fallback << ",";
+        os << "enable_logging=" << config.attributes.enable_logging << ",";
+        os << "enable_graph_report=" << config.attributes.enable_graph_report << ",";
+        os << "enable_detailed_buffer_report=" << config.attributes.enable_detailed_buffer_report << ",";
+        os << "enable_detailed_tensor_report=" << config.attributes.enable_detailed_tensor_report << ",";
+        os << "enable_comparison_mode=" << config.attributes.enable_comparison_mode << ",";
+        os << "comparison_mode_should_raise_exception=" << config.attributes.comparison_mode_should_raise_exception
+           << ",";
+        os << "comparison_mode_pcc=" << config.attributes.comparison_mode_pcc << ",";
+        os << "root_report_path=" << fmt::format("{}", config.attributes.root_report_path) << ",";
+        os << "report_name=" << fmt::format("{}", config.attributes.report_name) << ",";
+        os << "report_path=" << fmt::format("{}", config.get_report_path());
         os << "}";
         return os;
     }

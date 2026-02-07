@@ -7,11 +7,12 @@
 #include <string>
 
 #include <fmt/format.h>
+#include <tt_stl/stl_fmt.hpp>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nlohmann/json.hpp>
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 template <typename T>
 auto tt_serializable_class(nanobind::module_& mod, auto name, auto desc) {

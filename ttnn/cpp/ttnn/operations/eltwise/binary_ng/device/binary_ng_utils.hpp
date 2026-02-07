@@ -10,6 +10,7 @@
 
 #include <optional>
 #include <string>
+#include <tuple>
 
 namespace ttnn::operations::binary_ng {
 
@@ -114,6 +115,9 @@ struct AllShardVolumes {
     std::optional<std::uint32_t> a_shard_volume;
     std::optional<std::uint32_t> b_shard_volume;
     std::optional<std::uint32_t> c_shard_volume;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("a_shard_volume", "b_shard_volume", "c_shard_volume");
+    auto attribute_values() const { return std::forward_as_tuple(a_shard_volume, b_shard_volume, c_shard_volume); }
 };
 
 std::optional<AllShardVolumes> get_shard_volumes(

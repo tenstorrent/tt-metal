@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>

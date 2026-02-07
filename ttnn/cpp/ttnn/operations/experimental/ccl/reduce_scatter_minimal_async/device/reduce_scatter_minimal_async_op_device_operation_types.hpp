@@ -10,11 +10,12 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -70,6 +71,12 @@ struct ReduceScatterMinimalAsyncInputs {
     Tensor input_tensor;
     std::optional<Tensor> optional_intermediate_tensor;
     std::optional<Tensor> optional_output_tensor;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensor", "optional_intermediate_tensor", "optional_output_tensor");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input_tensor, optional_intermediate_tensor, optional_output_tensor);
+    }
 };
 
 // Common validation function

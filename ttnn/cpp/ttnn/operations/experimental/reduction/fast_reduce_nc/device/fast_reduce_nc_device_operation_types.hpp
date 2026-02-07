@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -13,11 +14,17 @@ struct FastReduceNCParams {
     const int32_t dim;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("dim", "output_mem_config", "compute_kernel_config");
+    auto attribute_values() const { return std::forward_as_tuple(dim, output_mem_config, compute_kernel_config); }
 };
 
 struct FastReduceNCInputs {
     const Tensor input;
     std::optional<Tensor> preallocated_output;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "preallocated_output");
+    auto attribute_values() const { return std::forward_as_tuple(input, preallocated_output); }
 };
 
 }  // namespace ttnn::experimental::prim

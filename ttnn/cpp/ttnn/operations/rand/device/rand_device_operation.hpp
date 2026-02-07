@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::rand {
@@ -18,9 +20,18 @@ struct RandDeviceOperation {
         const float from;
         const float to;
         uint32_t seed;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("shape", "dtype", "layout", "memory_config", "device", "from", "to", "seed");
+        auto attribute_values() const {
+            return std::forward_as_tuple(shape, dtype, layout, memory_config, device, from, to, seed);
+        }
     };
 
-    struct tensor_args_t {};
+    struct tensor_args_t {
+        static constexpr auto attribute_names = std::make_tuple();
+        auto attribute_values() const { return std::make_tuple(); }
+    };
 
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;

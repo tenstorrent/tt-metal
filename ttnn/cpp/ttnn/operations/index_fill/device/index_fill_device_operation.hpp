@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <optional>
 #include <variant>
 
@@ -16,10 +18,16 @@ struct IndexFillOperation {
         const uint32_t dim;
         const std::variant<float, int> value;
         const MemoryConfig memory_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("dim", "value", "memory_config");
+        auto attribute_values() const { return std::forward_as_tuple(dim, value, memory_config); }
     };
     struct tensor_args_t {
         const Tensor& input;
         const Tensor& index;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input", "index");
+        auto attribute_values() const { return std::forward_as_tuple(input, index); }
     };
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;

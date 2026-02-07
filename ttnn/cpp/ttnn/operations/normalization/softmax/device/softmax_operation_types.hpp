@@ -10,15 +10,26 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 
 namespace ttnn {
 // Softmax program configuration structs
-struct SoftmaxDefaultProgramConfig {};
+
+struct SoftmaxDefaultProgramConfig {
+    static constexpr auto attribute_names = std::make_tuple();
+    auto attribute_values() const { return std::make_tuple(); }
+};
 struct SoftmaxShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w{};
     std::size_t block_h{};
     std::size_t block_w{};
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("compute_with_storage_grid_size", "subblock_w", "block_h", "block_w");
+    auto attribute_values() const {
+        return std::forward_as_tuple(compute_with_storage_grid_size, subblock_w, block_h, block_w);
+    }
 };
 
 using SoftmaxProgramConfig = std::variant<SoftmaxDefaultProgramConfig, SoftmaxShardedMultiCoreProgramConfig>;

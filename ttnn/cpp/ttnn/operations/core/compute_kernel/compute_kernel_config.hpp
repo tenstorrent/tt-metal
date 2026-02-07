@@ -5,8 +5,8 @@
 #pragma once
 
 #include <array>
-#include <tuple>
 #include <optional>
+#include <tuple>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/base_types.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -22,6 +22,13 @@ struct ComputeKernelConfig {
     bool dst_full_sync_en = false;
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "math_fidelity", "math_approx_mode", "fp32_dest_acc_en", "packer_l1_acc", "dst_full_sync_en", "throttle_level");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en, throttle_level);
+    }
 };
 
 // Type aliases for backward compatibility

@@ -7,9 +7,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include <optional>
 #include <vector>
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -67,6 +68,9 @@ struct AllGatherConcatParams {
 struct AllGatherConcatInputs {
     Tensor input_tensor;
     Tensor buffer_tensor;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "buffer_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, buffer_tensor); }
 };
 
 }  // namespace ttnn::experimental::prim

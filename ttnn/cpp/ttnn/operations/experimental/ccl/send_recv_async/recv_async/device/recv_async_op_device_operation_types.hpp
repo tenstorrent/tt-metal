@@ -7,7 +7,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/attributes.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {

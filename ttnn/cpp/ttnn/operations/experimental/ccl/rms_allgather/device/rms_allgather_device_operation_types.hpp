@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -88,6 +89,12 @@ struct RMSAllGatherInputs {
     std::optional<const Tensor> weight;
     std::optional<const Tensor> stats;
     std::optional<Tensor> preallocated_output;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input", "residual_input_tensor", "weight", "stats", "preallocated_output");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input, residual_input_tensor, weight, stats, preallocated_output);
+    }
 };
 
 }  // namespace ttnn::experimental::prim
