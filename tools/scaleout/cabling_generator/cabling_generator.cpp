@@ -17,7 +17,6 @@
 #include <google/protobuf/text_format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/caseless_comparison.hpp>
-#include <tt_stl/attributes.hpp>
 
 // Add protobuf includes
 #include "protobuf/cluster_config.pb.h"
