@@ -26,9 +26,10 @@ from transformers import AutoTokenizer, UMT5EncoderModel
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
+from ...encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder
 from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
-from ...parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
+from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
@@ -123,6 +124,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         mesh_device,
         parallel_config,
         vae_parallel_config,
+        encoder_parallel_config,
         num_links,
         *,
         checkpoint_name: str = "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
@@ -165,11 +167,52 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             topology=ttnn.Topology.Linear,  # NOTE: VAE always uses Linear topology. TODO: enable ring if given.
         )
 
+        # See what options we have for topology. We should consider reusing CCL managers
+        self.encoder_ccl_manager = CCLManager(
+            mesh_device=mesh_device,
+            num_links=num_links,
+            topology=ttnn.Topology.Linear,
+        )
+
         self.is_fsdp = is_fsdp
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
+        self.encoder_parallel_config = encoder_parallel_config
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
+
+        # Load TT text encoder
+        umt5_config = UMT5Config(
+            vocab_size=self.text_encoder.config.vocab_size,
+            embed_dim=self.text_encoder.config.d_model,
+            ff_dim=self.text_encoder.config.d_ff,
+            kv_dim=self.text_encoder.config.d_kv,
+            num_heads=self.text_encoder.config.num_heads,
+            num_hidden_layers=self.text_encoder.config.num_layers,
+            max_prompt_length=256,  # TODO: Consider removing
+            layer_norm_eps=self.text_encoder.config.layer_norm_epsilon,
+            relative_attention_num_buckets=self.text_encoder.config.relative_attention_num_buckets,
+            relative_attention_max_distance=self.text_encoder.config.relative_attention_max_distance,
+        )
+
+        self.tt_umt5_encoder = UMT5Encoder(
+            config=umt5_config,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.encoder_ccl_manager,
+            parallel_config=self.encoder_parallel_config,
+        )
+
+        if not cache.initialize_from_cache(
+            self.tt_umt5_encoder,
+            self.text_encoder.state_dict(),
+            os.path.basename(self.checkpoint_name),
+            "text_encoder",
+            self.encoder_parallel_config,
+            tuple(self.mesh_device.shape),
+        ):
+            logger.info("Loading UMT5 text encoder weights from PyTorch state dict")
+            self.tt_umt5_encoder.load_torch_state_dict(self.text_encoder.state_dict())
+
         if not self.dynamic_load:
             self._load_transformer1()
             self._load_transformer2()
@@ -284,11 +327,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 mesh_axis=sp_axis,
             ),
         )
+        encoder_parallel_config = EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis)
+        )
         pipeline_class_ = pipeline_class or WanPipeline
         return pipeline_class_(
             mesh_device=mesh_device,
             parallel_config=parallel_config,
             vae_parallel_config=vae_parallel_config,
+            encoder_parallel_config=encoder_parallel_config,
             num_links=num_links or config["num_links"],
             boundary_ratio=0.875,
             scheduler=scheduler,
@@ -385,20 +432,50 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
         seq_lens = mask.gt(0).sum(dim=1).long()
 
-        prompt_embeds = self.text_encoder(text_input_ids.to(device), mask.to(device)).last_hidden_state
-        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
+        # prompt_embeds = self.text_encoder(text_input_ids.to(device), mask.to(device)).last_hidden_state
+        tt_prompt = ttnn.from_torch(
+            text_input_ids,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        prompt_embeds = self.tt_umt5_encoder(tt_prompt)[-1]
+        # prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(prompt_embeds)[0])
+
+        # prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
         prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
 
         # NOTE: while the reference impl does not pad to max_sequence_length, for some reason this seems to be necessary for correctness in this pipeline.
         # TODO: investigate
-        prompt_embeds = torch.stack(
-            [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds], dim=0
+        # prompt_embeds = torch.stack(
+        #    [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds], dim=0
+        # )
+        prompt_embeds = ttnn.stack(
+            [
+                ttnn.concat(
+                    [
+                        u,
+                        ttnn.zeros(
+                            (max_sequence_length - u.shape[0], u.shape[1]),
+                            dtype=u.dtype,
+                            layout=u.layout,
+                            device=self.mesh_device,
+                        ),
+                    ]
+                )
+                for u in prompt_embeds
+            ],
+            dim=0,
         )
 
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         _, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
+        # prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
+        prompt_embeds = ttnn.repeat(prompt_embeds, (1, num_videos_per_prompt, 1))
+        prompt_embeds = ttnn.view(prompt_embeds, (batch_size * num_videos_per_prompt, seq_len, -1))
+
+        # pytorch adapter
+        prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(prompt_embeds)[0]).to(dtype=dtype, device=device)
 
         return prompt_embeds
 
