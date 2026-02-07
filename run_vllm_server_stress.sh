@@ -37,6 +37,7 @@ export LOGURU_LEVEL=INFO
 export VLLM_TARGET_DEVICE="tt"
 export VLLM_USE_V1=1
 export VLLM_RPC_TIMEOUT=300000
+export TT_METAL_OPERATION_TIMEOUT_SECONDS=5.0  # CI default via setup-job action
 export MESH_DEVICE="(2, 4)"
 
 
