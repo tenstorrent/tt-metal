@@ -300,6 +300,8 @@ echo "  Python version: ${VENV_PYTHON_VERSION}"
 echo "Installing Python ${VENV_PYTHON_VERSION} via uv..."
 uv python install "${VENV_PYTHON_VERSION}"
 uv venv --link-mode copy --relocatable --managed-python --python "${VENV_PYTHON_VERSION}" "$PYTHON_ENV_DIR"
+# Patch activate for POSIX sh (Docker/CI use /bin/sh; relocatable activate uses $BASH_SOURCE)
+"${SCRIPT_DIR}/scripts/patch_activate_posix.sh" "$PYTHON_ENV_DIR" || true
 source "$PYTHON_ENV_DIR/bin/activate"
 
 # Install uv into the venv at the same version as the invoking uv
