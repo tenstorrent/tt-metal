@@ -127,5 +127,4 @@ void kernel_main() {
     fabric_connection.close();
 
     noc_async_full_barrier();
-    DPRINT << "Forwarder kernel completed" << ENDL();
 }

@@ -28,7 +28,6 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "api/debug/dprint.h"
 #include <cstdint>
 
 // =============================================================================
@@ -324,8 +323,6 @@ void kernel_main() {
     // ROUND 1: Send local input to R1 neighbor via forwarder
     // All local data is ready, send all packets immediately
     // ==========================================================================
-    DPRINT << "sender: r1 slot addr: " << r1_fwd_slot_addr << ", sem addr: " << r1_fwd_sem_addr << ENDL();
-    DPRINT << "Starting ROUND 1: Send local input to R1 neighbor via forwarder" << ENDL();
     sender.setup_round(
         {cb_local_l,
          cb_local_ms,
@@ -338,7 +335,6 @@ void kernel_main() {
          r1_base_slot_idx});
     sender.send_all();
     sender.finish_round();
-    DPRINT << "Sender Finished ROUND 1" << ENDL();
 
     // ==========================================================================
     // ROUND 2: Send R1 result to R2 neighbor via forwarder (STREAMING)
@@ -356,8 +352,6 @@ void kernel_main() {
          r2_base_slot_idx});
     sender.send_streaming();
     sender.finish_round();
-
-    DPRINT << "Sender Finished ROUND 2" << ENDL();
 
     noc_async_full_barrier();
 }

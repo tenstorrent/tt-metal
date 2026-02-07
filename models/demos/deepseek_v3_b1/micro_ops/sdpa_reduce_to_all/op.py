@@ -184,6 +184,7 @@ class SdpaReduceToAll:
                 if l_chunk_size_bytes > max_fabric_payload_size:
                     raise ValueError("L chunk payload exceeds fabric max payload size")
 
+                # Slots are sized for the largest payload (L chunk); MS uses slot 0.
                 header_cb_size = _round_up(packet_header_size_bytes, l1_alignment)
                 slot_size = _round_up(packet_header_size_bytes + l_chunk_size_bytes, l1_alignment)
 
@@ -191,11 +192,14 @@ class SdpaReduceToAll:
                 num_workers_per_link = num_shard_cores // num_links
                 workers_per_type = num_workers_per_link // 2
                 slots_per_worker = 1 + num_l_chunks
+                # Bit-packed forwarder semaphores support up to 32 slots per round.
                 slots_per_round = workers_per_type * slots_per_worker
 
                 if slots_per_round > 32:
                     raise ValueError("slots_per_round exceeds 32-bit semaphore capacity")
 
+                # Per-core forwarder buffer layout: BRISC [R1][R2], NCRISC after BRISC.
+                # forwarder_buffer_base is per-core L1; scratch size must be per-core.
                 r2_buffer_offset = slots_per_round * slot_size
                 brisc_buffer_size = 2 * slots_per_round * slot_size
                 ncrisc_buffer_offset = brisc_buffer_size

@@ -75,10 +75,7 @@ FORCE_INLINE void prepare_l_chunk_for_compute(
     cb_reserve_back(cb_l, tiles_per_l_chunk);
 
     // Wait for this L chunk (sem >= 2 + l_chunk_idx)
-    DPRINT << "Waiting for L chunk " << l_chunk_idx << " (sem >= " << (L_SEM_BASE_THRESHOLD + l_chunk_idx) << ")"
-           << ", curr " << *sem_ptr << ENDL();
     noc_semaphore_wait_min(sem_ptr, L_SEM_BASE_THRESHOLD + l_chunk_idx);
-    DPRINT << "L chunk " << l_chunk_idx << " is ready for compute" << ENDL();
 
     // L CB is aliased to buffer, just push (zero-copy)
     cb_push_back(cb_l, tiles_per_l_chunk);
@@ -126,12 +123,9 @@ void kernel_main() {
     // Prepare R1 neighbor data for compute
     // =========================================================================
     prepare_data_for_compute(cb_r1_neighbor_l, cb_r1_neighbor_ms, r1_neighbor_sem_addr, r1_recv_buffer_addr);
-    // DPRINT << "Reader kernel prepared R1 neighbor data for compute" << ENDL();
 
     // =========================================================================
     // Prepare R2 neighbor data for compute
     // =========================================================================
     prepare_data_for_compute(cb_r2_neighbor_l, cb_r2_neighbor_ms, r2_neighbor_sem_addr, r2_recv_buffer_addr);
-
-    DPRINT << "Reader kernel prepared R2 neighbor data for compute" << ENDL();
 }

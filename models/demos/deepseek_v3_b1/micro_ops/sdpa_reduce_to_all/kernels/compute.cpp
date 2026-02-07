@@ -134,6 +134,4 @@ void kernel_main() {
         cb_r2_neighbor_l,   // l1 (neighbor)
         cb_r1_result_l,     // l2 (R1 result)
         cb_l_out);          // l_out (normalized, aliased to output tensor)
-
-    DPRINT << "Compute kernel completed" << ENDL();
 }

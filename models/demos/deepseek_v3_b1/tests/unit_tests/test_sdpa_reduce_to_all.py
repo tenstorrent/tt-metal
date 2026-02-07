@@ -198,13 +198,16 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device):
         mesh_mapper=mesh_mapper2,
     )
 
+    # Per-core scratch size (covers BRISC + NCRISC regions).
+    # The shard is split across forwarder cores; each core gets the full per-core size.
     forwarder_buffer_size_bytes = compute_forwarder_scratch_size(
         batch_size=batch_size, l_width=l_width, num_cores=num_cores, tile_height=8, tile_width=32, bytes_per_element=2
     )
 
     num_forwarder_cores = 2
-    forwarder_shard_bytes = forwarder_buffer_size_bytes // num_forwarder_cores
-    forwarder_shard_width_elements = forwarder_shard_bytes // (tile.tile_shape[0] * 2)
+    # Convert per-core bytes to shard width in elements (bfloat16 = 2 bytes).
+    # BRISC and NCRISC share the same per-core buffer region.
+    forwarder_shard_width_elements = forwarder_buffer_size_bytes // (tile.tile_shape[0] * 2)
     forwarder_shard_width_elements = _round_up(forwarder_shard_width_elements, tile.tile_shape[1])
 
     forwarder_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(forwarder_cores[0], forwarder_cores[1])})
@@ -226,6 +229,7 @@ def test_sdpa_reduce_to_all(bh_1d_mesh_device):
     )
 
     semaphores = [ttnn.create_global_semaphore(submesh_device, shard_grid, 0) for _ in range(2)]
+    ttnn.synchronize_device(submesh_device)
 
     logger.info("Running SDPA reduce-to-all (single run)...")
     output_mesh = SdpaReduceToAll.op(
