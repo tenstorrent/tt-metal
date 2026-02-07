@@ -16,12 +16,8 @@ import torch.nn.functional as F
 class TimestepEncoder(nn.Module):
     def __init__(self, embedding_dim, compute_dtype=torch.float32):
         super().__init__()
-        self.time_proj = Timesteps(
-            num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=1
-        )
-        self.timestep_embedder = TimestepEmbedding(
-            in_channels=256, time_embed_dim=embedding_dim
-        )
+        self.time_proj = Timesteps(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=1)
+        self.timestep_embedder = TimestepEmbedding(in_channels=256, time_embed_dim=embedding_dim)
 
     def forward(self, timesteps):
         dtype = next(self.parameters()).dtype
@@ -51,6 +47,9 @@ class AdaLayerNorm(nn.Module):
         temb: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         temb = self.linear(self.silu(temb))
+        # Unwrap for chunk/norm to avoid C++ cast errors with TorchTTNNTensor
+        if hasattr(temb, "to_torch"):
+            temb = temb.to_torch
         scale, shift = temb.chunk(2, dim=1)
         x = self.norm(x) * (1 + scale[:, None]) + shift[:, None]
         return x
@@ -97,9 +96,7 @@ class BasicTransformerBlock(nn.Module):
             )
 
         if positional_embeddings == "sinusoidal":
-            self.pos_embed = SinusoidalPositionalEmbedding(
-                dim, max_seq_length=num_positional_embeddings
-            )
+            self.pos_embed = SinusoidalPositionalEmbedding(dim, max_seq_length=num_positional_embeddings)
         else:
             self.pos_embed = None
 
@@ -108,9 +105,7 @@ class BasicTransformerBlock(nn.Module):
         if norm_type == "ada_norm":
             self.norm1 = AdaLayerNorm(dim)
         else:
-            self.norm1 = nn.LayerNorm(
-                dim, elementwise_affine=norm_elementwise_affine, eps=norm_eps
-            )
+            self.norm1 = nn.LayerNorm(dim, elementwise_affine=norm_elementwise_affine, eps=norm_eps)
 
         self.attn1 = Attention(
             query_dim=dim,
@@ -155,14 +150,10 @@ class BasicTransformerBlock(nn.Module):
         if self.pos_embed is not None:
             norm_hidden_states = self.pos_embed(norm_hidden_states)
 
-        attn_output = self.attn1(
+        attn_output, _ = self.attn1(
             norm_hidden_states,
             encoder_hidden_states=encoder_hidden_states,
-            attention_mask=(
-                encoder_attention_mask
-                if encoder_hidden_states is not None
-                else attention_mask
-            ),
+            attention_mask=(encoder_attention_mask if encoder_hidden_states is not None else attention_mask),
         )
         if self.final_dropout:
             attn_output = self.final_dropout(attn_output)
@@ -209,22 +200,16 @@ class DiT(ModelMixin, ConfigMixin):
         super().__init__()
 
         self.attention_head_dim = attention_head_dim
-        self.inner_dim = (
-            self.config.num_attention_heads * self.config.attention_head_dim
-        )
+        self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
         self.gradient_checkpointing = False
 
         # Timestep encoder
-        self.timestep_encoder = TimestepEncoder(
-            embedding_dim=self.inner_dim, compute_dtype=self.compute_dtype
-        )
+        self.timestep_encoder = TimestepEncoder(embedding_dim=self.inner_dim, compute_dtype=self.compute_dtype)
 
         all_blocks = []
         for idx in range(self.config.num_layers):
             use_self_attn = idx % 2 == 1 and interleave_self_attention
-            curr_cross_attention_dim = (
-                cross_attention_dim if not use_self_attn else None
-            )
+            curr_cross_attention_dim = cross_attention_dim if not use_self_attn else None
 
             all_blocks += [
                 BasicTransformerBlock(
@@ -294,10 +279,17 @@ class DiT(ModelMixin, ConfigMixin):
 
         # Output processing
         conditioning = temb
-        shift, scale = self.proj_out_1(F.silu(conditioning)).chunk(2, dim=1)
-        hidden_states = (
-            self.norm_out(hidden_states) * (1 + scale[:, None]) + shift[:, None]
-        )
+        if hasattr(conditioning, "to_torch"):
+            conditioning = conditioning.to_torch
+        proj_res = self.proj_out_1(F.silu(conditioning))
+        if hasattr(proj_res, "to_torch"):
+            proj_res = proj_res.to_torch
+        shift, scale = proj_res.chunk(2, dim=1)
+
+        if hasattr(hidden_states, "to_torch"):
+            hidden_states = hidden_states.to_torch
+        hidden_states = self.norm_out(hidden_states) * (1 + scale[:, None]) + shift[:, None]
+
         if return_all_hidden_states:
             return self.proj_out_2(hidden_states), all_hidden_states
         else:
@@ -341,9 +333,7 @@ class AlternateVLDiT(DiT):
         non_image_attention_mask = (~image_mask) & backbone_attention_mask
 
         all_hidden_states = [hidden_states]
-        assert (
-            self.config.interleave_self_attention
-        ), "Interleave self attention must be enabled"
+        assert self.config.interleave_self_attention, "Interleave self attention must be enabled"
 
         # Process through transformer blocks
         for idx, block in enumerate(self.transformer_blocks):
@@ -376,10 +366,17 @@ class AlternateVLDiT(DiT):
 
         # Output processing
         conditioning = temb
-        shift, scale = self.proj_out_1(F.silu(conditioning)).chunk(2, dim=1)
-        hidden_states = (
-            self.norm_out(hidden_states) * (1 + scale[:, None]) + shift[:, None]
-        )
+        if hasattr(conditioning, "to_torch"):
+            conditioning = conditioning.to_torch
+        proj_res = self.proj_out_1(F.silu(conditioning))
+        if hasattr(proj_res, "to_torch"):
+            proj_res = proj_res.to_torch
+        shift, scale = proj_res.chunk(2, dim=1)
+
+        if hasattr(hidden_states, "to_torch"):
+            hidden_states = hidden_states.to_torch
+        hidden_states = self.norm_out(hidden_states) * (1 + scale[:, None]) + shift[:, None]
+
         if return_all_hidden_states:
             return self.proj_out_2(hidden_states), all_hidden_states
         else:
@@ -410,9 +407,7 @@ class SelfAttentionTransformer(ModelMixin, ConfigMixin):
         super().__init__()
 
         self.attention_head_dim = attention_head_dim
-        self.inner_dim = (
-            self.config.num_attention_heads * self.config.attention_head_dim
-        )
+        self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
         self.gradient_checkpointing = False
 
         self.transformer_blocks = nn.ModuleList(
