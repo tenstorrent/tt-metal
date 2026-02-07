@@ -342,6 +342,30 @@ struct to_json_t<T> {
     }
 };
 
+template <typename T>
+    requires ttsl::concepts::detail::supports_compile_time_attributes_v<T>
+struct from_json_t<T> {
+    T operator()(const nlohmann::json& json_object) {
+        T obj{};
+        // attribute_values() is const, but obj itself is mutable.
+        // Use const_cast to get mutable references to the underlying fields.
+        auto const_values = obj.attribute_values();
+        [&obj, &json_object, &const_values]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&obj, &json_object, &const_values] {
+                    const auto& attribute_name = std::get<Ns>(obj.attribute_names);
+                    using field_type = std::decay_t<decltype(std::get<Ns>(const_values))>;
+                    if (json_object.contains(attribute_name)) {
+                        const_cast<field_type&>(std::get<Ns>(const_values)) =
+                            from_json<field_type>(json_object.at(attribute_name));
+                    }
+                }(),
+                ...);
+        }(std::make_index_sequence<concepts::detail::get_num_attributes<T>()>{});
+        return obj;
+    }
+};
+
 // --- Fallback ---
 
 template <typename T>
