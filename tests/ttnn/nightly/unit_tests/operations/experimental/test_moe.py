@@ -59,10 +59,13 @@ def create_torch_input(L, in0_core_range_set, all_core_range_set, E, M, K):
     #     else:
     #         torch_input[..., i] = -0.25
     # torch_input = (1 / 1024) * torch.ones((L, in0_num_cores, 2, M, K), dtype=torch.bfloat16)
-    torch_input = torch.zeros((L, E, M, K), dtype=torch.bfloat16)
 
-    for e in range(E):
-        torch_input[0, e, 0, :] = torch.ones((K,), dtype=torch.bfloat16) * (e + 1)  # - 0.5
+    torch_input = torch.rand((L, E, M, K), dtype=torch.bfloat16) - 0.5
+
+    torch_input[:, 1, :, :] = torch_input[:, 0, :, :]
+
+    #     for e in range(E):
+    #         torch_input[0, e, 0, :] = torch.rand((K,), dtype=torch.bfloat16) - 0.5
 
     torch_input = torch_input.unsqueeze(1).repeat(1, in0_core_range_set.num_cores(), 1, 1, 1)
 
@@ -91,20 +94,22 @@ def create_torch_w0(L, E, K, N):
     Returns:
         torch_w0: Tensor of shape (L, E, K, N)
     """
-    # torch_w0 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # le_val = 1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for k_chunk in range(K // 32):
-    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #             k_val = k_chunk * 0.001
-    #             for n_chunk in range(N // 32):
-    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #                 n_val = n_chunk
-    #                 torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
+    #     torch_w0 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
+    #     le_val = 1
+    #     for l in range(L):
+    #         for e in range(E):
+    #             for k_chunk in range(K // 32):
+    #                 k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
+    #                 k_val = k_chunk * 0.001
+    #                 for n_chunk in range(N // 32):
+    #                     n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
+    #                     n_val = n_chunk
+    #                     torch_w0[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
+    #             le_val *= -1
 
     torch_w0 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    torch_w0[:, 1, :, :] = torch_w0[:, 0, :, :]
+
     return torch_w0
 
 
@@ -121,20 +126,22 @@ def create_torch_w1(L, E, K, N):
     Returns:
         torch_w1: Tensor of shape (L, E, K, N)
     """
-    # torch_w1 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
-    # le_val = -1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for k_chunk in range(K // 32):
-    #             k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #             k_val = k_chunk * 0.001
-    #             for n_chunk in range(N // 32):
-    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #                 n_val = n_chunk
-    #                 torch_w1[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
+    #     torch_w1 = torch.empty((L, E, K, N), dtype=torch.bfloat16)
+    #     le_val = -1
+    #     for l in range(L):
+    #         for e in range(E):
+    #             for k_chunk in range(K // 32):
+    #                 k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
+    #                 k_val = k_chunk * 0.001
+    #                 for n_chunk in range(N // 32):
+    #                     n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
+    #                     n_val = n_chunk
+    #                     torch_w1[l, e, k_start:k_end, n_start:n_end] = (n_val + k_val) * le_val
+    #             le_val *= -1
 
     torch_w1 = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    torch_w1[:, 1, :, :] = torch_w1[:, 0, :, :]
+
     return torch_w1
 
 
@@ -152,18 +159,20 @@ def create_torch_w2(L, E, N, K):
         torch_w2: Tensor of shape (L, E, N, K)
     """
     # torch_w2 = torch.empty((L, E, N, K), dtype=torch.bfloat16)
-    # le_val = 1
-    # for l in range(L):
-    #     for e in range(E):
-    #         for n_chunk in range(N // 32):
-    #             n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
-    #             n_val = 0.001 * n_chunk
-    #             for k_chunk in range(K // 32):
-    #                 k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
-    #                 k_val = k_chunk
-    #                 torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
-    #         le_val *= -1
+    #     le_val = 1
+    #     for l in range(L):
+    #         for e in range(E):
+    #             for n_chunk in range(N // 32):
+    #                 n_start, n_end = n_chunk * 32, n_chunk * 32 + 32
+    #                 n_val = 0.001 * n_chunk
+    #                 for k_chunk in range(K // 32):
+    #                     k_start, k_end = k_chunk * 32, k_chunk * 32 + 32
+    #                     k_val = k_chunk
+    #                     torch_w2[l, e, n_start:n_end, k_start:k_end] = (n_val + k_val) * le_val
+    #             le_val *= -1
     torch_w2 = torch.rand((L, E, N, K), dtype=torch.bfloat16) - 0.5
+    torch_w2[:, 1, :, :] = torch_w2[:, 0, :, :]
+
     return torch_w2
 
 
@@ -364,30 +373,30 @@ def prepare_output_tensor_from_combine_writer(
 
     shaped_torch_output = output_core_shards.view(output_shape)
 
-    #     for h in range(1):
-    #         for w in range(output_shard_width_dim):
-    #             for e in range(E):
-    #                 print(f"{h=} {w=} {e=}")
-    #                 print(f"output shards: {shaped_torch_output[h,w,e,0,:]}")
+    for h in range(output_shard_height_dim):
+        for w in range(output_shard_width_dim):
+            for e in range(E):
+                print(f"{h=} {w=} {e=}")
+                print(f"output shards: {shaped_torch_output[h,w,e,:8,:16]}")
 
     shaped_torch_output = shaped_torch_output.permute([2, 0, 3, 1, 4]).reshape([E, TOTAL_TOKENS, K])
     torch_output = torch.zeros([E, M, K], dtype=torch.bfloat16)
 
     for e in range(E):
-        active_tokens = 1  # TODO use dynamic active tokens
+        active_tokens = M  # TODO use dynamic active tokens
         tokens_per_shard = math.ceil(active_tokens / output_shard_height_dim)
         for t in range(active_tokens):
             bt = t // tokens_per_shard
             ot = t % tokens_per_shard
 
-            contrib = shaped_torch_output[e, bt * tokens_per_shard + ot]
+            contrib = shaped_torch_output[e, bt * TOTAL_TOKENS // output_shard_height_dim + ot]
             # assert not (contrib==0).all()
 
             torch_output[e, t] = contrib
 
     # assert torch.count_nonzero(torch_output).item() == K*E*1
-    for e in range(E):
-        print(f"{torch_output[e,:,:16]=}")
+    # for e in range(E):
+    #         print(f"{torch_output[e,:,:16]=}")
 
     return torch_output
 
@@ -632,9 +641,11 @@ def run_test_moe(device, M, K, N, E, L, check_accuracy, dump_outputs):
             torch_output_ref = torch_intermediate_ref @ torch_w2
 
             # print(f"{torch_input_ref[0,:,:,:]=}")
-            print(f"{torch_output_ref[0,:,:,:16]=}")
+            # print(f"{torch_output_ref[0,:,:,:16]=}")
 
         # Calculate accuracy metrics for each layer and expert
+        assert (torch.isclose(tt_to_torch_outputs[0, 0, :, :], tt_to_torch_outputs[0, 1, :, :])).all()
+
         for layer_id, expert_id in itertools.product(range(L), range(E)):
             torch_layer_output = torch_output_ref[layer_id, expert_id, :, :]
             tt_layer_output = tt_to_torch_outputs[layer_id, expert_id, :, :]

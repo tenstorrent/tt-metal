@@ -64,6 +64,18 @@ void kernel_main() {
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
 
+    constexpr auto cb_c2w_out = tt::CBIndex::c_5;
+
+    //     auto * source_base_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(source_base_l1_addr);
+    //
+    //     // for(uint32_t i = 0; i<1024; ++i){
+    // //         source_base_l1_ptr[i]=0x4100;
+    // //     }
+    //
+    //     DPRINT<<"INITIAL. Addr: "<<source_base_l1_ptr <<" \n";
+    //     tt::data_movement::common::print_bf16_pages(source_base_l1_addr,32,32);
+    //
+
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
     constexpr auto cb_c2s_out = tt::CBIndex::c_1;
@@ -136,7 +148,7 @@ void kernel_main() {
     // uint32_t* per_expert_counts_ptr = reinterpret_cast<uint32_t*>(get_read_ptr(per_expert_total_tokens_cb_id));
 
     uint32_t per_expert_counts_ptr[num_experts];
-    per_expert_counts_ptr[0] = per_expert_counts_ptr[1] = 1;
+    per_expert_counts_ptr[0] = per_expert_counts_ptr[1] = tile_height;
 
     bool source_buffer_iter = 0;
 
@@ -188,10 +200,10 @@ void kernel_main() {
 
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - hb * tile_height);
 
-            cb_wait_front(cb_c2w_rdy, 1);
-            cb_pop_front(cb_c2w_rdy, 1);
+            cb_wait_front(cb_c2w_out, 20);
+            const uint32_t source_base_l1_addr = get_read_ptr(cb_c2w_out);
 
-            const uint32_t source_base_l1_addr = output_base_l1_addr + source_buffer_iter * source_buffer_iter_offset;
+            // tt::data_movement::common::print_bf16_pages(source_base_l1_addr,16, 64);
 
             while (width_tiles_to_send > 0) {
                 const uint32_t width_tile_start = width_tile_base + wb;
@@ -224,10 +236,11 @@ void kernel_main() {
                     const uint32_t source_l1_addr =
                         source_base_l1_addr + (bt * source_width_tiles + wb) * tile_width_size_bytes;
 
-                    DPRINT << "t:" << t << " dest_height_shard: " << dest_height_shard << " shard_row: " << shard_row
-                           << " wb: " << wb << " dest_width_shard: " << dest_width_shard
-                           << " dest_width_offset_tiles: " << dest_width_offset_tiles
-                           << " width_transfer_tiles: " << width_transfer_tiles << "\n";
+                    // DPRINT<<"t:"<<t<<" dest_height_shard: "<<dest_height_shard<<" shard_row: "<<shard_row << " wb:
+                    // "<<wb
+                    //                     << " dest_width_shard: "<<dest_width_shard<<" dest_width_offset_tiles:
+                    //                     "<<dest_width_offset_tiles<< " width_transfer_tiles:
+                    //                     "<<width_transfer_tiles<<"\n";
 
                     // tt::data_movement::common::print_bf16_pages(source_l1_addr,width_transfer_bytes/2 , 1);
 
@@ -238,6 +251,8 @@ void kernel_main() {
             }
 
             noc_async_posted_atomic_barrier();
+            cb_pop_front(cb_c2w_out, 20);
+
             source_buffer_iter = !source_buffer_iter;
         }
     }

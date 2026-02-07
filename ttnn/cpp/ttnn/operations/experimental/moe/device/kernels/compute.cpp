@@ -12,6 +12,7 @@
 
 // DEBUG
 #include "compute_kernel_api/eltwise_unary/fill.h"
+#include "api/debug/dprint_tensix.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -44,6 +45,8 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+
+    constexpr auto cb_c2w_out = tt::CBIndex::c_5;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
@@ -111,7 +114,30 @@ void kernel_main() {
     mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
     // Initialize SFPU for SILU and eltwise multiply
-    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+    // PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+
+    MATH((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+
+    auto stall = []() {
+        for (uint32_t i = 0; i < 10000000; ++i) {
+            asm volatile("nop");
+        }
+        for (uint32_t i = 0; i < 10000000; ++i) {
+            asm volatile("nop");
+        }
+        for (uint32_t i = 0; i < 10000000; ++i) {
+            asm volatile("nop");
+        }
+        for (uint32_t i = 0; i < 10000000; ++i) {
+            asm volatile("nop");
+        }
+        for (uint32_t i = 0; i < 10000000; ++i) {
+            asm volatile("nop");
+        }
+        for (uint32_t i = 0; i < 10000000; ++i) {
+            asm volatile("nop");
+        }
+    };
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -144,28 +170,37 @@ void kernel_main() {
                 cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
             }
 
-            tile_regs_commit();
+            MATH((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
+            MATH((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
 
+            MATH((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
+            MATH((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+
+            tile_regs_commit();
+            tile_regs_wait();
             // The below is equivalent to tile_regs_wait(), but we stall CFG as well, so that the succeeding
             // TT_SETC16 instruction is also stalled until math thread is done with these dest registers.
-            TTI_SEMWAIT(
-                p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                semaphore::t6_sem(semaphore::MATH_PACK),
-                p_stall::STALL_ON_ZERO);
+            // TTI_SEMWAIT(
+            //                 p_stall::STALL_TDMA | p_stall::STALL_CFG,
+            //                 semaphore::t6_sem(semaphore::MATH_PACK),
+            //                 p_stall::STALL_ON_ZERO);
+            //
+            //             // Make SFPU access the appropriate half of the destination registers
+            //             PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32,
+            //             ckernel::packer::get_packer_dest_offset()));
+            //
+            //             //---------------------------------------------------------------------
+            //             // Apply SILU activation and then eltwise multiply
+            //             //---------------------------------------------------------------------
+            //             PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
+            //             PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+            //
+            //             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
+            //             PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+            //
+            //             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
-            // Make SFPU access the appropriate half of the destination registers
-            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-            //---------------------------------------------------------------------
-            // Apply SILU activation and then eltwise multiply
-            //---------------------------------------------------------------------
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-            PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
-
-            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-            PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
-
-            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+            pack_reconfig_data_format(cb_s2c_in2);
 
             pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
             pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
@@ -180,12 +215,10 @@ void kernel_main() {
         // Compute in2 @ W2 (in pairs of 4)
         //---------------------------------------------------------------------
         // Initialize pack untilize for row-major output: 4 tiles wide -> 32 rows x 128 datums
-        if (expert_id == 1) {
-            cb_push_back(cb_c2s_out_untilized, 224);
-        }
-        pack_untilize_dest_init<4, 20>(cb_c2s_out_untilized);
 
-        uint32_t out_index = (expert_id & 1) ? 0 : 0;
+        cb_reserve_back(cb_c2w_out, 20);
+        pack_untilize_dest_init<4, 20>(cb_c2w_out);
+
         uint32_t untilize_iter = 0;
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
@@ -218,6 +251,7 @@ void kernel_main() {
                     matmul_block(
                         cb_s2c_in2,
                         cb_r2c_w2,
+                        // in2_index,
                         in2_index++,
                         /*in1_index=*/k,
                         /*idst=*/0,
@@ -226,37 +260,43 @@ void kernel_main() {
                         /*rt_dim=*/1,
                         /*kt_dim=*/1);
                 }
-
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }
 
             //             fill_tile_init();
-            //             fill_tile(0, (float) expert_id+1);
-            //             fill_tile(1,(float) expert_id+1);
-            //             fill_tile(2,(float) expert_id+1);
-            //             fill_tile(3, (float) expert_id+1);
+            //             fill_tile(0, (float) expert_id + 1);
+            //             fill_tile(1,(float) expert_id + 1);
+            //             fill_tile(2,(float) expert_id + 1);
+            //             fill_tile(3, (float) expert_id + 1);
+
+            // MATH(stall());
+
+            //             dprint_tensix_dest_reg(0);
+            //             dprint_tensix_dest_reg(1);
+            //             dprint_tensix_dest_reg(2);
+            //             dprint_tensix_dest_reg(3);
 
             tile_regs_commit();
 
             // Reserve space in the output CB for the untilized data
-            // cb_reserve_back(cb_c2s_out_untilized, 1);
 
             tile_regs_wait();
             // Pack 4 tiles as row-major: 32 rows x 128 datums (32*4 width)
 
-            pack_untilize_dest<4, 20>(cb_c2s_out_untilized, /*block_rt_dim=*/1, out_index + untilize_iter++);
+            pack_untilize_dest<4, 20>(cb_c2w_out, /*block_rt_dim=*/1, untilize_iter++);
+
+            // pack_tile(0,cb_c2w_out);
+            //             pack_tile(1,cb_c2w_out);
+            //             pack_tile(2,cb_c2w_out);
+            //             pack_tile(3,cb_c2w_out);
+
             tile_regs_release();
         }
 
-        cb_reserve_back(cb_c2w_rdy, 1);
-        cb_push_back(cb_c2w_rdy, 1);
+        cb_push_back(cb_c2w_out, 20);
         // Restore normal packer state after untilize
 
-        if (expert_id == 1) {
-            cb_pop_front(cb_c2s_out_untilized, 224);
-            cb_push_back(cb_c2s_out_untilized, 224);
-        }
-        pack_untilize_uninit(cb_c2s_out_untilized);
+        pack_untilize_uninit(cb_c2w_out);
     }  // end for (expert_id)
 
     // Drain the pipeline - the last dummy push

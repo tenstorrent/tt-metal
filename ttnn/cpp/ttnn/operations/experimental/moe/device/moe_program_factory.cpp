@@ -66,6 +66,7 @@ MoEProgramFactory::cached_program_t MoEProgramFactory::create(
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_3, tt::DataFormat::Float32, false, 1},
         {"cb_s2c_in2", tt::CBIndex::c_4, tt::DataFormat::Float16_b, true, 6 * 2},
+        {"cb_c2w_out", tt::CBIndex::c_5, tt::DataFormat::Float16_b, true, 20},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
