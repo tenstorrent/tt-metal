@@ -13,6 +13,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -52,6 +53,9 @@ protected:
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
+    // Test failing with watcher enabled, github issue #30521
+    SKIP_FOR_WATCHER();
+
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = true;
@@ -102,6 +106,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
+    // Test failing with watcher enabled, github issue #30521
+    SKIP_FOR_WATCHER();
+
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = false;
@@ -146,6 +153,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
+    // Test failing with watcher enabled, github issue #30521
+    SKIP_FOR_WATCHER();
+
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = true;
@@ -192,6 +202,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
+    // Test failing with watcher enabled, github issue #30521
+    SKIP_FOR_WATCHER();
+
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = false;
@@ -430,6 +443,9 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
+    // Test failing with watcher enabled, github issue #30521
+    SKIP_FOR_WATCHER();
+
     uint32_t batch_size = 64;
     uint32_t sequence_length = 256;
     uint32_t in_features = 384U;
@@ -461,6 +477,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
+    auto ones_grad = ttnn::ones_like(output->get_value());
+    ones_grad = ttnn::multiply(ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
+    output->set_grad(ones_grad);
     output->backward();
 
     auto row_parallel_output_xtensor =
@@ -481,31 +500,39 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     auto replicate_layer_weight = get_parameter(replicate_layer_parameters, "weight");
     auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
+    // Use unscaled ones_grad for replicate layer because row parallel's all_reduce backward
+    // does all_reduce on grad (noop_backward=false), effectively multiplying by num_devices
+    auto replicate_ones_grad = ttnn::ones_like(replicate_layer_output->get_value());
+    replicate_layer_output->set_grad(replicate_ones_grad);
     replicate_layer_output->backward();
-    auto replicate_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
+    auto replicate_output_xtensor =
+        ttml::core::to_xtensor<float>(replicate_layer_output->get_value(), ttml::core::IdentityComposer{});
     auto replicate_layer_input_gradients =
         ttml::core::to_xtensor<float>(replicate_layer_input->get_grad(), ttml::core::IdentityComposer{});
-    auto replicate_layer_weight_gradients =
+    // Use IdentityComposer and take first device's gradient for comparison
+    auto replicate_layer_weight_gradients_vec =
         ttml::core::to_xtensor<float>(replicate_layer_weight->get_grad(), ttml::core::IdentityComposer{});
+    // LinearLayer weight gradient should be replicated - just take device 0
+    auto replicate_layer_weight_gradients = replicate_layer_weight_gradients_vec[0];
 
     EXPECT_TRUE(
         xt::allclose(replicate_output_xtensor[0], row_parallel_output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
     EXPECT_TRUE(
         xt::allclose(replicate_output_xtensor[1], row_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
-    xt::xarray<float> row_parallel_input_gradients_combined = row_parallel_input_gradients[0] + row_parallel_input_gradients[1];
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[0], row_parallel_input_gradients_combined, /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[0], row_parallel_input_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[1], row_parallel_input_gradients_combined, /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[1], row_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[0], row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
-    EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[1], row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients, row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
+    // Test failing with watcher enabled, github issue #30521
+    SKIP_FOR_WATCHER();
+
     uint32_t batch_size = 64;
     uint32_t sequence_length = 256;
     uint32_t in_features = 384U;
@@ -561,7 +588,8 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
     auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
     replicate_layer_output->backward();
-    auto replicate_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
+    auto replicate_output_xtensor =
+        ttml::core::to_xtensor<float>(replicate_layer_output->get_value(), ttml::core::IdentityComposer{});
     auto replicate_layer_input_gradients =
         ttml::core::to_xtensor<float>(replicate_layer_input->get_grad(), ttml::core::IdentityComposer{});
     auto replicate_layer_weight_gradients =
@@ -584,6 +612,9 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
+    // Test failing with watcher enabled, github issue #30521
+    SKIP_FOR_WATCHER();
+
     uint32_t batch_size = 64;
     uint32_t sequence_length = 256;
     uint32_t in_features = 384U;
@@ -640,7 +671,8 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
     auto replicate_layer_input = ttml::autograd::create_tensor(tt_tensor);
     auto replicate_layer_output = replicate_layer(replicate_layer_input);
     replicate_layer_output->backward();
-    auto replicate_output_xtensor = ttml::core::to_xtensor<float>(output->get_value(), ttml::core::IdentityComposer{});
+    auto replicate_output_xtensor =
+        ttml::core::to_xtensor<float>(replicate_layer_output->get_value(), ttml::core::IdentityComposer{});
     auto replicate_layer_input_gradients =
         ttml::core::to_xtensor<float>(replicate_layer_input->get_grad(), ttml::core::IdentityComposer{});
     auto replicate_layer_weight_gradients =

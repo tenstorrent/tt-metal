@@ -7,8 +7,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/typecast.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     constexpr uint32_t input_cb = get_compile_time_arg_val(2);
@@ -41,4 +40,3 @@ void MAIN {
         cb_push_back(output_cb, per_core_block_dim);
     }
 }
-}  // namespace NAMESPACE

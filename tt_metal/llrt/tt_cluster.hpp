@@ -277,7 +277,9 @@ public:
     //       CloseDevice(0)
     //       CloseDevice(1)
     void set_internal_routing_info_for_ethernet_cores(
-        bool enable_internal_routing, const std::vector<ChipId>& target_mmio_devices = {}) const;
+        const tt::tt_fabric::ControlPlane& control_plane,
+        bool enable_internal_routing,
+        const std::vector<ChipId>& target_mmio_devices = {}) const;
 
     const std::unordered_map<ChipId, std::unordered_map<EthernetChannel, std::tuple<ChipId, EthernetChannel>>>&
     get_ethernet_connections() const {
@@ -340,7 +342,8 @@ public:
     bool is_base_routing_fw_enabled() const;
 
     // Get all fabric ethernet cores
-    std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(ChipId chip_id) const;
+    std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(
+        const tt::tt_fabric::ControlPlane& control_plane, ChipId chip_id) const;
 
     // Get fabric ethernet cores connecting src to dst
     std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(ChipId src_id, ChipId dst_id) const;

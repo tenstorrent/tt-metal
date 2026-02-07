@@ -73,6 +73,7 @@ def initialize_vllm_text_transformer(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+    tt_model_args.use_qk_fused = False  # Qwen2.5-VL doesn't use qk fused ops
     assert tt_model_args.model_name.replace("-", "").endswith(
         hf_config.name_or_path.split("/")[-1].replace("-", "")
     ), f"The model specified in vLLM ({hf_config.name_or_path}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."

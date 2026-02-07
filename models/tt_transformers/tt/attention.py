@@ -44,8 +44,6 @@ class Attention(LightweightModule):
         self.paged_attention_config = paged_attention_config
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
-        self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
-        self.num_all_gather_links = configuration.num_all_gather_links
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
         self.rms_norm_add_unit_offset = configuration.rms_norm_add_unit_offset
@@ -476,8 +474,6 @@ class Attention(LightweightModule):
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
-            num_reduce_scatter_links=self.num_reduce_scatter_links,
-            num_all_gather_links=self.num_all_gather_links,
             memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
             sharded=True,
             dtype=self.ccl_dtype,
@@ -630,13 +626,13 @@ class Attention(LightweightModule):
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     all_gather_core_grid_offset=(0, 4),
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                    num_links=1,
+                    num_links=self.model_config["ATTN_AGMM_CONFIG"]["num_links"],
                     memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
                     memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
                     program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
                     compute_kernel_config=self.compute_kernel_config_hifi2,
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
+                    chunks_per_sync=self.model_config["ATTN_AGMM_CONFIG"]["chunks_per_sync"],
+                    num_workers_per_link=self.model_config["ATTN_AGMM_CONFIG"]["num_workers_per_link"],
                     num_buffers_per_channel=2,
                 )
             else:
@@ -674,7 +670,6 @@ class Attention(LightweightModule):
                 self.tt_ccl,
                 dim=2,
                 cluster_axis=1,
-                num_links=2,
                 memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
                 sharded=True,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
@@ -710,8 +705,6 @@ class Attention(LightweightModule):
                 self.mesh_device,
                 self.tt_ccl,
                 cluster_axis=0,
-                num_reduce_scatter_links=self.num_reduce_scatter_links,
-                num_all_gather_links=self.num_all_gather_links,
                 dim=0 if (self.TG and self.hidden_size < 8192) else 3,
                 topology=self.ccl_topology,
                 memory_config=(
@@ -775,8 +768,6 @@ class Attention(LightweightModule):
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
-            num_reduce_scatter_links=self.num_reduce_scatter_links,
-            num_all_gather_links=self.num_all_gather_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.ccl_dtype,
         )
@@ -970,8 +961,6 @@ class Attention(LightweightModule):
                 self.tt_ccl,
                 cluster_axis=0,
                 dim=0 if self.TG else 3,
-                num_reduce_scatter_links=self.num_reduce_scatter_links,
-                num_all_gather_links=self.num_all_gather_links,
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
@@ -1013,6 +1002,6 @@ class Attention(LightweightModule):
         # Get every 4th tensor starting from user_id // 8
         single_column_tensors = tensors[user_id // self.batch_size_per_device_group :: 4]
         # Create multi-device tensor
-        multi_device_tensor = ttnn.combine_device_tensors(single_column_tensors)
+        multi_device_tensor = ttnn.combine_device_tensors(tensors=single_column_tensors)
 
         return multi_device_tensor

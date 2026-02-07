@@ -9,6 +9,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
     prepare_linear_params,
 )
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 
 
 class TtResnetBlock2D(LightweightModule):
@@ -26,6 +27,8 @@ class TtResnetBlock2D(LightweightModule):
         self.device = device
         self.module_path = module_path
         self.debug_mode = debug_mode
+
+        self.is_refiner = isinstance(model_config, RefinerModelOptimisations)
 
         # fixed for ResnetBlock
         self.stride = (1, 1)
@@ -275,7 +278,9 @@ class TtResnetBlock2D(LightweightModule):
         # Note: Moving this to NG results in error caused by shard shape, to be investigated
         ttnn.add_(hidden_states, input_tensor, use_legacy=True)
 
-        if "up_blocks.2.resnets.2" not in self.module_path:
+        if (not self.is_refiner and "up_blocks.2.resnets.2" not in self.module_path) or (
+            self.is_refiner and "up_blocks.3.resnets.2" not in self.module_path
+        ):
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states, [C, H, W]

@@ -85,13 +85,9 @@
 namespace tt {
 class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
-namespace tt_metal {
-class CommandQueue;
-class EnqueueProgramCommand;
-namespace experimental {
+namespace tt_metal::experimental {
 class GlobalCircularBuffer;
-}  // namespace experimental
-}  // namespace tt_metal
+}  // namespace tt_metal::experimental
 }  // namespace tt
 
 namespace {
@@ -113,7 +109,7 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     //      - tensix kernels cannot be on dispatch cores
     //  Fast dispatch (ethernet):
     //      - eth kernels cannot be on idle eth cores
-    bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+    bool slow_dispatch = !(MetalContext::instance().rtoptions().get_fast_dispatch());
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     tt::CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
@@ -204,6 +200,7 @@ detail::ProgramImpl::ProgramImpl() :
 
     cached_device_hash_(std::nullopt),
     programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
+    max_cbs_(MetalContext::instance().hal().get_arch_num_circular_buffers()),
     id(program_counter++) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
@@ -211,6 +208,12 @@ detail::ProgramImpl::ProgramImpl() :
         kernel_groups_.push_back({});
         core_to_kernel_group_index_table_.push_back({});
     }
+
+    TT_ASSERT(
+        cb_mask_width_ >= max_cbs_,
+        "CB mask width ({}) is insufficient for architecture's {} CBs",
+        cb_mask_width_,
+        max_cbs_);
 
     program_configs_.resize(programmable_core_count_);
     program_config_sizes_.resize(programmable_core_count_ + 2);
@@ -406,7 +409,7 @@ KernelGroup::KernelGroup(
     const detail::ProgramImpl& program,
     uint32_t programmable_core_type_index,
     std::vector<KernelHandle> kernel_ids,
-    uint32_t local_cb_mask,
+    uint64_t local_cb_mask,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
@@ -575,8 +578,9 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         for (auto& [kernels, cores] : map) {
             // Start inclusive, max exclusive
             uint32_t max_local_cb_end_index = 0;
-            uint32_t min_remote_cb_start_index = NUM_CIRCULAR_BUFFERS;
-            uint32_t local_cb_mask = 0;
+            uint32_t min_remote_cb_start_index = max_cbs_;
+            uint64_t local_cb_mask = 0;
+            uint32_t num_dfbs = 0;
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : cores) {
@@ -593,18 +597,19 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         auto core = CoreCoord({x, y});
                         auto local_val = per_core_local_cb_indices_.find(core);
                         if (local_val != per_core_local_cb_indices_.end() && local_val->second.any()) {
-                            uint32_t used_cbs = local_val->second.to_ulong();
+                            uint64_t used_cbs = local_val->second.to_ullong();
                             local_cb_mask |= used_cbs;
-                            max_local_cb_end_index = std::max(
-                                max_local_cb_end_index, NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(used_cbs));
+                            uint32_t calculated_index =
+                                cb_mask_width_ - static_cast<uint32_t>(__builtin_clzll(used_cbs));
+                            max_local_cb_end_index = std::max(max_local_cb_end_index, calculated_index);
                             if (!logged_noncontiguous) {
                                 // Zeroes out the contiguous run of set bits starting at zero. Anything remaining is
                                 // above a zero bit.
-                                uint32_t non_contiguous_cbs = used_cbs & (used_cbs + 1);
+                                uint64_t non_contiguous_cbs = used_cbs & (used_cbs + 1);
                                 if (non_contiguous_cbs) {
                                     // ~used_cbs is always nonzero, because otherwise all CBs are in use and therefore
                                     // contiguous.
-                                    uint32_t first_unused_index = (uint32_t)__builtin_ctz(~used_cbs);
+                                    uint32_t first_unused_index = static_cast<uint32_t>(__builtin_ctzll(~used_cbs));
                                     std::string kernels_str;
                                     for (auto id : kernels) {
                                         std::shared_ptr<Kernel> kernel = handle_to_kernel.at(id);
@@ -618,7 +623,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                     std::lock_guard lock(m);
                                     // Keep track of which programs have been logged to avoid spamming the log. This is
                                     // particularly important for mesh devices.
-                                    static std::set<std::tuple<uint32_t, uint32_t, std::string>> logged;
+                                    static std::set<std::tuple<uint64_t, uint32_t, std::string>> logged;
                                     auto cb_tuple =
                                         std::make_tuple(non_contiguous_cbs, first_unused_index, kernels_str);
 
@@ -631,8 +636,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                                 HalProgrammableCoreType::TENSIX));
 
                                         std::string cb_ids;
-                                        for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-                                            if (non_contiguous_cbs & (1 << i)) {
+                                        for (uint32_t i = 0; i < max_cbs_; i++) {
+                                            if (non_contiguous_cbs & (1ULL << i)) {
                                                 if (!cb_ids.empty()) {
                                                     cb_ids += ",";
                                                 }
@@ -655,7 +660,18 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         auto remote_val = per_core_remote_cb_indices_.find(core);
                         if (remote_val != per_core_remote_cb_indices_.end() && remote_val->second.any()) {
                             min_remote_cb_start_index = std::min(
-                                min_remote_cb_start_index, (uint32_t)__builtin_ctz(remote_val->second.to_ulong()));
+                                min_remote_cb_start_index,
+                                static_cast<uint32_t>(__builtin_ctzll(remote_val->second.to_ullong())));
+                        }
+
+                        if (not hal.get_supports_dfbs(programmable_core_type_index)) {
+                            continue;
+                        }
+                        // Hacky here but dfbs and cbs aren't used interchangeably so use the local_cb_mask on
+                        // KernelGroup to hold value of number of dfbs
+                        auto local_dfb_val = per_core_num_dfbs_.find(core);
+                        if (local_dfb_val != per_core_num_dfbs_.end()) {
+                            num_dfbs += local_dfb_val->second;
                         }
                     }
                 }
@@ -668,6 +684,13 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 programmable_core_type_index,
                 max_local_cb_end_index,
                 min_remote_cb_start_index);
+            TT_FATAL(
+                !(local_cb_mask != 0 && num_dfbs != 0),
+                "Cannot use both circular buffers and dataflow buffers on the same core. "
+                "local_cb_mask: {}, num_dfbs: {}",
+                local_cb_mask,
+                num_dfbs);
+            local_cb_mask = (num_dfbs > 0 && local_cb_mask == 0) ? num_dfbs : local_cb_mask;
             std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
             // Sort kernel ids by dispatch class, so loops over this array will be in dispatch class order
             std::sort(kernel_ids.begin(), kernel_ids.end(), [&handle_to_kernel](KernelHandle a, KernelHandle b) {
@@ -726,16 +749,17 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
                 std::bitset<NUM_CIRCULAR_BUFFERS>& cb_indices = this->per_core_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& local_cb_indices = this->per_core_local_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& remote_cb_indices = this->per_core_remote_cb_indices_[logical_core];
-                auto add_buffer_indices = [&cb_indices](
+                uint32_t max_cbs = max_cbs_;
+                auto add_buffer_indices = [&cb_indices, max_cbs](
                                               const std::unordered_set<uint8_t>& buffer_indices,
                                               std::bitset<NUM_CIRCULAR_BUFFERS>& target_cb_indices) {
                     for (uint32_t buffer_index : buffer_indices) {
                         // TT_ASSERT since we validate when constructing the config that it's within range
                         TT_ASSERT(
-                            buffer_index < NUM_CIRCULAR_BUFFERS,
+                            buffer_index < max_cbs,
                             "Invalid circular buffer index: {} should be between 0 and {}",
                             buffer_index,
-                            NUM_CIRCULAR_BUFFERS);
+                            max_cbs);
                         if (cb_indices[buffer_index]) {
                             TT_THROW(
                                 "Invalid circular buffer index: Cannot add circular buffer at index {}, another "
@@ -1258,7 +1282,7 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
     auto& sub_device_ids_map = this->sub_device_ids_[device->id()];
     auto sub_device_ids = sub_device_ids_map.find(sub_device_manager_id);
     if (this->compiled_.empty() || sub_device_ids == sub_device_ids_map.end()) {
-        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr ||
+        if (!MetalContext::instance().rtoptions().get_fast_dispatch() ||
             sub_device_manager_id == device->get_default_sub_device_manager_id()) {
             // No sub device manager, nothing to validate
             auto [sub_device_ids, _] =
@@ -1511,11 +1535,11 @@ uint32_t detail::ProgramImpl::get_cb_base_addr(IDevice* device, CoreCoord /*logi
                            .cb_offset;
 }
 
-void detail::ProgramImpl::set_last_used_command_queue_for_testing(CommandQueue* queue) {
+void detail::ProgramImpl::set_last_used_command_queue_for_testing(HWCommandQueue* queue) {
     this->last_used_command_queue_for_testing = queue;
 }
 
-CommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
+HWCommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
     return this->last_used_command_queue_for_testing;
 }
 
@@ -1649,6 +1673,8 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
     program_config.cb_offset = state.cb_offset;
     program_config.cb_size = state.cb_size;
     program_config.local_cb_size = state.local_cb_size;
+    program_config.dfb_offset = state.dfb_offset;
+    program_config.dfb_size = state.dfb_size;
     program_config.kernel_text_offset = state.kernel_text_offset;
     program_config.kernel_text_size = state.kernel_text_size;
     program_config_sizes_[index] = state.offset;
@@ -1659,14 +1685,10 @@ void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
     program_config_sizes_[programmable_core_count_ + 1] = runs_on_noc_unicast_only_cores();
     set_launch_msg_sem_offsets();
     // TODO: This check is wrong - it populates dispatch data for dispatch kernels
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         populate_dispatch_data(device);  // TODO: maybe rename
     }
 }
-
-using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
-using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
-using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
 
 void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     if (is_finalized()) {
@@ -1674,23 +1696,28 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     }
 
     // Create proper function objects that capture 'this'
-    KernelsGetter kernels_getter =
+    detail::KernelsGetter kernels_getter =
         [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
         return this->get_kernels(index);
     };
 
-    KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
+    detail::KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
         return this->get_kernel_groups(index);
     };
 
-    SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+
+    detail::DataflowBuffersGetter dataflow_buffers_getter =
+        [this]() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
+        return this->dataflow_buffers_;
+    };
 
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
     tt::stl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
-        device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+        device, kernels_getter, kernel_groups_getter, semaphores_getter, dataflow_buffers_getter, programs);
 
     set_finalized();
 }
@@ -1702,6 +1729,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
+    const DataflowBuffersGetter& dataflow_buffers_getter,
     tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
@@ -1727,6 +1755,16 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
         state.offset = program_dispatch::finalize_cbs(
             index, kernel_groups_getter(index), state.offset, state.cb_offset, state.cb_size, state.local_cb_size);
+
+        TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+
+        state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
+            index,
+            kernel_groups_getter(index),
+            dataflow_buffers_getter(),
+            state.offset,
+            state.dfb_offset,
+            state.dfb_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 

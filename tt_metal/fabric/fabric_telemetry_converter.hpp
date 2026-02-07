@@ -42,8 +42,11 @@ tt::tt_fabric::FabricTelemetryStaticInfo unpack_static_info_from_hal(const Stati
     dst.mesh_id = src.mesh_id();
     dst.device_id = src.device_id();
     dst.direction = src.direction();
+    dst.neighbor_mesh_id = src.neighbor_mesh_id();
     dst.fabric_config = src.fabric_config();
+    dst.version = src.version();
     dst.supported_stats = static_cast<tt::tt_fabric::FabricTelemetryStatisticMask>(src.supported_stats());
+    dst.neighbor_device_id = src.neighbor_device_id();
     return dst;
 }
 

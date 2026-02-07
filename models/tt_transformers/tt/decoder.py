@@ -120,6 +120,7 @@ class TransformerBlock(LightweightModule):
             args,
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
+            ag_config_key="ATTN_LN_AG_CONFIG",
         )
         self.ff_norm = DistributedNorm(
             RMSNorm(
@@ -142,6 +143,7 @@ class TransformerBlock(LightweightModule):
             args,
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
+            ag_config_key="FFN_LN_AG_CONFIG",
         )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
@@ -258,8 +260,6 @@ class TransformerBlock(LightweightModule):
                     tt_ccl=self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
-                    num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-                    num_all_gather_links=self.args.num_all_gather_links,
                     topology=ttnn.Topology.Ring,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,
@@ -293,8 +293,6 @@ class TransformerBlock(LightweightModule):
                     tt_ccl=self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
-                    num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-                    num_all_gather_links=self.args.num_all_gather_links,
                     topology=ttnn.Topology.Ring,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,

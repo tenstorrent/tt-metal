@@ -290,6 +290,7 @@ class DRAMStreamingMatmul:
             per_core_N,
             subblock_w,
             num_subblocks_k,
+            in0_tile_shape[0],  # tile_r_dim (m) for SFPU SILU iterations
         ]
 
         # Runtime args (per-core: bank_id and vc)

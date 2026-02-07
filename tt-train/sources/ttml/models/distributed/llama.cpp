@@ -4,6 +4,7 @@
 
 #include "llama.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/distributed/linear.hpp"
@@ -17,17 +18,20 @@ namespace ttml::models::distributed::llama {
 
 namespace {
 
-void initialize_weights(DistributedLlama& model) {
+[[maybe_unused]] void initialize_weights(DistributedLlama& model) {
     auto params = model.parameters();
+    auto& pctx = autograd::ctx().get_parallelism_context();
+    auto tp_axis = pctx.get_tp_axis();
+    auto tp_size = pctx.get_tp_size();
+
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
         if (name.find("weight") != std::string::npos) {
             auto tensor_shape = tensor.logical_shape();
             auto* device = &autograd::ctx().get_device();
-            auto num_devices = static_cast<uint32_t>(device->num_devices());
-            tensor_shape[0] *= num_devices;
+            tensor_shape[0] *= tp_size;
             auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
-            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+            const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, tp_axis);
             tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
                 weight_xtensor, device, ttnn::Layout::TILE, mapper.get()));
         } else if (name.find("bias") != std::string::npos) {
@@ -39,9 +43,12 @@ void initialize_weights(DistributedLlama& model) {
 }  // namespace
 
 DistributedLlama::DistributedLlama(const LlamaConfig& config) {
+    auto tp_axis = autograd::ctx().get_parallelism_context().get_tp_axis();
+
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
     uint32_t embedding_dim = config.embedding_dim;
+    std::optional<uint32_t> intermediate_dim = config.intermediate_dim;
     uint32_t num_heads = config.num_heads;
     uint32_t num_groups = config.num_groups;
     float dropout_prob = config.dropout_prob;
@@ -53,6 +60,8 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     fmt::print("    Vocab size: {}\n", vocab_size);
     fmt::print("    Max sequence length: {}\n", max_sequence_length);
     fmt::print("    Embedding dim: {}\n", embedding_dim);
+    fmt::print(
+        "    Intermediate dim: {}\n", intermediate_dim ? fmt::format("{}", *intermediate_dim) : "None (using default)");
     fmt::print("    Num heads: {}\n", num_heads);
     fmt::print("    Num groups: {}\n", num_groups);
     fmt::print("    Dropout probability: {}\n", dropout_prob);
@@ -99,11 +108,11 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         blocks.push_back(std::make_shared<modules::distributed::DistributedLlamaBlock>(
-            embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob));
+            embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob, intermediate_dim));
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-        embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true);
+        embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true, tp_axis);
 
     create_name("llama");
     register_module(tok_emb, "tok_emb");
@@ -112,8 +121,6 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     }
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
-
-    initialize_weights(*this);
 }
 
 autograd::TensorPtr DistributedLlama::operator()(

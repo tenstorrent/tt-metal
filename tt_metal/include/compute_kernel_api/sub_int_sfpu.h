@@ -7,7 +7,7 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_sub_int.h"
-#include "llk_math_eltwise_binary_sfpu_rsub_int32.h"
+#include "llk_math_eltwise_binary_sfpu_rsub_int.h"
 #endif
 
 namespace ckernel {
@@ -22,6 +22,9 @@ namespace ckernel {
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
  *
+ * @tparam data_format Template argument specifying the data type.
+ * Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
+ *
  * Return value: None
  *
  * | Argument              | Description                                                           | Type     | Valid Range                                           | Required |
@@ -31,16 +34,9 @@ namespace ckernel {
  * | odst                  | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void sub_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::INT32, false>(idst0, idst1, odst)));
-}
-
-ALWI void sub_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::INT32, false>(idst0, idst1, odst)));
-}
-
-ALWI void sub_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::LO16, false>(idst0, idst1, odst)));
+template <DataFormat data_format>
+ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, data_format, false>(idst0, idst1, odst)));
 }
 
 // clang-format off
@@ -53,6 +49,9 @@ ALWI void sub_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
  * when using 16 bit formats. This gets reduced to 2 tiles from each operand for 32 bit formats.
  *
+ * @tparam data_format Template argument specifying the data type.
+ * Supported data formats are: DataFormat::Int32, DataFormat::UInt32, DataFormat::UInt16
+ *
  * Return value: None
  *
  * | Argument              | Description                                                           | Type     | Valid Range                                           | Required |
@@ -62,22 +61,15 @@ ALWI void sub_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst                  | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void rsub_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_rsub_int<APPROX, InstrModLoadStore::INT32>(idst0, idst1, odst)));
-}
-
-ALWI void rsub_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_rsub_int<APPROX, InstrModLoadStore::INT32>(idst0, idst1, odst)));
-}
-
-ALWI void rsub_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_rsub_int<APPROX, InstrModLoadStore::LO16>(idst0, idst1, odst)));
+template <DataFormat data_format>
+ALWI void rsub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_rsub_int<APPROX, data_format>(idst0, idst1, odst)));
 }
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void sub_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_sub_int_init<APPROX>())); }
 
-ALWI void rsub_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_rsub_int32_init<APPROX>())); }
+ALWI void rsub_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_rsub_int_init<APPROX>())); }
 
 }  // namespace ckernel

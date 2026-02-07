@@ -132,7 +132,45 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, batch_size: int, seq_len: 
         Tensor after allreduce (if TP > 1) or original tensor
     """
     if mesh_config.tp > 1:
-        tensor = ttnn.unsqueeze(tensor, 0)
         tensor = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
-        tensor = ttnn.reshape(tensor, (batch_size, seq_len, hidden_size))
+
+        # Remove padding added in weights.py for tile-aligned CCL operations.
+        # If local_hidden was padded (e.g., 360 -> 384), we need to slice back to original hidden_size.
+        local_hidden = hidden_size // mesh_config.tp
+        padded_local_hidden = ((local_hidden + 31) // 32) * 32
+        if padded_local_hidden != local_hidden:
+            # Slice from padded_hidden back to hidden_size on the last dimension.
+            # Works for both decode [1, 1, batch, padded_hidden] and prefill [1, batch, seq_len, padded_hidden].
+            shape = tensor.shape
+            tensor = ttnn.slice(
+                tensor,
+                starts=[0, 0, 0, 0],
+                ends=[shape[0], shape[1], shape[2], hidden_size],
+                steps=[1, 1, 1, 1],
+            )
     return tensor
+
+
+def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list:
+    """
+    Get mesh coordinates for a given mesh shape and optional row and column indices.
+
+    This is used to specify which devices should execute paged cache operations
+    when the KV cache is replicated but users are sharded across rows.
+
+    Args:
+        mesh_shape: Shape of the mesh as [num_rows, num_cols]
+        row: Optional row index to filter (None = all rows)
+        col: Optional column index to filter (None = all columns)
+
+    Returns:
+        List of ttnn.MeshCoordinate objects for the specified row/column
+    """
+    if row is not None:
+        assert 0 <= row < mesh_shape[0], f"Row index {row} out of bounds for mesh shape {mesh_shape}"
+    if col is not None:
+        assert 0 <= col < mesh_shape[1], f"Column index {col} out of bounds for mesh shape {mesh_shape}"
+
+    row_select = range(mesh_shape[0]) if row is None else [row]
+    col_select = range(mesh_shape[1]) if col is None else [col]
+    return [ttnn.MeshCoordinate(r, c) for r in row_select for c in col_select]

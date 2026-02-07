@@ -3,25 +3,6 @@ name: "(APC) Select and Run Post-Commit Tests"
 on:
   workflow_dispatch:
     inputs:
-      build-type:
-        description: "Build type"
-        required: false
-        type: choice
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        default: Release
-      version:
-        description: "OS version"
-        required: false
-        type: choice
-        options:
-          - "22.04"
-          - "24.04"
-        default: "22.04"
       tests-json:
         description: |
           JSON object specifying which tests to run.
@@ -49,6 +30,30 @@ on:
         required: false
         default: false
         type: boolean
+      platform:
+        description: "Platform to build and test"
+        required: false
+        type: choice
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        default: "Ubuntu 22.04"
+      build-type:
+        description: "Build type"
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        default: Release
+      enable-lto:
+        description: "Enable Link Time Optimization (LTO)"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   parse-tests-json:
@@ -63,8 +68,10 @@ jobs:
           TESTS=$(echo "$TESTS_JSON" | jq -r 'to_entries | map(select(.value == true) | .key) | join(",")')
           echo "tests_to_run=$TESTS" >> $GITHUB_OUTPUT
 
+  # NOTE: build-artifact.yaml handles platform parsing internally.
+  # Just pass platform and enable-lto inputs directly.
   build-artifact:
-    needs: parse-tests-json
+    needs: [parse-tests-json]
     if: ${{ always() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -74,9 +81,10 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
-      version: ${{ inputs.version || '22.04' }}
+      platform: ${{ inputs.platform }}
       skip-tt-train: false
       ref: ${{ inputs.commit || github.sha }}
+      enable-lto: ${{ inputs.enable-lto || false }}
 
   sd-unit-tests:
     needs: [parse-tests-json, build-artifact]
@@ -159,6 +167,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      timeout: ${{ inputs.enable-watcher && 240 || 40 }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
@@ -180,6 +189,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      timeout: ${{ inputs.enable-watcher && 120 || 35 }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}

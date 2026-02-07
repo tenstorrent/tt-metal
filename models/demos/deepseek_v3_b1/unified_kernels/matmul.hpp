@@ -44,9 +44,10 @@ struct Matmul {
     struct WriterCTArgs {};
 
     // Compute CTArgs (TRISC): out_w (output width in tiles)
-    template <uint32_t out_w_>
+    template <uint32_t out_w_, bool transpose_ = false>
     struct ComputeCTArgs {
         static constexpr uint32_t out_w = out_w_;
+        static constexpr bool transpose = transpose_;
     };
 
     // ========================================================================
@@ -95,8 +96,12 @@ struct Matmul {
             constexpr uint32_t out_subblock_h = 1;
             constexpr uint32_t out_subblock_w = 1;
             constexpr uint32_t in0_block_w = 1;  // Process one K tile at a time
-            constexpr bool transpose = false;
             constexpr uint32_t out_w = CTArgs::out_w;
+            constexpr bool transpose = CTArgs::transpose;
+            constexpr bool split_acc = true;
+            constexpr bool dense_packing = true;
+            constexpr bool finalize = split_acc && true;
+            constexpr bool read_transposed = transpose && true;
 
             // Wait for all input tiles (both from sharded tensors in L1)
             // in1 has num_tiles * out_w tiles (K tiles for each output column)
@@ -106,60 +111,21 @@ struct Matmul {
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            if constexpr (out_w == 1) {
-                // Use optimized custom_mm API for single output tile with K-dimension reduction
-                custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
+            custom_mm_block_init<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
 
-                tile_regs_acquire();
+            tile_regs_acquire();
 
-                // Single call handles all K tiles internally via MOP replay
-                custom_mm_block(args.in0, args.in1, 0, 0, 0, transpose, args.k_num_tiles);
+            custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
 
-                tile_regs_commit();
+            tile_regs_commit();
 
-                // Pack output tile
-                tile_regs_wait();
-                pack_tile(0, args.out, 0);
-                tile_regs_release();
-            } else {
-                // Use standard matmul API for multiple output tiles
-                // Process in blocks of up to 256 tiles (max DST size)
-                mm_block_init(args.in0, args.in1, args.out, transpose, out_subblock_w, out_subblock_h, in0_block_w);
-
-                constexpr uint32_t max_dst_size = 256;
-                constexpr uint32_t num_blocks = (out_w + max_dst_size - 1) / max_dst_size;
-
-                uint32_t block_start = 0;
-                for (uint32_t block = 0; block < num_blocks; block++) {
-                    uint32_t block_end = (block_start + max_dst_size < out_w) ? block_start + max_dst_size : out_w;
-                    uint32_t block_size = block_end - block_start;
-
-                    tile_regs_acquire();
-
-                    uint32_t in1_k_offset = block_start;  // Tracks k * out_w + block_start
-                    for (uint32_t k = 0; k < args.k_num_tiles; k++) {
-                        uint32_t in1_idx = in1_k_offset;
-                        for (uint32_t dst_idx = 0; dst_idx < block_size; dst_idx++) {
-                            matmul_tiles(args.in0, args.in1, k, in1_idx, dst_idx);
-                            in1_idx++;
-                        }
-                        in1_k_offset += out_w;
-                    }
-
-                    tile_regs_commit();
-
-                    // Pack output tiles for this block
-                    tile_regs_wait();
-                    uint32_t out_idx = block_start;
-                    for (uint32_t dst_idx = 0; dst_idx < block_size; dst_idx++) {
-                        pack_tile(dst_idx, args.out, out_idx);
-                        out_idx++;
-                    }
-                    tile_regs_release();
-
-                    block_start += max_dst_size;
-                }
+            tile_regs_wait();
+            for (uint32_t dst_idx = 0; dst_idx < out_w; dst_idx++) {
+                pack_tile(dst_idx, args.out, dst_idx);
             }
+            tile_regs_release();
+
+            custom_mm_block_uninit<dense_packing>();
 
             // Pop inputs
             if constexpr (pop_in0) {
