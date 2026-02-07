@@ -13,12 +13,9 @@ namespace ttnn::prim::detail {
 // Determine the largest subblock size for matmul that:
 // 1. Has subblock_h * subblock_w <= dst_size
 // 2. subblock_h divides block_height and subblock_w divides block_width
-// 3. Either subblock_w == block_width (full row) or subblock_h == 1
-//    (row-major intermediate buffer constraint)
 //
 // Candidates are ordered by total volume (h*w) descending to maximize
-// dest register utilization. This replaces ad-hoc heuristics with a
-// principled search, matching the approach in conv2d_utils.cpp.
+// dest register utilization.
 static inline std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
     uint32_t block_height, uint32_t block_width, uint32_t dst_size) {
     constexpr std::array<std::pair<uint32_t, uint32_t>, 20> subblocks = {{
@@ -31,10 +28,6 @@ static inline std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
             continue;
         }
         if ((block_height % subblock_height != 0) || (block_width % subblock_width != 0)) {
-            continue;
-        }
-        // Row-major constraint: full-width subblock or height=1
-        if (subblock_width != block_width && subblock_height != 1) {
             continue;
         }
         return {subblock_height, subblock_width};
