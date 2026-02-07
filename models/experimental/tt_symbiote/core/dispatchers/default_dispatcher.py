@@ -162,8 +162,38 @@ def handle_div(func, args, kwargs):
 
 
 def handle_add(func, args, kwargs):
-    """Handle addition operation."""
+    """Handle addition operation. Uses CPU fallback when one operand is plain torch
+    (e.g. vision tower output) to avoid SIGFPE from device add/layout on awkward shapes."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    a, b = args[0], args[1]
+    a_plain = isinstance(a, torch.Tensor) and not isinstance(a, TorchTTNNTensor)
+    b_plain = isinstance(b, torch.Tensor) and not isinstance(b, TorchTTNNTensor)
+
+    if a_plain or b_plain:
+        # One operand from CPU (e.g. vision output): move plain to device and run add on TTNN
+        device = None
+        if isinstance(a, TorchTTNNTensor) and getattr(a, "ttnn_tensor", None) is not None:
+            device = a.to_ttnn.device()
+        if isinstance(b, TorchTTNNTensor) and getattr(b, "ttnn_tensor", None) is not None:
+            device = b.to_ttnn.device() if device is None else device
+        if device is None:
+            raise RuntimeError("At least one of the inputs must be a TTNN tensor.")
+        if isinstance(a, TorchTTNNTensor):
+            t_a_ttnn = ensure_tile_layout(a.to_ttnn)
+        else:
+            t_a_ttnn = ttnn.from_torch(
+                a.detach().to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            )
+            t_a_ttnn = ensure_tile_layout(t_a_ttnn)
+        if isinstance(b, TorchTTNNTensor):
+            t_b_ttnn = ensure_tile_layout(b.to_ttnn)
+        else:
+            t_b_ttnn = ttnn.from_torch(
+                b.detach().to(torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            )
+            t_b_ttnn = ensure_tile_layout(t_b_ttnn)
+        return TorchTTNNTensor(ttnn.add(t_a_ttnn, t_b_ttnn))
 
     input_tensor1, input_tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(args[0], args[1])
 
@@ -784,6 +814,53 @@ def handle_split(func, args, kwargs):
     return [TorchTTNNTensor(tensor) for tensor in ttnn_tensors]
 
 
+def handle_chunk(func, args, kwargs):
+    """Handle chunk operation: split tensor into n chunks along dim (like split with equal-sized parts)."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+
+    n_chunks = int(args[1])
+    dim = int(kwargs.get("dim", args[2] if len(args) > 2 else 0))
+    input_shape = list(input_tensor.shape)
+    dim = dim + len(input_shape) if dim < 0 else dim
+    size = input_shape[dim]
+    if n_chunks <= 0 or size == 0:
+        return tuple()
+    base = size // n_chunks
+    remainder = size % n_chunks
+    chunk_sizes = [base + 1] * remainder + [base] * (n_chunks - remainder)
+    chunk_sizes = [s for s in chunk_sizes if s > 0]
+    if not chunk_sizes:
+        return tuple()
+
+    ttnn_tensors = []
+    start = 0
+    for ch_size in chunk_sizes:
+        starts = [0] * len(input_shape)
+        ends = list(input_shape)
+        starts[dim] = start
+        ends[dim] = start + ch_size
+        start += ch_size
+        slice_step = [1] * len(input_shape)
+        t = ttnn.slice(input_tensor.to_ttnn, starts, ends, slice_step)
+        ttnn_tensors.append(TorchTTNNTensor(t))
+    return tuple(ttnn_tensors)
+
+
+def handle_contiguous(func, args, kwargs):
+    """Handle contiguous: return a contiguous copy on device (clone)."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+    t = ensure_tile_layout(input_tensor.to_ttnn)
+    return TorchTTNNTensor(ttnn.clone(t))
+
+
 def _to_copy(
     x,
     dtype=None,
@@ -1017,6 +1094,51 @@ def handle_clamp(func, args, kwargs):
     return TorchTTNNTensor(ttnn.clamp(input_tensor.to_ttnn, min_val, max_val))
 
 
+def handle_constant_pad_nd(func, args, kwargs):
+    """Handle constant_pad_nd (F.pad mode='constant') for patch_embedding and similar.
+    Converts PyTorch pad list (last dim first, left/right per dim) to ttnn.pad format
+    (list of [before, after] per dimension, first dim first). Only end padding is supported on device."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+
+    pad_list = args[1]  # PyTorch: (left_n, right_n, left_n-1, right_n-1, ...)
+    value = float(args[2]) if len(args) > 2 else 0.0
+
+    t = input_tensor.to_ttnn
+    t = ensure_tile_layout(t)
+    rank = len(t.shape)
+    if rank != 4:
+        raise NotImplementedError(
+            f"handle_constant_pad_nd: ttnn.pad on device requires rank 4, got {rank}. "
+            "Use CPU fallback for this tensor."
+        )
+
+    # PyTorch pad_list length is 2*rank (last dim first)
+    if len(pad_list) != 2 * rank:
+        raise ValueError(f"handle_constant_pad_nd: pad_list length must be 2*rank={2*rank}, got {len(pad_list)}")
+
+    # Convert to [(before, after), ...] per dimension, dim 0 first
+    # PyTorch order: (dim_{n-1}_left, dim_{n-1}_right, dim_{n-2}_left, ...)
+    padding_config = []
+    for i in range(rank):
+        j = (rank - 1 - i) * 2
+        left, right = int(pad_list[j]), int(pad_list[j + 1])
+        if left != 0:
+            raise NotImplementedError(
+                "handle_constant_pad_nd: ttnn.pad on device does not support front (left) padding. Use CPU fallback."
+            )
+        # Tile alignment: last two dims must have end padding multiple of TILE_SIZE (32)
+        if i >= rank - 2 and right > 0:
+            right = ((right + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        padding_config.append([left, right])
+
+    out = ttnn.pad(t, padding=padding_config, value=value)
+    return TorchTTNNTensor(out)
+
+
 def handle_scatter_value_inplace(func, args, kwargs):
     """Handle scatter_ value operation."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
@@ -1193,6 +1315,10 @@ func_to_ttnn_compatible = {
     "aten::lt.Tensor": handle_lt,
     "aten::where.self": handle_where,
     "aten::split.Tensor": handle_split,
+    "aten::chunk": handle_chunk,
+    "aten::chunk.Tensor": handle_chunk,
+    "aten::chunk.default": handle_chunk,
+    "aten::contiguous": handle_contiguous,
     "aten::_to_copy": handle_to_copy,
     "aten::max.dim": handle_max,
     "aten::addmm": handle_addmm,
@@ -1201,11 +1327,12 @@ func_to_ttnn_compatible = {
     "aten::topk": handle_topk,
     "aten::permute": handle_permute,
     "aten::clamp": handle_clamp,
+    "aten::constant_pad_nd": handle_constant_pad_nd,
     "aten::clone": handle_to_copy,
     "aten::_safe_softmax": handle_softmax,
     "aten::mm": handle_bmm,
     "aten::silu": handle_silu,
-    # "aten::scatter_.value": handle_scatter_value_inplace,
+    "aten::scatter_.value": handle_scatter_value_inplace,
     "aten::bitwise_not": handle_bitwise_not,
     "aten::gather": handle_gather,
 }
@@ -1301,6 +1428,40 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
         if args[0].to_ttnn.dtype not in [ttnn.float32, ttnn.bfloat16, ttnn.int32, ttnn.uint32, ttnn.uint16]:
             print("TTNN: aten::unsqueeze only supports float32, bfloat16, int32, and uint32 dtypes.")
             passed = False
+    if "aten::scatter_.value" == func_name:
+        if not any_ttnn_tensor or len(args) < 4:
+            passed = False
+        elif not isinstance(args[1], int):
+            print("TTNN: aten::scatter_.value requires int dim.")
+            passed = False
+    if func_name in ("aten::chunk", "aten::chunk.Tensor", "aten::chunk.default"):
+        if not any_ttnn_tensor or len(args) < 2:
+            passed = False
+        elif not isinstance(args[1], int) or (len(args) > 2 and not isinstance(args[2], int)):
+            print("TTNN: aten::chunk requires chunks (int) and optional dim (int).")
+            passed = False
+    if "aten::contiguous" == func_name:
+        if not any_ttnn_tensor or len(args) < 1:
+            passed = False
+    if "aten::constant_pad_nd" == func_name:
+        if not any_ttnn_tensor or len(args) < 2:
+            passed = False
+        else:
+            inp = args[0]
+            rank = len(inp.shape)
+            pad_list = args[1]
+            if not isinstance(pad_list, (list, tuple)) or len(pad_list) != 2 * rank:
+                passed = False
+            elif rank != 4:
+                print("TTNN: aten::constant_pad_nd on device only supports rank 4 tensors.")
+                passed = False
+            else:
+                for i in range(rank):
+                    j = (rank - 1 - i) * 2
+                    if int(pad_list[j]) != 0:
+                        print("TTNN: aten::constant_pad_nd on device only supports end (right) padding.")
+                        passed = False
+                        break
     if not any_ttnn_tensor and func_name in ["aten::mm", "aten::addmm", "aten::bmm"]:
         print("Found invalid TTNN dispatch for matmul operation. Please check input dtypes and layouts.")
     if func_name in func_to_ttnn_compatible and any_ttnn_tensor:
