@@ -168,7 +168,7 @@ class LMHead(LightweightModule):
                     "num_weight_splits,weight_shapes,weights_dtype,"
                     "model_name\n"
                 )
-            _w_shapes = ";".join(f"{w.shape[0]}x{w.shape[1]}x{w.shape[2]}x{w.shape[3]}" for w in self.output_weights)
+            _w_shapes = ";".join("x".join(str(d) for d in w.shape) for w in self.output_weights)
             _entry = (
                 f"{self.args.cluster_shape[0]},{self.args.cluster_shape[1]},{x.dtype},"
                 f"{x.shape[0]},{x.shape[1]},{x.shape[2]},{x.shape[3]},"
