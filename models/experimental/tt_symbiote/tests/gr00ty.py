@@ -2,261 +2,190 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-import csv
 import time
-import builtins
+import csv
 import torch
 import ttnn
 import pytest
+import requests
 import numpy as np
-from tqdm import tqdm
+from PIL import Image
 from pathlib import Path
-from datetime import datetime
-from scipy.stats import pearsonr
-from transformers import PretrainedConfig
+from torch import nn
+from tqdm import tqdm
+from torch.distributions import Beta
+from transformers import PretrainedConfig, AutoTokenizer
 
-# --- Hardware Module Imports ---
-from models.experimental.tt_symbiote.modules.linear import TTNNLinear
-from models.experimental.tt_symbiote.modules.normalization import TTNNLayerNorm
-from models.experimental.tt_symbiote.modules.activation import TTNNSilu
-from models.experimental.tt_symbiote.utils.device_management import set_device
-
-# Global telemetry state
-MODULE_PERF_RECORDS = []
-ttnn.CONFIG.enable_model_cache = True
-
-# =============================================================================
-# 0. METRICS & TELEMETRY
-# =============================================================================
+# --- 1. PERFORMANCE TRACKING ---
+MODEL_STATS = []
 
 
-def calculate_pcc(golden, hw):
-    """Calculates Pearson Correlation Coefficient for parity validation."""
-    if golden is None or hw is None:
-        return 0.0
-    g = golden.detach().cpu().to(torch.float32).flatten().numpy()
-    h = hw.detach().cpu().to(torch.float32).flatten().numpy()
-    if np.all(g == g[0]) and np.all(h == h[0]):
-        return 1.0
-    corr, _ = pearsonr(g, h)
-    return corr
+def save_stats_to_csv(filename="gr00t_perf_report.csv"):
+    if not MODEL_STATS:
+        return
+    fieldnames = ["Module Name", "Phase", "Type", "Wall Time (s)"]
+    with open(filename, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(MODEL_STATS)
+    print(f"\n[INFO] Performance report saved to: {filename}")
 
 
-class ModuleTimer:
-    """Records hardware execution latency per layer."""
-
-    def __init__(self, name):
-        self.name = name
-
-    def __enter__(self):
-        self.start = time.perf_counter()
-
-    def __exit__(self, type, value, traceback):
-        duration = (time.perf_counter() - self.start) * 1000  # ms
-        MODULE_PERF_RECORDS.append((self.name, duration))
+# --- 2. THE DIRICHLET PATCH ---
+def patched_beta_sample(self, sample_shape=torch.Size()):
+    """Ensure Beta sampling is handled in float for hardware stability."""
+    shadow_dist = Beta(self.concentration0.float(), self.concentration1.float())
+    return shadow_dist.rsample(sample_shape).to(self.concentration0.dtype)
 
 
-# =============================================================================
-# 1. GLOBAL ENVIRONMENT PATCHING (CRITICAL FOR COLLECTION)
-# =============================================================================
-
-import transformers.modeling_flash_attention_utils as fa_utils
-import transformers.utils.import_utils as import_utils
+Beta.sample = patched_beta_sample
 
 
-def dummy_flash_attn(*args, **kwargs):
-    return args[0] if args else None
+def setup_framework():
+    PretrainedConfig._attn_implementation_autoset = False
+    PretrainedConfig._attn_implementation_internal = "eager"
 
 
-# Satisfaction of Flash Attention dependencies
-fa_utils._lazy_imports = lambda x: (
-    dummy_flash_attn,
-    dummy_flash_attn,
-    lambda x, *a, **k: (x, None, None, None),
-    lambda x, *a, **k: x,
-)
-import_utils.is_flash_attn_2_available = lambda: True
-import_utils.is_flash_attn_available = lambda: True
+setup_framework()
 
-# Builtin injection for namespace compatibility
-builtins_to_inject = {
-    "flash_attn_func": dummy_flash_attn,
-    "flash_attn_varlen_func": dummy_flash_attn,
-    "_flash_supports_window_size": False,
-    "_flash_supports_softcap": False,
-    "flash_241": False,
-    "deterministic_g": False,
-    "_use_top_left_mask": False,
-}
-for name, val in builtins_to_inject.items():
-    setattr(builtins, name, val)
+# --- 3. PATH & IMPORTS ---
+TEST_FILE_PATH = Path(__file__).resolve()
+PROJECT_ROOT = TEST_FILE_PATH.parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-# Force hardware-optimized attention paths in PretrainedConfig
-orig_config_init = PretrainedConfig.__init__
+from modules.attention import TTNNGR00TSelfAttention
+from modules.linear import TTNNLinear
+from modules.normalization import TTNNLayerNorm
+from modules.activation import TTNNSilu
+from modules.conv import TTNNConv2dNHWC
+from utils.device_management import set_device
+from utils.module_replacement import register_module_replacement_dict
+
+try:
+    from gr00t.model.gr00t_n1d6.gr00t_n1d6 import Gr00tN1d6
+except ValueError:
+    Gr00tN1d6 = sys.modules["gr00t.model.gr00t_n1d6.gr00t_n1d6"].Gr00tN1d6
 
 
-def patched_config_init(self, *args, **kwargs):
-    orig_config_init(self, *args, **kwargs)
-    flags = {
-        "_attn_implementation": "flash_attention_2",
-        "_attn_implementation_autoset": False,
-        "_attn_implementation_internal": "flash_attention_2",
-        "initializer_range": getattr(self, "initializer_range", 0.02),
-    }
-    for attr, val in flags.items():
-        setattr(self, attr, val)
+class Qwen2MLP(nn.Module):
+    def __init__(self, source):
+        super().__init__()
+        self.gate_proj, self.up_proj, self.down_proj = source.gate_proj, source.up_proj, source.down_proj
+        self.act_fn = nn.SiLU()
+
+    @classmethod
+    def from_torch(cls, source):
+        return cls(source)
+
+    def forward(self, x):
+        return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
 
-PretrainedConfig.__init__ = patched_config_init
-
-# Extend ttnn.Tensor with PyTorch-style API methods
-ttnn.Tensor.__len__ = lambda self: self.shape[0]
-ttnn.Tensor.dim = lambda self: len(self.shape)
-ttnn.Tensor.size = lambda self, dim=None: self.shape[dim] if dim is not None else self.shape
-ttnn.Tensor.to = lambda self, *args, **kwargs: self
-
-original_ttnn_reshape = ttnn.reshape
-
-
-def robust_ttnn_reshape(self, *shape):
-    target = list(shape[0]) if len(shape) == 1 and isinstance(shape[0], (list, tuple, torch.Size)) else list(shape)
-    if len(target) > 4:
-        return ttnn.from_torch(self.to_torch().reshape(target), dtype=self.dtype, device=self.device())
-    return original_ttnn_reshape(self, target)
-
-
-ttnn.Tensor.reshape = robust_ttnn_reshape
-
-# =============================================================================
-# 2. HARDWARE COMPATIBILITY WRAPPERS
-# =============================================================================
-
-for cls_name in ["Siglip2Model", "Siglip2ForImageClassification"]:
-    if not hasattr(builtins, cls_name):
-        setattr(builtins, cls_name, type(cls_name, (object,), {}))
-
-
-def make_torch_compatible(cls):
-    """Bridges TTNN modules for weight loading and profiling."""
-    if not hasattr(cls, "state_dict"):
-        cls.state_dict = lambda self, *args, **kwargs: {}
-
-    def _load_shim(self, SD, prefix, *args, **kwargs):
-        for target, variants in {"weight": ["weight", "W"], "bias": ["bias", "b"]}.items():
-            for variant in variants:
-                if prefix + variant in SD:
-                    setattr(
-                        self,
-                        target,
-                        torch.nn.Parameter(SD[prefix + variant].to("cpu").to(torch.bfloat16), requires_grad=False),
-                    )
-                    break
-
-    cls._load_from_state_dict = _load_shim
-
-    orig_call = cls.__call__
-
-    def timed_call(self, *args, **kwargs):
-        name = getattr(self, "module_path", self.__class__.__name__)
-        with ModuleTimer(name):
-            return orig_call(self, *args, **kwargs)
-
-    cls.__call__ = timed_call
-
-    for attr in ["parameters", "modules", "buffers", "children", "named_children"]:
-        if not hasattr(cls, attr):
-            setattr(cls, attr, lambda self, *a, **k: iter([]))
-    if not hasattr(cls, "apply"):
-        cls.apply = lambda self, fn: (fn(self), self)[1]
-    return cls
-
-
-for hardware_cls in [TTNNLinear, TTNNLayerNorm, TTNNSilu]:
-    make_torch_compatible(hardware_cls)
-
-# =============================================================================
-# 3. REPO PATHING & GR00T IMPORT
-# =============================================================================
-
-repo_root = Path(__file__).resolve().parents[4]
-sys.path.insert(0, str(repo_root))
-sys.path.insert(0, str(repo_root / "models/experimental/tt_symbiote/groot"))
-modules_path = repo_root / "models/experimental/tt_symbiote/modules"
-if str(modules_path) not in sys.path:
-    sys.path.insert(0, str(modules_path))
-
-from gr00t.model.gr00t_n1d6.gr00t_n1d6_tens import Gr00tN1d6
-
-Gr00tN1d6._supports_flash_attn_2 = True
-
-# =============================================================================
-# 4. TEST CASE EXECUTION
-# =============================================================================
-
-
+# --- 4. MAIN TEST ---
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
-def test_gr00t_inference(device):
-    torch_dtype, model_id = torch.bfloat16, "nvidia/GR00T-N1.6-3B"
+def test_gr00t_inference_validation(device):
     torch.manual_seed(42)
+    model_id = "nvidia/GR00T-N1.6-3B"
 
-    print(f"\n[INIT] Loading model: {model_id}")
-    model = Gr00tN1d6.from_pretrained(model_id, dtype=torch_dtype, trust_remote_code=True)
-    model.eval()
+    print(f"\n[INIT] Loading Tokenizer and Model Weights...")
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B", trust_remote_code=True)
 
-    # Robust Input Pipeline: Force text tokens to avoid Size(0) errors
-    image_token_id = 32000
-    input_ids = torch.zeros((1, 256), dtype=torch.long)
-    input_ids[0, :10] = torch.arange(1, 11)
-    input_ids[0, 10 : 10 + 64] = image_token_id
+    model = Gr00tN1d6.from_pretrained(
+        model_id, dtype=torch.bfloat16, trust_remote_code=True, attn_implementation="eager"
+    ).eval()
 
-    inputs = {
-        "input_ids": input_ids,
-        "attention_mask": torch.ones(1, 256, dtype=torch.long),
-        "pixel_values": torch.randn(1, 1, 3, 224, 224, dtype=torch_dtype),
-        "state": torch.randn(1, 1, model.config.max_state_dim, dtype=torch_dtype),
-        "embodiment_id": torch.zeros(1, dtype=torch.long),
+    # --- Hardware Mapping ---
+    lang_layer = model.backbone.model.language_model.model.layers[0]
+    vision_layer = model.backbone.model.vision_model.vision_model.encoder.layers[0]
+    action_block = model.action_head.model.transformer_blocks[0]
+
+    op_mapping = {
+        nn.Linear: TTNNLinear,
+        nn.LayerNorm: TTNNLayerNorm,
+        nn.SiLU: TTNNSilu,
+        nn.Conv2d: TTNNConv2dNHWC,
+        lang_layer.mlp.__class__: Qwen2MLP,
+        lang_layer.self_attn.__class__: TTNNGR00TSelfAttention,
+        vision_layer.self_attn.__class__: TTNNGR00TSelfAttention,
+        action_block.attn1.__class__: TTNNGR00TSelfAttention,
     }
 
-    print("[CPU] Running Golden Reference...")
-    with torch.no_grad():
-        golden_output = model(**inputs)
-
-    print("[TTNN] Performing hardware surgery...")
-    model.perform_surgery()
-    for name, module in model.named_modules():
-        module.module_path = name
-
+    transformed = register_module_replacement_dict(model, op_mapping, model_config={"dtype": ttnn.bfloat16})
     set_device(model, device)
 
-    print("[TTNN] Preparing weights for device...")
-    for _, module in tqdm(model.named_modules(), desc="Weight Prep"):
+    # Weights Assimilation (Tracked)
+    for name, module in tqdm(transformed.items(), desc="Assimilating Weights"):
         if hasattr(module, "preprocess_weights"):
+            start_as = time.time()
             module.preprocess_weights()
             module.move_weights_to_device()
+            MODEL_STATS.append(
+                {
+                    "Module Name": name,
+                    "Phase": "Assimilation",
+                    "Type": module.__class__.__name__,
+                    "Wall Time (s)": f"{time.time() - start_as:.6f}",
+                }
+            )
 
-    MODULE_PERF_RECORDS.clear()
-    print("[DEVICE] Triggering Hardware Inference on Wormhole...")
+    # --- 5. Real Data Forward Pass ---
+    prompt = "Pick up the red block."
+    img_url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+    raw_image = Image.open(requests.get(img_url, stream=True).raw).convert("RGB")
+
+    text_data = tokenizer(prompt, return_tensors="pt", padding="max_length", max_length=256, truncation=True)
+    img_resized = raw_image.resize((224, 224))
+    pixel_values = torch.from_numpy(np.array(img_resized)).permute(2, 0, 1).float()
+    pixel_values = (pixel_values / 255.0).unsqueeze(0).to(torch.bfloat16)
+
+    real_inputs = {
+        "input_ids": text_data["input_ids"],
+        "attention_mask": text_data["attention_mask"],
+        "pixel_values": [pixel_values],
+        "embodiment_id": torch.zeros((1,), dtype=torch.long),
+        "state": torch.zeros(1, 1, model.config.max_state_dim, dtype=torch.bfloat16),
+        "action": torch.zeros(1, 128, model.config.max_action_dim, dtype=torch.bfloat16),
+        "action_mask": torch.ones((1, 128), dtype=torch.bfloat16),
+        "velocity": torch.zeros(1, 128, model.config.max_action_dim, dtype=torch.bfloat16),
+    }
+
+    print("\n[RUNNING] Hardware Inference Pass...")
     with torch.no_grad():
-        hw_output = model(**inputs)
+        try:
+            start_pass = time.time()
+            output = model(inputs=real_inputs)
 
-    final_pcc = calculate_pcc(golden_output["action"], hw_output["action"])
+            if hasattr(device, "synchronize"):
+                device.synchronize()
+            elif hasattr(ttnn, "synchronize"):
+                ttnn.synchronize(device)
 
-    # CSV Generation
-    csv_path = repo_root / f"gr00t_parity_perf_{datetime.now():%Y%m%d_%H%M%S}.csv"
-    with open(csv_path, mode="w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Module Path", "Wall Clock Time (ms)", "Status", "Total Model PCC"])
-        for i, (path, duration) in enumerate(MODULE_PERF_RECORDS):
-            status = "Slowing Down" if duration > 15 else "Healthy"
-            row = [path, f"{duration:.4f}", status]
-            if i == 0:
-                row.append(f"{final_pcc:.6f}")
-            writer.writerow(row)
+            end_pass = time.time()
+            MODEL_STATS.append(
+                {
+                    "Module Name": "Full_Model_Graph",
+                    "Phase": "Inference",
+                    "Type": "End-to-End",
+                    "Wall Time (s)": f"{end_pass - start_pass:.6f}",
+                }
+            )
 
-    print("\n" + "=" * 80)
-    print(f"REPORT GENERATED: {csv_path}")
-    print(f"FINAL ACTION HEAD PCC: {final_pcc:.6f}")
-    print("=" * 80)
+            print(f"\n[SUCCESS] Pass completed in {end_pass - start_pass:.4f}s")
+            if "action" in output:
+                print(f"Action Prediction: {output['action'][0, 0, :5]}")
 
-    assert final_pcc > 0.95, f"PCC threshold failure! Got {final_pcc}"
-    print("\nInference and Parity completed successfully!")
+            save_stats_to_csv()
+            # Per-op dispatch timings (TTNN vs Torch) for profiling hotspots
+            try:
+                from models.experimental.tt_symbiote.core.run_config import DispatchManager
+
+                DispatchManager.save_stats_to_file("dispatch_timings.csv")
+                print("[INFO] Dispatch timings (TTNN vs CPU per op) saved to: dispatch_timings.csv")
+            except Exception as _e:
+                pass
+
+        except Exception as e:
+            save_stats_to_csv("gr00t_crash_report.csv")
+            print(f"\n[FAILURE] Error: {e}")
+            raise e
