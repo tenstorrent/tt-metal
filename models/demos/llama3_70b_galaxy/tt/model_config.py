@@ -1174,13 +1174,10 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
-            # Default PAGED_SDPA_DECODE_PROGCFG (will be updated dynamically based on actual ISL)
-            # Use 48 cores for ISLs >= 8k, 32 cores for ISLs < 8k
-            # Call update_paged_sdpa_config_for_isl() to update based on actual input sequence length
             self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                compute_with_storage_grid_size=(8, 6),
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                    self.start_core, 32, self.sub_core_grids, row_wise=True
+                    self.start_core, 48, self.sub_core_grids, row_wise=True
                 ),
                 exp_approx_mode=False,
                 q_chunk_size=0,
@@ -2227,36 +2224,6 @@ class TtModelArgs:
     vision_max_num_chunks={self.vision_max_num_chunks},
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
-
-    def update_paged_sdpa_config_for_isl(self, isl):
-        """
-        Update PAGED_SDPA_DECODE_PROGCFG based on the actual Input Sequence Length (ISL).
-        Use 48 cores for ISLs >= 8k, 32 cores for ISLs < 8k.
-
-        Args:
-            isl (int): The actual input sequence length
-        """
-        if self.num_devices != 32:
-            # Only applies to TG (32 devices)
-            return
-
-        # 7000 since 8k isl has actual length 7558
-        if isl >= 7000:
-            num_cores = 48
-            grid_size = (8, 6)
-        else:
-            num_cores = 32
-            grid_size = (8, 4)
-
-        self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
-            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                self.start_core, num_cores, self.sub_core_grids, row_wise=True
-            ),
-            exp_approx_mode=False,
-            q_chunk_size=0,
-            k_chunk_size=0,
-        )
 
     def is_vision(self):
         return self.vision_chunk_size > 0
