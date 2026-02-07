@@ -39,9 +39,10 @@ struct tensor_args_t {
     const ttnn::Tensor& exp_avg_sq;
     std::optional<ttnn::Tensor> max_exp_avg_sq = std::nullopt;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("max_exp_avg_sq");
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("param", "grad", "exp_avg", "exp_avg_sq", "max_exp_avg_sq");
     auto attribute_values() const {
-        return std::forward_as_tuple(max_exp_avg_sq);
+        return std::forward_as_tuple(param, grad, exp_avg, exp_avg_sq, max_exp_avg_sq);
     }
 };
 

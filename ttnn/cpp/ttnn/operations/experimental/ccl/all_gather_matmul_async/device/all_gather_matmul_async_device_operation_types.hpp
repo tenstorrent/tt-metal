@@ -29,7 +29,7 @@ struct AllGatherMatmulAsyncParams {
     /* Fusion params */
     CoreCoord all_gather_core_grid_offset;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "all_gather_core_grid_offset");
+    static constexpr auto attribute_names = std::forward_as_tuple("matmul", "all_gather_core_grid_offset");
     auto attribute_values() const { return std::forward_as_tuple(this->matmul, this->all_gather_core_grid_offset); }
 };
 

@@ -35,8 +35,8 @@ struct LayerNormPostAllGatherInputs {
     std::optional<Tensor> gamma;
     std::optional<Tensor> beta;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("gamma", "beta");
-    auto attribute_values() const { return std::forward_as_tuple(gamma, beta); }
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "stats", "gamma", "beta");
+    auto attribute_values() const { return std::forward_as_tuple(input, stats, gamma, beta); }
 };
 
 }  // namespace ttnn::prim

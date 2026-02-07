@@ -181,6 +181,23 @@ struct Conv2dParallelizationConfig {
     uint32_t per_core_out_matrix_width_ntile = 1;
 
     CoreCoord get_grid_size() const { return this->grid_size; }
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "grid_size",
+        "num_cores_nhw",
+        "num_cores_c_in",
+        "num_cores_c_out",
+        "per_core_out_matrix_height_ntile",
+        "per_core_out_matrix_width_ntile");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            grid_size,
+            num_cores_nhw,
+            num_cores_c_in,
+            num_cores_c_out,
+            per_core_out_matrix_height_ntile,
+            per_core_out_matrix_width_ntile);
+    }
 };
 
 struct Conv2dBlockConfig {
@@ -188,6 +205,13 @@ struct Conv2dBlockConfig {
     uint32_t act_block_w_ntiles;
     uint32_t out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "act_block_h_ntiles", "act_block_w_ntiles", "out_subblock_h_ntiles", "out_subblock_w_ntiles");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            act_block_h_ntiles, act_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles);
+    }
 };
 
 struct Conv2dParams {
@@ -235,8 +259,11 @@ struct Conv2dHashableParams {
         "untilize_out",
         "has_bias",
         "activation",
+        "parallelization_config",
+        "block_config",
         "memory_config",
         "dtype",
+        "input_tensor_shape",
         "compute_kernel_config",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
@@ -249,8 +276,11 @@ struct Conv2dHashableParams {
             untilize_out,
             has_bias,
             activation,
+            parallelization_config,
+            block_config,
             memory_config,
             dtype,
+            input_tensor_shape,
             compute_kernel_config,
             enable_act_double_buffer,
             enable_weights_double_buffer,

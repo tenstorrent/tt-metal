@@ -19,8 +19,8 @@ struct ProdNcInputs {
     Tensor input;
     Tensor output;  // Note: output is passed as input (inplace pattern)
 
-    static constexpr auto attribute_names = std::forward_as_tuple("input");
-    auto attribute_values() const { return std::forward_as_tuple(input); }
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "output");
+    auto attribute_values() const { return std::forward_as_tuple(input, output); }
 };
 
 }  // namespace ttnn::prim

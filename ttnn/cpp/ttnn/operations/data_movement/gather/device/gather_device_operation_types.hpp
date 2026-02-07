@@ -25,8 +25,9 @@ struct GatherInputs {
     const Tensor& input_index_tensor;
     std::optional<Tensor> output_tensor;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("output_tensor");
-    auto attribute_values() const { return std::forward_as_tuple(output_tensor); }
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensor", "input_index_tensor", "output_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, input_index_tensor, output_tensor); }
 };
 
 }  // namespace ttnn::prim

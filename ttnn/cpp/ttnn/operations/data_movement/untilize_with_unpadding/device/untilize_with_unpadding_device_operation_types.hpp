@@ -20,6 +20,7 @@ struct UntilizeWithUnpaddingParams {
     std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
+        "output_tensor_end",
         "output_mem_config",
         "use_multicore",
         "use_pack_untilize",
@@ -29,6 +30,7 @@ struct UntilizeWithUnpaddingParams {
         "sub_core_grids");
     auto attribute_values() const {
         return std::forward_as_tuple(
+            output_tensor_end,
             output_mem_config,
             use_multicore,
             use_pack_untilize,

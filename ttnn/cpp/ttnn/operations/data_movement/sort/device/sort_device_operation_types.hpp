@@ -24,8 +24,8 @@ struct SortInputs {
     const Tensor& input_tensor;
     std::vector<std::optional<Tensor>> output_tensors;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("output_tensors");
-    auto attribute_values() const { return std::forward_as_tuple(output_tensors); }
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "output_tensors");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, output_tensors); }
 };
 
 }  // namespace ttnn::prim

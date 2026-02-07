@@ -33,9 +33,11 @@ struct MatmulReduceScatterAsyncParams {
         reduce_scatter_core_grid_offset(reduce_scatter_core_grid_offset),
         devices(std::move(devices)) {}
 
-    static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "reduce_scatter_core_grid_offset");
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("reduce_scatter_params", "matmul_struct", "reduce_scatter_core_grid_offset", "devices");
     auto attribute_values() const {
-        return std::forward_as_tuple(this->matmul_struct, this->reduce_scatter_core_grid_offset);
+        return std::forward_as_tuple(
+            this->reduce_scatter_params, this->matmul_struct, this->reduce_scatter_core_grid_offset, this->devices);
     }
 };
 

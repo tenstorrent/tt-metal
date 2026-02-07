@@ -35,8 +35,26 @@ struct UntilizeOperationAttributes {
     bool enough_space_height{};
     uint32_t pf_type{};
 
-    static constexpr auto attribute_names = std::forward_as_tuple("output_mem_config", "sub_core_grids");
-    auto attribute_values() const { return std::forward_as_tuple(output_mem_config, sub_core_grids); }
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "output_mem_config",
+        "use_multicore",
+        "use_pack_untilize",
+        "fp32_dest_acc_en",
+        "sub_core_grids",
+        "enough_space_width",
+        "enough_space_height",
+        "pf_type");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            output_mem_config,
+            use_multicore,
+            use_pack_untilize,
+            fp32_dest_acc_en,
+            sub_core_grids,
+            enough_space_width,
+            enough_space_height,
+            pf_type);
+    }
 };
 
 using UntilizeTensorReturnValue = Tensor;
