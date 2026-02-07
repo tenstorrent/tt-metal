@@ -16,6 +16,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ops/losses.hpp"
@@ -272,6 +273,8 @@ TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
+    // Skip with watcher enabled due to failure github issue #37193
+    SKIP_FOR_WATCHER();
     using namespace ttml;
 
     const uint32_t N = 5U, C = 1U, H = 91U, W = 187U;

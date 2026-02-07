@@ -99,6 +99,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_MULTI_AERISC,          // Disable multi-erisc mode (inverted logic, enabled by default)
     TT_METAL_USE_MGD_2_0,                   // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,             // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,          // Disable use of SFPLOADMACRO instructions
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -654,6 +655,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->erisc_iram_enabled_env_var = !disabled;
             break;
         }
+
+        // TT_METAL_DISABLE_SFPLOADMACRO
+        // Disable use of SFPLOADMACRO instructions.
+        // Default: 0 (use SFPLOADMACRO instructions)
+        // Usage: export TT_METAL_DISABLE_SFPLOADMACRO=1
+        case EnvVarID::TT_METAL_DISABLE_SFPLOADMACRO: this->disable_sfploadmacro = is_env_enabled(value); break;
 
         // ========================================
         // PROFILING & PERFORMANCE
