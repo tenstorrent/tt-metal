@@ -143,9 +143,12 @@ def tt_all_reduce(
     num_all_gather_links=None,
     topology=ttnn.Topology.Linear,
     memory_config=None,
+    rs_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
+    chunks_per_sync=10,
+    num_workers_per_link=2,
 ):
     """
     Perform an all-reduce operation across devices in a mesh.
@@ -200,10 +203,10 @@ def tt_all_reduce(
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             num_links=num_reduce_scatter_links,
             memory_config=memory_config,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            intermediate_memory_config=rs_memory_config,
             topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=2,
         )
         input_tensor.deallocate(True)
