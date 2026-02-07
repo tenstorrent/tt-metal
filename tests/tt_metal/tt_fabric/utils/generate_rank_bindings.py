@@ -109,13 +109,6 @@ def generate_supported_rank_bindings():
         2: [3],
         3: [4],
     }
-    # Process Rank ID To Tray ID Mapping for WH Galaxy pipeline (trays 2 and 3 swapped)
-    WH_GLX_PIPELINE_RANK_TO_TRAY_MAPPING = {
-        0: [1],
-        1: [2],
-        2: [4],
-        3: [3],
-    }
     # Process Rank ID To Tray ID Mapping for 2x4 cyclic mesh configuration
     WH_GLX_2X4_CYCLIC_RANK_TO_TRAY_MAPPING = {
         0: [1],
@@ -350,13 +343,6 @@ def generate_supported_rank_bindings():
             WH_GLX_QUAD_RANK_TO_TRAY_MAPPING,
             "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x2_multi_mesh.textproto",
             "4x2_multi_mesh_rank_binding.yaml",
-        )
-        generate_rank_binding_yaml(
-            tray_to_pcie_device_mapping,
-            QUAD_MESH_RANK_BINDINGS,
-            WH_GLX_PIPELINE_RANK_TO_TRAY_MAPPING,
-            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_split_4x2_pipeline_multi_mesh.textproto",
-            "4x2_multi_mesh_pipeline_rank_binding.yaml",
         )
         generate_rank_binding_yaml(
             tray_to_pcie_device_mapping,
