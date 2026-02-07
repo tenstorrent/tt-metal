@@ -52,7 +52,7 @@ class _GatedReduceDownProjContext:
     """Holds all computed values needed by GatedLocalReduceDownProjOp helper methods."""
 
     # Device & format
-    device: Any
+    full_device_grid: Any
     data_format: Any
     input_tile: Any
     input_tile_size: int
@@ -306,8 +306,21 @@ class GatedLocalReduceDownProjOp:
         ig_g1_receiver_data_addr = group1_dst_tensor.buffer_address()
         ig_g2_receiver_data_addr = group2_dst_tensor.buffer_address()
 
+        # Pre-compute full device grid so we don't need to store device reference
+        full_device_grid = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(
+                        device.compute_with_storage_grid_size().x - 1,
+                        device.compute_with_storage_grid_size().y - 1,
+                    ),
+                )
+            ]
+        )
+
         return _GatedReduceDownProjContext(
-            device=device,
+            full_device_grid=full_device_grid,
             data_format=data_format,
             input_tile=input_tile,
             input_tile_size=input_tile_size,
@@ -778,19 +791,8 @@ class GatedLocalReduceDownProjOp:
         core_descs, per_core_descs = GatedLocalReduceDownProjOp._build_core_descriptors(ctx)
 
         # Semaphore descriptors
-        full_device_grid = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(
-                        ctx.device.compute_with_storage_grid_size().x - 1,
-                        ctx.device.compute_with_storage_grid_size().y - 1,
-                    ),
-                )
-            ]
-        )
         semaphore_descriptors = [
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=full_device_grid, initial_value=0) for i in range(10)
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=ctx.full_device_grid, initial_value=0) for i in range(10)
         ]
 
         # Kernel descriptor

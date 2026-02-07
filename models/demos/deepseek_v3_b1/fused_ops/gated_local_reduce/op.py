@@ -92,6 +92,12 @@ class GatedLocalReduceOp:
         intermed_cb = 2  # Intermediate: holds 2 tiles (group1 result + group2 result)
         out_cb = 3  # Final output
 
+        # GatedReduce requires all CBs to share the same data format (binary_op_init_common called once)
+        assert input_tensor_group1.dtype == input_tensor_group2.dtype == output_tensor.dtype, (
+            f"GatedReduce requires matching dtypes: group1={input_tensor_group1.dtype}, "
+            f"group2={input_tensor_group2.dtype}, output={output_tensor.dtype}"
+        )
+
         # Get tile info from output tensor for intermediate buffer
         output_tile = output_tensor.tile
         tile_h, tile_w = output_tile.tile_shape

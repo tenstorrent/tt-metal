@@ -300,7 +300,7 @@ void kernel_main() {
     };
 
     // Gate/Up sliced matmul CTArgs
-    using KNSlicedMatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::ComputeCTArgs;
+    using KNSlicedMatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::ComputeCTArgs<>;
     deepseek_b1_ops::KNSlicedMatmul::ComputeArgs gu_matmul_args{
         get_named_compile_time_arg_val("gu_act_cb"),
         get_named_compile_time_arg_val("gu_weights_cb"),

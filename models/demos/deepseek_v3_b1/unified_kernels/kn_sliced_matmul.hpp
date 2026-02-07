@@ -21,19 +21,19 @@ namespace deepseek_b1_ops {
 // ============================================================================
 // KNSlicedMatmul micro-op: KN-parallel partial matmul with offset into activation buffer
 //
-// Computes: output[1,1] = act[k_offset..k_offset+k_per_core] @ weights[k_per_core,1]
+// Computes: output[1,out_w] = act[k_offset..k_offset+k_per_core] @ weights[k_per_core,out_w]
 //
 // Each core takes a slice of the shared activation buffer (via k_offset) and
-// multiplies it against its local weight shard, producing a single output tile.
-// Fixed properties: out_w=1, transpose=false, split_acc=true, dense_packing=true.
+// multiplies it against its local weight shard, producing out_w output tiles.
+// Fixed properties: transpose=false, split_acc=true, dense_packing=true.
 //
 // CB States:
 //   NCRISC: No-op (weights setup done externally via setup_sharded_buffer)
 //   BRISC: No-op
 //   TRISC (Compute):
 //     - Waits: act_cb (act_total_tiles), weights_cb (k_per_core)
-//     - Reserves: out_cb (1 tile)
-//     - Pushes: out_cb (1 tile)
+//     - Reserves: out_cb (out_w tiles)
+//     - Pushes: out_cb (out_w tiles)
 //     - Pops: act_cb (act_total_tiles) if pop_act=true,
 //             weights_cb (k_per_core) if pop_weights=true
 // ============================================================================
@@ -48,8 +48,11 @@ struct KNSlicedMatmul {
     // Writer CTArgs (BRISC): none
     struct WriterCTArgs {};
 
-    // Compute CTArgs (TRISC): none (out_w=1, split_acc=true are fixed)
-    struct ComputeCTArgs {};
+    // Compute CTArgs (TRISC)
+    template <uint32_t OutW = 1>
+    struct ComputeCTArgs {
+        static constexpr uint32_t out_w = OutW;
+    };
 
     // ========================================================================
     // Runtime args structs - different layout per RISC
@@ -65,7 +68,7 @@ struct KNSlicedMatmul {
     struct ComputeArgs {
         uint32_t act_cb;           // activation CB (full shared buffer)
         uint32_t weights_cb;       // weights CB (per-core K-slice)
-        uint32_t out_cb;           // output CB (1 tile)
+        uint32_t out_cb;           // output CB (out_w tiles)
         uint32_t k_offset;         // tile offset into act_cb
         uint32_t k_per_core;       // K tiles this core processes
         uint32_t act_total_tiles;  // total tiles in act_cb (for wait/pop)
@@ -100,23 +103,25 @@ struct KNSlicedMatmul {
             constexpr bool split_acc = true;
             constexpr bool dense_packing = true;
             constexpr bool finalize = true;
-            constexpr uint32_t out_w = 1;
+            constexpr uint32_t out_w = CTArgs::out_w;
+
+            custom_mm_block_init<transpose, split_acc, dense_packing>(args.act_cb, args.weights_cb, args.out_cb, out_w);
 
             // Wait for all activation tiles and weight tiles
             cb_wait_front(args.act_cb, args.act_total_tiles);
             cb_wait_front(args.weights_cb, args.k_per_core);
 
             // Reserve output tile
-            cb_reserve_back(args.out_cb, 1);
-
-            custom_mm_block_init<transpose, split_acc, dense_packing>(args.act_cb, args.weights_cb, args.out_cb, out_w);
+            cb_reserve_back(args.out_cb, out_w);
 
             tile_regs_acquire();
             custom_mm_block<finalize, false>(args.act_cb, args.weights_cb, args.k_offset, 0, 0, args.k_per_core, out_w);
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(0, args.out_cb, 0);
+            for (uint32_t j = 0; j < out_w; j++) {
+                pack_tile(j, args.out_cb, j);
+            }
             tile_regs_release();
 
             custom_mm_block_uninit<dense_packing>();
@@ -129,7 +134,7 @@ struct KNSlicedMatmul {
                 cb_pop_front(args.weights_cb, args.k_per_core);
             }
 
-            cb_push_back(args.out_cb, 1);
+            cb_push_back(args.out_cb, out_w);
 #endif
         }
     };  // class Op

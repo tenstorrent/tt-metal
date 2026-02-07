@@ -58,7 +58,7 @@ class _SharedExpertContext:
     """Holds all computed values needed by SharedExpertOp helper methods."""
 
     # Device & format
-    device: Any
+    full_device_grid: Any
     data_format: Any
     input_tile: Any
     input_tile_size: int
@@ -154,13 +154,6 @@ class _SharedExpertContext:
     gather_dest_noc_core: Any
     mcast_dest_noc_start: Any
     mcast_dest_noc_end: Any
-
-    # Input tensors (needed for CB descriptors)
-    activation_tensor: Any
-    down_weights_tensor: Any
-    bias_tensor: Any
-    output_tensor: Any
-    gate_up_weights_tensor: Any
 
 
 class SharedExpertOp:
@@ -386,8 +379,21 @@ class SharedExpertOp:
         ag_receiver_data_addr = ag_dummy_tensor.buffer_address()
         bg_receiver_data_addr = bg_dummy_tensor.buffer_address()
 
+        # Pre-compute full device grid so we don't need to store device reference
+        full_device_grid = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(
+                        device.compute_with_storage_grid_size().x - 1,
+                        device.compute_with_storage_grid_size().y - 1,
+                    ),
+                )
+            ]
+        )
+
         return _SharedExpertContext(
-            device=device,
+            full_device_grid=full_device_grid,
             data_format=data_format,
             input_tile=input_tile,
             input_tile_size=input_tile_size,
@@ -467,11 +473,6 @@ class SharedExpertOp:
             gather_dest_noc_core=gather_dest_noc_core,
             mcast_dest_noc_start=mcast_dest_noc_start,
             mcast_dest_noc_end=mcast_dest_noc_end,
-            activation_tensor=activation_tensor,
-            down_weights_tensor=down_weights_tensor,
-            bias_tensor=bias_tensor,
-            output_tensor=output_tensor,
-            gate_up_weights_tensor=gate_up_weights_tensor,
         )
 
     @staticmethod
@@ -627,7 +628,9 @@ class SharedExpertOp:
         return ncrisc_named_compile_time_args, brisc_named_compile_time_args, trisc_named_compile_time_args
 
     @staticmethod
-    def _build_cb_descriptors(ctx):
+    def _build_cb_descriptors(
+        ctx, activation_tensor, down_weights_tensor, bias_tensor, output_tensor, gate_up_weights_tensor
+    ):
         """Build all 15 circular buffer descriptors."""
         # CB 0: A_gather_dst — tensor-backed on sender (backed by dummy tensor)
         group1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(ctx.group1_cb, ctx.ag_dummy_tensor)
@@ -685,7 +688,7 @@ class SharedExpertOp:
         )
 
         # CB 5: Down weights — tensor-backed on 112 matmul cores
-        matmul_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(ctx.matmul_in1_cb, ctx.down_weights_tensor)
+        matmul_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(ctx.matmul_in1_cb, down_weights_tensor)
 
         # CB 6: Down matmul output — on 112 matmul cores
         matmul_out_format = ttnn.CBFormatDescriptor(
@@ -701,12 +704,10 @@ class SharedExpertOp:
         )
 
         # CB 7: Output gather destination — tensor-backed on sender
-        gather_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(ctx.gather_dst_cb, ctx.output_tensor)
+        gather_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(ctx.gather_dst_cb, output_tensor)
 
         # CB 8: Activation mcast source — tensor-backed on sender
-        act_mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            ctx.act_mcast_src_cb, ctx.activation_tensor
-        )
+        act_mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(ctx.act_mcast_src_cb, activation_tensor)
 
         # CB 9: Activation mcast recv — manual on all 130 cores
         act_mcast_dst_format = ttnn.CBFormatDescriptor(
@@ -723,7 +724,7 @@ class SharedExpertOp:
 
         # CB 10: Residual mcast source — tensor-backed on sender
         residual_mcast_src_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            ctx.residual_mcast_src_cb, ctx.bias_tensor
+            ctx.residual_mcast_src_cb, bias_tensor
         )
 
         # CB 11: Residual mcast dest — all 130 cores, manual
@@ -753,7 +754,7 @@ class SharedExpertOp:
         )
 
         # CB 13: Gate/Up weights — tensor-backed on 128 compute cores
-        gu_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(ctx.gu_weights_cb, ctx.gate_up_weights_tensor)
+        gu_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(ctx.gu_weights_cb, gate_up_weights_tensor)
 
         # CB 14: Gate/Up matmul output — 1 tile on 128 compute cores, manual
         compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in ctx.compute_cores_list])
@@ -922,23 +923,14 @@ class SharedExpertOp:
         )
 
         ncrisc_args, brisc_args, trisc_args = SharedExpertOp._build_compile_time_args(ctx)
-        cb_descriptors = SharedExpertOp._build_cb_descriptors(ctx)
+        cb_descriptors = SharedExpertOp._build_cb_descriptors(
+            ctx, activation_tensor, down_weights_tensor, bias_tensor, output_tensor, gate_up_weights_tensor
+        )
         core_descs, per_core_descs = SharedExpertOp._build_core_descriptors(ctx)
 
         # Semaphore descriptors
-        full_device_grid = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(
-                        ctx.device.compute_with_storage_grid_size().x - 1,
-                        ctx.device.compute_with_storage_grid_size().y - 1,
-                    ),
-                )
-            ]
-        )
         semaphore_descriptors = [
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=full_device_grid, initial_value=0) for i in range(10)
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=ctx.full_device_grid, initial_value=0) for i in range(10)
         ]
 
         # Kernel descriptor
@@ -976,4 +968,9 @@ class SharedExpertOp:
             gate_up_weights_tensor,
         ]
         ttnn.generic_op(io_tensors, program_descriptor)
+
+        # Release dummy tensors to avoid holding device memory
+        ttnn.deallocate(ctx.ag_dummy_tensor)
+        ttnn.deallocate(ctx.bg_dummy_tensor)
+
         return output_tensor

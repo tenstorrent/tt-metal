@@ -73,13 +73,14 @@ struct GatedReduce {
             constexpr uint32_t k_num_tiles = CTArgs::k_num_tiles;
             static_assert(tiles_per_k >= 2 && tiles_per_k % 2 == 0, "tiles_per_k must be even and >= 2");
 
-            // Init add + silu for group1 once before the loop
+            // Init once before the loop
             binary_op_init_common(args.group1_cb, args.group1_cb, args.intermed_cb);
-            add_tiles_init(args.group1_cb, args.group1_cb, true /* acc_to_dest */);
             silu_tile_init();
 
             for (uint32_t k = 0; k < k_num_tiles; k++) {
-                // Group 1: reduce + SiLU (add already initialized)
+                // Group 1: reduce + SiLU
+                add_tiles_init(args.group1_cb, args.group1_cb, true /* acc_to_dest */);
+
                 cb_wait_front(args.group1_cb, tiles_per_k);
                 cb_reserve_back(args.intermed_cb, 1);
 
@@ -97,7 +98,6 @@ struct GatedReduce {
                 cb_push_back(args.intermed_cb, 1);
 
                 // Group 2: reduce (re-init add for different CB)
-                binary_op_init_common(args.group2_cb, args.group2_cb, args.intermed_cb);
                 add_tiles_init(args.group2_cb, args.group2_cb, true /* acc_to_dest */);
 
                 cb_wait_front(args.group2_cb, tiles_per_k);
@@ -119,7 +119,6 @@ struct GatedReduce {
                 cb_wait_front(args.intermed_cb, 2);
                 cb_reserve_back(args.out_cb, 1);
 
-                binary_op_init_common(args.intermed_cb, args.intermed_cb, args.out_cb);
                 mul_tiles_init(args.intermed_cb, args.intermed_cb);
 
                 tile_regs_acquire();
@@ -131,13 +130,6 @@ struct GatedReduce {
 
                 cb_pop_front(args.intermed_cb, 2);
                 cb_push_back(args.out_cb, 1);
-
-                // Re-init add for group1 in next iteration
-                if constexpr (k_num_tiles > 1) {
-                    binary_op_init_common(args.group1_cb, args.group1_cb, args.intermed_cb);
-                    add_tiles_init(args.group1_cb, args.group1_cb, true /* acc_to_dest */);
-                    silu_tile_init();
-                }
             }
 #endif
         }
