@@ -25,6 +25,7 @@ target_sources(
             device/embeddings_rm_program_factory.hpp
             device/embeddings_tilized_indices_program_factory.hpp
             device/embedding_program_factory_common.hpp
+            device/embeddings_nd_sharded_program_factory.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -34,6 +35,7 @@ target_sources(
         device/embeddings_fused_program_factory.cpp
         device/embeddings_rm_program_factory.cpp
         device/embeddings_tilized_indices_program_factory.cpp
+        device/embeddings_nd_sharded_program_factory.cpp
         device/embedding_program_factory_common.cpp
         embedding.cpp
 )

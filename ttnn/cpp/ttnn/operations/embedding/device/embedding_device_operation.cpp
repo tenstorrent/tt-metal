@@ -10,12 +10,13 @@ using namespace tt::constants;
 using namespace std;
 using namespace tt::tt_metal;
 
-#define RISC_CORES_PER_TENSIX 2
-
 namespace ttnn::prim {
 
 EmbeddingsDeviceOperation::program_factory_t EmbeddingsDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.input_tensor_arg.nd_shard_spec().has_value()) {
+        return EmbeddingsNDShardedProgramFactory{};
+    }
     if (tensor_args.input_tensor_arg.layout() == ttnn::TILE_LAYOUT) {
         return EmbeddingsTilizedIndicesProgramFactory{};
     }
@@ -39,9 +40,7 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
         weights.layout() == Layout::ROW_MAJOR, "Weights tensor layout must be ROW_MAJOR but got {}", weights.layout());
     TT_FATAL(a.dtype() == DataType::UINT32 or a.dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16, "Weights tensor must have BFLOAT16 dtype");
-    TT_FATAL(
-        a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Embedding does not currently support sharded inputs");
+
     TT_FATAL(
         weights.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Embedding does not currently support sharded weights");
@@ -87,13 +86,10 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
         }
     } else {
         if (is_sharded(operation_attributes.output_mem_config.memory_layout())) {
-            TT_FATAL(
-                operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Embedding only supports height sharded Row Major outputs");
+            // TT_FATAL(
+            //     operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            //     "Embedding only supports height sharded Row Major outputs");
         }
-    }
-    if (a.layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
     }
     switch (operation_attributes.embeddings_type) {
         case EmbeddingsType::PADDED:
@@ -116,11 +112,17 @@ TensorSpec EmbeddingsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor_arg;
     const auto& weight_tensor = tensor_args.weight_arg;
-    auto num_output_embeddings = input_tensor.logical_shape()[-1];
-    auto batch_num = input_tensor.logical_shape()[0];
+
     auto num_embedding_dims = weight_tensor.logical_shape()[-1];
 
-    ttnn::Shape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
+    std::cout << "[EmbeddingsDeviceOperation] input_tensor.logical_shape(): " << input_tensor.logical_shape()
+              << std::endl;
+    ttsl::SmallVector<uint32_t> output_shape_vec = {
+        input_tensor.logical_shape().begin(), input_tensor.logical_shape().end()};
+    output_shape_vec.push_back(num_embedding_dims);
+    ttnn::Shape output_shape(output_shape_vec);
+    std::cout << "[EmbeddingsDeviceOperation] output_shape: " << output_shape << std::endl;
+
     auto output_layout =
         (operation_attributes.tilized && input_tensor.layout() != Layout::TILE) ? Layout::TILE : Layout::ROW_MAJOR;
     if (tensor_args.optional_output_tensor.has_value()) {
@@ -162,6 +164,7 @@ Tensor embedding(
         .optional_output_tensor = optional_output_tensor,
     };
 
+    std::cout << "[embedding] launch: " << std::endl;
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

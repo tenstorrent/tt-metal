@@ -13,6 +13,7 @@
 #include "embeddings_fused_program_factory.hpp"
 #include "embeddings_rm_program_factory.hpp"
 #include "embeddings_tilized_indices_program_factory.hpp"
+#include "embeddings_nd_sharded_program_factory.hpp"
 
 namespace ttnn::prim {
 
@@ -24,8 +25,8 @@ struct EmbeddingsDeviceOperation {
     using program_factory_t = std::variant<
         EmbeddingsFusedProgramFactory,
         EmbeddingsRMProgramFactory,
-        EmbeddingsTilizedIndicesProgramFactory
-    >;
+        EmbeddingsTilizedIndicesProgramFactory,
+        EmbeddingsNDShardedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
