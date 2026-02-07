@@ -7,7 +7,6 @@
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_matmul_api.h"
-namespace NAMESPACE {
 
 inline void tilize_activation(uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks) {
     llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>();
@@ -36,7 +35,7 @@ inline void reblock_and_untilize_output(uint32_t out_subblock_h, uint32_t out_bl
     }
 }
 
-void math_main() {
+void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);
     llk_math_pack_sync_init<DST_ACCUM_MODE>();
 
@@ -118,4 +117,3 @@ void math_main() {
         }
     }
 }
-}  // namespace NAMESPACE
