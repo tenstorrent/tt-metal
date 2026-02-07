@@ -1720,18 +1720,29 @@ def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
         (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
     }
 
-    # Test configurations with representative input shapes from VAE decoder
-    # (C_in, C_out, kernel_size, T, H, W)
+    # Test configurations with actual unsharded input shapes from VAE decoder
+    # Input shapes provided as (T, H, W, C_in), converted to (C_in, C_out, kernel_size, T, H, W)
     conv_configs = [
-        (96, 32, (3, 3, 3), 4, 720, 1280),
-        (192, 96, (1, 3, 3), 4, 360, 640),
-        (96, 96, (3, 3, 3), 4, 720, 1280),
-        (384, 192, (1, 3, 3), 2, 180, 320),
-        (192, 192, (3, 3, 3), 4, 360, 640),
-        (32, 384, (3, 3, 3), 1, 90, 160),
-        (192, 384, (3, 3, 3), 2, 180, 320),
-        (384, 384, (3, 3, 3), 1, 90, 160),
-        (384, 768, (3, 3, 3), 1, 90, 160),
+        # (T=3, H=25, W=22, C_in=32) -> conv_in
+        (32, 384, (3, 3, 3), 3, 25, 22),
+        # (T=3, H=25, W=22, C_in=384) -> mid_block resnets
+        (384, 384, (3, 3, 3), 3, 25, 22),
+        # (T=1, H=48, W=42, C_in=384) -> time upsample (1x3x3 kernel)
+        (384, 192, (1, 3, 3), 1, 48, 42),
+        # (T=3, H=48, W=42, C_in=192) -> up_block.1 resnet
+        (192, 384, (3, 3, 3), 3, 48, 42),
+        # (T=3, H=48, W=42, C_in=384) -> up_block.1 resnet
+        (384, 384, (3, 3, 3), 3, 48, 42),
+        # (T=1, H=94, W=82, C_in=384) -> time upsample (1x3x3 kernel)
+        (384, 192, (1, 3, 3), 1, 94, 82),
+        # (T=3, H=94, W=82, C_in=192) -> up_block.2 resnet
+        (192, 192, (3, 3, 3), 3, 94, 82),
+        # (T=1, H=186, W=162, C_in=192) -> time upsample (1x3x3 kernel)
+        (192, 96, (1, 3, 3), 1, 186, 162),
+        # (T=3, H=186, W=162, C_in=96) -> up_block.3 resnet
+        (96, 96, (3, 3, 3), 3, 186, 162),
+        # (T=3, H=186, W=162, C_in=96) -> conv_out
+        (96, 32, (3, 3, 3), 3, 186, 162),
     ]
 
     grid_size = mesh_device.compute_with_storage_grid_size()
