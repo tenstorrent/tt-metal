@@ -14,6 +14,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
 #include <iomanip>
 
 namespace tt::tt_metal {
@@ -174,12 +175,15 @@ void run_sr_test_migrated(
         sizeof(uint64_t) * NUM_ITERATIONS,
         tt_cxy_pair(start_device_id, start_core_coord),
         latency_measurement_address);
+    // Clock frequency for latency calculation: WH B0 = 1.0 GHz, BH = 1.35 GHz
+    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    const double clock_freq_hz = (arch == tt::ARCH::WORMHOLE_B0) ? 1.0e9 : 1.35e9;
     double avg_latency_cycles = 0.0;
     for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
         avg_latency_cycles += static_cast<double>(latencies[i]);
     }
     avg_latency_cycles /= NUM_ITERATIONS;
-    double avg_latency_us = (avg_latency_cycles / (1.35e9)) * 1e6;
+    double avg_latency_us = (avg_latency_cycles / clock_freq_hz) * 1e6;
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "Average latency in cycles: " << avg_latency_cycles << std::endl;
     std::cout << "Average latency in microseconds: " << avg_latency_us << std::endl;
