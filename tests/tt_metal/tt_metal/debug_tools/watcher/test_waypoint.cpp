@@ -224,7 +224,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         }
         EXPECT_TRUE(
             FileContainsAllStringsInOrder(
-                fixture->log_file_name,
+                fixture->log_file_name(),
                 expected_waypoints
             )
         );

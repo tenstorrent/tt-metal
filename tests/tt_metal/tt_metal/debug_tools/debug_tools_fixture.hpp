@@ -161,7 +161,8 @@ public:
             if (!enabled_processors.contains(HalProgrammableCoreType::TENSIX, i)) {
                 continue;
             }
-            auto filename = fmt::format("generated/dprint/device-0_worker-core-0-0_{}.txt", suffixes[i]);
+            auto filename = fmt::format("{}generated/dprint/device-0_worker-core-0-0_{}.txt",
+                tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(), suffixes[i]);
             EXPECT_TRUE(FilesMatchesString(filename, expected[i]));
         }
     }
@@ -183,7 +184,9 @@ protected:
 // A version of MeshDispatchFixture with watcher enabled
 class MeshWatcherFixture : public DebugToolsMeshFixture {
 public:
-    inline static const std::string log_file_name = "generated/watcher/watcher.log";
+    inline static std::string log_file_name() {
+        return tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + "generated/watcher/watcher.log";
+    }
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.

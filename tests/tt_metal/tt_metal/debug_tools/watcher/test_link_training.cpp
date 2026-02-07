@@ -122,7 +122,7 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     DebugToolsMeshFixture::TearDown();  // NOLINT(bugprone-parent-virtual-call) Call parent teardown so we don't disable
                                     // watcher
     MetalContext::instance().teardown();
-    EXPECT_TRUE(FileContainsAllStrings(this->log_file_name, expected_strings));
+    EXPECT_TRUE(FileContainsAllStrings(this->log_file_name(), expected_strings));
 }
 
 TEST_F(MeshWatcherFixture, ActiveEthTestWatcherDetectLinkUp) {
