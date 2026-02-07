@@ -561,7 +561,7 @@ typename device_operation_t::tensor_return_value_t launch(
     ttnn::MeshDevice* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
 
     if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
-        mesh_device_operation_utils::filter_tensor_shards(
+        tensor_return_value = mesh_device_operation_utils::filter_tensor_shards(
             mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device), tensor_return_value);
     }
 
