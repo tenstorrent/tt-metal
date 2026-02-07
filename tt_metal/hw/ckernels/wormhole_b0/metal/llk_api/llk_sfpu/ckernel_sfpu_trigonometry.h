@@ -108,16 +108,55 @@ sfpi_inline vFloat sfpu_sinpi<false>(vFloat x) {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_sine() {
-    // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0] * FRAC_1_PI;
-        vInt whole_v = float_to_int16(v, 0);
-        v -= int32_to_float(whole_v, 0);
-        v = sfpu_sinpi<APPROXIMATION_MODE>(v);
+    // Constants for four-stage Cody-Waite reduction with P1+P2+P3+P4=PI
+    const float P0 = -0x1.92p+1f;               // representable as bf16
+    const float P1 = -0x1.fbp-11f;              // representable as fp16
+    sfpi::vConstFloatPrgm0 = -0x1.51p-21f;      // requires fp32
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;  // requires fp32
 
-        v_if(whole_v & 1) { v = -v; }
-        v_endif;
-        dst_reg[0] = v;
+    // 1 / PI
+    sfpi::vConstFloatPrgm2 = 0x1.45f306p-2f;
+
+    // Constants for sin(a) = a + a*s (C0 + a^2 (C1 + a^2 (C2 + a^2 C3)))
+    vFloat C3 = 0x1.5dc908p-19f;
+    vFloat C2 = -0x1.9f70fp-13f;
+    vFloat C1 = 0x1.110edap-7f;
+    vFloat C0 = -0x1.55554cp-3f;
+
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+
+        // Compute j = round(v / PI).
+        // First, j = v * INV_PI + 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
+        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
+        vFloat tmp;
+        tmp.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);
+        __rvtt_vec_t inv_pi = __builtin_rvtt_sfpreadlreg(sfpi::vConstFloatPrgm2.get());
+        vFloat j;
+        j.get() = __builtin_rvtt_wh_sfpmad(v.get(), inv_pi, tmp.get(), SFPMAD_MOD1_OFFSET_NONE);
+        // We need the LSB of the integer later, to determine the sign of the result.
+        vInt q = reinterpret<vInt>(j);
+        // Shift mantissa bits back; j is now round(v / PI) in fp32.
+        j += -tmp;
+
+        // Four-stage Cody-Waite reduction; a = v - j * PI.
+        // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
+        vFloat a = v + j * P0;
+        // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
+        a = a + j * P1;
+        a = a + j * sfpi::vConstFloatPrgm0;
+        a = a + j * sfpi::vConstFloatPrgm1;
+
+        vFloat s = a * a;
+        vFloat r = C3 * s + C2;
+        r = r * s + C1;
+        r = r * s + C0;
+        s = a * s;
+        r = r * s + a;
+
+        r = reinterpret<vFloat>(reinterpret<vInt>(r) ^ (q << 31));
+
+        dst_reg[0] = r;
         dst_reg++;
     }
 }
