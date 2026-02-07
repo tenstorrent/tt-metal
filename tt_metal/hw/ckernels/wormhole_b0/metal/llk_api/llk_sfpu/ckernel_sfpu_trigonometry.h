@@ -117,7 +117,7 @@ inline void calculate_sine() {
     // 1 / PI
     sfpi::vConstFloatPrgm2 = 0x1.45f306p-2f;
 
-    // Constants for sin(a) = a + a*s (C0 + a^2 (C1 + a^2 (C2 + a^2 C3)))
+    // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3)))
     vFloat C3 = 0x1.5dc908p-19f;
     vFloat C2 = -0x1.9f70fp-13f;
     vFloat C1 = 0x1.110edap-7f;
