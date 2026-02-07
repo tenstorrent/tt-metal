@@ -22,7 +22,7 @@ constexpr static uint32_t DEFAULT_PROFILER_L1_PROGRAM_MIN_OPTIONAL_MARKER_COUNT 
 uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions) {
     std::optional<uint32_t> profiler_program_support_count = rtoptions.get_profiler_program_support_count();
     const bool do_profiler_sum = rtoptions.get_profiler_sum();
-    const bool debug_dump_enabled = rtoptions.get_experimental_device_debug_dump_enabled();
+    const bool debug_dump_enabled = rtoptions.get_experimental_noc_debug_dump_enabled();
 
     if (!profiler_program_support_count.has_value()) {
         profiler_program_support_count = DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT;
@@ -72,7 +72,7 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes() {
 
 uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rtoptions) {
     const uint32_t per_buffer_size = get_profiler_dram_bank_size_per_risc_bytes(rtoptions);
-    const bool debug_dump_enabled = rtoptions.get_experimental_device_debug_dump_enabled();
+    const bool debug_dump_enabled = rtoptions.get_experimental_noc_debug_dump_enabled();
 
     // There are 2 DRAM buffers per risc when debug dump is enabled.
     // The size of each buffer returned by get_profiler_dram_bank_size_per_risc_bytes is half to maintain the same
@@ -166,6 +166,8 @@ void ProfilerStateManager::signal_debug_dump_read() {
 void ProfilerStateManager::start_debug_dump_thread(
     std::vector<IDevice*> active_devices, std::unordered_map<ChipId, std::vector<CoreCoord>> virtual_cores_map) {
     TT_ASSERT(!this->debug_dump_thread.joinable());
+    // Reset stop flag in case it was set by a previous cleanup_device_profilers() call
+    this->stop_debug_dump_thread = false;
     // Faster polling to unblock cores quickly at the expensive of more NoC PCIe traffic
     constexpr auto interval = std::chrono::milliseconds(500);
 

@@ -104,6 +104,9 @@ set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
 # Promote all IMPORTED targets discovered by find_package() to a GLOBAL scope
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 
+# Reduce verbose "-- Up-to-date:" messages during install steps (e.g. cmake --install / target install)
+set(CMAKE_INSTALL_MESSAGE LAZY)
+
 ############################################################################################################################
 # Project Options
 #   The following options and their defaults impact what artifacts get built
