@@ -237,14 +237,28 @@ class VectorExportSource(VectorSource):
                             if "sweep_name" not in vector_data:
                                 vector_data["sweep_name"] = module_name
 
+                            # Get traced_machine_info for filtering checks
+                            traced_machine_info = vector_data.get("traced_machine_info")
+                            # Handle both list and dict formats
+                            if isinstance(traced_machine_info, list) and traced_machine_info:
+                                traced_machine_info = traced_machine_info[0]
+
+                            # Check if required mesh shape exceeds available devices
+                            # This check always applies regardless of MESH_DEVICE_SHAPE env var
+                            if current_machine_info and traced_machine_info and isinstance(traced_machine_info, dict):
+                                required_device_count = traced_machine_info.get("device_count", 1)
+                                current_device_count = current_machine_info.get("device_count", 1)
+
+                                if required_device_count > current_device_count:
+                                    logger.debug(
+                                        f"Skipping vector requiring {required_device_count} devices "
+                                        f"(current machine has {current_device_count})"
+                                    )
+                                    machine_mismatch_count += 1
+                                    continue
+
                             # Apply mesh filtering if enabled
                             if mesh_filter and target_mesh:
-                                traced_machine_info = vector_data.get("traced_machine_info")
-
-                                # Handle both list and dict formats
-                                if isinstance(traced_machine_info, list) and traced_machine_info:
-                                    traced_machine_info = traced_machine_info[0]
-
                                 if traced_machine_info and isinstance(traced_machine_info, dict):
                                     # Extract mesh shape from traced config
                                     vector_mesh = traced_machine_info.get("mesh_device_shape")
