@@ -18,12 +18,15 @@
 #include <chrono>
 #include <iomanip>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
 
 namespace tt::tt_metal {
 
 // Fixture for single-galaxy pipeline tests (4 ranks, one per tray).
 // Uses MeshDeviceExaboxFixture which auto-detects the system topology.
-// Set TT_FABRIC_MESH_GRAPH_DESC_PATH to bh_galaxy_4x2_mesh_graph_descriptor.textproto when running.
+// Supports both BH and WH galaxies.
+// Set TT_FABRIC_MESH_GRAPH_DESC_PATH to the appropriate mesh graph descriptor when running
+// (e.g. bh_galaxy_4x2_mesh_graph_descriptor.textproto or wh_galaxy_2x4_mesh_graph_descriptor.textproto).
 class MeshDeviceSingleGalaxyPipelineFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture {};
 
 // Pipeline config structs.
@@ -101,19 +104,29 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
 
 // Pipeline type enum to toggle between different pipeline configurations.
 enum class PipelineType {
-    CLOSET_BOX,    // Existing multi-host pipeline (48 stages across dual galaxy closet box)
-    SINGLE_GALAXY  // Single-galaxy pipeline (4 stages, 9 hops across 4 trays)
+    CLOSET_BOX,        // Existing multi-host pipeline (48 stages across dual galaxy closet box)
+    BH_SINGLE_GALAXY,  // BH single-galaxy pipeline (4 stages, 9 hops across 4 trays)
+    WH_SINGLE_GALAXY   // WH single-galaxy pipeline (4 stages, 9 hops across 4 trays)
 };
 
 // Get physical pipeline stage configs for the specified pipeline type.
 std::vector<PhysicalPipelineStageConfig> get_physical_pipeline_config(PipelineType type) {
     switch (type) {
-        case PipelineType::SINGLE_GALAXY:
+        case PipelineType::BH_SINGLE_GALAXY:
             return {
                 {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
                 {.tray_id = 3, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
                 {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
                 {.tray_id = 2, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
+            };
+        case PipelineType::WH_SINGLE_GALAXY:
+            // Same ASIC locations as BH, but trays 2 and 3 are swapped.
+            // Ring: T1 -> T2 -> T4 -> T3 -> T1
+            return {
+                {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
+                {.tray_id = 2, .entry_node_asic_location = 6, .exit_node_asic_location = 4},
+                {.tray_id = 4, .entry_node_asic_location = 4, .exit_node_asic_location = 7},
+                {.tray_id = 3, .entry_node_asic_location = 7, .exit_node_asic_location = 4},
             };
         case PipelineType::CLOSET_BOX:
         default:
@@ -262,13 +275,17 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
 }
 
 // Single-galaxy pipeline test helper (multi-process, 4 ranks, one per tray).
-// Uses the SINGLE_GALAXY pipeline config and follows the same setup logic
+// Uses the arch-appropriate SINGLE_GALAXY pipeline config and follows the same setup logic
 // as the ClosetBox SendRecvPipeline test, but with 4 stages across 4 trays
-// and a separate sender device (T1D2).
+// and a separate sender device.
 //
-// Pipeline path (9 hops):
+// BH Pipeline path (9 hops):
 //   T1D2(send) -> T1D6(fwd) -> T3D6(fwd) -> T3D4(fwd) -> T4D4(fwd) ->
 //   T4D7(fwd) -> T2D7(fwd) -> T2D4(fwd) -> T1D4(fwd) -> T1D2(recv)
+//
+// WH Pipeline path (9 hops, trays 2 and 3 swapped vs BH):
+//   T1D2(send) -> T1D6(fwd) -> T2D6(fwd) -> T2D4(fwd) -> T4D4(fwd) ->
+//   T4D7(fwd) -> T3D7(fwd) -> T3D4(fwd) -> T1D4(fwd) -> T1D2(recv)
 void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_device, bool enable_correctness_check) {
     constexpr uint32_t XFER_SIZE = 14 * 1024;
     constexpr uint32_t NUM_ITERATIONS = 100;
@@ -282,8 +299,17 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
     auto physical_system_descriptor = create_physical_system_descriptor();
     auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device);
 
-    // Build pipeline from the SINGLE_GALAXY config (4 stages, one per tray)
-    auto physical_config = get_physical_pipeline_config(PipelineType::SINGLE_GALAXY);
+    // Detect architecture to select the appropriate pipeline config and parameters
+    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    const bool is_wormhole = (arch == tt::ARCH::WORMHOLE_B0);
+    const auto pipeline_type = is_wormhole ? PipelineType::WH_SINGLE_GALAXY : PipelineType::BH_SINGLE_GALAXY;
+    // Sender device ASIC location on tray 1 (must differ from pipeline entry/exit ASICs)
+    const uint32_t sender_asic_location = 2;
+    // Clock frequency for latency calculation: WH B0 = 1.0 GHz, BH = 1.35 GHz
+    const double clock_freq_hz = is_wormhole ? 1.0e9 : 1.35e9;
+
+    // Build pipeline from the arch-appropriate SINGLE_GALAXY config (4 stages, one per tray)
+    auto physical_config = get_physical_pipeline_config(pipeline_type);
     auto pipeline_stages = build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord, physical_config);
 
     const uint32_t num_stages = pipeline_stages.size();
@@ -350,17 +376,17 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
     distributed::MeshCoordinate start_coord = distributed::MeshCoordinate(0, 0);
 
     if (is_pipeline_start) {
-        // Resolve sender device T1D2 using physical system descriptor.
+        // Resolve sender device using physical system descriptor.
         // The sender device is separate from the pipeline stage entry/exit nodes.
         auto sender_hostname = physical_system_descriptor.get_hostname_for_rank(0);
         auto sender_asic_id = physical_system_descriptor.get_asic_id(
-            sender_hostname, tt::tt_metal::TrayID(1), tt::tt_metal::ASICLocation(2));
+            sender_hostname, tt::tt_metal::TrayID(1), tt::tt_metal::ASICLocation(sender_asic_location));
         start_coord = asic_id_to_mesh_coord.at(sender_asic_id);
 
-        // Outbound: start_coord (T1D2) -> my_exit (T1D6)
+        // Outbound: start_coord -> my_exit
         auto [intermed_send, intermed_recv] = create_intermed_socket_pair(start_coord, my_exit);
 
-        // Cross-mesh send: my_exit (T1D6) -> downstream_entry (T3D6)
+        // Cross-mesh send: my_exit -> downstream_entry
         auto fwd_connection = distributed::SocketConnection(
             distributed::MeshCoreCoord(my_exit, logical_coord),
             distributed::MeshCoreCoord(downstream_entry, logical_coord));
@@ -371,7 +397,7 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
             distributed::multihost::Rank(downstream_rank));
         auto send_socket = distributed::MeshSocket(mesh_device, send_socket_config);
 
-        // Cross-mesh recv: upstream_exit (T2D4) -> my_entry (T1D4)
+        // Cross-mesh recv: upstream_exit -> my_entry
         auto bwd_connection = distributed::SocketConnection(
             distributed::MeshCoreCoord(upstream_exit, logical_coord),
             distributed::MeshCoreCoord(my_entry, logical_coord));
@@ -382,7 +408,7 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
             distributed_context->rank());
         auto recv_socket = distributed::MeshSocket(mesh_device, recv_socket_config);
 
-        // Inbound: my_entry (T1D4) -> start_coord (T1D2)
+        // Inbound: my_entry -> start_coord
         auto [intermed_send_2, intermed_recv_2] = create_intermed_socket_pair(my_entry, start_coord);
 
         // Create device buffer using metal-level API
@@ -409,9 +435,9 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
         Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
 
         // Launch kernels:
-        // - send_async on T1D2: sends data via intermed to T1D6, receives ack back via intermed_2 from T1D4
-        // - socket_forward on T1D6: forwards from intermed to cross-mesh send socket (to T3D6)
-        // - socket_forward on T1D4: forwards from cross-mesh recv socket (from T2D4) to intermed_2 (to T1D2)
+        // - send_async on start_coord: sends data via intermed to my_exit, receives ack back via intermed_2
+        // - socket_forward on my_exit: forwards from intermed to cross-mesh send socket (downstream)
+        // - socket_forward on my_entry: forwards from cross-mesh recv socket (upstream) to intermed_2
         tt::tt_metal::send_async(
             mesh_device.get(),
             input_buffer,
@@ -487,7 +513,7 @@ void run_single_galaxy_pipeline(std::shared_ptr<distributed::MeshDevice>& mesh_d
             avg_latency_cycles += static_cast<double>(latency);
         }
         avg_latency_cycles /= NUM_ITERATIONS;
-        double avg_latency_us = (avg_latency_cycles / (1.35e9)) * 1e6;
+        double avg_latency_us = (avg_latency_cycles / clock_freq_hz) * 1e6;
         std::cout << std::fixed << std::setprecision(2);
         std::cout << "Average latency in cycles: " << avg_latency_cycles << std::endl;
         std::cout << "Average latency in microseconds: " << avg_latency_us << std::endl;
