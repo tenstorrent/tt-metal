@@ -108,7 +108,7 @@ sfpi_inline vFloat sfpu_sinpi<false>(vFloat x) {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_sine() {
-    // Constants for four-stage Cody-Waite reduction with P1+P2+P3+P4=PI
+    // Constants for four-stage Cody-Waite reduction with -PI = P0 + P1 + vConstFloatPrgm0 + vConstFloatPrgm1
     const float P0 = -0x1.92p+1f;               // representable as bf16
     const float P1 = -0x1.fbp-11f;              // representable as fp16
     sfpi::vConstFloatPrgm0 = -0x1.51p-21f;      // requires fp32
@@ -127,19 +127,20 @@ inline void calculate_sine() {
         vFloat v = dst_reg[0];
 
         // Compute j = round(v / PI).
-        // First, j = v * INV_PI + 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
-        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
         vFloat tmp;
+        // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
         tmp.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);
         __rvtt_vec_t inv_pi = __builtin_rvtt_sfpreadlreg(sfpi::vConstFloatPrgm2.get());
+        // First, j = v * (1 / PI) + 1.5*2^23 shifts the mantissa bits to give round-to-nearest-even.
         vFloat j;
         j.get() = __builtin_rvtt_bh_sfpmad(v.get(), inv_pi, tmp.get(), SFPMAD_MOD1_OFFSET_NONE);
-        // We need the LSB of the integer later, to determine the sign of the result.
+        // At this point, the mantissa bits of j contain the integer.
+        // Store for later; the LSB determines the sign of the result.
         vInt q = reinterpret<vInt>(j);
         // Shift mantissa bits back; j is now round(v / PI) in fp32.
-        j += -tmp;
+        j -= tmp;
 
-        // Four-stage Cody-Waite reduction; a = v - j * PI.
+        // Four-stage Cody-Waite reduction; a = v + j * -PI.
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
         vFloat a = v + j * P0;
         // P1 representable as fp16; generates a single SFPLOADI, filling NOP slot from previous SFPMAD.
