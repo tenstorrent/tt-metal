@@ -27,6 +27,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
       - name: Get workflow run_id attempt number to analyze
         id: get-run-id-and-attempt
         shell: bash

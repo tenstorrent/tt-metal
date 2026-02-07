@@ -5,11 +5,14 @@
 // Single kernel file, compiles correctly for all RISC cores
 // Each RISC has its own CTArgs struct with different compile-time arg layout
 //
-// Implements: RMSNorm + Mcast + Matmul + Gather + RMSNorm2 + Mcast2 + Matmul2 + Matmul3 + RoPE + GatherHeads
-// - NCRISC: RMSNorm reader + Mcast receiver (on matmul cores), Matmul reader + Gather sender (on matmul cores),
+// Implements: CCL Broadcast + RMSNorm + Mcast + Matmul + Gather + RMSNorm2 + Mcast2 + Matmul2 + Matmul3 + RoPE +
+// GatherHeads
+// - NCRISC: CCL Broadcast Reader + RMSNorm reader + Mcast receiver (on matmul cores), Matmul reader + Gather sender (on
+// matmul cores),
 //           RMSNorm2 reader + Mcast2 receiver (on matmul2 cores), Matmul2 reader (on matmul2 cores),
 //           Matmul3 reader (on qnope cores), RoPE reader (on qrope cores), GatherHeads sender (on qnope/qrope cores)
-// - BRISC: RMSNorm writer + Mcast sender (on input core), Matmul writer (on matmul cores), Gather receiver (on
+// - BRISC: CCL Broadcast Writer + RMSNorm writer + Mcast sender (on input core), Matmul writer (on matmul cores),
+// Gather receiver (on
 //          input core), Mcast2 sender (on input core), Matmul2 writer (on matmul2 cores),
 //          GatherHeads receiver (on sdpa input cores)
 // - TRISC: RMSNorm compute (on input core), Matmul compute (on matmul cores), RMSNorm2 compute (on input core),
@@ -30,6 +33,7 @@
 #include "../../../unified_kernels/gather.hpp"
 #include "../../../unified_kernels/gather_heads.hpp"
 #include "../../../unified_kernels/rope.hpp"
+#include "../../../unified_kernels/broadcast.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 // Defined at namespace scope (local classes cannot have static data members)
@@ -50,6 +54,7 @@ struct Core {
     static constexpr bool is_kv_rmsnorm_core = get_named_compile_time_arg_val("is_kv_rmsnorm_core") == 1;
     static constexpr bool is_knope_core = get_named_compile_time_arg_val("is_knope_core") == 1;
     static constexpr bool is_krope_core = get_named_compile_time_arg_val("is_krope_core") == 1;
+    static constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
 };
 
 void kernel_main() {
@@ -60,6 +65,27 @@ void kernel_main() {
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type aliases (required for Op templates)
+    // CCL Broadcast CTArgs type alias
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_core_noc_x"),
+        get_named_compile_time_arg_val("bcast_core_noc_y"),
+        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+        get_named_compile_time_arg_val("bcast_is_active_broadcaster")>;
+
+    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+    if constexpr (!Core::skip_ccl) {
+        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
+            get_common_arg_val<uint32_t>(0),  // tensor_address0
+            get_common_arg_val<uint32_t>(1),  // tile_id_start
+            get_common_arg_val<uint32_t>(2),  // tile_id_end
+        };
+    }
+
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
@@ -167,9 +193,50 @@ void kernel_main() {
 
 // ============================================================================
 // BRISC (Writer + Mcast Sender) - WriterConfigDescriptor compiles as BRISC
-// Named compile-time args: rmsnorm writer, mcast sender, matmul writer, gather receiver
+// Named compile-time args: bcast writer + rmsnorm writer, mcast sender, matmul writer, gather receiver
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
+
+    // CCL Broadcast CTArgs type alias
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
+        get_named_compile_time_arg_val("bcast_cb0_id"),
+        get_named_compile_time_arg_val("bcast_packet_size_in_pages"),
+        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+        get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
+        get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
+        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_core_noc_x"),
+        get_named_compile_time_arg_val("bcast_core_noc_y"),
+        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
+        get_named_compile_time_arg_val("bcast_has_secondary_target"),
+        get_named_compile_time_arg_val("bcast_has_reverse_secondary_connection"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
+        get_named_compile_time_arg_val("bcast_range_hops_forward"),
+        get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
+        get_named_compile_time_arg_val("bcast_range_hops_backward"),
+        get_named_compile_time_arg_val("bcast_using_persistent_buffers")>;
+
+    // CCL Broadcast writer runtime args (only populated when not skip_ccl)
+    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+    if constexpr (!Core::skip_ccl) {
+        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
+            get_common_arg_val<uint32_t>(0),   // tensor_address0
+            get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
+            get_common_arg_val<uint32_t>(2),   // tile_id_start
+            get_common_arg_val<uint32_t>(3),   // tile_id_end
+            get_common_arg_val<uint32_t>(4),   // wait_output_semaphore
+            get_common_arg_val<uint32_t>(5),   // reset_global_semaphore
+            get_common_arg_val<uint32_t>(6),   // out_ready_sem_noc0_x
+            get_common_arg_val<uint32_t>(7),   // out_ready_sem_noc0_y
+            get_common_arg_val<uint32_t>(8),   // out_ready_sem_wait_value
+            get_common_arg_val<uint32_t>(9),   // barrier_sem
+            get_common_arg_val<uint32_t>(10),  // barrier_sem_noc0_x
+            get_common_arg_val<uint32_t>(11),  // barrier_sem_noc0_y
+            get_common_arg_val<uint32_t>(12),  // ring_index
+            get_common_arg_val<uint32_t>(13),  // secondary_sync_sem
+            get_common_arg_val<uint32_t>(14),  // num_connections (computed from len(dst_nodes))
+        };
+    }
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
@@ -309,6 +376,11 @@ void kernel_main() {
 // ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
     // CTArgs type aliases (required for Op templates)
+
+    // CCL Broadcast CTArgs (no-op for TRISC)
+    using BcastCTArgs = deepseek_b1_ops::Broadcast::ComputeCTArgs;
+    deepseek_b1_ops::Broadcast::ComputeArgs bcast_args{};
+
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ComputeCTArgs<
         get_named_compile_time_arg_val("rmsnorm_fp32_acc") == 1,
         get_named_compile_time_arg_val("rmsnorm_num_tiles"),
@@ -459,12 +531,12 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
     // Setup sharded persistent buffers
-    if constexpr (Core::is_input_core) {
-        // RMSNorm input and gamma buffers
+    if constexpr (Core::is_input_core && !Core::skip_ccl) {
+        // Multi-device mode: NCRISC sets up gamma buffers while BRISC handles CCL
+        // RMSNorm gamma buffer
         constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
         constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
         constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
         unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
 
         // RMSNorm2 gamma buffer (3 tiles of 16x32)
@@ -545,6 +617,45 @@ void kernel_main() {
         unified_kernels::setup_sharded_buffer(krope_cos_cb, krope_Wt);
         unified_kernels::setup_sharded_buffer(krope_sin_cb, krope_Wt);
         unified_kernels::setup_sharded_buffer(krope_trans_mat_cb, 1);
+    }
+#endif
+
+    // ========================================================================
+    // CCL Broadcast (optional, skip if single-device mode)
+    // ========================================================================
+    if constexpr (!Core::skip_ccl) {
+        {
+            DeviceZoneScopedN("CCL_BROADCAST");
+            deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
+            bcast(bcast_args);
+        }
+    }
+
+#if defined(COMPILE_FOR_NCRISC)
+    if constexpr (Core::is_input_core && Core::skip_ccl) {
+        // Single-device mode: NCRISC sets up ALL sharded buffers (input + gamma + gamma2)
+        // This matches the reference kernel behavior
+        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
+        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+        constexpr uint32_t rmsnorm2_gamma_cb = get_named_compile_time_arg_val("rmsnorm2_gamma_cb");
+        constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
+
+        unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
+        unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
+    }
+#endif
+
+#if defined(COMPILE_FOR_BRISC)
+    if constexpr (Core::is_input_core && !Core::skip_ccl) {
+        // Multi-device mode only: BRISC sets up intermediate (broadcast output) buffer
+        // Gamma CBs are already set up by NCRISC via setup_sharded_buffer
+        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+
+        cb_reserve_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+        cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
     }
 #endif
 
