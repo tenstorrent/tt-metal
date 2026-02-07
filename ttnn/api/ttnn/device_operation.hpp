@@ -11,6 +11,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <unordered_map>
 
 #include <tt-metalium/program_cache.hpp>
@@ -550,9 +551,8 @@ typename device_operation_t::tensor_return_value_t launch(
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     if (first_tensor.has_value()) [[likely]] {
-        const auto& storage = first_tensor.value().storage();
         TT_FATAL(
-            std::holds_alternative<tt::tt_metal::DeviceStorage>(storage),
+            tt::tt_metal::is_device_tensor(first_tensor.value()),
             "Device Operations expect tensor with Device storage in inputs");
     }
 

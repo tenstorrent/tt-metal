@@ -9,6 +9,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -18,16 +19,10 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 bool can_deallocate(const Tensor& input_tensor) {
-    return std::visit(
-        [&input_tensor](auto&& storage) {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return storage.mesh_buffer.use_count() == 1;
-            } else {
-                return false;
-            }
-        },
-        input_tensor.storage());
+    if (!is_device_tensor(input_tensor)) {
+        return false;
+    }
+    return input_tensor.device_storage().mesh_buffer.use_count() == 1;
 }
 
 static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {

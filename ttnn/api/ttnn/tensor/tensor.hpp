@@ -47,7 +47,8 @@ public:
     ~Tensor();
 
     // Constructs a tensor with `Storage`, `TensorSpec`, and `TensorTopology`.
-    [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+    [[nodiscard]] Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+    [[nodiscard]] Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -183,7 +184,11 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
+private:
+    // TODO: remove this, use case has been all cleaned up
     const Storage& storage() const;
+
+public:
     DataType dtype() const;
     Layout layout() const;
     const tt::tt_metal::Shape& logical_shape() const;
@@ -253,7 +258,6 @@ private:
     // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
     std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
 
-    void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 
     // Shared pointer to all attributes associated with this tensor
