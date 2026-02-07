@@ -775,7 +775,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                             .q_chunk_count = q_count,
                         });
 
-                        uint32_t head_id = b * NQH + h;
+                        uint32_t head_id = (b * NQH) + h;
                         if (head_id < head_segments.size()) {
                             head_segments[head_id].push_back(HeadSegmentRef{
                                 .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
