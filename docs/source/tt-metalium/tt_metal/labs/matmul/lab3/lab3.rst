@@ -1143,6 +1143,9 @@ Make sure to account for the fact that number of receivers for A may be differen
    logical coordinates are ``(0, 0)`` (i.e. you shouldn't assume that core with logical coordinates ``(0, 0)`` has device coordinates ``(0, 0)``).
    Advice: name all your coordinate variables with logical/device in the name to avoid any ambiguity.
 
+   When converting lofgical to device coordinates, you can use the ``worker_core_from_logical_core`` function.
+  Keep in mind that this function accepts only valid logical coordinates. For example, passing a coordinate outside the grid size will throw an error.
+
    Make sure to perform all arithmetic on coordinates before converting to device coordinates. Add or subtract any offsets
    (e.g., to determine the core to the right of the current core) in logical coordinate space, then convert the final result to device coordinates.|
 
