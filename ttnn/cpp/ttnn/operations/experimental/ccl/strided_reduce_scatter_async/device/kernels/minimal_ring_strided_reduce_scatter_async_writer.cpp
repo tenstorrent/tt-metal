@@ -326,7 +326,7 @@ void kernel_main() {
                                 size_t l1_read_addr = get_read_ptr(cb_output_id);
 
                                 for (uint32_t k = 0; k < tiles_to_read_in_this_step; ++k) {
-                                    auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
+                                    auto tile_indices = coordinates_to_tile_indices(
                                         first_tile_row_in_mm_M_block,
                                         first_chunk_col_in_tiles,
                                         first_mm_core_idx,
@@ -336,7 +336,12 @@ void kernel_main() {
                                         N_block_wt,
                                         tiles_ht_per_core,
                                         mm_block_ht,
-                                        chunk_width_in_tiles);
+                                        chunk_width_in_tiles,
+                                        actual_slice_idx,
+                                        slice_Wt,
+                                        input_tensor_Wt);
+                                    slice_tile_idx = tile_indices.slice;
+                                    global_tile_idx = tile_indices.global;
 
                                     get_next_tile_coordinates(
                                         first_tile_row_in_mm_M_block,
@@ -346,10 +351,6 @@ void kernel_main() {
                                         effective_chunk_piece_size,
                                         effective_chunk_width_in_tiles,
                                         mm_block_ht);
-                                    slice_tile_idx =
-                                        slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
-                                    global_tile_idx = slice_coordinates_to_global_tile_index(
-                                        slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
                                     DPRINT << "global_tile_idx: " << global_tile_idx << ENDL();
 
                                     if (i < (ring_size - 1)) {

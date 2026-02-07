@@ -223,7 +223,7 @@ void kernel_main() {
                             }
 
                             for (uint32_t j = 0; j < tiles_to_read_in_this_step; ++j) {
-                                auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
+                                auto [slice_tile_idx, global_tile_idx] = coordinates_to_tile_indices(
                                     first_tile_row_in_mm_M_block,
                                     first_chunk_col_in_tiles,
                                     first_mm_core_idx,
@@ -233,11 +233,10 @@ void kernel_main() {
                                     N_block_wt,
                                     tiles_ht_per_core,
                                     mm_block_ht,
-                                    chunk_width_in_tiles);
-                                uint32_t slice_tile_idx =
-                                    slice_coordinates_to_slice_tile_index(slice_row, slice_col, slice_Wt);
-                                uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
-                                    slice_row, slice_col, actual_slice_idx, slice_Wt, input_tensor_Wt);
+                                    chunk_width_in_tiles,
+                                    actual_slice_idx,
+                                    slice_Wt,
+                                    input_tensor_Wt);
                                 DPRINT << "global_tile_idx: " << global_tile_idx << ENDL();
                                 uint32_t input_tile_id = global_tile_idx + batch_offset;
 
