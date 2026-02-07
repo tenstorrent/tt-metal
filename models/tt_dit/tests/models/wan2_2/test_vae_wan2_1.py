@@ -1843,9 +1843,9 @@ def test_conv3d_blocking_sweep(mesh_device, silicon_arch_blackhole):
         torch_bias = torch.randn(C_out, dtype=torch.float32)
 
         padded_C_in = aligned_channels(C_in)
-        T_padded = T + kernel_size[0] - 1  # Causal padding
 
-        torch_input = torch.randn(1, T_padded, H, W, padded_C_in, dtype=torch.float32)
+        # Input shape: (N, T, H, W, C) - no causal padding added here
+        torch_input = torch.randn(1, T, H, W, padded_C_in, dtype=torch.float32)
 
         # Track best result for this config
         best_time = float("inf")
