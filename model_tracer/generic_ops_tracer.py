@@ -59,33 +59,64 @@ BASE_DIR = get_base_dir()
 
 
 def get_machine_info():
-    """Get machine info (board type, device series, and card count) using tt-smi command."""
+    """Get machine info (board type, device series, card count, and device count) using tt-smi command."""
     try:
         result = subprocess.run(["tt-smi", "-ls"], capture_output=True, text=True, timeout=10)
         if result.returncode != 0 or not result.stdout.strip():
             return None
 
-        in_table = False
+        # Parse "All available boards" section for total device count
+        all_devices = []
+        in_all_boards = False
+
+        # Parse "Boards that can be reset" section for card count
+        in_reset_table = False
         machines = {}
 
         for line in result.stdout.split("\n"):
+            # Track when we enter "All available boards" section
+            if "All available boards on host" in line:
+                in_all_boards = True
+                in_reset_table = False
+                continue
+
+            # Track when we enter "Boards that can be reset" section
             if "Boards that can be reset" in line:
-                in_table = True
+                in_all_boards = False
+                in_reset_table = True
                 continue
-            if not in_table:
-                continue
-            if line.strip().startswith("│"):
+
+            # Parse device rows in "All available boards" section
+            if in_all_boards and line.strip().startswith("│"):
+                parts = [p.strip() for p in line.split("│") if p.strip()]
+                if len(parts) >= 3:
+                    pci_dev_id = parts[0]
+                    board_type = parts[1]
+                    device_series = parts[2].rstrip("LR").strip()  # Remove L/R suffix
+                    if board_type and device_series and board_type != "Board Type" and pci_dev_id != "PCI Dev ID":
+                        all_devices.append((board_type, device_series))
+
+            # Count cards from "Boards that can be reset" section
+            if in_reset_table and line.strip().startswith("│"):
                 parts = [p.strip() for p in line.split("│") if p.strip()]
                 if len(parts) >= 3:
                     board_type = parts[1]
-                    device_series = parts[2].rstrip("L").strip()
+                    device_series = parts[2].rstrip("LR").strip()
                     if board_type and device_series and board_type != "Board Type":
                         key = (board_type, device_series)
                         machines[key] = machines.get(key, 0) + 1
 
-        if machines:
+        if machines and all_devices:
             (board_type, device_series), card_count = max(machines.items(), key=lambda x: x[1])
-            return {"board_type": board_type, "device_series": device_series, "card_count": card_count}
+            # Count total devices from "All available boards" section
+            device_count = len(all_devices)
+
+            return {
+                "board_type": board_type,
+                "device_series": device_series,
+                "card_count": card_count,
+                "device_count": device_count,
+            }
         return None
     except:
         return None
