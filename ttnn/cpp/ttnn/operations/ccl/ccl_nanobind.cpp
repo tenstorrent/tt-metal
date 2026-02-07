@@ -18,7 +18,6 @@
 #include "ttnn/operations/ccl/all_to_all_dispatch/all_to_all_dispatch_nanobind.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_nanobind.hpp"
 #include "ttnn/operations/ccl/all_reduce/all_reduce_nanobind.hpp"
-#include "ttnn/operations/ccl/reduce_to_all/reduce_to_all_nanobind.hpp"
 
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -46,7 +45,6 @@ void py_module(nb::module_& mod) {
     ccl::bind_reduce_scatter(mod);
     ccl::bind_all_reduce(mod);
     ccl::bind_broadcast(mod);
-    ccl::bind_reduce_to_all(mod);
 }
 
 }  // namespace ttnn::operations::ccl

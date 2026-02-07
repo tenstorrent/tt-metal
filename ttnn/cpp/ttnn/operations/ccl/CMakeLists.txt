@@ -100,9 +100,6 @@ target_sources(
         broadcast/broadcast.cpp
         broadcast/device/broadcast_device_operation.cpp
         broadcast/device/broadcast_program_factory.cpp
-        reduce_to_all/reduce_to_all.cpp
-        reduce_to_all/device/reduce_to_all_op.cpp
-        reduce_to_all/device/reduce_to_all_program.cpp
 )
 
 target_include_directories(ttnn_op_ccl PRIVATE ${FixmeOpIncDirs})
