@@ -251,6 +251,7 @@ def from_torch(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     cq_id: Optional[int] = None,
+    col_tilize: bool = False,
 ) -> Optional[ttnn.Tensor]:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. If `tensor` is `None`, the function returns `None`.
@@ -273,6 +274,10 @@ def from_torch(
         memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
         mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
         cq_id (int, optional): The command queue ID to use. Defaults to `0`.
+        col_tilize (bool, optional): If True, transpose the last two dimensions before BFP tilization so that
+            exponents are shared along columns instead of rows. Requires BFP dtype (bfloat8_b or bfloat4_b),
+            tensor.ndim >= 2, and spec must be None. The returned tensor has the last two dims swapped.
+            Use with ``transpose_b=True`` in matmul. Defaults to `False`.
 
     Returns:
         ttnn.Tensor | None: A `ttnn.Tensor` created from the input `torch.Tensor`, or `None` if `tensor` is `None`.
@@ -280,6 +285,14 @@ def from_torch(
 
     if tensor is None:
         return None
+
+    if col_tilize:
+        if spec is not None:
+            raise RuntimeError("ttnn.from_torch: col_tilize=True is not supported with spec")
+        if dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            raise RuntimeError("ttnn.from_torch: col_tilize=True requires BFP dtype (bfloat8_b or bfloat4_b)")
+        if tensor.ndim < 2:
+            raise RuntimeError("ttnn.from_torch: col_tilize=True requires tensor.ndim >= 2")
 
     if spec is not None:
         if spec.shape != tensor.shape:
@@ -314,6 +327,7 @@ def from_torch(
         cq_id=cq_id,
         pad_value=pad_value,
         mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+        col_tilize=col_tilize,
     )
 
 
