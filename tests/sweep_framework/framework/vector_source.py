@@ -172,16 +172,21 @@ class VectorExportSource(VectorSource):
         if not module_files:
             return []
 
+        # Check if this is a model_traced run (resource filtering only applies to model_traced)
+        is_model_traced = "model_traced" in module_name
+
+        # Get current machine info (for device/card filtering in model_traced runs)
+        current_machine_info = None
+        if is_model_traced:
+            current_machine_info = self._get_machine_info()
+
         # Check if mesh filtering is enabled via environment variable
         mesh_filter = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
-        current_machine_info = None
         target_mesh = None
 
         if mesh_filter:
             logger.info(f"Mesh filtering enabled: MESH_DEVICE_SHAPE={mesh_filter}")
 
-            # Get current machine info
-            current_machine_info = self._get_machine_info()
             if current_machine_info:
                 logger.info(
                     f"Current machine: board_type={current_machine_info['board_type']}, "
@@ -244,18 +249,31 @@ class VectorExportSource(VectorSource):
                                 traced_machine_info = traced_machine_info[0]
 
                             # Check if required mesh shape exceeds available devices
-                            # This check always applies regardless of MESH_DEVICE_SHAPE env var
+                            # This check only applies to model_traced runs (not nightly/lead models)
+                            # and is independent of MESH_DEVICE_SHAPE env var
+                            skip_for_resources = False
                             if current_machine_info and traced_machine_info and isinstance(traced_machine_info, dict):
                                 required_device_count = traced_machine_info.get("device_count", 1)
+                                required_card_count = traced_machine_info.get("card_count", 1)
+
+                                # Get current machine capabilities directly from machine info
+                                current_card_count = current_machine_info.get("card_count", 1)
                                 current_device_count = current_machine_info.get("device_count", 1)
 
-                                if required_device_count > current_device_count:
+                                # Skip if vector requires more cards or devices than available
+                                if (
+                                    required_card_count > current_card_count
+                                    or required_device_count > current_device_count
+                                ):
                                     logger.debug(
-                                        f"Skipping vector requiring {required_device_count} devices "
-                                        f"(current machine has {current_device_count})"
+                                        f"Skipping vector requiring {required_card_count} cards/{required_device_count} devices "
+                                        f"(current machine has {current_card_count} cards/{current_device_count} devices)"
                                     )
                                     machine_mismatch_count += 1
-                                    continue
+                                    skip_for_resources = True
+
+                            if skip_for_resources:
+                                continue
 
                             # Apply mesh filtering if enabled
                             if mesh_filter and target_mesh:
