@@ -146,7 +146,6 @@ class Module(ABC):
                 parts.append("missing Torch state keys: " + ", ".join(missing_keys))
             if unexpected_keys:
                 parts.append("unexpected Torch state keys: " + ", ".join(unexpected_keys))
-            breakpoint()
             raise ValueError("; ".join(parts))
 
         self._is_loaded = True
