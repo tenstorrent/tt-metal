@@ -33,7 +33,15 @@ jobs:
         run: gh api rate_limit
 
       # ------------------------------------------------------------
-      # Fetch REAL merge queue using GraphQL
+      # Compute timestamp (15 min lookback)
+      # ------------------------------------------------------------
+      - name: Compute lookback timestamp
+        id: time
+        run: |
+          echo "LOOKBACK=$(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
+      # ------------------------------------------------------------
+      # Fetch merge queue
       # ------------------------------------------------------------
       - name: Fetch merge queue
         env:
@@ -62,11 +70,39 @@ jobs:
           }
           ' > merge_queue_raw.json
 
-          echo "[Info] Raw merge queue size:"
-          jq '.data.repository.mergeQueue.entries.nodes | length' merge_queue_raw.json
+      # ------------------------------------------------------------
+      # Fetch recently merged PRs
+      # ------------------------------------------------------------
+      - name: Fetch merged PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          LOOKBACK="${{ steps.time.outputs.LOOKBACK }}"
+
+          gh api graphql -f query="
+          query {
+            search(
+              query: \"repo:tenstorrent/tt-metal is:pr is:merged merged:>=$LOOKBACK\",
+              type: ISSUE,
+              first: 50
+            ) {
+              nodes {
+                ... on PullRequest {
+                  number
+                  title
+                  author { login }
+                  headRefOid
+                  mergedAt
+                }
+              }
+            }
+          }
+          " > merged_prs_raw.json
 
       # ------------------------------------------------------------
-      # Build snapshot JSON
+      # Build unified snapshot
       # ------------------------------------------------------------
       - name: Build merge queue snapshot
         run: |
@@ -75,26 +111,46 @@ jobs:
           mkdir -p generated/merge_queue
           COLLECTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          jq --arg repo "tenstorrent/tt-metal" --arg ts "$COLLECTED_AT" '
+          jq -n \
+            --arg repo "tenstorrent/tt-metal" \
+            --arg ts "$COLLECTED_AT" \
+            --slurpfile queue merge_queue_raw.json \
+            --slurpfile merged merged_prs_raw.json '
           {
             repository: $repo,
             collected_at: $ts,
-            merge_queue: [
-              .data.repository.mergeQueue.entries.nodes[] | {
-                merge_queue_id: null,
-                pr_number: .pullRequest.number,
-                pr_title: .pullRequest.title,
-                pr_author_login: .pullRequest.author.login,
-                head_sha: .pullRequest.headRefOid,
-                state: "IN_QUEUE",
-                queue_position: .position,
-                enqueued_at: .enqueuedAt,
-                collected_at: $ts
-              }
-            ]
+            merge_queue:
+              (
+                [
+                  $queue[0].data.repository.mergeQueue.entries.nodes[]? | {
+                    pr_number: .pullRequest.number,
+                    pr_title: .pullRequest.title,
+                    pr_author_login: .pullRequest.author.login,
+                    head_sha: .pullRequest.headRefOid,
+                    state: "IN_QUEUE",
+                    queue_position: .position,
+                    enqueued_at: .enqueuedAt,
+                    merged_at: null,
+                    collected_at: $ts
+                  }
+                ]
+                +
+                [
+                  $merged[0].data.search.nodes[]? | {
+                    pr_number: .number,
+                    pr_title: .title,
+                    pr_author_login: .author.login,
+                    head_sha: .headRefOid,
+                    state: "MERGED",
+                    queue_position: null,
+                    enqueued_at: null,
+                    merged_at: .mergedAt,
+                    collected_at: $ts
+                  }
+                ]
+              )
           }
-          ' merge_queue_raw.json \
-            > generated/merge_queue/merge_queue_snapshot.json
+          ' > generated/merge_queue/merge_queue_snapshot.json
 
           echo "[Info] Snapshot size:"
           jq '.merge_queue | length' generated/merge_queue/merge_queue_snapshot.json
@@ -108,8 +164,6 @@ jobs:
 
           mv generated/merge_queue/merge_queue_snapshot.json \
              generated/merge_queue/${TS}_merge_queue_snapshot.json
-
-          ls -lh generated/merge_queue
 
       # ------------------------------------------------------------
       # Upload via SFTP
