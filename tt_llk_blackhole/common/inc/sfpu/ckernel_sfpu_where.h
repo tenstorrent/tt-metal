@@ -28,6 +28,23 @@ inline void _calculate_where_(
 
     constexpr std::uint32_t mod0 = data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
 
+#ifdef DISABLE_SFPLOADMACRO
+    int offset3 = (dst_index_out * 32) << 1;
+
+    lltt::record(0, 6);
+    TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_7, offset0);
+    TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset1);
+    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset2);
+    TTI_SFPENCC(0, 0, 0, sfpi::SFPENCC_MOD1_EU_R1);
+    TT_SFPSTORE(p_sfpu::LREG1, mod0, ADDR_MOD_6, offset3);
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        lltt::replay(0, 6);
+    }
+#else
     if (dst_index_out == dst_index_in0)
     {
         // We use macros 0 and 2 to schedule the following, which achieves 3 cycles per input row of 32 values:
@@ -84,11 +101,13 @@ inline void _calculate_where_(
             lltt::replay(0, 4);
         }
     }
+#endif
 }
 
 template <bool APPROXIMATION_MODE>
 inline void _init_where_()
 {
+#ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
     TTI_SFPSETCC(0, 0, 12, 6); // SFPSETCC_MOD1_LREG_EQ0
 
@@ -125,6 +144,7 @@ inline void _init_where_()
 
     // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for all macros.
     TTI_SFPCONFIG(0x770, 8, 1);
+#endif
 }
 
 } // namespace ckernel::sfpu
