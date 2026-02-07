@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/base_types.hpp>
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -19,6 +20,9 @@ struct PrefixScanInputs {
     Tensor a;
     Tensor bx;
     Tensor h_prev;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("a", "bx", "h_prev");
+    auto attribute_values() const { return std::forward_as_tuple(a, bx, h_prev); }
 };
 
 }  // namespace ttnn::experimental::prim

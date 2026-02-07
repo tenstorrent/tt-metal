@@ -68,6 +68,9 @@ struct SoftmaxParams {
 struct SoftmaxInputs {
     const Tensor& input_tensor;
     const std::optional<const Tensor> mask;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "mask");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, mask); }
 };
 
 }  // namespace ttnn::prim

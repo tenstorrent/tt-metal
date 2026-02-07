@@ -17,6 +17,9 @@ using spec_return_value_t = TensorSpec;
 struct tensor_args_t {
     const std::vector<Tensor>& io_tensors;
     const Tensor& output_tensor;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("io_tensors", "output_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(io_tensors, output_tensor); }
 };
 
 }  // namespace ttnn::operations::generic

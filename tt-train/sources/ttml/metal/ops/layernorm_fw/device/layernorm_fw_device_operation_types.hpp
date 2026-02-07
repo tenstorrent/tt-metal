@@ -22,6 +22,12 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_output = std::nullopt;
     std::optional<ttnn::Tensor> preallocated_mean = std::nullopt;
     std::optional<ttnn::Tensor> preallocated_rstd = std::nullopt;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "input", "gamma", "beta", "preallocated_output", "preallocated_mean", "preallocated_rstd");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input, gamma, beta, preallocated_output, preallocated_mean, preallocated_rstd);
+    }
 };
 
 // Output tensor specs and tensors

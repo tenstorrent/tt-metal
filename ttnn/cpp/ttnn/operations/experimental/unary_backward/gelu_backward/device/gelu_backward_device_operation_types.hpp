@@ -24,6 +24,9 @@ struct GeluBackwardInputs {
     const Tensor& grad_output;
     const Tensor& input;
     std::optional<Tensor> preallocated_input_grad;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("grad_output", "input", "preallocated_input_grad");
+    auto attribute_values() const { return std::forward_as_tuple(grad_output, input, preallocated_input_grad); }
 };
 
 }  // namespace ttnn::experimental::prim

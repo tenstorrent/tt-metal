@@ -6,6 +6,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -27,6 +28,12 @@ struct WhereInputs {
     Tensor true_value_tensor;
     Tensor false_value_tensor;
     std::optional<Tensor> output_tensor;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("condition_tensor", "true_value_tensor", "false_value_tensor", "output_tensor");
+    auto attribute_values() const {
+        return std::forward_as_tuple(condition_tensor, true_value_tensor, false_value_tensor, output_tensor);
+    }
 };
 
 }  // namespace ttnn::experimental::prim

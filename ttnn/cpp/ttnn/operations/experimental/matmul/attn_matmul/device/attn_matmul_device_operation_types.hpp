@@ -40,6 +40,10 @@ struct AttnMatmulInputs {
     Tensor input_tensor_a;
     Tensor input_tensor_b;
     std::optional<Tensor> preallocated_output;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensor_a", "input_tensor_b", "preallocated_output");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor_a, input_tensor_b, preallocated_output); }
 };
 
 }  // namespace ttnn::experimental::prim

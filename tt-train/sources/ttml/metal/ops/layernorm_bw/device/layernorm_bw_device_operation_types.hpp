@@ -21,6 +21,27 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_dx = std::nullopt;  // dx (input gradient)
     std::optional<ttnn::Tensor> preallocated_dgamma_components = std::nullopt;  // dgamma components
     std::optional<ttnn::Tensor> preallocated_dbeta_components = std::nullopt;   // dbeta components
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "input",
+        "gamma",
+        "mean",
+        "rstd",
+        "dL_dout",
+        "preallocated_dx",
+        "preallocated_dgamma_components",
+        "preallocated_dbeta_components");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            input,
+            gamma,
+            mean,
+            rstd,
+            dL_dout,
+            preallocated_dx,
+            preallocated_dgamma_components,
+            preallocated_dbeta_components);
+    }
 };
 
 // Output tensor specs and tensors

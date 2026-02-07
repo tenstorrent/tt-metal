@@ -16,6 +16,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -88,6 +89,9 @@ struct LlamaAllGatherMatmulAsyncInputs {
     Tensor input0;
     Tensor input1;
     Tensor intermediate;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input0", "input1", "intermediate");
+    auto attribute_values() const { return std::forward_as_tuple(input0, input1, intermediate); }
 };
 
 }  // namespace ttnn::experimental::prim

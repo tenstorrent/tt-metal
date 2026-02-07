@@ -109,6 +109,9 @@ struct Conv3dInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<const Tensor> bias_tensor;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "weight_tensor", "bias_tensor");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, weight_tensor, bias_tensor); }
 };
 
 namespace detail {

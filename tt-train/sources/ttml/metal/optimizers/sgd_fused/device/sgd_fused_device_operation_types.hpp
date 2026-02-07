@@ -23,6 +23,11 @@ struct tensor_args_t {
     const ttnn::Tensor& param;
     const ttnn::Tensor& grad;
     std::optional<ttnn::Tensor> momentum_buffer = std::nullopt;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("param", "grad", "momentum_buffer");
+    auto attribute_values() const {
+        return std::forward_as_tuple(param, grad, momentum_buffer);
+    }
 };
 
 using tensor_return_value_t = ttnn::Tensor;

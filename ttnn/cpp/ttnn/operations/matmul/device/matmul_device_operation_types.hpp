@@ -67,6 +67,12 @@ struct MatmulInputs {
     std::vector<Tensor> input_tensors;                                // a,b, weights
     std::vector<std::optional<const Tensor>> optional_input_tensors;  // bias
     std::vector<std::optional<Tensor>> optional_output_tensors;       // output
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensors", "optional_input_tensors", "optional_output_tensors");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input_tensors, optional_input_tensors, optional_output_tensors);
+    }
 };
 
 }  // namespace ttnn::prim

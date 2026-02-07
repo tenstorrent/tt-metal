@@ -22,6 +22,12 @@ struct tensor_args_t {
     std::optional<Tensor> intermediate_tensor;
     std::optional<Tensor> residual_tensor;  // Optional residual input for fused residual add
     std::optional<Tensor> persistent_output_tensor;  // Optional persistent output buffer
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input_tensor", "intermediate_tensor", "residual_tensor", "persistent_output_tensor");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input_tensor, intermediate_tensor, residual_tensor, persistent_output_tensor);
+    }
 };
 
 }  // namespace ttnn::operations::experimental::ccl::deepseek_minimal_all_reduce

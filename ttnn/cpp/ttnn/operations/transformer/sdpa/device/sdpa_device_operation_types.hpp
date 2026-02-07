@@ -8,6 +8,7 @@
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <optional>
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -31,6 +32,10 @@ struct SDPAInputs {
     std::optional<Tensor> attn_mask;
     std::optional<Tensor> page_table;
     std::optional<Tensor> attention_sink;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("q", "k", "v", "attn_mask", "page_table", "attention_sink");
+    auto attribute_values() const { return std::forward_as_tuple(q, k, v, attn_mask, page_table, attention_sink); }
 };
 
 }  // namespace ttnn::prim

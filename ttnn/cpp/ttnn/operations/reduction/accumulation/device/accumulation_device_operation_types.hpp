@@ -10,6 +10,7 @@
 #include "ttnn/types.hpp"
 
 #include <optional>
+#include <tuple>
 
 namespace ttnn::prim {
 
@@ -26,6 +27,9 @@ struct AccumulationParams {
 struct AccumulationInputs {
     const Tensor& input_tensor;
     std::optional<Tensor> opt_output;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "opt_output");
+    auto attribute_values() const { return std::forward_as_tuple(input_tensor, opt_output); }
 };
 
 }  // namespace ttnn::prim

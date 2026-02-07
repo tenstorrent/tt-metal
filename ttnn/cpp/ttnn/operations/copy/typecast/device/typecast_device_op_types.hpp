@@ -44,6 +44,9 @@ struct TypecastParams {
 struct TypecastInputs {
     Tensor input;
     std::optional<Tensor> preallocated_output;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "preallocated_output");
+    auto attribute_values() const { return std::forward_as_tuple(input, preallocated_output); }
 };
 
 }  // namespace ttnn::prim

@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
+#include <tuple>
 
 namespace ttnn::experimental::prim {
 
@@ -57,6 +58,12 @@ struct MatmulReduceScatterAsyncInputs {
     std::optional<Tensor> bias;
     Tensor persistent_intermediate;
     Tensor persistent_output;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input", "weight", "bias", "persistent_intermediate", "persistent_output");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input, weight, bias, persistent_intermediate, persistent_output);
+    }
 };
 
 }  // namespace ttnn::experimental::prim
