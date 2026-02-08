@@ -15,33 +15,36 @@ namespace ttml::modules::distributed {
 
 DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConfig& config) :
     m_embedding_dim(config.embedding_dim), m_num_heads(config.num_heads), m_num_groups(config.num_groups) {
-    auto num_devices = static_cast<uint32_t>(autograd::ctx().get_device().num_devices());
-    if (m_num_heads % num_devices != 0) {
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    auto tp_axis = pctx.get_tp_axis();
+    auto tp_size = pctx.get_tp_size();
+
+    if (m_num_heads % tp_size != 0) {
         throw std::runtime_error(fmt::format(
-            "Number of heads must be divisible by the number of devices. Number of heads = {}, devices = {}",
+            "Number of heads must be divisible by the TP size. Number of heads = {}, TP size = {}",
             m_num_heads,
-            num_devices));
+            tp_size));
     }
 
-    if (m_num_groups % num_devices != 0) {
+    if (m_num_groups % tp_size != 0) {
         throw std::runtime_error(fmt::format(
-            "Number of groups must be divisible by the number of devices. Number of groups = {}, devices = {}",
+            "Number of groups must be divisible by the TP size. Number of groups = {}, TP size = {}",
             m_num_groups,
-            num_devices));
+            tp_size));
     }
 
-    m_num_local_heads = m_num_heads / num_devices;
-    m_num_local_groups = m_num_groups / num_devices;
+    m_num_local_heads = m_num_heads / tp_size;
+    m_num_local_groups = m_num_groups / tp_size;
 
     // create layers
     m_q_linear = std::make_shared<ColumnParallelLinear>(
-        m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* gather_output */ false);
+        m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* gather_output */ false, tp_axis);
     auto concat_kv_dim = 2U * m_num_groups * (m_embedding_dim / m_num_heads);
     m_kv_linear = std::make_shared<ColumnParallelLinear>(
-        m_embedding_dim, concat_kv_dim, /* has_bias */ false, /* gather_output */ false);
+        m_embedding_dim, concat_kv_dim, /* has_bias */ false, /* gather_output */ false, tp_axis);
     m_dropout = std::make_shared<ttml::modules::DropoutLayer>(config.dropout_prob, /* use_per_device_seed */ false);
     m_out_linear = std::make_shared<RowParallelLinear>(
-        m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* input_is_parallel */ true);
+        m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* input_is_parallel */ true, tp_axis);
     m_embedding = std::make_shared<ttml::modules::RotaryEmbedding>(config.rope_params);
 
     // register modules

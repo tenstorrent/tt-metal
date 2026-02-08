@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Implemented based on bmm.cpp
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/matmul.h"
+#include "api/compute/transpose_wh.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 ////////////////////

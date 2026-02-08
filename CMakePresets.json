@@ -113,8 +113,7 @@
         "name": "clang-tidy",
         "configurePreset": "clang-tidy",
         "configuration": "Debug",
-        "targets": ["all", "all_verify_interface_header_sets"],
-        "nativeToolOptions": ["-k0"]
+        "targets": ["all", "all_verify_interface_header_sets"]
       },
       {
         "name": "clang-tidy-fix",

@@ -2,31 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <compute_kernel_api/cb_api.h>
-#include <compute_kernel_api/pack.h>
-#include <compute_kernel_api/reconfig_data_format.h>
-#include <compute_kernel_api/reg_api.h>
+#include <api/compute/cb_api.h>
+#include <api/compute/pack.h>
+#include <api/compute/reconfig_data_format.h>
+#include <api/compute/reg_api.h>
 #include <hostdevcommon/kernel_structs.h>
 #include <tensix.h>
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/sqrt.h"
-#include "compute_kernel_api/mask.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/bcast.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/sqrt.h"
+#include "api/compute/mask.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose_wh.h"
 #include "sdpa_bw_compute_utils.hpp"
 
 namespace NAMESPACE {
