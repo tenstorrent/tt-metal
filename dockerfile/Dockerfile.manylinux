@@ -1,5 +1,5 @@
 # ManyLinux Dockerfile
-# Uses pre-built tool images from GHCR for mold, SFPI, and OpenMPI (ULFM).
+# Uses pre-built tool images from GHCR for ccache, mold, SFPI, and OpenMPI (ULFM).
 # Tool images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml.
 # Tool layers are expected to be available when this image is built (no fallbacks).
 
@@ -9,6 +9,7 @@
 #############################################################
 
 # Tool images from GHCR (built by Dockerfile.tools)
+ARG TOOL_CCACHE_IMAGE=scratch
 ARG TOOL_MOLD_IMAGE=scratch
 ARG TOOL_SFPI_IMAGE=scratch
 ARG TOOL_OPENMPI_IMAGE=scratch
@@ -16,6 +17,9 @@ ARG TOOL_OPENMPI_IMAGE=scratch
 #############################################################
 # Tool layers - pulled from pre-built GHCR images
 #############################################################
+
+# ccache layer - pre-built from GHCR
+FROM ${TOOL_CCACHE_IMAGE} AS ccache-layer
 
 # mold layer - pre-built from GHCR
 FROM ${TOOL_MOLD_IMAGE} AS mold-layer
@@ -87,30 +91,13 @@ RUN --mount=from=mold-layer,source=/install,target=/mold-staging \
     cp -a /mold-staging/lib/* /usr/local/lib/ && \
     mold --version
 
+# Copy ccache from pre-built tool image
+RUN --mount=from=ccache-layer,source=/install,target=/ccache-staging \
+    cp -a /ccache-staging/bin/ccache /usr/local/bin/ && \
+    ccache --version
+
 # Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
 ENV PATH="/usr/local/bin:$PATH"
-
-# Build ccache 4.7 from source
-# NOTE: We build from source rather than using the pre-built tool image because
-# manylinux has specific glibc requirements and the pre-built binary may not be compatible
-WORKDIR /tmp
-RUN wget https://github.com/ccache/ccache/releases/download/v4.7/ccache-4.7.tar.gz && \
-    tar xzf ccache-4.7.tar.gz && \
-    cd ccache-4.7 && \
-    mkdir build && \
-    cd build && \
-    cmake \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr/local \
-        -DENABLE_TESTING=OFF \
-        -DWARNINGS_AS_ERRORS=FALSE \
-        -GNinja \
-        .. && \
-    ninja && \
-    ninja install && \
-    cd /tmp && \
-    rm -rf ccache-4.7* && \
-    echo "Installed ccache from source: $(ccache --version)"
 
 # Copy OpenMPI (ULFM) from pre-built tool image
 ARG OMPI_TAG=v5.0.7

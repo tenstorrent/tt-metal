@@ -763,6 +763,7 @@ jobs:
           file: dockerfile/Dockerfile.manylinux
           tags: ${{ needs.check-docker-images.outputs.manylinux-tag }}
           build-args: |
+            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
             TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
             TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
             TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
