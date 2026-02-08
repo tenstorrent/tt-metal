@@ -249,7 +249,6 @@ RUN dnf install -y \
     libfabric-devel \
     libmpc-devel \
     libzstd-devel \
-    prrte-devel \
     mpfr-devel \
     pmix-devel \
     zlib-devel \
