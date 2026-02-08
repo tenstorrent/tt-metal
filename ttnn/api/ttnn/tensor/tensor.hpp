@@ -23,6 +23,9 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/device.hpp>
 
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/tensor/device_tensor.hpp>
+
 #include <tt_stl/optional_reference.hpp>
 
 namespace tt::tt_metal {
@@ -39,7 +42,7 @@ public:
 
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
-    std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
+    std::shared_ptr<std::variant<tt::tt_metal::HostTensor, tt::tt_metal::DeviceTensor>> tensor_attributes = nullptr;
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -189,14 +192,7 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-private:
-    // TODO(river):
-    // This will be removed as part of Metal Tensor split lowering (#37692).
-    // The function is removed publicly as the underlying storage of Tensor will be changed as part of the refactoring
-    // effort.
-    const Storage& storage() const;
 
-public:
     DataType dtype() const;
     Layout layout() const;
     const tt::tt_metal::Shape& logical_shape() const;
@@ -237,6 +233,16 @@ public:
     const HostStorage& host_storage() const&;
     const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
+    // Returns underlying HostTensor.
+    // Throws if the tensor is not on host.
+    const tt::tt_metal::HostTensor& host_tensor() const&;
+    const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+
+    // Returns underlying DeviceTensor.
+    // Throws if the tensor is not on device.
+    const DeviceTensor& device_tensor() const&;
+    const DeviceTensor& device_tensor() const&& = delete;  // prevents dangling reference to temporaries.
+
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
@@ -250,8 +256,10 @@ public:
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
-    auto attribute_values() const { return std::forward_as_tuple(storage(), tensor_spec()); }
+    // static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
+    // auto attribute_values() const { return std::forward_as_tuple(storage(), tensor_spec()); }
+    static constexpr auto attribute_names = std::forward_as_tuple("tensor_spec");
+    auto attribute_values() const { return std::forward_as_tuple(tensor_spec()); }
 
     static std::uint64_t get_tensor_id_counter();
 
