@@ -31,4 +31,5 @@ rm -rf "${WORKDIR}"
 echo "OpenMPI ${OMPI_TAG} installed to ${OMPI_PREFIX}"
 if [ -x "${OMPI_PREFIX}/bin/mpicc" ]; then
     "${OMPI_PREFIX}/bin/mpicc" --version || true
+    ls -alh "${OMPI_PREFIX}"/*
 fi
