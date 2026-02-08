@@ -6,7 +6,7 @@ set -euo pipefail
 YQ_VERSION="${YQ_VERSION:-v4.44.6}"
 # SHA256 for yq_linux_amd64 v4.44.6
 # Verified from GitHub release
-YQ_SHA256="${YQ_SHA256:-55f6b59bcbae8fe64f1e99c5daad1f8d37f02b4a5f5199a6ec8c70e9676a30b3}"
+YQ_SHA256="${YQ_SHA256:-0c2b24e645b57d8e7c0566d18643a6d4f5580feeea3878127354a46f2a1e4598}"
 
 INSTALL_DIR="${INSTALL_DIR:-/usr/local}"
 DOWNLOAD_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
