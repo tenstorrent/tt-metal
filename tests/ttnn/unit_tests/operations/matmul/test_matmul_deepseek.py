@@ -11,7 +11,7 @@ import math
 import ttnn
 
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import pad_to_dram_banks
-from models.common.utility_functions import comp_pcc, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, skip_for_blackhole, skip_with_watcher
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -242,6 +242,7 @@ def pad_to_tile(dim, tile_size):
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #36314")
 def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     """
     Test matmul with L1 sharded input1 and DRAM sharded input2.
@@ -466,6 +467,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
         "wkv_b2",
     ],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #36314")
 def test_matmul_batched_dram_sharded(device, test_case):
     """
     Test for Batch-Sharded DRAM Matmul.
@@ -626,6 +628,7 @@ def test_matmul_batched_dram_sharded(device, test_case):
     ],
     ids=["batch12_m32_k64_n32", "batch24_m64_k128_n64"],
 )
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #36314")
 def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
     """
     Test program cache behavior for Batch-Sharded DRAM Matmul.

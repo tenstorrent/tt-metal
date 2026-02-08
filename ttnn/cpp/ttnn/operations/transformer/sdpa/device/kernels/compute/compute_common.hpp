@@ -8,19 +8,19 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "api/debug/assert.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/binary_max_min.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/softplus.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/reduce_custom.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/binary_max_min.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
+#include "api/compute/reduce_custom.h"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
