@@ -38,6 +38,7 @@
 #include <memory>
 #include <utility>
 #include <atomic>
+#include <variant>
 
 namespace tt::tt_metal {
 namespace {
@@ -81,15 +82,15 @@ Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
 
 Tensor::Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(
-        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
+    tensor_attributes(std::make_shared<std::variant<HostTensor, DeviceTensor>>(
+        HostTensor(std::move(storage), std::move(tensor_spec), std::move(tensor_topology)))) {}
 
 Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(
-        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    if (auto buffer = device_storage().mesh_buffer; buffer != nullptr) {
-        mesh_device_ = buffer->device();
+    tensor_attributes(std::make_shared<std::variant<HostTensor, DeviceTensor>>(
+        DeviceTensor(std::move(storage), std::move(tensor_spec), std::move(tensor_topology)))) {
+    if (auto mesh_buffer = device_storage().mesh_buffer) {
+        mesh_device_ = mesh_buffer->device();
     }
 }
 
@@ -129,17 +130,8 @@ void Tensor::deallocate_impl(bool force) {
     };
 
     // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
-    if (can_deallocate(tensor_attributes, force)) {
-        std::visit(
-            tt::stl::overloaded{
-                [](HostStorage&) {},
-                [this, force, &can_deallocate](DeviceStorage& storage) {
-                    if (can_deallocate(storage.mesh_buffer, force)) {
-                        storage.mesh_buffer->deallocate();
-                    }
-                    storage.mesh_buffer.reset();
-                }},
-            this->tensor_attributes->get_storage());
+    if (storage_type() == StorageType::DEVICE && can_deallocate(tensor_attributes, force)) {
+        std::get<DeviceTensor>(*tensor_attributes).deallocate();
     }
     // GraphTracker::instance().track_function_end();
 }
@@ -434,28 +426,28 @@ Tensor Tensor::reshape(
 
 Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
     Tensor result = *this;
-    result.tensor_attributes =
-        std::make_shared<TensorAttributes>(tensor_attributes->with_tensor_topology(std::move(tensor_topology)));
+    result.tensor_attributes = std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::visit(
+        [&](auto& tensor) -> std::variant<HostTensor, DeviceTensor> {
+            return tensor.with_tensor_topology(std::move(tensor_topology));
+        },
+        *tensor_attributes));
     return result;
 }
 
 bool Tensor::is_allocated() const {
-    auto output = std::visit(
-        tt::stl::overloaded{
-            [](const DeviceStorage& storage) { return storage.is_allocated(); },
-            [](const HostStorage&) { return true; },
-        },
-        this->storage());
-    return output;
+    if (storage_type() == StorageType::HOST) {
+        return true;
+    }
+    return device_tensor().is_allocated();
 }
 
 StorageType Tensor::storage_type() const {
     return std::visit(
         tt::stl::overloaded{
-            [](const HostStorage&) { return StorageType::HOST; },
-            [](const DeviceStorage&) { return StorageType::DEVICE; },
+            [](const HostTensor&) { return StorageType::HOST; },
+            [](const DeviceTensor&) { return StorageType::DEVICE; },
         },
-        this->storage());
+        *this->tensor_attributes);
 }
 
 tt::tt_metal::Shape Tensor::strides() const {
@@ -554,34 +546,34 @@ Tensor set_tensor_id(const Tensor& tensor) {
     return output;
 };
 
-const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
+const tt::tt_metal::Shape& Tensor::logical_shape() const { return tensor_spec().logical_shape(); }
 
-const tt::tt_metal::Shape& Tensor::logical_shape() const {
-    return this->tensor_attributes->get_tensor_spec().logical_shape();
+const tt::tt_metal::Shape& Tensor::padded_shape() const { return tensor_spec().padded_shape(); }
+
+DataType Tensor::dtype() const { return tensor_spec().tensor_layout().get_data_type(); }
+
+Layout Tensor::layout() const { return tensor_spec().tensor_layout().get_layout(); }
+
+const TensorSpec& Tensor::tensor_spec() const {
+    return std::visit([](const auto& tensor) -> const TensorSpec& { return tensor.tensor_spec(); }, *tensor_attributes);
 }
-
-const tt::tt_metal::Shape& Tensor::padded_shape() const {
-    return this->tensor_attributes->get_tensor_spec().padded_shape();
-}
-
-DataType Tensor::dtype() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_data_type(); }
-
-Layout Tensor::layout() const { return this->tensor_attributes->get_tensor_spec().tensor_layout().get_layout(); }
-
-const TensorSpec& Tensor::tensor_spec() const { return this->tensor_attributes->get_tensor_spec(); }
 
 Buffer* Tensor::buffer() const { return device_storage().get_buffer(); }
 
-const DeviceStorage& Tensor::device_storage() const& {
-    const auto* device_storage = std::get_if<DeviceStorage>(&this->storage());
-    TT_FATAL(device_storage != nullptr, "Expected Tensor with DeviceStorage, got {}", this->storage_type());
-    return *device_storage;
+const DeviceStorage& Tensor::device_storage() const& { return device_tensor().get_storage(); }
+
+const HostStorage& Tensor::host_storage() const& { return host_tensor().get_storage(); }
+
+const HostTensor& Tensor::host_tensor() const& {
+    const auto* host_tensor = std::get_if<HostTensor>(tensor_attributes.get());
+    TT_FATAL(host_tensor != nullptr, "Expected Tensor with HostTensor, got DeviceTensor");
+    return *host_tensor;
 }
 
-const HostStorage& Tensor::host_storage() const& {
-    const auto* host_storage = std::get_if<HostStorage>(&this->storage());
-    TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
-    return *host_storage;
+const DeviceTensor& Tensor::device_tensor() const& {
+    const auto* device_tensor = std::get_if<DeviceTensor>(tensor_attributes.get());
+    TT_FATAL(device_tensor != nullptr, "Expected Tensor with DeviceTensor, got HostTensor");
+    return *device_tensor;
 }
 
 distributed::MeshDevice* Tensor::device() const {
@@ -599,7 +591,10 @@ const std::optional<ShardSpec>& Tensor::shard_spec() const { return this->memory
 
 const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->memory_config().nd_shard_spec(); }
 
-const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
+const TensorTopology& Tensor::tensor_topology() const {
+    return std::visit(
+        [](const auto& tensor) -> const TensorTopology& { return tensor.tensor_topology(); }, *tensor_attributes);
+}
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
     tt::stl::reflection::operator<<(os, tensor);

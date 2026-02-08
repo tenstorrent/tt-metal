@@ -47,6 +47,12 @@ public:
      * Construct a tensor that does not own any device memory.
      */
     DeviceTensor() = default;
+
+    // TODO: Close this constructor after refactoring.
+    DeviceTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+        impl(std::make_unique<TensorAttributes>(
+            std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
+
     /**
      * Deallocates any owning device memory.
      */
@@ -66,7 +72,7 @@ public:
      */
     void deallocate() {
         // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
-        auto& device_storage = get_device_storage();
+        auto& device_storage = get_storage();
         device_storage.mesh_buffer->deallocate();
         device_storage.mesh_buffer.reset();
         // GraphTracker::instance().track_function_end();
@@ -81,7 +87,7 @@ public:
      */
     // TODO: make this optional_ref?
     distributed::MeshDevice* get_device() const {
-        if (const auto& mesh_buffer = get_device_storage().mesh_buffer; mesh_buffer != nullptr) {
+        if (const auto& mesh_buffer = get_storage().mesh_buffer; mesh_buffer != nullptr) {
             return mesh_buffer->device();
         }
         return nullptr;
@@ -135,7 +141,7 @@ public:
     // TODO: this is implemented dependening on both if we have released the buffer and if the buffer is deallocated.
     //     Who would dealloate the buffer?
     bool is_allocated() const {
-        if (const auto& mesh_buffer = get_device_storage().mesh_buffer; mesh_buffer != nullptr) {
+        if (const auto& mesh_buffer = get_storage().mesh_buffer; mesh_buffer != nullptr) {
             return mesh_buffer->is_allocated();
         }
         return false;
@@ -152,11 +158,18 @@ public:
     //  */
     //  std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
 
+    const DeviceStorage& get_storage() const { return std::get<DeviceStorage>(impl->get_storage()); }
+
+    // TODO: This is a hack right now, because this allows multiple device tensor holding on to the same conceptual
+    // storage, find a better way to do this.
+    DeviceTensor with_tensor_topology(TensorTopology tensor_topology) {
+        return DeviceTensor(get_storage(), tensor_spec(), std::move(tensor_topology));
+    }
+
 private:
     std::unique_ptr<TensorAttributes> impl;
 
-    const DeviceStorage& get_device_storage() const { return std::get<DeviceStorage>(impl->get_storage()); }
-    DeviceStorage& get_device_storage() { return std::get<DeviceStorage>(impl->get_storage()); }
+    DeviceStorage& get_storage() { return std::get<DeviceStorage>(impl->get_storage()); }
 };
 
 }  // namespace tt::tt_metal

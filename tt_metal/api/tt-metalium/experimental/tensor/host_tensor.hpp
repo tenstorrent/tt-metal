@@ -289,8 +289,24 @@ public:
     // "Extra helper functions"
     Strides strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
 
+    // TODO: Remove these after refactoring.
+    HostTensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+        impl(std::make_unique<TensorAttributes>(
+            std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
+
+    // TODO: Does this make sense for HostTensor?
+    HostTensor with_tensor_topology(TensorTopology tensor_topology) const {
+        HostTensor result = *this;
+        result.impl = std::make_unique<TensorAttributes>(impl->with_tensor_topology(std::move(tensor_topology)));
+        return result;
+    }
+
+    const HostStorage& get_storage() const { return std::get<HostStorage>(impl->get_storage()); }
+
 private:
     std::unique_ptr<TensorAttributes> impl;
+
+    HostStorage& get_storage() { return std::get<HostStorage>(impl->get_storage()); }
 };
 
 }  // namespace tt::tt_metal
