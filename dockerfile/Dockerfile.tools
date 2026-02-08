@@ -235,6 +235,7 @@ RUN dnf install -y \
     autoconf \
     automake \
     bison \
+    bzip2 \
     ca-certificates \
     flex \
     gcc \
@@ -252,6 +253,7 @@ RUN dnf install -y \
     mpfr-devel \
     pmix-devel \
     zlib-devel \
+    wget \
     && dnf clean all
 
 COPY dockerfile/scripts/install-openmpi.sh /tmp/install-openmpi.sh
