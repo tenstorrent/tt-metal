@@ -515,7 +515,7 @@ std::ostream& operator<<(std::ostream& os, const AsicChannel& asic_channel) {
 // Hash function implementation for AsicChannel
 namespace std {
 std::size_t hash<tt::scaleout_tools::AsicChannel>::operator()(
-    const tt::scaleout_tools::AsicChannel& asic_chash {
+    const tt::scaleout_tools::AsicChannel& asic_channel) const {
     return ttsl::hash::hash_objects_with_default_seed(asic_channel.asic_location, asic_channel.channel_id);
 }
 }  // namespace std
