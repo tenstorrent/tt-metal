@@ -415,7 +415,9 @@ install_mpi_ulfm() {
     fi
 
     # Only install MPI ULFM for Ubuntu 24.04 or older
-    local VERSION_NUM=$(echo "$VERSION" | sed 's/\.//')
+    # Extract major.minor version (e.g., "22.04" from "22.04.5") and remove dots for comparison
+    local VERSION_MAJOR_MINOR=$(echo "$OS_VERSION" | cut -d. -f1,2)
+    local VERSION_NUM=$(echo "$VERSION_MAJOR_MINOR" | tr -d '.')
 
     if [ "$VERSION_NUM" -gt "2404" ]; then
         echo "[INFO] Skipping MPI ULFM installation for Ubuntu $VERSION (only needed for 24.04 or older)"
