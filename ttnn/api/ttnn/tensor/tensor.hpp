@@ -42,7 +42,7 @@ public:
 
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
-    std::shared_ptr<std::variant<tt::tt_metal::HostTensor, tt::tt_metal::DeviceTensor>> tensor_attributes = nullptr;
+    std::shared_ptr<std::variant<tt::tt_metal::HostTensor, tt::tt_metal::DeviceTensor>> backing_tensor = nullptr;
 
     // ======================================================================================
     //                                  Hi Level APIs
