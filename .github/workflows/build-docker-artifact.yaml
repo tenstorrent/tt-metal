@@ -25,6 +25,12 @@ name: "Build tt-metal docker artifact"
 # Dockerfile during builds.
 # =============================================================================
 
+# Required to push images to GHCR (organization or user). Without this you may see:
+# "denied: installation not allowed to Create organization package"
+permissions:
+  contents: read
+  packages: write
+
 on:
   workflow_call:
     inputs:
