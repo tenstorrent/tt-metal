@@ -52,7 +52,7 @@ std::tuple<
     CoreRange>               // MM bounding box two
 get_cores(ttnn::MeshDevice* mesh_device) {
     // Cores
-    const std::vector<CoreCoord> tilize_cores = {CoreCoord(5, 0), CoreCoord(5, 1), CoreCoord(5, 2), CoreCoord(5, 3)};
+    const std::vector<CoreCoord> tilize_cores = {CoreCoord(5, 9), CoreCoord(5, 8), CoreCoord(5, 7), CoreCoord(5, 6)};
     const std::vector<CoreCoord> matmul_cores =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
 

@@ -110,10 +110,6 @@ void kernel_main() {
     // Set state for the data writes
     noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_base_addr, a2a_packet_size, /*noc=*/1, vchannel);
 
-    // Set state for the semaphore write
-    noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
-        neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
-
     //-------------------------------------------------------------------------
     // Init synchronization with tilize cores
     //-------------------------------------------------------------------------
@@ -134,7 +130,6 @@ void kernel_main() {
     cb_push_back(cb_w2c_md, 2);
 
     // Precompute NUM_CHUNKS_PER_EXPERT
-    // NOTE: hardcoded to 2 experts
     volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
     uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
@@ -164,6 +159,10 @@ void kernel_main() {
             // Signal to tilize cores that they can send another chunk of tiles
             noc_semaphore_inc</*posted=*/true>(
                 matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
+
+            // Set state for the semaphore write
+            noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
+                neighbor_semaphore_noc_addr, /*val=*/0, /*be=*/0xF, /*cmd_buf=*/write_at_cmd_buf, /*noc=*/1, vchannel);
 
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
