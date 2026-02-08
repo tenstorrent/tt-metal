@@ -75,6 +75,10 @@ public:
         const std::optional<Tile>& tile = std::nullopt);
     [[nodiscard]] Tensor(HostBuffer buffer, TensorSpec tensor_spec);
 
+    // Metal Tensor constructors
+    explicit Tensor(tt::tt_metal::HostTensor host_tensor);
+    explicit Tensor(tt::tt_metal::DeviceTensor device_tensor);
+
     // Converts a buffer of elements of type `T` to a `Tensor`.
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
     // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
