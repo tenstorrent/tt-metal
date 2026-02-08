@@ -31,6 +31,7 @@ ARG TOOL_DOXYGEN_IMAGE=scratch
 ARG TOOL_CBA_IMAGE=scratch
 ARG TOOL_GDB_IMAGE=scratch
 ARG TOOL_CMAKE_IMAGE=scratch
+ARG TOOL_YQ_IMAGE=scratch
 
 # uv - Python package manager
 # Pinned to specific SHA256 for reproducible builds per:
@@ -57,6 +58,9 @@ ARG GDB_SHA256=2d4dd8061d8ded12b6c63f55e45344881e8226105f4d2a9b234040efa5ce7772
 ARG CMAKE_VERSION=4.2.3
 ARG CMAKE_SHA256=5bb505d5e0cca0480a330f7f27ccf52c2b8b5214c5bba97df08899f5ef650c23
 
+ARG YQ_VERSION=v4.44.6
+ARG YQ_SHA256=55f6b59bcbae8fe64f1e99c5daad1f8d37f02b4a5f5199a6ec8c70e9676a30b3
+
 #############################################################
 # Tool layers - pulled from pre-built GHCR images
 # These images contain binaries at /install/{bin,lib,...}
@@ -79,6 +83,9 @@ FROM ${TOOL_GDB_IMAGE} AS gdb-layer
 
 # cmake layer - pre-built from GHCR
 FROM ${TOOL_CMAKE_IMAGE} AS cmake-layer
+
+# yq layer - pre-built from GHCR
+FROM ${TOOL_YQ_IMAGE} AS yq-layer
 
 #############################################################
 # uv layer - copy from official distroless image
@@ -142,11 +149,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install yq (YAML processor) for CI workflows
-# Note: mikefarah/yq is not available in apt, download binary from GitHub releases
-ARG YQ_VERSION=v4.44.6
-RUN wget -q "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -O /usr/local/bin/yq && \
-    chmod +x /usr/local/bin/yq
+# Copy pre-built yq from GHCR tool image
+# yq (YAML processor) is not available in apt, so we use pre-built tool image
+COPY --from=yq-layer /install/bin/yq /usr/local/bin/
 
 # Set up virtual environment using uv
 # Uses the system Python version (3.10 on Ubuntu 22.04, 3.12 on Ubuntu 24.04)

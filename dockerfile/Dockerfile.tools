@@ -33,6 +33,9 @@ ARG GDB_SHA256=2d4dd8061d8ded12b6c63f55e45344881e8226105f4d2a9b234040efa5ce7772
 ARG CMAKE_VERSION=4.2.3
 ARG CMAKE_SHA256=5bb505d5e0cca0480a330f7f27ccf52c2b8b5214c5bba97df08899f5ef650c23
 
+ARG YQ_VERSION=v4.44.6
+ARG YQ_SHA256=55f6b59bcbae8fe64f1e99c5daad1f8d37f02b4a5f5199a6ec8c70e9676a30b3
+
 #############################################################
 # ccache - simple binary extraction
 # Outputs: /install/bin/ccache
@@ -155,3 +158,21 @@ RUN apk add --no-cache bash wget && \
 
 FROM scratch AS cmake
 COPY --from=cmake-builder /install/ /install/
+
+#############################################################
+# yq - simple binary extraction
+# Outputs: /install/bin/yq
+#############################################################
+
+FROM alpine:3.19 AS yq-builder
+ARG YQ_VERSION
+ARG YQ_SHA256
+COPY dockerfile/scripts/install-yq.sh /tmp/install-yq.sh
+RUN apk add --no-cache bash wget && \
+    YQ_VERSION=${YQ_VERSION} \
+    YQ_SHA256=${YQ_SHA256} \
+    INSTALL_DIR=/install \
+    /bin/bash /tmp/install-yq.sh
+
+FROM scratch AS yq
+COPY --from=yq-builder /install/ /install/

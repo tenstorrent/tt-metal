@@ -7,6 +7,11 @@ name: "Build all Docker images"
 # NAMING CONVENTION: Outputs use "ubuntu-XXXX-*-tag" format to distinguish
 # platform-specific images. These map to build-artifact.yaml inputs like:
 #   ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
+#
+# TOOL IMAGES: This workflow depends on build-docker-artifact.yaml to build and
+# cache tool images (ccache, mold, cmake, etc.). Tool image tags are computed
+# locally and passed as build-args to ensure consistency with the single-platform
+# workflow.
 # =============================================================================
 
 on:
@@ -160,11 +165,204 @@ jobs:
             echo "needs-build=true" >> $GITHUB_OUTPUT
           fi
 
+  # =============================================================================
+  # TOOL IMAGES: Check and build third-party tool images
+  # =============================================================================
+  # These images contain pre-built binaries for tools like ccache, mold, etc.
+  # They are built once and pushed to GHCR, then pulled by the main Dockerfile.
+  # This eliminates repeated downloads from upstream sources.
+  # =============================================================================
+
+  check-tool-images:
+    name: "🔧 Check tool images"
+    runs-on: ubuntu-latest
+    outputs:
+      ccache-tag: ${{ steps.tags.outputs.ccache-tag }}
+      ccache-exists: ${{ steps.check.outputs.ccache-exists }}
+      mold-tag: ${{ steps.tags.outputs.mold-tag }}
+      mold-exists: ${{ steps.check.outputs.mold-exists }}
+      doxygen-tag: ${{ steps.tags.outputs.doxygen-tag }}
+      doxygen-exists: ${{ steps.check.outputs.doxygen-exists }}
+      cba-tag: ${{ steps.tags.outputs.cba-tag }}
+      cba-exists: ${{ steps.check.outputs.cba-exists }}
+      gdb-tag: ${{ steps.tags.outputs.gdb-tag }}
+      gdb-exists: ${{ steps.check.outputs.gdb-exists }}
+      cmake-tag: ${{ steps.tags.outputs.cmake-tag }}
+      cmake-exists: ${{ steps.check.outputs.cmake-exists }}
+      yq-tag: ${{ steps.tags.outputs.yq-tag }}
+      yq-exists: ${{ steps.check.outputs.yq-exists }}
+      any-missing: ${{ steps.check.outputs.any-missing }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Compute tool image tags
+        id: tags
+        run: |
+          # Extract versions from Dockerfile.tools
+          CCACHE_VERSION=$(grep -E "^ARG CCACHE_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
+          MOLD_VERSION=$(grep -E "^ARG MOLD_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
+          DOXYGEN_VERSION=$(grep -E "^ARG DOXYGEN_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
+          CBA_VERSION=$(grep -E "^ARG CBA_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
+          GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
+          CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
+          YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
+
+          # Compute hashes for each tool (version + install script)
+          CCACHE_HASH=$(cat dockerfile/scripts/install-ccache.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          MOLD_HASH=$(cat dockerfile/scripts/install-mold.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          DOXYGEN_HASH=$(cat dockerfile/scripts/install-doxygen.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          CBA_HASH=$(cat dockerfile/scripts/install-clangbuildanalyzer.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          GDB_HASH=$(cat dockerfile/scripts/install-gdb.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          CMAKE_HASH=$(cat dockerfile/scripts/install-cmake.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          YQ_HASH=$(cat dockerfile/scripts/install-yq.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+
+          # Generate tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
+          BASE="ghcr.io/${{ github.repository }}/tt-metalium/tools"
+          echo "ccache-tag=${BASE}/ccache:${CCACHE_VERSION}-${CCACHE_HASH}" >> $GITHUB_OUTPUT
+          echo "mold-tag=${BASE}/mold:${MOLD_VERSION}-${MOLD_HASH}" >> $GITHUB_OUTPUT
+          echo "doxygen-tag=${BASE}/doxygen:${DOXYGEN_VERSION}-${DOXYGEN_HASH}" >> $GITHUB_OUTPUT
+          echo "cba-tag=${BASE}/cba:${CBA_VERSION}-${CBA_HASH}" >> $GITHUB_OUTPUT
+          echo "gdb-tag=${BASE}/gdb:${GDB_VERSION}-${GDB_HASH}" >> $GITHUB_OUTPUT
+          echo "cmake-tag=${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" >> $GITHUB_OUTPUT
+          echo "yq-tag=${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" >> $GITHUB_OUTPUT
+
+      - name: Check if tool images exist
+        id: check
+        run: |
+          check_image() {
+            local tag="$1"
+            local name="$2"
+            if docker manifest inspect "$tag" > /dev/null 2>&1; then
+              echo "$tag exists"
+              echo "${name}-exists=true" >> $GITHUB_OUTPUT
+            else
+              echo "$tag does not exist"
+              echo "${name}-exists=false" >> $GITHUB_OUTPUT
+            fi
+          }
+
+          check_image "${{ steps.tags.outputs.ccache-tag }}" "ccache"
+          check_image "${{ steps.tags.outputs.mold-tag }}" "mold"
+          check_image "${{ steps.tags.outputs.doxygen-tag }}" "doxygen"
+          check_image "${{ steps.tags.outputs.cba-tag }}" "cba"
+          check_image "${{ steps.tags.outputs.gdb-tag }}" "gdb"
+          check_image "${{ steps.tags.outputs.cmake-tag }}" "cmake"
+          check_image "${{ steps.tags.outputs.yq-tag }}" "yq"
+
+          # Check if any are missing
+          if ! docker manifest inspect "${{ steps.tags.outputs.ccache-tag }}" > /dev/null 2>&1 || \
+             ! docker manifest inspect "${{ steps.tags.outputs.mold-tag }}" > /dev/null 2>&1 || \
+             ! docker manifest inspect "${{ steps.tags.outputs.doxygen-tag }}" > /dev/null 2>&1 || \
+             ! docker manifest inspect "${{ steps.tags.outputs.cba-tag }}" > /dev/null 2>&1 || \
+             ! docker manifest inspect "${{ steps.tags.outputs.gdb-tag }}" > /dev/null 2>&1 || \
+             ! docker manifest inspect "${{ steps.tags.outputs.cmake-tag }}" > /dev/null 2>&1 || \
+             ! docker manifest inspect "${{ steps.tags.outputs.yq-tag }}" > /dev/null 2>&1; then
+            echo "any-missing=true" >> $GITHUB_OUTPUT
+          else
+            echo "any-missing=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-tool-images:
+    name: "🔧 Build tool images"
+    needs: check-tool-images
+    if: needs.check-tool-images.outputs.any-missing == 'true'
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ccache image
+        if: needs.check-tool-images.outputs.ccache-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: ccache
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.ccache-tag }}
+
+      - name: Build and push mold image
+        if: needs.check-tool-images.outputs.mold-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: mold
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.mold-tag }}
+
+      - name: Build and push doxygen image
+        if: needs.check-tool-images.outputs.doxygen-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: doxygen
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.doxygen-tag }}
+
+      - name: Build and push ClangBuildAnalyzer image
+        if: needs.check-tool-images.outputs.cba-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: cba
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.cba-tag }}
+
+      - name: Build and push GDB image
+        if: needs.check-tool-images.outputs.gdb-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: gdb
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.gdb-tag }}
+
+      - name: Build and push cmake image
+        if: needs.check-tool-images.outputs.cmake-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: cmake
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.cmake-tag }}
+
+      - name: Build and push yq image
+        if: needs.check-tool-images.outputs.yq-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: yq
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.yq-tag }}
+
   # Build Ubuntu 22.04 images
   build-ubuntu-2204:
     name: "🐳 Ubuntu 22.04"
-    needs: check-images
-    if: needs.check-images.outputs.ubuntu-2204-needs-build == 'true'
+    needs: [check-images, check-tool-images, build-tool-images]
+    # Run if images need build AND tool images are ready
+    # Use always() to run even when build-tool-images is skipped (all tools exist)
+    if: |
+      always() && !failure() && !cancelled() &&
+      needs.check-images.outputs.ubuntu-2204-needs-build == 'true'
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -186,7 +384,15 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-build
           tags: ${{ needs.check-images.outputs.ubuntu-2204-ci-build-tag }}
-          build-args: UBUNTU_VERSION=22.04
+          build-args: |
+            UBUNTU_VERSION=22.04
+            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
+            TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
+            TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
+            TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
+            TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -199,7 +405,15 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-test
           tags: ${{ needs.check-images.outputs.ubuntu-2204-ci-test-tag }}
-          build-args: UBUNTU_VERSION=22.04
+          build-args: |
+            UBUNTU_VERSION=22.04
+            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
+            TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
+            TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
+            TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
+            TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -212,7 +426,15 @@ jobs:
           file: dockerfile/Dockerfile
           target: dev
           tags: ${{ needs.check-images.outputs.ubuntu-2204-dev-tag }}
-          build-args: UBUNTU_VERSION=22.04
+          build-args: |
+            UBUNTU_VERSION=22.04
+            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
+            TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
+            TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
+            TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
+            TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -247,8 +469,12 @@ jobs:
   # Build Ubuntu 24.04 images
   build-ubuntu-2404:
     name: "🐳 Ubuntu 24.04"
-    needs: check-images
-    if: needs.check-images.outputs.ubuntu-2404-needs-build == 'true'
+    needs: [check-images, check-tool-images, build-tool-images]
+    # Run if images need build AND tool images are ready
+    # Use always() to run even when build-tool-images is skipped (all tools exist)
+    if: |
+      always() && !failure() && !cancelled() &&
+      needs.check-images.outputs.ubuntu-2404-needs-build == 'true'
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -270,7 +496,15 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-build
           tags: ${{ needs.check-images.outputs.ubuntu-2404-ci-build-tag }}
-          build-args: UBUNTU_VERSION=24.04
+          build-args: |
+            UBUNTU_VERSION=24.04
+            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
+            TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
+            TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
+            TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
+            TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -283,7 +517,15 @@ jobs:
           file: dockerfile/Dockerfile
           target: ci-test
           tags: ${{ needs.check-images.outputs.ubuntu-2404-ci-test-tag }}
-          build-args: UBUNTU_VERSION=24.04
+          build-args: |
+            UBUNTU_VERSION=24.04
+            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
+            TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
+            TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
+            TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
+            TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -296,7 +538,15 @@ jobs:
           file: dockerfile/Dockerfile
           target: dev
           tags: ${{ needs.check-images.outputs.ubuntu-2404-dev-tag }}
-          build-args: UBUNTU_VERSION=24.04
+          build-args: |
+            UBUNTU_VERSION=24.04
+            TOOL_CCACHE_IMAGE=${{ needs.check-tool-images.outputs.ccache-tag }}
+            TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
+            TOOL_DOXYGEN_IMAGE=${{ needs.check-tool-images.outputs.doxygen-tag }}
+            TOOL_CBA_IMAGE=${{ needs.check-tool-images.outputs.cba-tag }}
+            TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -360,7 +610,7 @@ jobs:
   # Update latest tags on main
   tag-latest:
     name: "🔄 Update latest tags"
-    needs: [check-images, build-ubuntu-2204, build-ubuntu-2404, build-manylinux]
+    needs: [check-images, check-tool-images, build-tool-images, build-ubuntu-2204, build-ubuntu-2404, build-manylinux]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
