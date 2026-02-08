@@ -62,6 +62,47 @@ struct SlidingWindowConfig {
     bool is_transpose = false;
     bool ceil_mode = false;
 
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "batch_size",
+        "channels",
+        "input_hw",
+        "window_hw",
+        "stride_hw",
+        "padding",
+        "output_pad_hw",
+        "dilation_hw",
+        "ceil_pad_hw",
+        "scale_h",
+        "scale_w",
+        "num_cores_nhw",
+        "num_cores_c",
+        "core_range_set",
+        "snap_to_tile",
+        "is_bilinear",
+        "is_transpose",
+        "ceil_mode");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            batch_size,
+            channels,
+            input_hw,
+            window_hw,
+            stride_hw,
+            padding,
+            output_pad_hw,
+            dilation_hw,
+            ceil_pad_hw,
+            scale_h,
+            scale_w,
+            num_cores_nhw,
+            num_cores_c,
+            core_range_set,
+            snap_to_tile,
+            is_bilinear,
+            is_transpose,
+            ceil_mode);
+    }
+
     std::string to_string() const;
     bool has_parallel_config() const;
     /**
