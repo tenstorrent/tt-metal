@@ -658,6 +658,18 @@ size_t log_worker_to_fabric_edm_sender_rt_args(
     return starting_arg_idx + 10;
 }
 
+bool is_packed_credit_mode_enabled(const FabricEriscDatamoverConfig& config) {
+    tt::ARCH arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    switch (arch) {
+        case tt::ARCH::BLACKHOLE:
+            return config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus;
+        case tt::ARCH::WORMHOLE_B0:
+            return config.topology == tt::tt_fabric::Topology::Ring; // packed credits not fully enabled/tested for Torus on WH yet due to different credit mechanics
+        default:
+            return false;
+    }
+}
+
 FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const CoreCoord& my_eth_core_logical,
     size_t my_noc_x,
@@ -708,8 +720,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     has_tensix_extension(has_tensix_extension),
     // First level ack is enabled to support bubble flow control
-    enable_first_level_ack(
-        config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus) {
+    enable_first_level_ack(is_packed_credit_mode_enabled(config)) {
     // NOTE: actual_sender_channels_per_vc and actual_receiver_channels_per_vc are:
     // 1. Stored as members for later use in compile-time args
     // 2. Used for connection validation
