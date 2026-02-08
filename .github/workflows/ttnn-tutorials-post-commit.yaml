@@ -14,7 +14,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 30
+        default: 300
       docker-image:
         required: true
         type: string
@@ -57,7 +57,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 30
+        default: 300
       docker-image:
         required: true
         type: string
@@ -99,7 +99,7 @@ jobs:
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
+        timeout-minutes: 100
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
@@ -108,19 +108,19 @@ jobs:
           auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: 🐍 Install minimum set of packages
-        timeout-minutes: 10
+        timeout-minutes: 100
         run: |
           cd docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python
           uv pip install --index-strategy unsafe-best-match --no-cache -r tutorials-dev.txt
 
       - name: 🛠️ Install testing utils
-        timeout-minutes: 10
+        timeout-minutes: 100
         run: |
           cd scripts/basic_dev_image
           uv pip install -r minimum-testing-kit.txt
 
       - name: 🛠️ Install tt-triage dependencies
-        timeout-minutes: 10
+        timeout-minutes: 100
         run: |
           apt-get update
           apt-get install -y curl

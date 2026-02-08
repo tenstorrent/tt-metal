@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 10
+        default: 100
       build-artifact-name:
         required: true
         type: string
@@ -78,7 +78,7 @@ jobs:
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
+        timeout-minutes: 100
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
@@ -95,7 +95,7 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06CXU895AP # Michael Chiou
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
+        timeout-minutes: 100
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"

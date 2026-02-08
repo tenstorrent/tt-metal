@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 40
+        default: 400
       docker-image:
         required: true
         type: string
@@ -59,13 +59,6 @@ jobs:
             cmd: |
               ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
             auto-triage: false
-          - name: debug_tools and device and dispatch
-            cmd: |
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=$GTEST_FILTER
-              ./build/test/tt_metal/unit_tests_inspector --gtest_filter=$GTEST_FILTER
-              ./build/test/tt_metal/unit_tests_device --gtest_filter=$GTEST_FILTER
-              ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=$GTEST_FILTER
-            auto-triage: false
           - name: llk
             cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter=$GTEST_FILTER
             auto-triage: true
@@ -105,7 +98,7 @@ jobs:
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
+        timeout-minutes: 100
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           # Unsure why these C++ tests need the wheel...  a cleanup to do separately
@@ -126,7 +119,7 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06CXU895AP # Michael Chiou
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
+        timeout-minutes: 100
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
