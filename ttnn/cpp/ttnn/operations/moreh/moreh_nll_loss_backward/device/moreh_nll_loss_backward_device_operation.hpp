@@ -25,9 +25,9 @@ struct MorehNllLossBackwardDeviceOperation {
         const DeviceComputeKernelConfig compute_kernel_config;
 
         static constexpr auto attribute_names =
-            std::forward_as_tuple("reduction_mean", "memory_config", "compute_kernel_config");
+            std::forward_as_tuple("reduction_mean", "ignore_index", "memory_config", "compute_kernel_config");
         auto attribute_values() const {
-            return std::forward_as_tuple(reduction_mean, memory_config, compute_kernel_config);
+            return std::forward_as_tuple(reduction_mean, ignore_index, memory_config, compute_kernel_config);
         }
     };
 

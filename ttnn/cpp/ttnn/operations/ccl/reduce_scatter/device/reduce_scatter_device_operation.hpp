@@ -36,6 +36,31 @@ struct ReduceScatterDeviceOperation {
         const std::optional<uint32_t> chunks_per_sync;
         const std::optional<uint32_t> num_workers_per_link;
         const std::optional<uint32_t> num_buffers_per_channel;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "memory_config",
+            "optional_intermediate_mem_config",
+            "dim",
+            "cluster_axis",
+            "subdevice_id",
+            "topology",
+            "num_links",
+            "chunks_per_sync",
+            "num_workers_per_link",
+            "num_buffers_per_channel");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                memory_config,
+                optional_intermediate_mem_config,
+                dim,
+                cluster_axis,
+                subdevice_id,
+                topology,
+                num_links,
+                chunks_per_sync,
+                num_workers_per_link,
+                num_buffers_per_channel);
+        }
     };
 
     struct tensor_args_t {

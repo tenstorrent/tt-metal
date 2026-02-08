@@ -59,7 +59,8 @@ struct AllToAllDispatchMetadataDeviceOperation {
             "drain_sync_tilizer_core",
             "worker_mode",
             "mux_core_range_set",
-            "dispatch_algorithm");
+            "dispatch_algorithm",
+            "cross_device_semaphore");
         auto attribute_values() const {
             return std::forward_as_tuple(
                 worker_core_range_set,
@@ -69,7 +70,8 @@ struct AllToAllDispatchMetadataDeviceOperation {
                 drain_sync_tilizer_core,
                 worker_mode,
                 mux_core_range_set,
-                dispatch_algorithm);
+                dispatch_algorithm,
+                cross_device_semaphore);
         };
     };
     struct tensor_args_t {

@@ -22,10 +22,11 @@ struct MorehNllLossStep1DeviceOperation {
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
 
-        static constexpr auto attribute_names =
-            std::forward_as_tuple("reduction", "dtype", "channel_size", "memory_config", "compute_kernel_config");
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "reduction", "ignore_index", "dtype", "channel_size", "memory_config", "compute_kernel_config");
         auto attribute_values() const {
-            return std::forward_as_tuple(reduction, dtype, channel_size, memory_config, compute_kernel_config);
+            return std::forward_as_tuple(
+                reduction, ignore_index, dtype, channel_size, memory_config, compute_kernel_config);
         }
     };
 

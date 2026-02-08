@@ -21,8 +21,10 @@ struct MorehNllLossStep2DeviceOperation {
         const DeviceComputeKernelConfig compute_kernel_config;
 
         static constexpr auto attribute_names =
-            std::forward_as_tuple("reduction", "memory_config", "compute_kernel_config");
-        auto attribute_values() const { return std::forward_as_tuple(reduction, memory_config, compute_kernel_config); }
+            std::forward_as_tuple("reduction", "ignore_index", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(reduction, ignore_index, memory_config, compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {

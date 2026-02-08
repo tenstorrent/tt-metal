@@ -24,8 +24,11 @@ struct DeepseekB1ReduceToOneOp {
 
         const ttnn::TensorSpec _input_tensor_spec;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("root_coord", "exit_coord", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(root_coord, exit_coord, topology); };
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("root_coord", "exit_coord", "topology", "_input_tensor_spec");
+        auto attribute_values() const {
+            return std::forward_as_tuple(root_coord, exit_coord, topology, _input_tensor_spec);
+        };
     };
 
     struct tensor_args_t {

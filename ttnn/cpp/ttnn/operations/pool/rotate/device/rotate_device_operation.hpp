@@ -17,6 +17,12 @@ struct RotateDeviceOperation {
         const bool expand;
         const std::string interpolation_mode;
         const MemoryConfig memory_config;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("angle", "center", "fill", "expand", "interpolation_mode", "memory_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(angle, center, fill, expand, interpolation_mode, memory_config);
+        }
     };
 
     struct tensor_args_t {

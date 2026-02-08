@@ -54,6 +54,9 @@ struct Matmul_RS {
         LlamaReduceScatterDeviceOperation::operation_attributes_t rs_op;
         ttnn::prim::MatmulDeviceOperation::operation_attributes_t matmul;
         using matmul_device_t = ttnn::prim::MatmulDeviceOperation;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("rs", "rs_op", "matmul");
+        auto attribute_values() const { return std::forward_as_tuple(rs, rs_op, matmul); }
     };
     struct Matmul_RS_PF {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods

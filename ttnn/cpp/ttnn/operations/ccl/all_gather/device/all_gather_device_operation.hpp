@@ -36,6 +36,31 @@ struct AllGatherDeviceOperation {
         const std::optional<uint32_t> num_workers_per_link;
         const std::optional<uint32_t> num_buffers_per_channel;
         const std::optional<CoreRangeSet> sub_core_grid;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "memory_config",
+            "dim",
+            "cluster_axis",
+            "subdevice_id",
+            "topology",
+            "num_links",
+            "chunks_per_sync",
+            "num_workers_per_link",
+            "num_buffers_per_channel",
+            "sub_core_grid");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                memory_config,
+                dim,
+                cluster_axis,
+                subdevice_id,
+                topology,
+                num_links,
+                chunks_per_sync,
+                num_workers_per_link,
+                num_buffers_per_channel,
+                sub_core_grid);
+        }
     };
 
     struct tensor_args_t {

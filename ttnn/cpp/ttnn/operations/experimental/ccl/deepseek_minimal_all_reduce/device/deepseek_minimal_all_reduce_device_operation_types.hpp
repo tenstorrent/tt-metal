@@ -15,6 +15,9 @@ struct operation_attributes_t {
     uint32_t ring_size = 2;
     tt::tt_fabric::Topology topology{};
     std::optional<uint32_t> cluster_axis;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("num_links", "ring_size", "topology", "cluster_axis");
+    auto attribute_values() const { return std::forward_as_tuple(num_links, ring_size, topology, cluster_axis); }
 };
 
 struct tensor_args_t {

@@ -25,8 +25,11 @@ struct PointToPointOp {
         // put this in here to hash on tensor spec
         const ttnn::TensorSpec _input_tensor_spec;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("send_coord", "receive_coord", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(send_coord, receive_coord, topology); };
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("receive_coord", "send_coord", "topology", "_input_tensor_spec");
+        auto attribute_values() const {
+            return std::forward_as_tuple(receive_coord, send_coord, topology, _input_tensor_spec);
+        };
     };
 
     struct tensor_args_t {
