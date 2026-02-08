@@ -44,6 +44,8 @@ RUN FILES=(/etc/yum.repos.d/*.repo) && \
 
 RUN dnf remove -y epel-release || true
 
+ENV PATH="/usr/local/bin:$PATH"
+
 # Copy SFPI from pre-built tool image
 RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
     mkdir -p /opt/tenstorrent && \
@@ -95,9 +97,6 @@ RUN --mount=from=mold-layer,source=/install,target=/mold-staging \
 RUN --mount=from=ccache-layer,source=/install,target=/ccache-staging \
     cp -a /ccache-staging/bin/ccache /usr/local/bin/ && \
     ccache --version
-
-# Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
-ENV PATH="/usr/local/bin:$PATH"
 
 # Copy OpenMPI (ULFM) from pre-built tool image
 ARG OMPI_TAG=v5.0.7
