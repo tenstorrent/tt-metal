@@ -223,30 +223,35 @@ COPY --from=sfpi-builder /install/ /install/
 # Consumed by Dockerfile.manylinux to avoid rebuilding OpenMPI each time.
 #############################################################
 
-FROM almalinux:9 AS openmpi-builder
+FROM quay.io/pypa/manylinux_2_34_x86_64 AS openmpi-builder
 ARG OMPI_TAG
 
+RUN FILES=(/etc/yum.repos.d/*.repo) && \
+  sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
+
+RUN dnf remove -y epel-release || true
 # Build deps matching manylinux (AlmaLinux 9) for ABI compatibility
 RUN dnf install -y \
     autoconf \
     automake \
     bison \
     ca-certificates \
-    expat-devel \
     flex \
+    gcc \
+    make \
+    hwloc-devel \
     gfortran \
     gmp-devel \
     gawk \
     git \
     libevent-devel \
     libibverbs-devel \
+    libfabric-devel \
     libmpc-devel \
     libzstd-devel \
+    prrte-devel \
     mpfr-devel \
-    patchutils \
     pmix-devel \
-    texinfo \
-    wget \
     zlib-devel \
     && dnf clean all
 
