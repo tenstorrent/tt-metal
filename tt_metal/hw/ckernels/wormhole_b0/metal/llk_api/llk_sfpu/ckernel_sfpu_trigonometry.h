@@ -114,8 +114,7 @@ inline void calculate_sine() {
     sfpi::vConstFloatPrgm0 = -0x1.51p-21f;      // requires fp32
     sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;  // requires fp32
 
-    // 1 / PI
-    sfpi::vConstFloatPrgm2 = 0x1.45f306p-2f;
+    sfpi::vConstFloatPrgm2 = FRAC_1_PI;
 
     // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, pi/2].
     vFloat C3 = 0x1.5dc908p-19f;
