@@ -4,10 +4,10 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/addcmul.h"
-#include "compute_kernel_api/eltwise_unary/addcdiv.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/addcmul.h"
+#include "api/compute/eltwise_unary/addcdiv.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_in0,
