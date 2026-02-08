@@ -1,6 +1,6 @@
 #!/bin/bash
 # Utility script to compute SHA256 hashes for tool tarballs
-# Run this to verify/update hashes in the Dockerfile
+# Run this to verify/update hashes in the Dockerfile.tools
 set -euo pipefail
 
 TMPDIR=$(mktemp -d)
@@ -37,7 +37,7 @@ echo "MOLD_SHA256=$($SHA_CMD "$TMPDIR/mold.tar.gz" | cut -d' ' -f1)"
 echo ""
 
 # doxygen
-DOXYGEN_VERSION="${DOXYGEN_VERSION:-1.9.6}"
+DOXYGEN_VERSION="${DOXYGEN_VERSION:-1.16.1}"
 echo "Downloading doxygen ${DOXYGEN_VERSION}..."
 curl -fsSL -o "$TMPDIR/doxygen.tar.gz" \
     "https://www.doxygen.nl/files/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
@@ -60,5 +60,29 @@ curl -fsSL -o "$TMPDIR/gdb.tar.xz" \
 echo "GDB_SHA256=$($SHA_CMD "$TMPDIR/gdb.tar.xz" | cut -d' ' -f1)"
 echo ""
 
+# cmake
+CMAKE_VERSION="${CMAKE_VERSION:-4.2.3}"
+echo "Downloading cmake ${CMAKE_VERSION}..."
+curl -fsSL -o "$TMPDIR/cmake.tar.gz" \
+    "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz"
+echo "CMAKE_SHA256=$($SHA_CMD "$TMPDIR/cmake.tar.gz" | cut -d' ' -f1)"
+echo ""
+
+# yq
+YQ_VERSION="${YQ_VERSION:-v4.44.6}"
+echo "Downloading yq ${YQ_VERSION}..."
+curl -fsSL -o "$TMPDIR/yq_linux_amd64" \
+    "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+echo "YQ_SHA256=$($SHA_CMD "$TMPDIR/yq_linux_amd64" | cut -d' ' -f1)"
+echo ""
+
+# SFPI - Note: version comes from tt_metal/sfpi-version, not hardcoded here
+echo "SFPI: Version and hash come from tt_metal/sfpi-version (single source of truth)"
+echo "       Run: grep sfpi_x86_64_debian_deb_hash tt_metal/sfpi-version"
+echo ""
+
 echo "=============================================="
-echo "Copy these values to the ARG declarations in Dockerfile"
+echo "Copy these values to the ARG declarations in Dockerfile.tools"
+echo ""
+echo "Note: SFPI version/hash are NOT in Dockerfile.tools."
+echo "      They come from tt_metal/sfpi-version (single source of truth)."
