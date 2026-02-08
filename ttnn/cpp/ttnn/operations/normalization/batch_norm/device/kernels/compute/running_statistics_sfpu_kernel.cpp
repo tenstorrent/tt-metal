@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);

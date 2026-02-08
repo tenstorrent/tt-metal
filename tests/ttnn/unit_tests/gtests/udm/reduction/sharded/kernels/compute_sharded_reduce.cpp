@@ -6,8 +6,8 @@
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 #define FLOAT32_REDUCTION true
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/reduce.h"
+#include "api/compute/eltwise_binary.h"
 
 /**
  * @brief Compute kernel for distributed SUM reduction

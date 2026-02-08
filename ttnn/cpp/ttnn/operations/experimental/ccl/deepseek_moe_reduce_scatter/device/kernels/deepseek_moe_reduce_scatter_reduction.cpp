@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_binary.h"
 
 namespace NAMESPACE {
 

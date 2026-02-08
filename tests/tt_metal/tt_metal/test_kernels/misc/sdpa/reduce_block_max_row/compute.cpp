@@ -4,12 +4,12 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce_custom.h"
-#include "compute_kernel_api/binary_max_min.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce_custom.h"
+#include "api/compute/binary_max_min.h"
 
 void kernel_main() {
     constexpr uint32_t qk_im_cb = get_compile_time_arg_val(0);

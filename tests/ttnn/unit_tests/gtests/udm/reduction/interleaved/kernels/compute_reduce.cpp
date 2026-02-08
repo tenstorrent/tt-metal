@@ -24,10 +24,10 @@
 #define FLOAT32_REDUCTION true
 
 #include <cstdint>
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/reduce.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/compute_kernel_api.h"
 
 namespace NAMESPACE {
 void MAIN {

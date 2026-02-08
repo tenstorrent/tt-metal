@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "compute_kernel_api/common.h"
+#include "api/compute/common.h"
 #include "internal/risc_attribs.h"
 #include "internal/firmware_common.h"
 #include "api/debug/waypoint.h"

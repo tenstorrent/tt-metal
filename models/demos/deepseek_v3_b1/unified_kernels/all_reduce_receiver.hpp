@@ -21,7 +21,7 @@ using namespace tt::tt_fabric::linear::experimental;
 using namespace tt::tt_fabric::common::experimental;
 
 #elif defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_binary.h"
 #endif
 
 namespace deepseek_b1_ops {

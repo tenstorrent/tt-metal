@@ -10,7 +10,7 @@
 #ifndef COMPILE_FOR_TRISC
 #include "api/dataflow/dataflow_api.h"
 #else
-#include "compute_kernel_api/common.h"
+#include "api/compute/common.h"
 #endif
 
 extern uint32_t rta_count;

@@ -357,7 +357,7 @@ if(NOT TARGET TT::Metalium)
             "${TT_METAL_HOME}/tt_metal/api/"
             "${TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
             "${TT_METAL_HOME}/tt_metal/hostdevcommon/api"
-            "${TT_METAL_HOME}/tt_metal/include"
+            "${TT_METAL_HOME}/tt_metal/hw/inc"
             "${TT_METAL_HOME}/tt_stl"
             # TTNN
             "$ENV{TT_METAL_HOME}/ttnn"

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
 
 void kernel_main() {
     // compile-time args

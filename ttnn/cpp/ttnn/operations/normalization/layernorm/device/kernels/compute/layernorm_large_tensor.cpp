@@ -9,13 +9,13 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
