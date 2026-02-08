@@ -81,14 +81,18 @@ Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
     Tensor(HostStorage(std::move(buffer)), std::move(tensor_spec), TensorTopology{}) {}
 
 Tensor::Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(std::make_shared<std::variant<HostTensor, DeviceTensor>>(
-        HostTensor(std::move(storage), std::move(tensor_spec), std::move(tensor_topology)))) {}
+    Tensor(HostTensor(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
 
 Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+    Tensor(DeviceTensor(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
+
+Tensor::Tensor(tt::tt_metal::HostTensor host_tensor) :
     tensor_id(Tensor::next_tensor_id()),
-    tensor_attributes(std::make_shared<std::variant<HostTensor, DeviceTensor>>(
-        DeviceTensor(std::move(storage), std::move(tensor_spec), std::move(tensor_topology)))) {
+    tensor_attributes(std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::move(host_tensor))) {}
+
+Tensor::Tensor(tt::tt_metal::DeviceTensor device_tensor) :
+    tensor_id(Tensor::next_tensor_id()),
+    tensor_attributes(std::make_shared<std::variant<HostTensor, DeviceTensor>>(std::move(device_tensor))) {
     if (auto mesh_buffer = device_storage().mesh_buffer) {
         mesh_device_ = mesh_buffer->device();
     }
