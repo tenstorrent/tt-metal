@@ -117,7 +117,7 @@ inline void calculate_sine() {
     // 1 / PI
     sfpi::vConstFloatPrgm2 = 0x1.45f306p-2f;
 
-    // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3)))
+    // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, pi/2].
     vFloat C3 = 0x1.5dc908p-19f;
     vFloat C2 = -0x1.9f70fp-13f;
     vFloat C1 = 0x1.110edap-7f;
@@ -127,18 +127,19 @@ inline void calculate_sine() {
         vFloat v = dst_reg[0];
 
         // Compute j = round(v / PI).
-        vFloat tmp;
+        vFloat rounding_bias;
         // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
-        tmp.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);
+        rounding_bias.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);  // 1.5*2^23
         __rvtt_vec_t inv_pi = __builtin_rvtt_sfpreadlreg(sfpi::vConstFloatPrgm2.get());
         // First, j = v * (1 / PI) + 1.5*2^23 shifts the mantissa bits to give round-to-nearest-even.
         vFloat j;
-        j.get() = __builtin_rvtt_bh_sfpmad(v.get(), inv_pi, tmp.get(), SFPMAD_MOD1_OFFSET_NONE);
+        j.get() = __builtin_rvtt_bh_sfpmad(v.get(), inv_pi, rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
         // At this point, the mantissa bits of j contain the integer.
         // Store for later; the LSB determines the sign of the result.
         vInt q = reinterpret<vInt>(j);
         // Shift mantissa bits back; j is now round(v / PI) in fp32.
-        j -= tmp;
+        j -= rounding_bias;
+        q <<= 31;
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI.
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
@@ -149,13 +150,12 @@ inline void calculate_sine() {
         a = a + j * sfpi::vConstFloatPrgm1;
 
         vFloat s = a * a;
+        a = reinterpret<vFloat>(reinterpret<vInt>(a) ^ q);
         vFloat r = C3 * s + C2;
         r = r * s + C1;
         r = r * s + C0;
         s = a * s;
         r = r * s + a;
-
-        r = reinterpret<vFloat>(reinterpret<vInt>(r) ^ (q << 31));
 
         dst_reg[0] = r;
         dst_reg++;
