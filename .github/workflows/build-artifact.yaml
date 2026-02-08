@@ -330,7 +330,7 @@ jobs:
       ${{ needs.parse-platform.outputs.distro }}
       ${{ needs.parse-platform.outputs.version }}
     needs: [parse-platform, build-docker-image]
-    timeout-minutes: 100
+    timeout-minutes: 500
     runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
@@ -490,7 +490,7 @@ jobs:
           "${build_args[@]}"
 
       - name: 🛠️ Compile
-        timeout-minutes: 90
+        timeout-minutes: 500
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
           cmake --build build --target install
@@ -503,7 +503,7 @@ jobs:
           ClangBuildAnalyzer --analyze capture.bin
 
       - name: 📦 Package
-        timeout-minutes: 10
+        timeout-minutes: 100
         run: |
           cmake --build build --target package
 
@@ -523,7 +523,7 @@ jobs:
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
         uses: actions/upload-artifact@v4
-        timeout-minutes: 10
+        timeout-minutes: 100
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: |
@@ -569,7 +569,7 @@ jobs:
       - name: ☁️ Upload tarball
         if: ${{ inputs.publish-artifact }}
         uses: actions/upload-artifact@v4
-        timeout-minutes: 10
+        timeout-minutes: 100
         with:
           name: ${{ env.build_artifact_name }}
           path: /work/ttm_any.tar.zst

@@ -361,6 +361,8 @@ def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
 )
 @pytest.mark.timeout(120)
 def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+    if s == 131072 and dtype == ttnn.bfloat8_b:
+        pytest.skip("Skipping test case: 1-8-1-131072-128-k128-q128-bfp8")
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:

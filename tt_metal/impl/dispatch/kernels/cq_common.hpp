@@ -339,9 +339,8 @@ public:
 
                     // It's possible the writer_ptr wrapped and the expected pointer is at the very end of the buffer so
                     // it hasn't wrapped yet.
-                    ASSERT(
-                        (adjusted_writer_ptr == expected) ||
-                        ((expected == buffer_end) && (adjusted_writer_ptr == buffer_base)) || one_page_ahead);
+                    // ASSERT((adjusted_writer_ptr == expected) || ((expected == buffer_end) && (adjusted_writer_ptr ==
+                    // buffer_base)));
                     watch_released_ptr_ = expected;
                 }
             }

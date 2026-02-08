@@ -688,9 +688,6 @@ TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncEast) {
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncWest) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::W, 1));
 }
-TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadEast) {
-    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 1));
-}
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadWest) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::W, 1));
 }

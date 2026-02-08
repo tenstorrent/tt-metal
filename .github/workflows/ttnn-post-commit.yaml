@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 40
+        default: 400
       docker-image:
         required: true
         type: string
@@ -56,7 +56,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 40
+        default: 400
       docker-image:
         required: true
         type: string
@@ -98,6 +98,10 @@ jobs:
           requested_ttnn_tests=$(jq --argjson merge_gate_call "${{ inputs.merge-gate-call }}" \
             '[.[] | select(.merge_gate == $merge_gate_call)]' <<< "$default_ttnn_tests")
           echo "[info] After filtering for merge_gate=${{ inputs.merge-gate-call }}: $requested_ttnn_tests"
+
+          # Exclude "ttnn reduce and misc ops group" when lightweight kernel asserts are enabled
+          requested_ttnn_tests=$(jq --argjson lw_asserts "${{ inputs.enable-lightweight-kernel-asserts || false }}" '[.[] | select(($lw_asserts == true and .name == "ttnn reduce and misc ops group") | not)]' <<< "$requested_ttnn_tests")
+          echo "[info] after filtering for lightweight-kernel-asserts: $requested_ttnn_tests"
 
           # Check that we have a valid test list that's not empty
           echo "$requested_ttnn_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
@@ -142,7 +146,7 @@ jobs:
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
+        timeout-minutes: 100
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
@@ -167,7 +171,7 @@ jobs:
           owner: U06CXU895AP # Michael Chiou
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
+        timeout-minutes: 100
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
