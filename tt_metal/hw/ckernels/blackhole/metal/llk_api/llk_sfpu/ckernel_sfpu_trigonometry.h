@@ -139,7 +139,6 @@ inline void calculate_sine() {
         vInt q = reinterpret<vInt>(j);
         // Shift mantissa bits back; j is now round(v / PI) in fp32.
         j -= rounding_bias;
-        q <<= 31;
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI.
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
@@ -149,13 +148,14 @@ inline void calculate_sine() {
         a = a + j * sfpi::vConstFloatPrgm0;
         a = a + j * sfpi::vConstFloatPrgm1;
 
+        q <<= 31;
         vFloat s = a * a;
         a = reinterpret<vFloat>(reinterpret<vInt>(a) ^ q);
         vFloat r = C3 * s + C2;
         r = r * s + C1;
+        vFloat c = a * s;
         r = r * s + C0;
-        s = a * s;
-        r = r * s + a;
+        r = r * c + a;
 
         dst_reg[0] = r;
         dst_reg++;
