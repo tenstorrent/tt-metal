@@ -126,11 +126,12 @@ inline void calculate_sine() {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
 
-        // Compute j = round(v / PI).
-        vFloat rounding_bias;
         // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
+        vFloat rounding_bias;
         rounding_bias.get() = __builtin_rvtt_sfpxloadi(0, 0x4b40);  // 1.5*2^23
         __rvtt_vec_t inv_pi = __builtin_rvtt_sfpreadlreg(sfpi::vConstFloatPrgm2.get());
+
+        // Compute j = round(v / PI).
         // First, j = v * (1 / PI) + 1.5*2^23 shifts the mantissa bits to give round-to-nearest-even.
         vFloat j;
         j.get() = __builtin_rvtt_wh_sfpmad(v.get(), inv_pi, rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
