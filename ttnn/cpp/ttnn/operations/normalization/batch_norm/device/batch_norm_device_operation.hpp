@@ -28,6 +28,12 @@ struct BatchNormOperation {
         std::optional<Tensor> weight;
         std::optional<Tensor> bias;
         std::optional<Tensor> output;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input", "batch_mean", "batch_var", "weight", "bias", "output");
+        auto attribute_values() const {
+            return std::forward_as_tuple(input, batch_mean, batch_var, weight, bias, output);
+        }
     };
 
     using spec_return_value_t = TensorSpec;

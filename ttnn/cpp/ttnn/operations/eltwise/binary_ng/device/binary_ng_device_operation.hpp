@@ -54,6 +54,10 @@ struct BinaryNgDeviceOperation {
         const Tensor& input_tensor_a;
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> output_tensor;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input_tensor_a", "input_tensor_b", "output_tensor");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor_a, input_tensor_b, output_tensor); }
     };
 
     struct ProgramFactory {

@@ -43,6 +43,12 @@ struct BinaryDeviceOperation {
         const Tensor& input_tensor_a;
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> output_tensor;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input_tensor_a", "input_tensor_b", "output_tensor");
+        auto attribute_values() const {
+            return std::forward_as_tuple(input_tensor_a, input_tensor_b, output_tensor);
+        }
     };
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;

@@ -40,6 +40,12 @@ struct TernaryDeviceOperation {
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> input_tensor_c;
         std::optional<Tensor> optional_output_tensor;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input_tensor_a", "input_tensor_b", "input_tensor_c", "optional_output_tensor");
+        auto attribute_values() const {
+            return std::forward_as_tuple(input_tensor_a, input_tensor_b, input_tensor_c, optional_output_tensor);
+        }
     };
 
     struct TernaryProgramFactory {

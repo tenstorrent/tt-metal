@@ -21,6 +21,9 @@ struct RotateDeviceOperation {
 
     struct tensor_args_t {
         const Tensor& input;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input");
+        auto attribute_values() const { return std::forward_as_tuple(input); }
     };
 
     using spec_return_value_t = TensorSpec;

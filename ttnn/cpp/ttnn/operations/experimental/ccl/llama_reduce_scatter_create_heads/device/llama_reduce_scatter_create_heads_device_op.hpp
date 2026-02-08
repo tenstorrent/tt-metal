@@ -39,6 +39,9 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
     struct tensor_args_t {
         const Tensor input_tensor;
         Tensor intermediate_packet_buffer;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_tensor", "intermediate_packet_buffer");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor, intermediate_packet_buffer); }
     };
 
     using spec_return_value_t = std::vector<ttnn::TensorSpec>;

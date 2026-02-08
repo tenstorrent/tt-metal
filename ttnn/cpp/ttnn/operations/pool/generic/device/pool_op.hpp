@@ -36,6 +36,9 @@ struct Pool2D {
 
     struct tensor_args_t {
         const Tensor& input_tensor_;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("input_tensor_");
+        auto attribute_values() const { return std::forward_as_tuple(input_tensor_); }
     };
 
     using spec_return_value_t = TensorSpec;
