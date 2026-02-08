@@ -57,9 +57,6 @@ docs/build
 docs/env
 docs/doxygen_build
 
-# CMake build artifacts
-__cmake_systeminformation/
-
 **~
 **.swp
 **.swo
@@ -89,7 +86,7 @@ hf_data/
 
 # exclude venv
 venv/
-
+.venv/
 # exclude pytorch binaries
 *.pt
 
@@ -149,5 +146,3 @@ Testing
 .auto_triage/output
 .github/actions/*/node_modules/
 models/experimental/petr/resources/*.pth
-
-.claude
