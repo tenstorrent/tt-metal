@@ -262,6 +262,8 @@ jobs:
           target: ccache
           push: true
           tags: ${{ needs.check-tool-images.outputs.ccache-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push mold image
         if: needs.check-tool-images.outputs.mold-exists != 'true'
@@ -272,6 +274,8 @@ jobs:
           target: mold
           push: true
           tags: ${{ needs.check-tool-images.outputs.mold-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push doxygen image
         if: needs.check-tool-images.outputs.doxygen-exists != 'true'
@@ -282,6 +286,8 @@ jobs:
           target: doxygen
           push: true
           tags: ${{ needs.check-tool-images.outputs.doxygen-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push ClangBuildAnalyzer image
         if: needs.check-tool-images.outputs.cba-exists != 'true'
@@ -292,6 +298,8 @@ jobs:
           target: cba
           push: true
           tags: ${{ needs.check-tool-images.outputs.cba-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push GDB image
         if: needs.check-tool-images.outputs.gdb-exists != 'true'
@@ -302,6 +310,8 @@ jobs:
           target: gdb
           push: true
           tags: ${{ needs.check-tool-images.outputs.gdb-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push cmake image
         if: needs.check-tool-images.outputs.cmake-exists != 'true'
@@ -312,6 +322,8 @@ jobs:
           target: cmake
           push: true
           tags: ${{ needs.check-tool-images.outputs.cmake-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push yq image
         if: needs.check-tool-images.outputs.yq-exists != 'true'
@@ -322,6 +334,8 @@ jobs:
           target: yq
           push: true
           tags: ${{ needs.check-tool-images.outputs.yq-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push sfpi image
         if: needs.check-tool-images.outputs.sfpi-exists != 'true'
@@ -332,6 +346,8 @@ jobs:
           target: sfpi
           push: true
           tags: ${{ needs.check-tool-images.outputs.sfpi-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # =============================================================================
   # PYTHON VENV IMAGES: Check and build pre-built Python virtual environments
@@ -441,6 +457,8 @@ jobs:
           target: ci-build-venv-${{ needs.check-python-venv-images.outputs.ubuntu-version == '22.04' && '2204' || '2404' }}
           push: true
           tags: ${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
       - name: Build and push ci-test-venv image
         if: needs.check-python-venv-images.outputs.ci-test-venv-exists != 'true'
@@ -451,6 +469,8 @@ jobs:
           target: ci-test-venv-${{ needs.check-python-venv-images.outputs.ubuntu-version == '22.04' && '2204' || '2404' }}
           push: true
           tags: ${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # =============================================================================
   # MAIN DOCKER IMAGES: Check and build CI/Dev/Test images
