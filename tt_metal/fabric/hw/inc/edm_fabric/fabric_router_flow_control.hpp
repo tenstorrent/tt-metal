@@ -138,14 +138,14 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
                 constexpr size_t CREDITS_PER_WORD = MAX_ACK_CREDITS_PER_L1_WORD;
                 static_assert(MAX_ACK_CREDITS_PER_L1_WORD == MAX_PACKETS_RECEIVED_CREDITS_PER_LOCAL_MEMORY_WORD, "MAX_ACK_CREDITS_PER_L1_WORD must be equal to MAX_PACKETS_RECEIVED_CREDITS_PER_LOCAL_MEMORY_WORD. Supporting mismatch between these two is not yet implemented.");
 
-                auto sum_lower_word_credits = [](uint32_t current_val, uint32_t delta_val) -> uint32_t {                                                                                                                                                     
+                auto sum_lower_word_credits = [](uint32_t current_val, uint32_t delta_val) -> uint32_t {
                     //TODO: static assert that VC receiver channel num buffers < 128 (otherwise the below code will not work)
 
                     // Using SIMD-in-register addition technique
                     if constexpr (VC_NUM_SENDER_CHANNELS == 1) {
-                        // 1 channel: plain byte add, no cross-byte carry possible                                                                                                                                                                           
+                        // 1 channel: plain byte add, no cross-byte carry possible
                         return (current_val + delta_val) & 0xFFu;
-                    } else {                                                                                                                                                                                                                                 
+                    } else {
                         // 2-4 channels: small-delta XOR (delta bytes always < 128)
                         constexpr uint32_t MSB_MASK = 0x80808080u;
                         return ((current_val & ~MSB_MASK) + delta_val) ^ (current_val & MSB_MASK);
@@ -294,15 +294,19 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
                     WATCHER_RING_BUFFER_PUSH(0xdeadbeef);
                     remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
                 } else {
+                    constexpr uint32_t reg0_mask = (1 << (PackedValueType::CREDIT_WIDTH * 2)) - 1;
                     WATCHER_RING_BUFFER_PUSH(0xa4000000 | (packed_value.get() & 0xFFFF));
-                    remote_update_ptr_val<receiver_txq_id>(stream_id, static_cast<uint32_t>(packed_value.get()));
+                    remote_update_ptr_val<receiver_txq_id>(
+                        stream_id, static_cast<uint32_t>(packed_value.get() & reg0_mask));
                     auto stream_id_1 = stream_id + 1;
 
                     if constexpr (wait_for_txq) {
                         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
                         }
                     }
-                    remote_update_ptr_val<receiver_txq_id>(stream_id_1, static_cast<uint32_t>(packed_value.get()));
+                    constexpr uint32_t reg1_shift = (PackedValueType::CREDIT_WIDTH * 2);
+                    remote_update_ptr_val<receiver_txq_id>(
+                        stream_id_1, static_cast<uint32_t>(packed_value.get() >> reg1_shift));
                 }
             } else {
                 static_assert(
@@ -509,6 +513,25 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
         }
     }
 
+    template <uint8_t sender_channel_index>
+    static constexpr uint32_t get_credit_slot_in_reg() {
+        constexpr size_t slot_in_reg =
+            sender_channel_index < CHANNELS_IN_REG0 ? sender_channel_index : sender_channel_index - CHANNELS_IN_REG0;
+        return slot_in_reg;
+    }
+
+    template <uint8_t sender_channel_index>
+    static constexpr uint32_t get_stream_reg_index() {
+        constexpr size_t stream_reg_index = sender_channel_index < CHANNELS_IN_REG0 ? 0 : 1;
+        return stream_reg_index;
+    }
+
+    template <uint8_t sender_channel_index>
+    static constexpr uint32_t get_in_reg_shift_amount() {
+        constexpr size_t shift_amount = get_credit_slot_in_reg<sender_channel_index>() * CREDIT_WIDTH;
+        return shift_amount;
+    }
+
     // returns the packed value for the channel, in isolation, but in the "packed" location of the register
     template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t sender_channel_index>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
@@ -520,12 +543,11 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
             // Channel 0 or 1: read from first register
             // Channel 2+: read from second register
             // In reg1, channels are at offsets (ch_id - CHANNELS_IN_REG0) * CREDIT_WIDTH
-            constexpr size_t stream_reg_index = sender_channel_index < CHANNELS_IN_REG0 ? 0 : 1;
-            constexpr size_t slot_in_reg = sender_channel_index < CHANNELS_IN_REG0 ? sender_channel_index : sender_channel_index - CHANNELS_IN_REG0;
-            constexpr size_t shift_amount = slot_in_reg * CREDIT_WIDTH;
+            constexpr size_t shift_amount = get_in_reg_shift_amount<sender_channel_index>();
             constexpr size_t mask = 0xff << shift_amount;
 
-            uint32_t reg_val = get_ptr_val(to_sender_packets_acked_streams[stream_reg_index]);
+            uint32_t reg_val =
+                get_ptr_val(to_sender_packets_acked_streams[get_stream_reg_index<sender_channel_index>()]);
             uint32_t channel_acks = reg_val & mask;
             return static_cast<uint32_t>(channel_acks);
         }
@@ -538,13 +560,12 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
             increment_local_update_ptr_val(to_sender_packets_acked_streams, -num_acks);
         } else {
             // Packed mode: pack decrement value into this channel's position and write to correct register
-            constexpr size_t stream_reg_index = sender_channel_index < CHANNELS_IN_REG0 ? 0 : 1;
-            constexpr size_t slot_in_reg = sender_channel_index < CHANNELS_IN_REG0 ? sender_channel_index : sender_channel_index - CHANNELS_IN_REG0;
-            constexpr size_t shift_amount = slot_in_reg * CREDIT_WIDTH;
+            constexpr size_t shift_amount = get_in_reg_shift_amount<sender_channel_index>();
 
             uint32_t packed_decrement = static_cast<uint32_t>(num_acks) << (shift_amount);
             increment_local_update_ptr_val(
-                to_sender_packets_acked_streams[stream_reg_index], -static_cast<int32_t>(packed_decrement));
+                to_sender_packets_acked_streams[get_stream_reg_index<sender_channel_index>()],
+                -static_cast<int32_t>(packed_decrement));
         }
     }
 
