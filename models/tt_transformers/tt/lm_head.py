@@ -31,7 +31,7 @@ class LMHead(LightweightModule):
         self.tt_ccl = tt_ccl
         self.dtype = dtype
         self.vocab_size = args.vocab_size
-        self.padded_vocab_size = args.padded_vocab_size
+        self.padded_vocab_size = args.padded_vocab_size if args.padded_vocab_size else args.vocab_size
         self.num_devices = args.num_devices
         self.prefetcher = prefetcher
 
@@ -40,8 +40,8 @@ class LMHead(LightweightModule):
         # 2. size_per_device is also tile-aligned after dividing by num_devices
         # This ensures TILE concat doesn't have padding in the middle
         tile_size = 32
-        padded_vocab_size = math.ceil(self.vocab_size / (tile_size)) * (tile_size)
-        size_per_device = padded_vocab_size // self.num_devices
+        self.padded_vocab_size = math.ceil(self.padded_vocab_size / (tile_size)) * (tile_size)
+        size_per_device = self.padded_vocab_size // self.num_devices
 
         max_columns_per_device_ring_mm = math.ceil((max_columns_per_device) / tile_size) * tile_size
         max_columns_per_device_dram_sharded = max_columns_per_device

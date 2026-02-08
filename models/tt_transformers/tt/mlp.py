@@ -296,13 +296,15 @@ class MLP(LightweightModule):
             sharded=(mode == Mode.DECODE),
             memory_config=self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out),
             rs_memory_config=self.model_config["MLP_RS_CONFIG"]["rs_memory_config"]
-            if mode == "decode"
+            if mode == Mode.DECODE
             else ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
-            chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == "decode" else 10,
-            num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"] if mode == "decode" else 2,
+            chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == Mode.DECODE else 10,
+            num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"]
+            if mode == Mode.DECODE
+            else 2,
             subdevice_id=self.prefetcher.worker_sub_device_id
             if mode == Mode.DECODE and self.prefetcher is not None
             else None,
