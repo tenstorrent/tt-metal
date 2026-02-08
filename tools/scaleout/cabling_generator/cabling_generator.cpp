@@ -17,6 +17,7 @@
 #include <google/protobuf/text_format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/caseless_comparison.hpp>
+#include <tt_stl/hash.hpp>
 
 // Add protobuf includes
 #include "protobuf/cluster_config.pb.h"
@@ -2075,22 +2076,21 @@ std::ostream& operator<<(std::ostream& os, const PhysicalPortEndpoint& conn) {
 namespace std {
 template <>
 struct hash<tt::scaleout_tools::LogicalChannelEndpoint> {
-    std::size_t operator()(const tt::scaleout_tools::LogicalChannelEndpoint& conn) const {
-        return tt::stl::hash::hash_objects_with_default_seed(conn.host_id, conn.tray_id, conn.asic_channel);
+    std::size_t operator()(const tt::scaleout_tools::LogicalChannelEndpoint& cohash       return ttsl::hash::hash_objects_with_default_seed(conn.host_id, conn.tray_id, conn.asic_channel);
     }
 };
 
 template <>
 struct hash<tt::scaleout_tools::PhysicalChannelEndpoint> {
-    std::size_t operator()(const tt::scaleout_tools::PhysicalChannelEndpoint& conn) const {
-        return tt::stl::hash::hash_objects_with_default_seed(conn.hostname, conn.tray_id, conn.asic_channel);
+    std::size_t operator()(const tt::scaleout_tools::PhysicalChannelEndpoint& conn) hash
+        return ttsl::hash::hash_objects_with_default_seed(conn.hostname, conn.tray_id, conn.asic_channel);
     }
 };
 
 template <>
 struct hash<tt::scaleout_tools::PhysicalPortEndpoint> {
-    std::size_t operator()(const tt::scaleout_tools::PhysicalPortEndpoint& conn) const {
-        return tt::stl::hash::hash_objects_with_default_seed(
+    std::size_t operator()(const tt::scaleout_tools::PhysicalPortEndpoint& conn) cohash
+        return ttsl::hash::hash_objects_with_default_seed(
             conn.hostname, conn.aisle, conn.rack, conn.shelf_u, *conn.tray_id, conn.port_type, *conn.port_id);
     }
 };
