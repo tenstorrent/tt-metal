@@ -15,13 +15,13 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  *
- * Template scale parameter is used when aprox and fast_and_approx are true and exp_tile is called with scale_en set to
+ * Template scale parameter is used when approx and fast_and_approx are true and exp_tile is called with scale_en set to
  * true.
  *
  */
-template <bool approx = false, bool fast_and_approx = true, uint32_t scale = 0x3F800000>
+template <bool approx = false, bool fast_and_approx = true, uint32_t scale = 0x3F800000, bool clamp_negative = true>
 ALWI void exp_tile_init() {
-    MATH(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, approx, fast_and_approx, scale));
+    MATH(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, approx, fast_and_approx, scale, clamp_negative));
 }
 
 // clang-format off
@@ -53,6 +53,7 @@ template <
     bool fast_and_approx = true,
     bool scale_en = false,
     bool skip_positive_check = false,
+    bool clamp_negative = true,
     int iterations = 8>
 ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
     MATH(SFPU_TEMPLATE_PARAMS_KERNEL_FN(
@@ -62,6 +63,7 @@ ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_
         DST_ACCUM_MODE,
         scale_en,
         skip_positive_check,
+        clamp_negative,
         iterations,
         idst,
         vector_mode,

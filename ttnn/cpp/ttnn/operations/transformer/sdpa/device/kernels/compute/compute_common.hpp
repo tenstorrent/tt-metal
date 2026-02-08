@@ -307,10 +307,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
 
     // The exponential function uses clamp_negative=false for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
-    // Since exp(x) for x < -88 is ~0, the packer ReLU can be used to clamp these outputs to zero.
-    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, true>(
-        ckernel::sfpu::
-            _init_exponential_<true, true, scale_fp32, false /* clamp_negative -- if false, requires packer ReLU */>)));
+    // Enable packer ReLU to zero any negative values produced by the exponential approximation.
+    exp_tile_init<true, true, scale_fp32, false>();
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
@@ -326,10 +325,6 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     uint32_t granularity = 1;
 #endif
 
-    // Enable packer ReLU to zero any negative values produced by the exponential approximation
-    // (see comment above regarding clamp_negative=false).
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
-
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
@@ -338,17 +333,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 // Use VectorMode::None and 32 iterations to more efficiently process the tile in one shot.
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 : 8;
                 constexpr int vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
-                MATH((_llk_math_eltwise_unary_sfpu_params_<true>(
-                    ckernel::sfpu::_calculate_exponential_<
-                        true /* approximate */,
-                        true /* scale_en */,
-                        iterations,
-                        true /* fast_and_approx */,
-                        true /* skip_positive_check */,
-                        false /* clamp negative -- if false, requires packer ReLU */>,
-                    j,
-                    vector_mode_exp,
-                    0 /* scale set in init */)));
+                exp_tile<true, true, false, false, false, iterations>(j, vector_mode_exp);
             }
             tile_regs_commit();
 
