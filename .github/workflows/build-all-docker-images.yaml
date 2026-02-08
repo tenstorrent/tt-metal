@@ -57,20 +57,22 @@ permissions:
   packages: write
 
 jobs:
-  # Ubuntu 22.04: full build via single source of truth
+  # Ubuntu 22.04: full build via single source of truth; this run also builds manylinux (once for all platforms)
   build-2204:
     name: "🐳 Ubuntu 22.04"
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       platform: "Ubuntu 22.04"
       architecture: "amd64"
+      build-manylinux: true
     secrets: inherit
 
-  # Ubuntu 24.04: full build via single source of truth (runs in parallel with build-2204)
+  # Ubuntu 24.04: full build via single source of truth (runs in parallel with build-2204); skip manylinux (handled by build-2204)
   build-2404:
     name: "🐳 Ubuntu 24.04"
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       platform: "Ubuntu 24.04"
       architecture: "amd64"
+      build-manylinux: false
     secrets: inherit

@@ -37,6 +37,11 @@ on:
         required: false
         type: string
         default: "amd64"
+      build-manylinux:
+        required: false
+        type: boolean
+        default: true
+        description: "When false, skip building the manylinux image. Set to false for one platform when build-all-docker-images calls this workflow twice so manylinux is built only once."
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -104,6 +109,11 @@ on:
         default: "amd64"
         options:
             - "amd64"
+      build-manylinux:
+        required: false
+        type: boolean
+        default: true
+        description: "Build the manylinux image (set false only when another run is building it)"
 
 jobs:
   # =============================================================================
@@ -683,11 +693,13 @@ jobs:
   build-manylinux-image:
     name: "🐳️ Build ManyLinux image"
     needs: [check-docker-images, check-tool-images, build-tool-images]
-    # Run if manylinux needs build AND tool images are ready
+    # Run if manylinux needs build AND tool images are ready AND this run is responsible for manylinux
     # Use always() to run even when build-tool-images is skipped (all exist)
+    # When build-manylinux input is false (e.g. second platform in build-all-docker-images), skip so manylinux is built only once
     if: |
       always() && !failure() && !cancelled() &&
-      needs.check-docker-images.outputs.manylinux-exists != 'true'
+      needs.check-docker-images.outputs.manylinux-exists != 'true' &&
+      inputs.build-manylinux != false
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -766,7 +778,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Manylinux tag"
-        if: needs.check-docker-images.outputs.manylinux-exists == 'true'
+        if: needs.check-docker-images.outputs.manylinux-exists == 'true' && inputs.build-manylinux != false
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.check-docker-images.outputs.manylinux-tag }}
