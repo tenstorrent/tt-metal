@@ -1,0 +1,177 @@
+name: "[internal] Produce GitHub Merge Queue data"
+
+on:
+  push:
+    branches:
+      - ashah/merge-queue
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+  workflow_dispatch:
+
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  produce-merge-queue:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ------------------------------------------------------------
+      # Verify token works
+      # ------------------------------------------------------------
+      - name: Check GitHub API rate limit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api rate_limit
+
+      # ------------------------------------------------------------
+      # Compute timestamp (15 min lookback)
+      # ------------------------------------------------------------
+      - name: Compute lookback timestamp
+        id: time
+        run: |
+          echo "LOOKBACK=$(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
+      # ------------------------------------------------------------
+      # Fetch merge queue
+      # ------------------------------------------------------------
+      - name: Fetch merge queue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh api graphql -f query='
+          query {
+            repository(owner: "tenstorrent", name: "tt-metal") {
+              mergeQueue {
+                entries(first: 100) {
+                  nodes {
+                    enqueuedAt
+                    position
+                    pullRequest {
+                      number
+                      title
+                      author { login }
+                      headRefOid
+                    }
+                  }
+                }
+              }
+            }
+          }
+          ' > merge_queue_raw.json
+
+      # ------------------------------------------------------------
+      # Fetch recently merged PRs
+      # ------------------------------------------------------------
+      - name: Fetch merged PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          LOOKBACK="${{ steps.time.outputs.LOOKBACK }}"
+
+          gh api graphql -f query="
+          query {
+            search(
+              query: \"repo:tenstorrent/tt-metal is:pr is:merged merged:>=$LOOKBACK\",
+              type: ISSUE,
+              first: 50
+            ) {
+              nodes {
+                ... on PullRequest {
+                  number
+                  title
+                  author { login }
+                  headRefOid
+                  mergedAt
+                }
+              }
+            }
+          }
+          " > merged_prs_raw.json
+
+      # ------------------------------------------------------------
+      # Build unified snapshot
+      # ------------------------------------------------------------
+      - name: Build merge queue snapshot
+        run: |
+          set -euo pipefail
+
+          mkdir -p generated/merge_queue
+          COLLECTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          jq -n \
+            --arg repo "tenstorrent/tt-metal" \
+            --arg ts "$COLLECTED_AT" \
+            --slurpfile queue merge_queue_raw.json \
+            --slurpfile merged merged_prs_raw.json '
+          {
+            repository: $repo,
+            collected_at: $ts,
+            merge_queue:
+              (
+                [
+                  $queue[0].data.repository.mergeQueue.entries.nodes[]? | {
+                    pr_number: .pullRequest.number,
+                    pr_title: .pullRequest.title,
+                    pr_author_login: .pullRequest.author.login,
+                    head_sha: .pullRequest.headRefOid,
+                    state: "IN_QUEUE",
+                    queue_position: .position,
+                    enqueued_at: .enqueuedAt,
+                    merged_at: null,
+                    collected_at: $ts
+                  }
+                ]
+                +
+                [
+                  $merged[0].data.search.nodes[]? | {
+                    pr_number: .number,
+                    pr_title: .title,
+                    pr_author_login: .author.login,
+                    head_sha: .headRefOid,
+                    state: "MERGED",
+                    queue_position: null,
+                    enqueued_at: null,
+                    merged_at: .mergedAt,
+                    collected_at: $ts
+                  }
+                ]
+              )
+          }
+          ' > generated/merge_queue/merge_queue_snapshot.json
+
+          echo "[Info] Snapshot size:"
+          jq '.merge_queue | length' generated/merge_queue/merge_queue_snapshot.json
+
+      # ------------------------------------------------------------
+      # Timestamp filename
+      # ------------------------------------------------------------
+      - name: Add timestamp to filename
+        run: |
+          TS=$(date -u +"%Y%m%dT%H%M%SZ")
+
+          mv generated/merge_queue/merge_queue_snapshot.json \
+             generated/merge_queue/${TS}_merge_queue_snapshot.json
+
+      # ------------------------------------------------------------
+      # Upload via SFTP
+      # ------------------------------------------------------------
+      - name: Upload merge queue data via SFTP
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_MERGE_QUEUE_WRITER_KEY }}
+          username: ${{ secrets.SFTP_MERGE_QUEUE_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_MERGE_QUEUE_WRITER_HOSTNAME }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/merge_queue_data_batchfile.txt
