@@ -168,7 +168,6 @@ static Tensor create_scalar_config_tensor(
 
                 if (output_stick_n == n_dim) {
                     nhw_linear -= output_stick_n * config.out_w * config.out_h;
-                    output_stick_n = 0;
                     output_stick_h = 0;
                     output_stick_w = 0;
                 }
