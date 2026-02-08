@@ -74,6 +74,8 @@ const generatePRRow = (pr) => {
                           .join(', ') ||
                       'None';
 
+    const assignees = pr.assignees?.map(a => a.login).join(', ') || 'Unassigned';
+
     const isDraft = pr.draft;
     const status  = isDraft ? '<span class="status draft">Draft</span>' : '<span class="status ready">Ready</span>';
 
@@ -89,6 +91,7 @@ const generatePRRow = (pr) => {
       <a href="${pr.html_url}" target="_blank">${pr.title}</a>
     </td>
     <td>${author}</td>
+    <td>${assignees}</td>
     <td>${reviewers}</td>
     <td>${createdAt}</td>
     <td>${daysOpen}</td>
@@ -98,7 +101,7 @@ const generatePRRow = (pr) => {
 
 const formattedDate = new Intl.DateTimeFormat('en-GB', {day: '2-digit', month: 'long', year: 'numeric'}).format(new Date());
 
-const generateHTMLReport = (rows, allLabels, llkReviewers, allAuthors, authorStats, reviewerStats) => `
+const generateHTMLReport = (rows, allLabels, llkReviewers, allAuthors, allAssignees, allRepos, authorStats, reviewerStats, assigneeStats) => `
 <!DOCTYPE html>
 <html>
 <head>
@@ -313,9 +316,20 @@ footer {
         <h3>Top 5 LLK Reviewers</h3>
         <canvas id="reviewerChart"></canvas>
     </div>
+    <div class="chart-box">
+        <h3>Top 5 Assignees</h3>
+        <canvas id="assigneeChart"></canvas>
+    </div>
 </div>
 
 <div class="filter-container">
+    <div class="filter-group">
+        <label for="repoFilter">Filter by Repository:</label>
+        <select id="repoFilter">
+            <option value="">All</option>
+            ${allRepos.map(repo => `<option value="${repo}">${repo}</option>`).join('')}
+        </select>
+    </div>
     <div class="filter-group">
         <label for="labelFilter">Filter by Label:</label>
         <select id="labelFilter">
@@ -338,6 +352,13 @@ footer {
         </select>
     </div>
     <div class="filter-group">
+        <label for="assigneeFilter">Filter by Assignee:</label>
+        <select id="assigneeFilter">
+            <option value="">All</option>
+            ${allAssignees.map(assignee => `<option value="${assignee}">${assignee}</option>`).join('')}
+        </select>
+    </div>
+    <div class="filter-group">
         <label for="statusFilter">Filter by Status:</label>
         <select id="statusFilter">
             <option value="">All</option>
@@ -350,6 +371,7 @@ footer {
         <select id="sortOrder">
             <option value="days_open">Days Open</option>
             <option value="author">Author</option>
+            <option value="assignee">Assignee</option>
             <option value="repository">Repository</option>
             <option value="title">Title</option>
             <option value="created_at">Created At</option>
@@ -364,6 +386,7 @@ footer {
         <th>PR</th>
         <th class="sortable" data-sort="title">Title</th>
         <th class="sortable" data-sort="author">Author</th>
+        <th class="sortable" data-sort="assignee">Assignees</th>
         <th>Reviewers</th>
         <th class="sortable" data-sort="created_at">Created At</th>
         <th class="sortable" data-sort="days_open">Days Open</th>
@@ -380,11 +403,24 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize the charts first
     const authorCtx = document.getElementById('authorChart').getContext('2d');
     const reviewerCtx = document.getElementById('reviewerChart').getContext('2d');
+    const assigneeCtx = document.getElementById('assigneeChart').getContext('2d');
 
     const authorData = ${JSON.stringify(authorStats)};
     const reviewerData = ${JSON.stringify(reviewerStats)};
+    const assigneeData = ${JSON.stringify(assigneeStats)};
 
-    new Chart(authorCtx, {
+    const chartHoverPlugin = {
+        id: 'chartHoverCursor',
+        afterEvent(chart, args) {
+            const event = args.event;
+            if (event.type === 'mousemove') {
+                const elements = chart.getElementsAtEventForMode(event, 'nearest', {intersect: true}, false);
+                chart.canvas.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+            }
+        }
+    };
+
+    const authorChartInst = new Chart(authorCtx, {
         type: 'bar',
         data: {
             labels: authorData.map(d => d.name),
@@ -406,7 +442,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     left: 5,
                     right: 5,
                     top: 10,
-                    bottom: 20 // Increased bottom padding
+                    bottom: 20
                 }
             },
             scales: {
@@ -418,9 +454,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 },
                 x: {
                     ticks: {
-                        padding: 8, // Increased padding
+                        padding: 8,
                         font: {
-                            size: 11 // Slightly smaller font
+                            size: 11
                         }
                     }
                 }
@@ -430,10 +466,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     display: false
                 }
             }
-        }
+        },
+        plugins: [chartHoverPlugin]
     });
 
-    new Chart(reviewerCtx, {
+    const reviewerChartInst = new Chart(reviewerCtx, {
         type: 'bar',
         data: {
             labels: reviewerData.map(d => d.name),
@@ -455,7 +492,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     left: 5,
                     right: 5,
                     top: 10,
-                    bottom: 20 // Increased bottom padding
+                    bottom: 20
                 }
             },
             scales: {
@@ -467,9 +504,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 },
                 x: {
                     ticks: {
-                        padding: 8, // Increased padding
+                        padding: 8,
                         font: {
-                            size: 11 // Slightly smaller font
+                            size: 11
                         }
                     }
                 }
@@ -479,13 +516,66 @@ document.addEventListener('DOMContentLoaded', () => {
                     display: false
                 }
             }
-        }
+        },
+        plugins: [chartHoverPlugin]
+    });
+
+    const assigneeChartInst = new Chart(assigneeCtx, {
+        type: 'bar',
+        data: {
+            labels: assigneeData.map(d => d.name),
+            datasets: [{
+                label: 'Assigned PRs',
+                data: assigneeData.map(d => d.count),
+                backgroundColor: '#fd7e14',
+                borderColor: '#e8590c',
+                borderWidth: 1,
+                barPercentage: 0.5,
+                categoryPercentage: 0.8
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            layout: {
+                padding: {
+                    left: 5,
+                    right: 5,
+                    top: 10,
+                    bottom: 20
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        stepSize: 1
+                    }
+                },
+                x: {
+                    ticks: {
+                        padding: 8,
+                        font: {
+                            size: 11
+                        }
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    display: false
+                }
+            }
+        },
+        plugins: [chartHoverPlugin]
     });
 
     // Existing filter and sort code
+    const repoFilter = document.getElementById('repoFilter');
     const labelFilter = document.getElementById('labelFilter');
     const llkReviewerFilter = document.getElementById('llkReviewerFilter');
     const authorFilter = document.getElementById('authorFilter');
+    const assigneeFilter = document.getElementById('assigneeFilter');
     const statusFilter = document.getElementById('statusFilter');
     const sortOrder = document.getElementById('sortOrder');
     const tableBody = document.querySelector('#prsTable tbody');
@@ -512,38 +602,50 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const filterAndSortTable = () => {
+        const repo = repoFilter.value;
         const label = labelFilter.value;
         const llkReviewer = llkReviewerFilter.value;
         const author = authorFilter.value;
+        const assignee = assigneeFilter.value;
         const status = statusFilter.value;
 
         let filteredRows = originalRows.filter(row => {
-            const rowLabels = Array.from(row.cells[7].querySelectorAll('.label'))
+            const rowRepo = row.cells[0].textContent;
+            const rowLabels = Array.from(row.cells[8].querySelectorAll('.label'))
                 .map(labelSpan => labelSpan.textContent);
-            const rowReviewers = row.cells[4].textContent.split(', ');
+            const rowReviewers = row.cells[5].textContent.split(', ');
             const rowAuthor = row.cells[3].textContent;
+            const rowAssignees = row.cells[4].textContent.split(', ');
             const isDraft = row.classList.contains('draft-row');
 
+            const repoMatch = !repo || rowRepo === repo;
             const statusMatch = !status ||
                 (status === 'draft' && isDraft) ||
                 (status === 'ready' && !isDraft);
             const labelMatch = !label || rowLabels.includes(label);
             const reviewerMatch = !llkReviewer || rowReviewers.includes(llkReviewer);
             const authorMatch = !author || rowAuthor === author;
+            const assigneeMatch = !assignee || rowAssignees.includes(assignee);
 
-            return labelMatch && statusMatch && reviewerMatch && authorMatch;
+            return repoMatch && labelMatch && statusMatch && reviewerMatch && authorMatch && assigneeMatch;
         });
 
         switch (currentSort) {
             case 'days_open':
                 filteredRows.sort((a, b) => {
-                    const comparison = parseInt(b.cells[6].textContent) - parseInt(a.cells[6].textContent);
+                    const comparison = parseInt(b.cells[7].textContent) - parseInt(a.cells[7].textContent);
                     return currentDirection === 'asc' ? -comparison : comparison;
                 });
                 break;
             case 'author':
                 filteredRows.sort((a, b) => {
                     const comparison = a.cells[3].textContent.localeCompare(b.cells[3].textContent);
+                    return currentDirection === 'desc' ? -comparison : comparison;
+                });
+                break;
+            case 'assignee':
+                filteredRows.sort((a, b) => {
+                    const comparison = a.cells[4].textContent.localeCompare(b.cells[4].textContent);
                     return currentDirection === 'desc' ? -comparison : comparison;
                 });
                 break;
@@ -564,8 +666,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 break;
             case 'created_at':
                 filteredRows.sort((a, b) => {
-                    const dateA = new Date(a.cells[5].textContent);
-                    const dateB = new Date(b.cells[5].textContent);
+                    const dateA = new Date(a.cells[6].textContent);
+                    const dateB = new Date(b.cells[6].textContent);
                     const comparison = dateB.getTime() - dateA.getTime();
                     return currentDirection === 'asc' ? -comparison : comparison;
                 });
@@ -596,15 +698,43 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Dropdown change handlers
+    repoFilter.addEventListener('change', filterAndSortTable);
     labelFilter.addEventListener('change', filterAndSortTable);
     llkReviewerFilter.addEventListener('change', filterAndSortTable);
     authorFilter.addEventListener('change', filterAndSortTable);
+    assigneeFilter.addEventListener('change', filterAndSortTable);
     statusFilter.addEventListener('change', filterAndSortTable);
 
     sortOrder.addEventListener('change', () => {
         currentSort = sortOrder.value;
         filterAndSortTable();
     });
+
+    // Chart click-to-filter handlers
+    // Clicking a bar clears ALL dropdowns, then sets only the clicked filter.
+    // Dropdown filters can be freely combined for intersection filtering.
+    const allFilters = [repoFilter, labelFilter, llkReviewerFilter, authorFilter, assigneeFilter, statusFilter];
+
+    const handleChartClick = (chartInst, data, filterEl) => {
+        chartInst.canvas.addEventListener('click', (event) => {
+            const elements = chartInst.getElementsAtEventForMode(event, 'nearest', {intersect: true}, false);
+            if (elements.length > 0) {
+                const name = data[elements[0].index].name;
+                const isToggleOff = filterEl.value === name;
+                // Clear all filters
+                allFilters.forEach(f => f.value = '');
+                // Toggle: clicking the same bar again clears the filter
+                if (!isToggleOff) {
+                    filterEl.value = name;
+                }
+                filterAndSortTable();
+            }
+        });
+    };
+
+    handleChartClick(authorChartInst, authorData, authorFilter);
+    handleChartClick(reviewerChartInst, reviewerData, llkReviewerFilter);
+    handleChartClick(assigneeChartInst, assigneeData, assigneeFilter);
 
     // Initial sort by days open
     updateHeaderVisuals();
@@ -636,7 +766,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const llkReviewers =
             [...new Set(combinedPRs.flatMap(pr => pr.requested_reviewers.map(r => r.login).filter(login => LLK_TEAM_REVIEWERS.has(login))))].sort();
 
-        const allAuthors = [...new Set(combinedPRs.map(pr => pr.user.login))].sort();
+        const allAuthors   = [...new Set(combinedPRs.map(pr => pr.user.login))].sort();
+        const allAssignees = [...new Set(combinedPRs.flatMap(pr => (pr.assignees || []).map(a => a.login)))].sort();
+        const allRepos     = [...new Set(combinedPRs.map(pr => pr._sourceRepo.split('/')[1]))].sort();
 
         // Calculate author statistics
         const authorCounts = {};
@@ -662,8 +794,19 @@ document.addEventListener('DOMContentLoaded', () => {
         // Get top 5 reviewers
         const reviewerStats = Object.entries(reviewerCounts).map(([name, count]) => ({name, count})).sort((a, b) => b.count - a.count).slice(0, 5);
 
+        // Calculate assignee statistics
+        const assigneeCounts = {};
+        combinedPRs.forEach(pr => {
+            (pr.assignees || []).forEach(assignee => {
+                assigneeCounts[assignee.login] = (assigneeCounts[assignee.login] || 0) + 1;
+            });
+        });
+
+        // Get top 5 assignees
+        const assigneeStats = Object.entries(assigneeCounts).map(([name, count]) => ({name, count})).sort((a, b) => b.count - a.count).slice(0, 5);
+
         const rows = sortedPRs.map(generatePRRow).join('');
-        const html = generateHTMLReport(rows, allLabels, llkReviewers, allAuthors, authorStats, reviewerStats);
+        const html = generateHTMLReport(rows, allLabels, llkReviewers, allAuthors, allAssignees, allRepos, authorStats, reviewerStats, assigneeStats);
 
         writeFileSync('pending-prs.html', html);
         console.log('✅ HTML report generated: pending-prs.html');
