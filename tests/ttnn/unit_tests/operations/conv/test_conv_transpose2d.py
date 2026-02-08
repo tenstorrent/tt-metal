@@ -494,6 +494,8 @@ def test_conv_transpose2d_config_tensors_in_dram(
     out_pad_h,
     out_pad_w,
 ):
+    # Clear program cache to ensure we're not using stale cached programs
+    device.clear_program_cache()
     run_conv_transpose2d(
         device,
         math_fidelity=ttnn.MathFidelity.HiFi4,
