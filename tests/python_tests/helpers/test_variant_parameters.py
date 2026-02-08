@@ -214,6 +214,14 @@ class FAST_MODE(TemplateParameter):
 
 
 @dataclass
+class CLAMP_NEGATIVE(TemplateParameter):
+    clamp_negative: bool = True
+
+    def covert_to_cpp(self) -> str:
+        return f"constexpr bool CLAMP_NEGATIVE = {str(self.clamp_negative).lower()};"
+
+
+@dataclass
 class STABLE_SORT(TemplateParameter):
     stable_sort: StableSort = StableSort.No
 
