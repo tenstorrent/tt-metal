@@ -162,7 +162,7 @@ public:
 
     // TODO: This is a hack right now, because this allows multiple device tensor holding on to the same conceptual
     // storage, find a better way to do this.
-    DeviceTensor with_tensor_topology(TensorTopology tensor_topology) {
+    DeviceTensor with_tensor_topology(TensorTopology tensor_topology) const {
         return DeviceTensor(get_storage(), tensor_spec(), std::move(tensor_topology));
     }
 

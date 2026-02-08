@@ -278,7 +278,7 @@ private:
 
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
-    std::shared_ptr<std::variant<tt::tt_metal::HostTensor, tt::tt_metal::DeviceTensor>> tensor_attributes = nullptr;
+    std::shared_ptr<std::variant<tt::tt_metal::HostTensor, tt::tt_metal::DeviceTensor>> backing_tensor = nullptr;
 };
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
