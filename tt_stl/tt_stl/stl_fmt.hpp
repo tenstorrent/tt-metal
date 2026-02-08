@@ -37,6 +37,12 @@ std::ostream& write_to(std::ostream& os, const T& value);
 
 // Container operator<< definitions
 
+// Special case for bool to print true/false instead of 1/0
+inline std::ostream& operator<<(std::ostream& os, bool value) {
+    os << (value ? "true" : "false");
+    return os;
+}
+
 template <typename T1, typename T2>
 std::ostream& operator<<(std::ostream& os, const std::pair<T1, T2>& pair) {
     os << "{";
@@ -209,7 +215,10 @@ typename std::enable_if_t<concepts::detail::supports_conversion_to_string_v<T>, 
 // the using-declaration brings all of them into scope for dependent name lookup.
 template <typename T>
 std::ostream& write_to(std::ostream& os, const T& value) {
-    if constexpr (
+    if constexpr (std::is_same_v<std::decay_t<T>, bool>) {
+        // Special case for bool to print true/false instead of 1/0
+        return operator<<(os, value);
+    } else if constexpr (
         concepts::detail::supports_conversion_to_string_v<std::decay_t<T>> || std::is_enum_v<std::decay_t<T>>) {
         // Use our operator<< overloads for custom types and enums
         using ttsl::stl_fmt::operator<<;
