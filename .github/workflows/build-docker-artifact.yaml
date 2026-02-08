@@ -78,6 +78,13 @@ on:
       tool-yq-tag:
         description: "Docker tag for the yq tool image"
         value: ${{ jobs.check-tool-images.outputs.yq-tag }}
+      # Python venv image tags
+      python-ci-build-venv-tag:
+        description: "Docker tag for the Python CI Build venv image"
+        value: ${{ jobs.check-python-venv-images.outputs.ci-build-venv-tag }}
+      python-ci-test-venv-tag:
+        description: "Docker tag for the Python CI Test venv image"
+        value: ${{ jobs.check-python-venv-images.outputs.ci-test-venv-tag }}
   workflow_dispatch:
     inputs:
       platform:
@@ -295,6 +302,125 @@ jobs:
           tags: ${{ needs.check-tool-images.outputs.yq-tag }}
 
   # =============================================================================
+  # PYTHON VENV IMAGES: Check and build pre-built Python virtual environments
+  # =============================================================================
+  # These images contain pre-built Python virtual environments with all dependencies
+  # installed. They are built once per requirements change and pushed to GHCR.
+  # Using pre-built venvs saves 5-10 minutes per build.
+  # =============================================================================
+
+  check-python-venv-images:
+    runs-on: ubuntu-latest
+    outputs:
+      ci-build-venv-tag: ${{ steps.tags.outputs.ci-build-venv-tag }}
+      ci-build-venv-exists: ${{ steps.check.outputs.ci-build-venv-exists }}
+      ci-test-venv-tag: ${{ steps.tags.outputs.ci-test-venv-tag }}
+      ci-test-venv-exists: ${{ steps.check.outputs.ci-test-venv-exists }}
+      any-missing: ${{ steps.check.outputs.any-missing }}
+      ubuntu-version: ${{ steps.platform.outputs.version }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Parse platform
+        id: platform
+        uses: ./.github/actions/parse-platform
+        with:
+          platform: ${{ inputs.platform }}
+
+      - name: Compute Python venv image tags
+        id: tags
+        run: |
+          VERSION="${{ steps.platform.outputs.version }}"
+          # Remove dots from version for target name (22.04 -> 2204)
+          VERSION_NODOT="${VERSION//.}"
+
+          # Hash requirements files + Dockerfile.python to detect changes
+          VENV_HASH=$(cat \
+            dockerfile/Dockerfile.python \
+            tt_metal/python_env/requirements-dev.txt \
+            docs/requirements-docs.txt \
+            tests/sweep_framework/requirements-sweeps.txt \
+            tools/triage/requirements.txt \
+            | sha1sum | cut -d' ' -f1 | head -c 12)
+
+          # Generate tags: ghcr.io/<repo>/tt-metalium/python-venv/<type>:<ubuntu-version>-<hash>
+          BASE="ghcr.io/${{ github.repository }}/tt-metalium/python-venv"
+          echo "ci-build-venv-tag=${BASE}/ci-build:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
+          echo "ci-test-venv-tag=${BASE}/ci-test:${VERSION_NODOT}-${VENV_HASH}" >> $GITHUB_OUTPUT
+
+          # Store version and target suffix for build step
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version-nodot=${VERSION_NODOT}" >> $GITHUB_OUTPUT
+
+      - name: Check if Python venv images exist
+        id: check
+        run: |
+          check_image() {
+            local tag="$1"
+            local name="$2"
+            if docker manifest inspect "$tag" > /dev/null 2>&1; then
+              echo "$tag exists"
+              echo "${name}-exists=true" >> $GITHUB_OUTPUT
+            else
+              echo "$tag does not exist"
+              echo "${name}-exists=false" >> $GITHUB_OUTPUT
+            fi
+          }
+
+          check_image "${{ steps.tags.outputs.ci-build-venv-tag }}" "ci-build-venv"
+          check_image "${{ steps.tags.outputs.ci-test-venv-tag }}" "ci-test-venv"
+
+          # Check if any are missing
+          if ! docker manifest inspect "${{ steps.tags.outputs.ci-build-venv-tag }}" > /dev/null 2>&1 || \
+             ! docker manifest inspect "${{ steps.tags.outputs.ci-test-venv-tag }}" > /dev/null 2>&1; then
+            echo "any-missing=true" >> $GITHUB_OUTPUT
+          else
+            echo "any-missing=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-python-venv-images:
+    name: "🐍 Build Python venv images"
+    needs: check-python-venv-images
+    if: needs.check-python-venv-images.outputs.any-missing == 'true'
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ci-build-venv image
+        if: needs.check-python-venv-images.outputs.ci-build-venv-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.python
+          target: ci-build-venv-${{ needs.check-python-venv-images.outputs.ubuntu-version == '22.04' && '2204' || '2404' }}
+          push: true
+          tags: ${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
+
+      - name: Build and push ci-test-venv image
+        if: needs.check-python-venv-images.outputs.ci-test-venv-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.python
+          target: ci-test-venv-${{ needs.check-python-venv-images.outputs.ubuntu-version == '22.04' && '2204' || '2404' }}
+          push: true
+          tags: ${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
+
+  # =============================================================================
   # MAIN DOCKER IMAGES: Check and build CI/Dev/Test images
   # =============================================================================
 
@@ -404,9 +530,9 @@ jobs:
   # Build Ubuntu images
   build-ubuntu-images:
     name: "🐳️ Build Ubuntu images"
-    needs: [check-docker-images, check-tool-images, build-tool-images]
+    needs: [check-docker-images, check-tool-images, build-tool-images, check-python-venv-images, build-python-venv-images]
     # Run if distro is ubuntu AND (main images missing OR basic images missing)
-    # Use always() to run even when build-tool-images is skipped (all tools exist)
+    # Use always() to run even when build-tool-images or build-python-venv-images is skipped (all exist)
     if: |
       always() && !failure() && !cancelled() &&
       needs.check-docker-images.outputs.distro == 'ubuntu' &&
@@ -443,6 +569,8 @@ jobs:
             TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
             TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
             TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
+            PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
+            PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -464,6 +592,8 @@ jobs:
             TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
             TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
             TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
+            PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
+            PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -485,6 +615,8 @@ jobs:
             TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
             TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
             TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
+            PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
+            PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
           cache-to: type=inline
           pull: true
           outputs: |

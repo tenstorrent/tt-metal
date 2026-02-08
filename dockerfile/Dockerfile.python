@@ -1,0 +1,213 @@
+# Python Virtual Environment Images for TT-Metalium
+# These images are built once and pushed to GHCR to avoid installing Python
+# packages repeatedly. Each venv is built as a separate target that outputs
+# to /install/venv, which can then be used as a source for COPY --from.
+#
+# The layer names match the main Dockerfile stages with a -venv suffix:
+#   ci-build-venv-2204  -> matches ci-build stage for Ubuntu 22.04
+#   ci-build-venv-2404  -> matches ci-build stage for Ubuntu 24.04
+#   ci-test-venv-2204   -> matches ci-test stage for Ubuntu 22.04
+#   ci-test-venv-2404   -> matches ci-test stage for Ubuntu 24.04
+#
+# Usage:
+#   docker build -f dockerfile/Dockerfile.python --target ci-test-venv-2204 \
+#     -t ghcr.io/.../python-ci-test-venv:2204-<hash> .
+#
+# The main Dockerfile can then use:
+#   FROM ghcr.io/.../python-ci-test-venv:2204-<hash> AS ci-test-venv-layer
+#   COPY --from=ci-test-venv-layer /install/venv /opt/venv
+
+#############################################################
+# uv layer - copy from official distroless image
+# Pinned to specific SHA256 for reproducible builds
+# This must match the UV version in the main Dockerfile
+# See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
+#############################################################
+
+FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b AS uv-layer
+
+#############################################################
+# Ubuntu 22.04 ci-build-venv
+# Python version: 3.10
+# Packages: build, numpy, setuptools (base packages for building)
+#############################################################
+
+FROM mirror.gcr.io/ubuntu:22.04 AS ci-build-venv-builder-2204
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHON_ENV_DIR=/opt/venv
+
+# Install Python and required build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
+    python3-dev \
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Create relocatable virtual environment and install base packages
+# umask 000 ensures the venv is world-writable for runtime pip installs
+# Note: We set PATH instead of using activate since activate is bash-specific
+RUN umask 000 && \
+    uv venv --relocatable $PYTHON_ENV_DIR && \
+    PATH="$PYTHON_ENV_DIR/bin:$PATH" \
+    uv pip install --no-cache-dir build numpy setuptools
+
+# Export as scratch image with only the venv
+FROM scratch AS ci-build-venv-2204
+COPY --from=ci-build-venv-builder-2204 /opt/venv /install/venv
+
+#############################################################
+# Ubuntu 24.04 ci-build-venv
+# Python version: 3.12
+# Packages: build, numpy, setuptools (base packages for building)
+#############################################################
+
+FROM mirror.gcr.io/ubuntu:24.04 AS ci-build-venv-builder-2404
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHON_ENV_DIR=/opt/venv
+
+# Install Python and required build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
+    python3-dev \
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Create relocatable virtual environment and install base packages
+# umask 000 ensures the venv is world-writable for runtime pip installs
+# Note: We set PATH instead of using activate since activate is bash-specific
+RUN umask 000 && \
+    uv venv --relocatable $PYTHON_ENV_DIR && \
+    PATH="$PYTHON_ENV_DIR/bin:$PATH" \
+    uv pip install --no-cache-dir build numpy setuptools
+
+# Export as scratch image with only the venv
+FROM scratch AS ci-build-venv-2404
+COPY --from=ci-build-venv-builder-2404 /opt/venv /install/venv
+
+#############################################################
+# Ubuntu 22.04 ci-test-venv
+# Python version: 3.10
+# Packages: torch (CPU) + requirements-dev.txt + docs + triage
+#############################################################
+
+FROM mirror.gcr.io/ubuntu:22.04 AS ci-test-venv-builder-2204
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHON_ENV_DIR=/opt/venv
+ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
+
+# Install Python and required build dependencies
+# Some packages require compilation, so we need build-essential and dev headers
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
+    python3-dev \
+    build-essential \
+    pkg-config \
+    libhdf5-dev \
+    libsndfile1-dev \
+    libgl1 \
+    git \
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Create directory structure for requirements files
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tools/triage/
+
+# Copy requirements files maintaining relative path structure for -r includes
+COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/
+COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
+COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
+COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
+
+# Create relocatable virtual environment and install all packages
+# Install torch from CPU index first, then other requirements
+# index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
+# umask 000 ensures the venv is world-writable for runtime pip installs
+# Note: We set PATH instead of using activate since activate is bash-specific
+RUN umask 000 && \
+    uv venv --relocatable $PYTHON_ENV_DIR && \
+    export PATH="$PYTHON_ENV_DIR/bin:$PATH" && \
+    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+
+# Export as scratch image with only the venv
+FROM scratch AS ci-test-venv-2204
+COPY --from=ci-test-venv-builder-2204 /opt/venv /install/venv
+
+#############################################################
+# Ubuntu 24.04 ci-test-venv
+# Python version: 3.12
+# Packages: torch (CPU) + requirements-dev.txt + docs + triage
+#############################################################
+
+FROM mirror.gcr.io/ubuntu:24.04 AS ci-test-venv-builder-2404
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHON_ENV_DIR=/opt/venv
+ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
+
+# Install Python and required build dependencies
+# Some packages require compilation, so we need build-essential and dev headers
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
+    python3-dev \
+    build-essential \
+    pkg-config \
+    libhdf5-dev \
+    libsndfile1-dev \
+    libgl1 \
+    git \
+    ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install uv from official distroless image
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+
+# Create directory structure for requirements files
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tools/triage/
+
+# Copy requirements files maintaining relative path structure for -r includes
+COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/
+COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
+COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
+COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
+
+# Create relocatable virtual environment and install all packages
+# Install torch from CPU index first, then other requirements
+# index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
+# umask 000 ensures the venv is world-writable for runtime pip installs
+# Note: We set PATH instead of using activate since activate is bash-specific
+RUN umask 000 && \
+    uv venv --relocatable $PYTHON_ENV_DIR && \
+    export PATH="$PYTHON_ENV_DIR/bin:$PATH" && \
+    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+
+# Export as scratch image with only the venv
+FROM scratch AS ci-test-venv-2404
+COPY --from=ci-test-venv-builder-2404 /opt/venv /install/venv

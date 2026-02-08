@@ -1,18 +1,29 @@
 # TT-Metalium Dockerfile
-# Optimized with multi-stage builds for tool caching
+# Optimized with multi-stage builds for tool and Python dependency caching
 #
 # Third-party tools are pulled from pre-built GHCR images to avoid hitting
 # upstream endpoints repeatedly. Tool images are built by Dockerfile.tools
 # and pushed to GHCR by build-docker-artifact.yaml.
+#
+# Python virtual environments with all dependencies pre-installed are pulled
+# from pre-built GHCR images to avoid repeated pip install operations.
+# Python venv images are built by Dockerfile.python and pushed to GHCR.
 #
 # To build locally without GHCR (e.g., for testing), you can build tool images first:
 #   docker build -f dockerfile/Dockerfile.tools --target ccache -t tool-ccache:local .
 #   docker build -f dockerfile/Dockerfile.tools --target mold -t tool-mold:local .
 #   docker build -f dockerfile/Dockerfile.tools --target cmake -t tool-cmake:local .
 #   ... etc
+#
+# And Python venv images:
+#   docker build -f dockerfile/Dockerfile.python --target ci-build-venv-2204 -t python-ci-build-venv:2204 .
+#   docker build -f dockerfile/Dockerfile.python --target ci-test-venv-2204 -t python-ci-test-venv:2204 .
+#
 # Then build with:
 #   docker build --build-arg TOOL_CCACHE_IMAGE=tool-ccache:local \
-#                --build-arg TOOL_CMAKE_IMAGE=tool-cmake:local ...
+#                --build-arg TOOL_CMAKE_IMAGE=tool-cmake:local \
+#                --build-arg PYTHON_CI_BUILD_VENV_IMAGE=python-ci-build-venv:2204 \
+#                --build-arg PYTHON_CI_TEST_VENV_IMAGE=python-ci-test-venv:2204 ...
 
 #############################################################
 # Tool image configuration (pre-built images from GHCR)
@@ -32,6 +43,13 @@ ARG TOOL_CBA_IMAGE=scratch
 ARG TOOL_GDB_IMAGE=scratch
 ARG TOOL_CMAKE_IMAGE=scratch
 ARG TOOL_YQ_IMAGE=scratch
+
+# Python venv images from GHCR (built by Dockerfile.python, pushed by build-docker-artifact.yaml)
+# These contain pre-built virtual environments with all Python dependencies installed.
+# Using pre-built venvs saves 5-10 minutes per build by avoiding pip install operations.
+# Set to scratch to fall back to building venv in-place (slower but works without GHCR).
+ARG PYTHON_CI_BUILD_VENV_IMAGE=scratch
+ARG PYTHON_CI_TEST_VENV_IMAGE=scratch
 
 # uv - Python package manager
 # Pinned to specific SHA256 for reproducible builds per:
@@ -86,6 +104,11 @@ FROM ${TOOL_CMAKE_IMAGE} AS cmake-layer
 
 # yq layer - pre-built from GHCR
 FROM ${TOOL_YQ_IMAGE} AS yq-layer
+
+# Python venv layers - pre-built from GHCR
+# These contain complete virtual environments with all dependencies pre-installed
+FROM ${PYTHON_CI_BUILD_VENV_IMAGE} AS ci-build-venv-layer
+FROM ${PYTHON_CI_TEST_VENV_IMAGE} AS ci-test-venv-layer
 
 #############################################################
 # uv layer - copy from official distroless image
@@ -155,13 +178,28 @@ COPY --from=yq-layer /install/bin/yq /usr/local/bin/
 
 # Set up virtual environment using uv
 # Uses the system Python version (3.10 on Ubuntu 22.04, 3.12 on Ubuntu 24.04)
+# If pre-built venv image is available (from GHCR), copy it instead of installing packages
+# This saves ~1 minute per build by avoiding pip install operations
 
 ENV PYTHON_ENV_DIR=/opt/venv
+
+# Copy pre-built venv if available, otherwise create one and install base packages
+# The --mount is used to conditionally check if the pre-built venv exists
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+RUN --mount=from=ci-build-venv-layer,source=/install,target=/venv-staging \
+    umask 000 && \
+    if [ -d /venv-staging/venv/bin ]; then \
+        echo "Using pre-built ci-build venv from GHCR" && \
+        cp -a /venv-staging/venv $PYTHON_ENV_DIR; \
+    else \
+        echo "Building ci-build venv from scratch (no pre-built image available)" && \
+        uv venv --relocatable $PYTHON_ENV_DIR && \
+        PATH="$PYTHON_ENV_DIR/bin:$PATH" \
+        uv pip install --no-cache-dir build numpy setuptools; \
+    fi
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -169,9 +207,6 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is activated on shell startup
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
-
-# Numpy needed for tt-train to build
-RUN umask 000 && uv pip install --no-cache-dir build numpy setuptools
 
 RUN git config --global --add safe.directory '*'
 
@@ -193,25 +228,35 @@ FROM ci-build AS ci-test
 ARG UBUNTU_VERSION=22.04
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
-# Create directories for infra
-RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
-RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
-RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
-# Copy requirements from tt-metal folders with requirements.txt docs
+# Create directories for infra (needed even with pre-built venv for requirements file reference)
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tools/triage/
+
+# Copy requirements files (needed for fallback install if no pre-built venv)
 COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
-# Copy requirements from tt-metal folders for sweeps (requirements-sweeps.txt)
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
-# Configure PyTorch CPU index and install Python packages using uv
+# Install Python packages from pre-built venv if available, otherwise install from requirements
+# Using pre-built venv saves 5-10 minutes per build by avoiding pip install operations
 # index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
 # that are not explicitly listed in the requirements.txt files
-RUN umask 000 && \
-    uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
-    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
-    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
+RUN --mount=from=ci-test-venv-layer,source=/install,target=/venv-staging \
+    umask 000 && \
+    if [ -d /venv-staging/venv/bin ]; then \
+        echo "Using pre-built ci-test venv from GHCR" && \
+        rm -rf $PYTHON_ENV_DIR && \
+        cp -a /venv-staging/venv $PYTHON_ENV_DIR; \
+    else \
+        echo "Installing Python packages from scratch (no pre-built ci-test venv available)" && \
+        uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
+        uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+        uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+        uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt; \
+    fi
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
