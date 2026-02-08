@@ -330,7 +330,6 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
-                // Use VectorMode::None and 32 iterations to more efficiently process the tile in one shot.
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 : 8;
                 constexpr int vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<true, true, false, false, false, iterations>(j, vector_mode_exp);

@@ -39,6 +39,7 @@ ALWI void exp_tile_init() {
  * | fast_and_approx         | If approx is true, enable fast approximation.                  | bool     | true, false      | true   |
  * | scale_en                | Enable input scaling by a constant factor in approximate or non-approximate mode | bool     | true, false      | false   |
  * | skip_positive_check     | Skip large-positive input check                                | bool     | true, false      | false   |
+ * | clamp_negative          | If approx && fast_and_approx selects between a version that clamps negative input and a version that does not | bool     | true, false      | true    |
  * | iterations              | Number of iterations over 32-SFPU lanes to run                 | int      | Positive integer | 8       |
  *
  * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |
