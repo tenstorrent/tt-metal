@@ -103,7 +103,11 @@ RUN --mount=from=ccache-layer,source=/install,target=/ccache-staging \
 ARG OMPI_TAG=v5.0.7
 ARG OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
 RUN --mount=from=openmpi-layer,source=/install,target=/ompi-staging \
-    cp -a /ompi-staging/opt/openmpi-${OMPI_TAG}-ulfm /opt/
+    cp -a /ompi-staging/opt/openmpi-${OMPI_TAG}-ulfm /opt/ && \
+    ls -alh /opt && \
+    ls -alh ${OMPI_PREFIX} && \
+    ls -alh ${OMPI_PREFIX}/*
+
 
 # ENV needed
 ENV PATH=${OMPI_PREFIX}/bin:$PATH
