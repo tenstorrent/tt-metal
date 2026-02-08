@@ -78,6 +78,9 @@ on:
       tool-yq-tag:
         description: "Docker tag for the yq tool image"
         value: ${{ jobs.check-tool-images.outputs.yq-tag }}
+      tool-sfpi-tag:
+        description: "Docker tag for the SFPI tool image"
+        value: ${{ jobs.check-tool-images.outputs.sfpi-tag }}
       # Python venv image tags
       python-ci-build-venv-tag:
         description: "Docker tag for the Python CI Build venv image"
@@ -128,6 +131,8 @@ jobs:
       cmake-exists: ${{ steps.check.outputs.cmake-exists }}
       yq-tag: ${{ steps.tags.outputs.yq-tag }}
       yq-exists: ${{ steps.check.outputs.yq-exists }}
+      sfpi-tag: ${{ steps.tags.outputs.sfpi-tag }}
+      sfpi-exists: ${{ steps.check.outputs.sfpi-exists }}
       any-missing: ${{ steps.check.outputs.any-missing }}
     steps:
       - name: Checkout repo
@@ -146,6 +151,8 @@ jobs:
           GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
           CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
           YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
+          # SFPI version comes from tt_metal/sfpi-version (single source of truth)
+          SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 
           # Compute hashes for each tool (version + install script)
           CCACHE_HASH=$(cat dockerfile/scripts/install-ccache.sh | sha1sum | cut -d' ' -f1 | head -c 8)
@@ -155,6 +162,7 @@ jobs:
           GDB_HASH=$(cat dockerfile/scripts/install-gdb.sh | sha1sum | cut -d' ' -f1 | head -c 8)
           CMAKE_HASH=$(cat dockerfile/scripts/install-cmake.sh | sha1sum | cut -d' ' -f1 | head -c 8)
           YQ_HASH=$(cat dockerfile/scripts/install-yq.sh | sha1sum | cut -d' ' -f1 | head -c 8)
+          SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 8)
 
           # Generate tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
           BASE="ghcr.io/${{ github.repository }}/tt-metalium/tools"
@@ -165,6 +173,7 @@ jobs:
           echo "gdb-tag=${BASE}/gdb:${GDB_VERSION}-${GDB_HASH}" >> $GITHUB_OUTPUT
           echo "cmake-tag=${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" >> $GITHUB_OUTPUT
           echo "yq-tag=${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" >> $GITHUB_OUTPUT
+          echo "sfpi-tag=${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" >> $GITHUB_OUTPUT
 
           # Also output versions for build args
           echo "ccache-version=${CCACHE_VERSION}" >> $GITHUB_OUTPUT
@@ -174,6 +183,7 @@ jobs:
           echo "gdb-version=${GDB_VERSION}" >> $GITHUB_OUTPUT
           echo "cmake-version=${CMAKE_VERSION}" >> $GITHUB_OUTPUT
           echo "yq-version=${YQ_VERSION}" >> $GITHUB_OUTPUT
+          echo "sfpi-version=${SFPI_VERSION}" >> $GITHUB_OUTPUT
 
       - name: Check if tool images exist
         id: check
@@ -197,6 +207,7 @@ jobs:
           check_image "${{ steps.tags.outputs.gdb-tag }}" "gdb"
           check_image "${{ steps.tags.outputs.cmake-tag }}" "cmake"
           check_image "${{ steps.tags.outputs.yq-tag }}" "yq"
+          check_image "${{ steps.tags.outputs.sfpi-tag }}" "sfpi"
 
           # Check if any are missing
           if [[ "${{ steps.tags.outputs.ccache-tag }}" == "" ]] || \
@@ -206,7 +217,8 @@ jobs:
              ! docker manifest inspect "${{ steps.tags.outputs.cba-tag }}" > /dev/null 2>&1 || \
              ! docker manifest inspect "${{ steps.tags.outputs.gdb-tag }}" > /dev/null 2>&1 || \
              ! docker manifest inspect "${{ steps.tags.outputs.cmake-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.yq-tag }}" > /dev/null 2>&1; then
+             ! docker manifest inspect "${{ steps.tags.outputs.yq-tag }}" > /dev/null 2>&1 || \
+             ! docker manifest inspect "${{ steps.tags.outputs.sfpi-tag }}" > /dev/null 2>&1; then
             echo "any-missing=true" >> $GITHUB_OUTPUT
           else
             echo "any-missing=false" >> $GITHUB_OUTPUT
@@ -300,6 +312,16 @@ jobs:
           target: yq
           push: true
           tags: ${{ needs.check-tool-images.outputs.yq-tag }}
+
+      - name: Build and push sfpi image
+        if: needs.check-tool-images.outputs.sfpi-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: sfpi
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.sfpi-tag }}
 
   # =============================================================================
   # PYTHON VENV IMAGES: Check and build pre-built Python virtual environments
@@ -569,6 +591,7 @@ jobs:
             TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
             TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
             TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
+            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
             PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
             PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
           cache-to: type=inline
@@ -592,6 +615,7 @@ jobs:
             TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
             TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
             TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
+            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
             PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
             PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
           cache-to: type=inline
@@ -615,6 +639,7 @@ jobs:
             TOOL_GDB_IMAGE=${{ needs.check-tool-images.outputs.gdb-tag }}
             TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
             TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
+            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
             PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
             PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
           cache-to: type=inline

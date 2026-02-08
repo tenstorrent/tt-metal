@@ -36,6 +36,12 @@ ARG CMAKE_SHA256=5bb505d5e0cca0480a330f7f27ccf52c2b8b5214c5bba97df08899f5ef650c2
 ARG YQ_VERSION=v4.44.6
 ARG YQ_SHA256=55f6b59bcbae8fe64f1e99c5daad1f8d37f02b4a5f5199a6ec8c70e9676a30b3
 
+# NOTE: SFPI version/hash are NOT defined here as ARGs.
+# The single source of truth for SFPI version information is:
+#   - tt_metal/sfpi-version (version number, hashes for all platforms)
+#   - tt_metal/sfpi-info.sh (helper script to parse version info)
+# The install-sfpi.sh script sources these files directly.
+
 #############################################################
 # ccache - simple binary extraction
 # Outputs: /install/bin/ccache
@@ -176,3 +182,35 @@ RUN apk add --no-cache bash wget && \
 
 FROM scratch AS yq
 COPY --from=yq-builder /install/ /install/
+
+#############################################################
+# SFPI - Tenstorrent SFPI compiler
+# Outputs: /install/opt/tenstorrent/sfpi/...
+#
+# NOTE: SFPI version and hash information come from:
+#   - tt_metal/sfpi-version (single source of truth)
+#   - tt_metal/sfpi-info.sh (helper script)
+# These files are copied into the build and sourced by install-sfpi.sh.
+# Do NOT hardcode version/hash ARGs here.
+#############################################################
+
+FROM ubuntu:22.04 AS sfpi-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates binutils xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy SFPI version info files (single source of truth)
+COPY tt_metal/sfpi-version /tmp/sfpi-version
+COPY tt_metal/sfpi-info.sh /tmp/sfpi-info.sh
+COPY dockerfile/scripts/install-sfpi.sh /tmp/install-sfpi.sh
+
+# Install SFPI - version/hash are read from sfpi-version file
+RUN SFPI_INFO_SCRIPT=/tmp/sfpi-info.sh \
+    SFPI_VERSION_FILE=/tmp/sfpi-version \
+    INSTALL_DIR=/install \
+    /bin/bash /tmp/install-sfpi.sh
+
+FROM scratch AS sfpi
+COPY --from=sfpi-builder /install/ /install/

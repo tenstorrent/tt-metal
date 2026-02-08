@@ -43,6 +43,7 @@ ARG TOOL_CBA_IMAGE=scratch
 ARG TOOL_GDB_IMAGE=scratch
 ARG TOOL_CMAKE_IMAGE=scratch
 ARG TOOL_YQ_IMAGE=scratch
+ARG TOOL_SFPI_IMAGE=scratch
 
 # Python venv images from GHCR (built by Dockerfile.python, pushed by build-docker-artifact.yaml)
 # These contain pre-built virtual environments with all Python dependencies installed.
@@ -79,6 +80,13 @@ ARG CMAKE_SHA256=5bb505d5e0cca0480a330f7f27ccf52c2b8b5214c5bba97df08899f5ef650c2
 ARG YQ_VERSION=v4.44.6
 ARG YQ_SHA256=55f6b59bcbae8fe64f1e99c5daad1f8d37f02b4a5f5199a6ec8c70e9676a30b3
 
+# NOTE: SFPI version/hash are NOT defined here as ARGs.
+# The single source of truth for SFPI version information is:
+#   - tt_metal/sfpi-version (version number, hashes for all platforms)
+#   - tt_metal/sfpi-info.sh (helper script to parse version info)
+# SFPI is installed from the pre-built tool image or via install_dependencies.sh
+# which sources these files directly.
+
 #############################################################
 # Tool layers - pulled from pre-built GHCR images
 # These images contain binaries at /install/{bin,lib,...}
@@ -105,6 +113,9 @@ FROM ${TOOL_CMAKE_IMAGE} AS cmake-layer
 # yq layer - pre-built from GHCR
 FROM ${TOOL_YQ_IMAGE} AS yq-layer
 
+# SFPI layer - pre-built from GHCR
+FROM ${TOOL_SFPI_IMAGE} AS sfpi-layer
+
 # Python venv layers - pre-built from GHCR
 # These contain complete virtual environments with all dependencies pre-installed
 FROM ${PYTHON_CI_BUILD_VENV_IMAGE} AS ci-build-venv-layer
@@ -129,7 +140,20 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install cmake from pre-built tool image (avoids flaky kitware repo)
 COPY --from=cmake-layer /install/ /usr/local/
 
-# Install runtime deps
+# Copy SFPI from pre-built tool image if available
+# This saves download time and avoids hitting GitHub releases API
+# If no pre-built image (scratch), the directory will be empty and install_dependencies.sh
+# will download SFPI as a fallback
+RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
+    if [ -d /sfpi-staging/opt/tenstorrent/sfpi ]; then \
+        echo "Using pre-built SFPI from GHCR tool image" && \
+        mkdir -p /opt/tenstorrent && \
+        cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/; \
+    else \
+        echo "No pre-built SFPI available, will download during dependency installation"; \
+    fi
+
+# Install runtime deps (SFPI installation is skipped if already present from above)
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version

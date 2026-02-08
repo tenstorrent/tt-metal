@@ -345,6 +345,13 @@ install_llvm() {
 }
 
 install_sfpi() {
+    # Check if SFPI is already installed (e.g., from pre-built tool image)
+    # Skip download if /opt/tenstorrent/sfpi exists and contains files
+    if [[ -d /opt/tenstorrent/sfpi ]] && [[ -n "$(ls -A /opt/tenstorrent/sfpi 2>/dev/null)" ]]; then
+        echo "[INFO] SFPI already installed at /opt/tenstorrent/sfpi, skipping download"
+        return 0
+    fi
+
     local version_file=$(dirname $0)/tt_metal/sfpi-info.sh
     if ! [[ -r $version_file ]] ; then
 	version_file=$(dirname $0)/sfpi-info.sh
