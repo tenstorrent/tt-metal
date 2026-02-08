@@ -37,24 +37,75 @@ void AttributeProtocolCheck::registerMatchers(MatchFinder* Finder) {
         this);
 }
 
+// Unwrap expression (handles ImplicitCastExpr, MaterializeTemporaryExpr, etc.)
+static const Expr* unwrapExpr(const Expr* E) {
+    if (!E) {
+        return E;
+    }
+    while (true) {
+        if (const auto* ICE = dyn_cast<ImplicitCastExpr>(E)) {
+            E = ICE->getSubExpr();
+        } else if (const auto* MTE = dyn_cast<MaterializeTemporaryExpr>(E)) {
+            E = MTE->getSubExpr();
+        } else if (const auto* BTE = dyn_cast<CXXBindTemporaryExpr>(E)) {
+            E = BTE->getSubExpr();
+        } else {
+            break;
+        }
+    }
+    return E;
+}
+
+// Find CallExpr in an expression (unwraps as needed)
+static const CallExpr* findCallExpr(const Expr* E) {
+    E = unwrapExpr(E);
+    if (const auto* CE = dyn_cast<CallExpr>(E)) {
+        return CE;
+    }
+    // Try CXXMemberCallExpr, CXXOperatorCallExpr, etc.
+    if (const auto* MCE = dyn_cast<CXXMemberCallExpr>(E)) {
+        return MCE;
+    }
+    if (const auto* OCE = dyn_cast<CXXOperatorCallExpr>(E)) {
+        return OCE;
+    }
+    return nullptr;
+}
+
 // Extract string literal from an expression (handles StringLiteral and
 // potentially other string-like expressions)
 static std::string extractStringLiteral(const Expr* E) {
+    E = unwrapExpr(E);
     if (const auto* SL = dyn_cast<StringLiteral>(E)) {
         return SL->getString().str();
     }
     return "";
 }
 
-// Extract field name from a DeclRefExpr (e.g., "field_name" from "field_name")
+// Extract field name from an expression (handles DeclRefExpr, MemberExpr, etc.)
 static std::string extractFieldName(const Expr* E) {
+    E = unwrapExpr(E);
+
+    // Direct field reference: field_name
     if (const auto* DRE = dyn_cast<DeclRefExpr>(E)) {
-        if (const auto* VD = dyn_cast<VarDecl>(DRE->getDecl())) {
-            if (VD->getDeclName().isIdentifier()) {
-                return VD->getName().str();
+        const NamedDecl* ND = dyn_cast<NamedDecl>(DRE->getDecl());
+        if (ND && ND->getDeclName().isIdentifier()) {
+            // Check if it's a field declaration
+            if (isa<FieldDecl>(ND) || isa<VarDecl>(ND)) {
+                return ND->getName().str();
             }
         }
     }
+
+    // Member access: this->field_name or obj.field_name
+    if (const auto* ME = dyn_cast<MemberExpr>(E)) {
+        if (ME->getMemberDecl()->getDeclName().isIdentifier()) {
+            if (isa<FieldDecl>(ME->getMemberDecl())) {
+                return ME->getMemberDecl()->getName().str();
+            }
+        }
+    }
+
     return "";
 }
 
@@ -65,22 +116,58 @@ static std::vector<std::string> parseAttributeNames(const VarDecl* VD) {
         return names;
     }
 
-    const Expr* Init = VD->getInit();
+    const Expr* Init = unwrapExpr(VD->getInit());
     // Look for std::forward_as_tuple(...) call
+    // Could be: CallExpr with DeclRefExpr, or MemberExpr, or DependentScopeMemberExpr
     if (const auto* CE = dyn_cast<CallExpr>(Init)) {
-        if (const auto* DRE = dyn_cast<DeclRefExpr>(CE->getCallee())) {
-            if (DRE->getDecl()->getNameAsString() == "forward_as_tuple") {
-                // Extract all string literal arguments
-                for (unsigned i = 0; i < CE->getNumArgs(); ++i) {
-                    std::string name = extractStringLiteral(CE->getArg(i));
-                    if (!name.empty()) {
-                        names.push_back(name);
-                    }
+        std::string calleeName;
+
+        // Try different ways to get the callee name
+        const Expr* Callee = unwrapExpr(CE->getCallee());
+        if (const auto* DRE = dyn_cast<DeclRefExpr>(Callee)) {
+            calleeName = DRE->getDecl()->getNameAsString();
+        } else if (const auto* ME = dyn_cast<MemberExpr>(Callee)) {
+            if (ME->getMemberDecl()->getDeclName().isIdentifier()) {
+                calleeName = ME->getMemberDecl()->getNameAsString();
+            }
+        }
+
+        if (calleeName == "forward_as_tuple") {
+            // Extract all string literal arguments
+            for (unsigned i = 0; i < CE->getNumArgs(); ++i) {
+                std::string name = extractStringLiteral(CE->getArg(i));
+                if (!name.empty()) {
+                    names.push_back(name);
                 }
             }
         }
     }
     return names;
+}
+
+// Helper to find ReturnStmt in a statement (handles CompoundStmt)
+static const ReturnStmt* findReturnStmt(const Stmt* S) {
+    if (!S) {
+        return nullptr;
+    }
+    if (const auto* RS = dyn_cast<ReturnStmt>(S)) {
+        return RS;
+    }
+    if (const auto* CS = dyn_cast<CompoundStmt>(S)) {
+        // Look for ReturnStmt in the compound statement
+        for (const auto* SubStmt : CS->body()) {
+            if (const auto* RS = findReturnStmt(SubStmt)) {
+                return RS;
+            }
+        }
+    }
+    // Recursively check children
+    for (const Stmt* Child : S->children()) {
+        if (const auto* RS = findReturnStmt(Child)) {
+            return RS;
+        }
+    }
+    return nullptr;
 }
 
 // Parse attribute_values(): extract field references from return std::forward_as_tuple(field1, field2, ...)
@@ -91,20 +178,30 @@ static std::vector<std::string> parseAttributeValues(const CXXMethodDecl* MD) {
     }
 
     const Stmt* Body = MD->getBody();
-    // Look for return statement
-    if (const auto* RS = dyn_cast<ReturnStmt>(Body)) {
-        if (const Expr* RetExpr = RS->getRetValue()) {
-            // Look for std::forward_as_tuple(...) call
-            if (const auto* CE = dyn_cast<CallExpr>(RetExpr)) {
-                if (const auto* DRE = dyn_cast<DeclRefExpr>(CE->getCallee())) {
-                    if (DRE->getDecl()->getNameAsString() == "forward_as_tuple") {
-                        // Extract all field references
-                        for (unsigned i = 0; i < CE->getNumArgs(); ++i) {
-                            std::string field = extractFieldName(CE->getArg(i));
-                            if (!field.empty()) {
-                                values.push_back(field);
-                            }
-                        }
+    // Look for return statement (may be inside CompoundStmt)
+    const ReturnStmt* RS = findReturnStmt(Body);
+    if (RS && RS->getRetValue()) {
+        const Expr* RetExpr = RS->getRetValue();
+        // Look for std::forward_as_tuple(...) call
+        if (const CallExpr* CE = findCallExpr(RetExpr)) {
+            std::string calleeName;
+
+            // Try different ways to get the callee name
+            const Expr* Callee = unwrapExpr(CE->getCallee());
+            if (const auto* DRE = dyn_cast<DeclRefExpr>(Callee)) {
+                calleeName = DRE->getDecl()->getNameAsString();
+            } else if (const auto* ME = dyn_cast<MemberExpr>(Callee)) {
+                if (ME->getMemberDecl()->getDeclName().isIdentifier()) {
+                    calleeName = ME->getMemberDecl()->getNameAsString();
+                }
+            }
+
+            if (calleeName == "forward_as_tuple") {
+                // Extract all field references
+                for (unsigned i = 0; i < CE->getNumArgs(); ++i) {
+                    std::string field = extractFieldName(CE->getArg(i));
+                    if (!field.empty()) {
+                        values.push_back(field);
                     }
                 }
             }
@@ -335,15 +432,12 @@ void AttributeProtocolCheck::check(const MatchFinder::MatchResult& Result) {
             SourceLocation namesStart = AttributeNamesVD->getBeginLoc();
             SourceLocation namesEnd = AttributeNamesVD->getEndLoc();
             if (namesStart.isValid() && namesEnd.isValid()) {
-                // Extend to include the semicolon
+                // Extend to include the semicolon - findLocationAfterToken returns location AFTER the token
                 const LangOptions& LO = Result.Context->getLangOpts();
-                Token Tok;
-                if (Lexer::getRawToken(namesEnd.getLocWithOffset(1), Tok, SM, LO) || Tok.isNot(tok::semi)) {
-                    // Try to find the semicolon after the declaration
-                    SourceLocation SemiLoc = Lexer::findLocationAfterToken(namesEnd, tok::semi, SM, LO, false);
-                    if (SemiLoc.isValid()) {
-                        namesEnd = SemiLoc;
-                    }
+                SourceLocation SemiLoc = Lexer::findLocationAfterToken(namesEnd, tok::semi, SM, LO, false);
+                if (SemiLoc.isValid()) {
+                    // SemiLoc points to after the semicolon, so use it as the end
+                    namesEnd = SemiLoc;
                 }
                 SourceRange fullRange(namesStart, namesEnd);
                 Diag << FixItHint::CreateReplacement(fullRange, namesCode.str());
@@ -355,7 +449,14 @@ void AttributeProtocolCheck::check(const MatchFinder::MatchResult& Result) {
             SourceLocation valuesStart = AttributeValuesMD->getBeginLoc();
             SourceLocation valuesEnd = AttributeValuesMD->getEndLoc();
             if (valuesStart.isValid() && valuesEnd.isValid()) {
-                // Extend to include the closing brace
+                // The getEndLoc() should already include the closing brace, but let's make sure
+                // we include any trailing whitespace/newline by finding the next token
+                const LangOptions& LO = Result.Context->getLangOpts();
+                SourceLocation AfterEnd = Lexer::findLocationAfterToken(valuesEnd, tok::unknown, SM, LO, true);
+                if (AfterEnd.isValid()) {
+                    // Include up to but not including the next token (usually a semicolon or closing brace)
+                    valuesEnd = AfterEnd.getLocWithOffset(-1);
+                }
                 SourceRange fullRange(valuesStart, valuesEnd);
                 Diag << FixItHint::CreateReplacement(fullRange, valuesCode.str());
             }
