@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/tile_move_copy.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 
 // Fused SiLU activation support (only when FUSE_SILU is defined)
@@ -13,7 +13,7 @@
 // - ITERATIONS: minimum 2 required for SFPU, then scales (m<=4->2, m=8->4, m>=16->8)
 // Total: significant speedup vs default silu_tile()
 #ifdef FUSE_SILU
-#include "compute_kernel_api.h"  // for silu_tile_init() and llk_math_eltwise_unary_sfpu_silu
+#include "api/compute/compute_kernel_api.h"  // for silu_tile_init() and llk_math_eltwise_unary_sfpu_silu
 #endif
 
 /**

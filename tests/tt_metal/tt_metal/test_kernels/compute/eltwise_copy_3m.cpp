@@ -4,10 +4,10 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/compute_kernel_api.h"
 
 namespace NAMESPACE {
 

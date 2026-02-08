@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/reduce.h"
+#include "api/compute/reduce.h"
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);

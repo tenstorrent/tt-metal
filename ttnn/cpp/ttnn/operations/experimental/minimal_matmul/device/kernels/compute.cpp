@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/untilize.h"
+#include "api/compute/tilize.h"
+#include "api/compute/matmul.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);

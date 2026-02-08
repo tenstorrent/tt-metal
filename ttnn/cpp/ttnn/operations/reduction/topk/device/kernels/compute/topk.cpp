@@ -4,11 +4,11 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
 
 /**
  * Transpose tiles from width-height to height-width format and pack to destination buffer

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ckernel.h"
-#include "compute_kernel_api.h"
+#include "api/compute/compute_kernel_api.h"
 #include <sfpi.h>
 
 using namespace sfpi;

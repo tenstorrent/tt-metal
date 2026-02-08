@@ -6,7 +6,7 @@
 #include "kernel_op_api.hpp"
 
 #if defined(COMPILE_FOR_TRISC)
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_binary.h"
 #endif
 
 namespace deepseek_b1_ops {

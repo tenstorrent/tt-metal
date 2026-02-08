@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/common.h"
+#include "api/compute/common.h"
 void kernel_main() {
     // Get configurable number of unique and common runtime args, and increment them all in place by a fixed value.
     constexpr uint32_t num_unique_rt_args = get_compile_time_arg_val(0);
