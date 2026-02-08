@@ -621,7 +621,10 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: base
           tags: ${{ needs.check-images.outputs.ubuntu-2204-basic-dev-tag }}
-          build-args: UBUNTU_VERSION=22.04
+          build-args: |
+            UBUNTU_VERSION=22.04
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -634,7 +637,10 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
           tags: ${{ needs.check-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
-          build-args: UBUNTU_VERSION=22.04
+          build-args: |
+            UBUNTU_VERSION=22.04
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -742,7 +748,10 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: base
           tags: ${{ needs.check-images.outputs.ubuntu-2404-basic-dev-tag }}
-          build-args: UBUNTU_VERSION=24.04
+          build-args: |
+            UBUNTU_VERSION=24.04
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -755,7 +764,10 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
           tags: ${{ needs.check-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
-          build-args: UBUNTU_VERSION=24.04
+          build-args: |
+            UBUNTU_VERSION=24.04
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
           cache-to: type=inline
           pull: true
           outputs: |

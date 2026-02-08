@@ -54,7 +54,7 @@ COPY --from=uv-layer /uv /uvx /usr/local/bin/
 RUN umask 000 && \
     uv venv --relocatable $PYTHON_ENV_DIR && \
     PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-    uv pip install --no-cache-dir build numpy setuptools
+    uv pip install --no-cache-dir uv build numpy setuptools
 
 # Export as scratch image with only the venv
 FROM scratch AS ci-build-venv-2204
@@ -88,7 +88,7 @@ COPY --from=uv-layer /uv /uvx /usr/local/bin/
 RUN umask 000 && \
     uv venv --relocatable $PYTHON_ENV_DIR && \
     PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-    uv pip install --no-cache-dir build numpy setuptools
+    uv pip install --no-cache-dir uv build numpy setuptools
 
 # Export as scratch image with only the venv
 FROM scratch AS ci-build-venv-2404

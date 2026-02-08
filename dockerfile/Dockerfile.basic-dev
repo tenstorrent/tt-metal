@@ -1,13 +1,56 @@
+# Basic Development Dockerfile
+# Uses pre-built tool images from GHCR for cmake and SFPI to avoid
+# repeated downloads from upstream sources.
+#
+# Tool images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml.
+# For local builds without GHCR, tools default to scratch and are installed from apt/scripts.
+
+#############################################################
+# Tool image configuration
+# NOTE: ARGs used in FROM must be declared before any FROM statement
+#############################################################
+
 ARG UBUNTU_VERSION=22.04
+
+# Tool images from GHCR (built by Dockerfile.tools)
+ARG TOOL_CMAKE_IMAGE=scratch
+ARG TOOL_SFPI_IMAGE=scratch
+
+#############################################################
+# Tool layers - pulled from pre-built GHCR images
+#############################################################
+
+# cmake layer - pre-built from GHCR
+FROM ${TOOL_CMAKE_IMAGE} AS cmake-layer
+
+# SFPI layer - pre-built from GHCR
+FROM ${TOOL_SFPI_IMAGE} AS sfpi-layer
+
+#############################################################
+# Base image
+#############################################################
+
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
-# Re-declare ARG make it available in the build stage
+# Re-declare ARG to make it available in the build stage
 ARG UBUNTU_VERSION
 
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install cmake from pre-built tool image if available, otherwise from apt
+# Using tool image avoids flaky kitware repo and ensures consistent version
+RUN --mount=from=cmake-layer,source=/install,target=/cmake-staging \
+    if [ -d /cmake-staging/bin ]; then \
+        echo "Using pre-built cmake from GHCR tool image" && \
+        cp -a /cmake-staging/* /usr/local/; \
+    else \
+        echo "No pre-built cmake available, installing from apt" && \
+        apt-get update && apt-get install -y --no-install-recommends cmake && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # Install basic tools to build
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
-    && apt-get update && apt-get install -y \
-    cmake \
     ninja-build \
     g++-12 \
     build-essential \
@@ -16,7 +59,7 @@ RUN apt-get update && apt-get install -y \
 # Install mpi-ulfm from the tenstorrent repository
 RUN set -eux; \
     apt-get update && \
-    apt-get install -y -f \
+    apt-get install -y -f --no-install-recommends \
         wget ca-certificates && \
     TMP_DIR="$(mktemp -d)" && \
     DEB_URL="https://github.com/tenstorrent/ompi/releases/download/v5.0.7/openmpi-ulfm_5.0.7-1_amd64.deb" && \
@@ -30,7 +73,7 @@ RUN set -eux; \
 FROM base AS basic-ttnn-runtime
 
 # Install basic runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     python3-dev \
     python3-pip \
@@ -40,7 +83,19 @@ RUN apt-get update && apt-get install -y \
 COPY scripts/install-uv.sh /tmp/install-uv.sh
 RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
 
-# Install the SFPI compiler
+# Copy SFPI from pre-built tool image if available
+# This saves download time and avoids hitting GitHub releases API
+# If no pre-built image (scratch), install_dependencies.sh will download SFPI
+RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
+    if [ -d /sfpi-staging/opt/tenstorrent/sfpi ]; then \
+        echo "Using pre-built SFPI from GHCR tool image" && \
+        mkdir -p /opt/tenstorrent && \
+        cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/; \
+    else \
+        echo "No pre-built SFPI available, will download during dependency installation"; \
+    fi
+
+# Install the SFPI compiler (skipped if already installed from tool image above)
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version

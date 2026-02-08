@@ -654,7 +654,10 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: base
           tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
@@ -667,7 +670,10 @@ jobs:
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
           tags: ${{ needs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
+            TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
           cache-to: type=inline
           pull: true
           outputs: |
