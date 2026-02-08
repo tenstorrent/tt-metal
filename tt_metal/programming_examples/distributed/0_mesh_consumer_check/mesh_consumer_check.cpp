@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Minimal tt-metal consumer example: check available devices and optionally open a mesh device.
-// Writes data to the device via H2D socket and reads it back via D2H socket (loopback on device).
+// Two-thread example: sender streams LLM-decode-style data to device via H2D socket,
+// receiver reads it back via D2H socket (loopback on device), prints and verifies.
+// Data format: 128 entries × (Token ID + User ID + Position ID) = 3 words = 12 bytes per entry.
 // Build and run from repo root (see README in this directory).
 // Related: https://github.com/tenstorrent/tt-metal/issues/34274
 
@@ -12,6 +13,25 @@
 #include <iostream>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
+#include <thread>
+#include <random>
+#include <cstring>
+
+namespace {
+
+constexpr uint32_t kNumEntries = 128;
+constexpr uint32_t kWordsPerEntry = 3;
+constexpr uint32_t kBytesPerEntry = kWordsPerEntry * sizeof(uint32_t);
+constexpr uint32_t kDataSizeBytes = kNumEntries * kBytesPerEntry;
+
+struct DecodeEntry {
+    uint32_t token_id;
+    uint32_t user_id;
+    uint32_t position_id;
+};
+static_assert(sizeof(DecodeEntry) == kBytesPerEntry, "DecodeEntry must be 12 bytes");
+
+}  // namespace
 
 int main() {
     using namespace tt::tt_metal;
@@ -26,33 +46,25 @@ int main() {
         return 0;
     }
 
-    std::cout << "Opening 1x1 mesh device (consumer)...\n";
+    std::cout << "Opening 1x1 mesh device..." << std::endl;
     auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(1, 1)));
     std::cout << "Mesh device opened. Shape: " << mesh_device->num_rows() << "x" << mesh_device->num_cols()
               << std::endl;
 
     const MeshCoreCoord socket_core(MeshCoordinate(0, 0), CoreCoord(0, 0));
-    std::cout << "Socket core: " << socket_core.core_coord.str() << std::endl;
-
-    const SocketMemoryConfig socket_mem_config(BufferType::L1, 1024);
     constexpr uint32_t page_size = 64;
-    constexpr uint32_t data_size = 1024;
+    constexpr uint32_t data_size = kDataSizeBytes;
     constexpr uint32_t num_iterations = 1;
-    std::cout << "Page size: " << page_size << ", Data size: " << data_size << std::endl;
+    constexpr uint32_t fifo_size = 2048;
 
     std::cerr << "[h2d_socket] Creating H2D socket...\n" << std::flush;
     auto input_socket = std::make_unique<H2DSocket>(
-        mesh_device, socket_core, socket_mem_config.socket_storage_type,
-        socket_mem_config.fifo_size, H2DMode::HOST_PUSH);
+        mesh_device, socket_core, BufferType::L1, fifo_size, H2DMode::HOST_PUSH);
     input_socket->set_page_size(page_size);
 
     std::cerr << "[d2h_socket] Creating D2H socket...\n" << std::flush;
-    auto output_socket = std::make_unique<D2HSocket>(mesh_device, socket_core, socket_mem_config.fifo_size);
+    auto output_socket = std::make_unique<D2HSocket>(mesh_device, socket_core, fifo_size);
     output_socket->set_page_size(page_size);
-
-    std::cout << "Socket config addresses - H2D: " << input_socket->get_config_buffer_address()
-              << ", D2H: " << output_socket->get_config_buffer_address() << std::endl;
-    std::cout << "Sockets initialized" << std::endl;
 
     std::cout << "Creating loopback kernel (H2D -> D2H)..." << std::endl;
     auto loopback_program = CreateProgram();
@@ -75,48 +87,73 @@ int main() {
     MeshWorkload mesh_workload;
     mesh_workload.add_program(MeshCoordinateRange(socket_core.device_coord), std::move(loopback_program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
-    std::cout << "Loopback kernel enqueued" << std::endl;
+    std::cout << "Loopback kernel enqueued. Streaming " << kNumEntries << " entries ("
+              << kDataSizeBytes << " bytes) with sender and receiver threads." << std::endl;
 
-    std::cout << "Writing tensor to device via H2D socket..." << std::endl;
+    std::vector<DecodeEntry> ref_data(kNumEntries);
+    std::vector<DecodeEntry> readback(kNumEntries);
+
     const uint32_t num_pages = data_size / page_size;
-    std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
-    std::iota(src_vec.begin(), src_vec.end(), 7u);
+    const uint32_t page_size_words = page_size / sizeof(uint32_t);
 
-    uint32_t page_size_words = page_size / sizeof(uint32_t);
-    for (uint32_t j = 0; j < num_pages; j++) {
-        input_socket->write(src_vec.data() + (j * page_size_words), 1);
+    std::thread sender([&]() {
+        std::mt19937 rng{42};
+        std::uniform_int_distribution<uint32_t> dist(0, 0xFFFF);
+        for (uint32_t i = 0; i < kNumEntries; i++) {
+            ref_data[i].token_id = dist(rng);
+            ref_data[i].user_id = dist(rng);
+            ref_data[i].position_id = dist(rng);
+        }
+        const auto* raw = reinterpret_cast<const uint32_t*>(ref_data.data());
+        for (uint32_t j = 0; j < num_pages; j++) {
+            input_socket->write(const_cast<void*>(static_cast<const void*>(raw + (j * page_size_words))), 1);
+        }
+        input_socket->barrier();
+    });
+
+    std::thread receiver([&]() {
+        auto* raw = reinterpret_cast<uint32_t*>(readback.data());
+        for (uint32_t j = 0; j < num_pages; j++) {
+            output_socket->read(raw + (j * page_size_words), 1);
+        }
+        output_socket->barrier();
+    });
+
+    sender.join();
+    receiver.join();
+
+    std::cout << "Receiver readback (first 5 and last 2 entries):" << std::endl;
+    for (uint32_t i = 0; i < 5; i++) {
+        std::cout << "  [" << i << "] token_id=" << readback[i].token_id << " user_id=" << readback[i].user_id
+                  << " position_id=" << readback[i].position_id << std::endl;
+    }
+    std::cout << "  ..." << std::endl;
+    for (uint32_t i = kNumEntries - 2; i < kNumEntries; i++) {
+        std::cout << "  [" << i << "] token_id=" << readback[i].token_id << " user_id=" << readback[i].user_id
+                  << " position_id=" << readback[i].position_id << std::endl;
     }
 
-    std::cout << "Reading back via D2H socket..." << std::endl;
-    std::vector<uint32_t> readback(data_size / sizeof(uint32_t));
-    for (uint32_t j = 0; j < num_pages; j++) {
-        output_socket->read(readback.data() + (j * page_size_words), 1);
-    }
-
-    input_socket->barrier();
-    output_socket->barrier();
-    std::cout << "Barriers done" << std::endl;
-
-    std::cout << "Readback: ";
-    for (size_t i = 0; i < 10; i++) {
-        std::cout << readback[i] << " ";
-    }
-    std::cout << std::endl;
-    std::cout << "Src vec: ";
-    for (size_t i = 0; i < 10; i++) {
-        std::cout << src_vec[i] << " ";
-    }
-    std::cout << std::endl;
-    if (readback != src_vec) {
-        std::cout << "Mismatch: data read via D2H socket does not match data sent via H2D socket." << std::endl;
+    bool ok = (std::memcmp(ref_data.data(), readback.data(), kDataSizeBytes) == 0);
+    if (!ok) {
+        std::cout << "Mismatch: data read via D2H does not match data sent via H2D." << std::endl;
+        for (uint32_t i = 0; i < kNumEntries && i < 20; i++) {
+            if (ref_data[i].token_id != readback[i].token_id || ref_data[i].user_id != readback[i].user_id ||
+                ref_data[i].position_id != readback[i].position_id) {
+                std::cout << "  First diff at entry " << i << ": ref(" << ref_data[i].token_id << ","
+                          << ref_data[i].user_id << "," << ref_data[i].position_id << ") vs recv("
+                          << readback[i].token_id << "," << readback[i].user_id << "," << readback[i].position_id
+                          << ")" << std::endl;
+                break;
+            }
+        }
+        Finish(mesh_device->mesh_command_queue());
+        mesh_device->close();
         return 1;
     }
-    std::cout << "OK: tensor pushed via H2D socket and read back via D2H socket; verified." << std::endl;
+    std::cout << "OK: " << kNumEntries << " entries streamed via H2D and read back via D2H; verified." << std::endl;
 
     Finish(mesh_device->mesh_command_queue());
-    std::cout << "Finished" << std::endl;
     mesh_device->close();
-
-    std::cout << "Done.\n";
+    std::cout << "Done." << std::endl;
     return 0;
 }
