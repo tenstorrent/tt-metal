@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/bcast.h"
+#include "compute_kernel_api/bcast.h"
 
 void kernel_main() {
     uint32_t w = 0;

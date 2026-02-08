@@ -13,7 +13,7 @@
 
 // TODO FIXME: this build system is ridiculously stupid
 #ifdef COMPILE_FOR_TRISC
-#include "api/compute/common.h"
+#include "compute_kernel_api/common.h"
 #else
 #include "api/dataflow/dataflow_api.h"
 #endif

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/tilize.h"
+#include "compute_kernel_api/tilize.h"
 
 void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);

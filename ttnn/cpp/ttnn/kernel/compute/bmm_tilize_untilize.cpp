@@ -5,16 +5,16 @@
 #include <cstdint>
 
 #include "internal/mod_div_lib.h"
-#include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/matmul.h"
+#include "compute_kernel_api/tilize.h"
+#include "compute_kernel_api/untilize.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/matmul.h"
 
 #ifdef FUSE_BIAS
-#include "api/compute/bcast.h"
+#include "compute_kernel_api/bcast.h"
 #endif
 
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #define DEBUG_PRINT 0
 

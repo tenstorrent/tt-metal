@@ -21,7 +21,7 @@ void core_agnostic_main();
 
 void kernel_main() { core_agnostic_main(); }
 #else
-#include "api/compute/common.h"
+#include "compute_kernel_api/common.h"
 
 #include "experimental/circular_buffer.h"
 

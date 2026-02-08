@@ -4,14 +4,14 @@
 
 #include <cstdint>
 
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/matmul.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/matmul.h"
 
 #ifdef FUSE_BIAS
-#include "api/compute/bcast.h"
+#include "compute_kernel_api/bcast.h"
 #endif
 
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);              // inner block size in tiles

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/transpose_wh.h"
+#include "compute_kernel_api/transpose_wh.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_compile_time_arg_val(0);

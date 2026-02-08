@@ -11,7 +11,7 @@
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 void kernel_main() {
 #else
-#include "api/compute/common.h"
+#include "compute_kernel_api/common.h"
 namespace NAMESPACE {
 void MAIN {
 #endif

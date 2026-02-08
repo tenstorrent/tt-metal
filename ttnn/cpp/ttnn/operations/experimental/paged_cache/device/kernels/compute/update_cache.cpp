@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "api/compute/common.h"
-#include "api/compute/pack_untilize.h"
-#include "api/compute/tilize.h"
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/pack_untilize.h"
+#include "compute_kernel_api/tilize.h"
 
 // Helper constexpr function to compute num_blocks_per_col
 constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) {

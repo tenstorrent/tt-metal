@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/tilize.h"
+#include "compute_kernel_api/tilize.h"
 
 namespace NAMESPACE {
 void MAIN {

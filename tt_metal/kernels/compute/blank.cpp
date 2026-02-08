@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/blank.h"
+#include "compute_kernel_api/blank.h"
 
 namespace NAMESPACE {
 void MAIN {}

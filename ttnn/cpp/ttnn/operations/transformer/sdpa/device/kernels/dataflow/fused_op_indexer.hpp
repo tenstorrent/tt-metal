@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "api/compute/common.h"
+#include "compute_kernel_api/common.h"
 #include "api/debug/assert.h"
 #include <array>
 

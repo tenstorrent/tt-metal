@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "api/compute/reduce.h"
+#include "compute_kernel_api/reduce.h"
 #include "experimental/circular_buffer.h"
 
 void kernel_main() {

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/bcast.h"
+#include "compute_kernel_api/bcast.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
