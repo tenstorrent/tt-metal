@@ -24,6 +24,7 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import (
 )
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "model_category, pcc_values, skip_check",
     [
