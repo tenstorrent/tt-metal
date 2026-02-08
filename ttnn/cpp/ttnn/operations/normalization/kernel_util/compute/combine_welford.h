@@ -10,15 +10,15 @@
 
 #pragma once
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_unary/rsqrt.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/copy_dest_values.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/reg_api.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/copy_dest_values.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/reg_api.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
 namespace norm::kernel_util::compute {
 /**

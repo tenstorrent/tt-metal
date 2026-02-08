@@ -29,8 +29,22 @@ private:
 
     tt::tt_fabric::WorkerToFabricMuxSender<mux_num_buffers_per_channel> edm;
 
+#if ASSERT_ENABLED
+    // Pointer to the end of the last released page. Used for assertions to catch cmd_ptr/released_pages desync.
+    uint32_t watch_released_ptr_;
+#endif
+
 public:
     CQRelayClient() = default;
+
+    // Initialize cmd_ptr tracking for release_pages assertions.
+    // Call this after init() and before any release_pages() calls that use cmd_ptr tracking.
+    template <uint32_t buffer_base>
+    FORCE_INLINE void init_cmd_ptr_tracking() {
+#if ASSERT_ENABLED
+        watch_released_ptr_ = buffer_base;
+#endif
+    }
 
     template <
         uint8_t noc_index,
@@ -210,6 +224,40 @@ public:
         tt::tt_fabric::fabric_atomic_inc<mux_num_buffers_per_channel>(edm, packet_header);
 #else
         noc_semaphore_inc(get_noc_addr_helper(dest_noc_xy, get_semaphore<fd_core_type>(dest_sem_id)), n, noc_idx);
+#endif
+    }
+
+    // Version of release_pages with cmd_ptr tracking for synchronization assertions.
+    // Template parameters specify the buffer geometry for validation.
+    template <
+        uint8_t noc_idx,
+        uint32_t dest_noc_xy,
+        uint32_t dest_sem_id,
+        uint32_t buffer_base,
+        uint32_t buffer_end,
+        uint32_t buffer_page_size>
+    FORCE_INLINE void release_pages(uint32_t n, uint32_t cmd_ptr) {
+        release_pages<noc_idx, dest_noc_xy, dest_sem_id>(n);
+
+#if ASSERT_ENABLED
+        if constexpr (buffer_page_size != 0) {
+            constexpr uint32_t buffer_size = buffer_end - buffer_base;
+            if constexpr (buffer_size != 0) {
+                if (n != 0) {
+                    // In the middle of processing, cmd_ptr may not be aligned to page size, but
+                    // must always be past the number of pages released.
+                    uint64_t bytes = n * buffer_page_size;
+                    uint32_t expected = watch_released_ptr_ + bytes;
+                    if (expected > buffer_end) {
+                        expected -= buffer_size;
+                    }
+
+                    // It's possible the cmd_ptr wrapped and the expected pointer is at the very end of the buffer
+                    ASSERT((cmd_ptr == expected) || ((expected == buffer_end) && (cmd_ptr == buffer_base)));
+                    watch_released_ptr_ = expected;
+                }
+            }
+        }
 #endif
     }
 

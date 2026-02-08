@@ -29,7 +29,7 @@ void hacky_sync(uint32_t sync_num, uint32_t wait_cycles, uint32_t sync_addr) {
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 void kernel_main() {
 #else
-#include "compute_kernel_api/common.h"
+#include "api/compute/common.h"
 namespace NAMESPACE {
 void MAIN {
 #endif
