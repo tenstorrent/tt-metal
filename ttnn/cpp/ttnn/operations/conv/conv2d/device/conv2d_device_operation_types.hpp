@@ -255,6 +255,7 @@ struct Conv2dHashableParams {
     std::optional<bool> force_split_reader;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
+        "sliding_window_config",
         "output_channels",
         "untilize_out",
         "has_bias",
@@ -272,6 +273,7 @@ struct Conv2dHashableParams {
         "force_split_reader");
     auto attribute_values() const {
         return std::forward_as_tuple(
+            sliding_window_config,
             output_channels,
             untilize_out,
             has_bias,
