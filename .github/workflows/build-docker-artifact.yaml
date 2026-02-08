@@ -86,6 +86,9 @@ on:
       tool-sfpi-tag:
         description: "Docker tag for the SFPI tool image"
         value: ${{ jobs.check-tool-images.outputs.sfpi-tag }}
+      tool-openmpi-tag:
+        description: "Docker tag for the OpenMPI (ULFM) tool image"
+        value: ${{ jobs.check-tool-images.outputs.openmpi-tag }}
       # Python venv image tags
       python-ci-build-venv-tag:
         description: "Docker tag for the Python CI Build venv image"
@@ -143,6 +146,8 @@ jobs:
       yq-exists: ${{ steps.check.outputs.yq-exists }}
       sfpi-tag: ${{ steps.tags.outputs.sfpi-tag }}
       sfpi-exists: ${{ steps.check.outputs.sfpi-exists }}
+      openmpi-tag: ${{ steps.tags.outputs.openmpi-tag }}
+      openmpi-exists: ${{ steps.check.outputs.openmpi-exists }}
       any-missing: ${{ steps.check.outputs.any-missing }}
     steps:
       - name: Checkout repo
@@ -161,6 +166,7 @@ jobs:
           GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
           CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
           YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | cut -d= -f2)
+          OMPI_TAG=$(grep -E "^ARG OMPI_TAG=" dockerfile/Dockerfile.tools | cut -d= -f2)
           # SFPI version comes from tt_metal/sfpi-version (single source of truth)
           SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 
@@ -173,6 +179,7 @@ jobs:
           CMAKE_HASH=$(cat dockerfile/scripts/install-cmake.sh | sha1sum | cut -d' ' -f1 | head -c 8)
           YQ_HASH=$(cat dockerfile/scripts/install-yq.sh | sha1sum | cut -d' ' -f1 | head -c 8)
           SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 8)
+          OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh | sha1sum | cut -d' ' -f1 | head -c 8)
 
           # Generate tags: ghcr.io/<repo>/tt-metalium/tools/<tool>:<version>-<hash>
           BASE="ghcr.io/${{ github.repository }}/tt-metalium/tools"
@@ -184,6 +191,7 @@ jobs:
           echo "cmake-tag=${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" >> $GITHUB_OUTPUT
           echo "yq-tag=${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" >> $GITHUB_OUTPUT
           echo "sfpi-tag=${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" >> $GITHUB_OUTPUT
+          echo "openmpi-tag=${BASE}/openmpi:${OMPI_TAG}-${OPENMPI_HASH}" >> $GITHUB_OUTPUT
 
           # Also output versions for build args
           echo "ccache-version=${CCACHE_VERSION}" >> $GITHUB_OUTPUT
@@ -194,6 +202,7 @@ jobs:
           echo "cmake-version=${CMAKE_VERSION}" >> $GITHUB_OUTPUT
           echo "yq-version=${YQ_VERSION}" >> $GITHUB_OUTPUT
           echo "sfpi-version=${SFPI_VERSION}" >> $GITHUB_OUTPUT
+          echo "openmpi-version=${OMPI_TAG}" >> $GITHUB_OUTPUT
 
       - name: Check if tool images exist
         id: check
@@ -218,6 +227,7 @@ jobs:
           check_image "${{ steps.tags.outputs.cmake-tag }}" "cmake"
           check_image "${{ steps.tags.outputs.yq-tag }}" "yq"
           check_image "${{ steps.tags.outputs.sfpi-tag }}" "sfpi"
+          check_image "${{ steps.tags.outputs.openmpi-tag }}" "openmpi"
 
           # Check if any are missing
           if [[ "${{ steps.tags.outputs.ccache-tag }}" == "" ]] || \
@@ -228,7 +238,8 @@ jobs:
              ! docker manifest inspect "${{ steps.tags.outputs.gdb-tag }}" > /dev/null 2>&1 || \
              ! docker manifest inspect "${{ steps.tags.outputs.cmake-tag }}" > /dev/null 2>&1 || \
              ! docker manifest inspect "${{ steps.tags.outputs.yq-tag }}" > /dev/null 2>&1 || \
-             ! docker manifest inspect "${{ steps.tags.outputs.sfpi-tag }}" > /dev/null 2>&1; then
+             ! docker manifest inspect "${{ steps.tags.outputs.sfpi-tag }}" > /dev/null 2>&1 || \
+             ! docker manifest inspect "${{ steps.tags.outputs.openmpi-tag }}" > /dev/null 2>&1; then
             echo "any-missing=true" >> $GITHUB_OUTPUT
           else
             echo "any-missing=false" >> $GITHUB_OUTPUT
@@ -238,7 +249,7 @@ jobs:
     name: "🔧 Build tool images"
     needs: check-tool-images
     if: needs.check-tool-images.outputs.any-missing == 'true'
-    timeout-minutes: 30
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
       - name: ⬇️ Checkout
@@ -346,6 +357,18 @@ jobs:
           target: sfpi
           push: true
           tags: ${{ needs.check-tool-images.outputs.sfpi-tag }}
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+      - name: Build and push openmpi image
+        if: needs.check-tool-images.outputs.openmpi-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.tools
+          target: openmpi
+          push: true
+          tags: ${{ needs.check-tool-images.outputs.openmpi-tag }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
@@ -742,6 +765,7 @@ jobs:
           build-args: |
             TOOL_MOLD_IMAGE=${{ needs.check-tool-images.outputs.mold-tag }}
             TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
+            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
           cache-to: type=inline
           pull: true
           outputs: |

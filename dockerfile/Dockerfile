@@ -140,20 +140,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install cmake from pre-built tool image (avoids flaky kitware repo)
 COPY --from=cmake-layer /install/ /usr/local/
 
-# Copy SFPI from pre-built tool image if available
-# This saves download time and avoids hitting GitHub releases API
-# If no pre-built image (scratch), the directory will be empty and install_dependencies.sh
-# will download SFPI as a fallback
+# Copy SFPI from pre-built tool image
 RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
-    if [ -d /sfpi-staging/opt/tenstorrent/sfpi ]; then \
-        echo "Using pre-built SFPI from GHCR tool image" && \
-        mkdir -p /opt/tenstorrent && \
-        cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/; \
-    else \
-        echo "No pre-built SFPI available, will download during dependency installation"; \
-    fi
+    mkdir -p /opt/tenstorrent && \
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
 
-# Install runtime deps (SFPI installation is skipped if already present from above)
+# Install runtime deps (SFPI already copied from tool image above)
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
@@ -207,23 +199,12 @@ COPY --from=yq-layer /install/bin/yq /usr/local/bin/
 
 ENV PYTHON_ENV_DIR=/opt/venv
 
-# Copy pre-built venv if available, otherwise create one and install base packages
-# The --mount is used to conditionally check if the pre-built venv exists
+# Copy pre-built ci-build venv from tool image
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
-# This is acceptable for single-user containers but should be reconsidered for multi-tenant
-# or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN --mount=from=ci-build-venv-layer,source=/install,target=/venv-staging \
     umask 000 && \
-    if [ -d /venv-staging/venv/bin ]; then \
-        echo "Using pre-built ci-build venv from GHCR" && \
-        cp -a /venv-staging/venv $PYTHON_ENV_DIR; \
-    else \
-        echo "Building ci-build venv from scratch (no pre-built image available)" && \
-        uv venv --relocatable $PYTHON_ENV_DIR && \
-        PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-        uv pip install --no-cache-dir build numpy setuptools; \
-    fi
+    cp -a /venv-staging/venv $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -264,23 +245,11 @@ COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-met
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
-# Install Python packages from pre-built venv if available, otherwise install from requirements
-# Using pre-built venv saves 5-10 minutes per build by avoiding pip install operations
-# index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
-# that are not explicitly listed in the requirements.txt files
+# Copy pre-built ci-test venv from tool image
 RUN --mount=from=ci-test-venv-layer,source=/install,target=/venv-staging \
     umask 000 && \
-    if [ -d /venv-staging/venv/bin ]; then \
-        echo "Using pre-built ci-test venv from GHCR" && \
-        rm -rf $PYTHON_ENV_DIR && \
-        cp -a /venv-staging/venv $PYTHON_ENV_DIR; \
-    else \
-        echo "Installing Python packages from scratch (no pre-built ci-test venv available)" && \
-        uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
-        uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-        uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
-        uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt; \
-    fi
+    rm -rf $PYTHON_ENV_DIR && \
+    cp -a /venv-staging/venv $PYTHON_ENV_DIR
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
@@ -315,16 +284,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ipmitool \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy pre-built GDB for non-24.04 Ubuntu versions
-# 24.04 has gdb 15.1 by default which is sufficient
-# GDB is pulled from pre-built GHCR tool image
+# Copy pre-built GDB from tool image (22.04); 24.04 uses system GDB
 RUN set -eux; echo "Ubuntu version: $UBUNTU_VERSION"
 RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
     if [ "$UBUNTU_VERSION" != "24.04" ]; then \
-        echo "Installing custom GDB for Ubuntu $UBUNTU_VERSION" && \
         cp -a /gdb-staging/* /usr/local/; \
     else \
-        echo "Using system GDB (15.1) for Ubuntu 24.04 - no custom build needed" && \
         apt-get update && apt-get install -y --no-install-recommends gdb && \
         apt-get clean && rm -rf /var/lib/apt/lists/*; \
     fi

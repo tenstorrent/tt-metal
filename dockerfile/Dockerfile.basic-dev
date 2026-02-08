@@ -36,17 +36,9 @@ ARG UBUNTU_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install cmake from pre-built tool image if available, otherwise from apt
-# Using tool image avoids flaky kitware repo and ensures consistent version
+# Copy cmake from pre-built tool image
 RUN --mount=from=cmake-layer,source=/install,target=/cmake-staging \
-    if [ -d /cmake-staging/bin ]; then \
-        echo "Using pre-built cmake from GHCR tool image" && \
-        cp -a /cmake-staging/* /usr/local/; \
-    else \
-        echo "No pre-built cmake available, installing from apt" && \
-        apt-get update && apt-get install -y --no-install-recommends cmake && \
-        rm -rf /var/lib/apt/lists/*; \
-    fi
+    cp -a /cmake-staging/* /usr/local/
 
 # Install basic tools to build
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -83,19 +75,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY scripts/install-uv.sh /tmp/install-uv.sh
 RUN chmod +x /tmp/install-uv.sh && /tmp/install-uv.sh --system
 
-# Copy SFPI from pre-built tool image if available
-# This saves download time and avoids hitting GitHub releases API
-# If no pre-built image (scratch), install_dependencies.sh will download SFPI
+# Copy SFPI from pre-built tool image
 RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
-    if [ -d /sfpi-staging/opt/tenstorrent/sfpi ]; then \
-        echo "Using pre-built SFPI from GHCR tool image" && \
-        mkdir -p /opt/tenstorrent && \
-        cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/; \
-    else \
-        echo "No pre-built SFPI available, will download during dependency installation"; \
-    fi
+    mkdir -p /opt/tenstorrent && \
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
 
-# Install the SFPI compiler (skipped if already installed from tool image above)
+# Install runtime deps (SFPI already copied from tool image above)
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version

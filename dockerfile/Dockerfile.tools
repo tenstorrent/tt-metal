@@ -36,6 +36,8 @@ ARG CMAKE_SHA256=5bb505d5e0cca0480a330f7f27ccf52c2b8b5214c5bba97df08899f5ef650c2
 ARG YQ_VERSION=v4.44.6
 ARG YQ_SHA256=0c2b24e645b57d8e7c0566d18643a6d4f5580feeea3878127354a46f2a1e4598
 
+ARG OMPI_TAG=v5.0.7
+
 # NOTE: SFPI version/hash are NOT defined here as ARGs.
 # The single source of truth for SFPI version information is:
 #   - tt_metal/sfpi-version (version number, hashes for all platforms)
@@ -214,3 +216,44 @@ RUN SFPI_INFO_SCRIPT=/tmp/sfpi-info.sh \
 
 FROM scratch AS sfpi
 COPY --from=sfpi-builder /install/ /install/
+
+#############################################################
+# OpenMPI - built from source with ULFM for manylinux
+# Outputs: /install/opt/openmpi-<tag>-ulfm/bin, lib, include, ...
+# Consumed by Dockerfile.manylinux to avoid rebuilding OpenMPI each time.
+#############################################################
+
+FROM almalinux:9 AS openmpi-builder
+ARG OMPI_TAG
+
+# Build deps matching manylinux (AlmaLinux 9) for ABI compatibility
+RUN dnf install -y \
+    autoconf \
+    automake \
+    bison \
+    ca-certificates \
+    expat-devel \
+    flex \
+    gfortran \
+    gmp-devel \
+    gawk \
+    git \
+    libevent-devel \
+    libibverbs-devel \
+    libmpc-devel \
+    libzstd-devel \
+    mpfr-devel \
+    patchutils \
+    pmix-devel \
+    texinfo \
+    wget \
+    zlib-devel \
+    && dnf clean all
+
+COPY dockerfile/scripts/install-openmpi.sh /tmp/install-openmpi.sh
+RUN OMPI_TAG=${OMPI_TAG} \
+    INSTALL_DIR=/install \
+    /bin/bash /tmp/install-openmpi.sh
+
+FROM scratch AS openmpi
+COPY --from=openmpi-builder /install/ /install/

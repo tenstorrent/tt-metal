@@ -1,9 +1,7 @@
 # ManyLinux Dockerfile
-# Uses pre-built tool images from GHCR for mold and SFPI to avoid
-# repeated downloads from upstream sources.
-#
+# Uses pre-built tool images from GHCR for mold, SFPI, and OpenMPI (ULFM).
 # Tool images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml.
-# For local builds without GHCR, tools default to scratch and are installed inline.
+# Tool layers are expected to be available when this image is built (no fallbacks).
 
 #############################################################
 # Tool image configuration
@@ -13,6 +11,7 @@
 # Tool images from GHCR (built by Dockerfile.tools)
 ARG TOOL_MOLD_IMAGE=scratch
 ARG TOOL_SFPI_IMAGE=scratch
+ARG TOOL_OPENMPI_IMAGE=scratch
 
 #############################################################
 # Tool layers - pulled from pre-built GHCR images
@@ -23,6 +22,9 @@ FROM ${TOOL_MOLD_IMAGE} AS mold-layer
 
 # SFPI layer - pre-built from GHCR
 FROM ${TOOL_SFPI_IMAGE} AS sfpi-layer
+
+# OpenMPI layer - pre-built from GHCR (ULFM support)
+FROM ${TOOL_OPENMPI_IMAGE} AS openmpi-layer
 
 #############################################################
 # Main manylinux image
@@ -38,16 +40,10 @@ RUN FILES=(/etc/yum.repos.d/*.repo) && \
 
 RUN dnf remove -y epel-release || true
 
-# Copy SFPI from pre-built tool image if available
-# This saves download time and avoids hitting GitHub releases API
+# Copy SFPI from pre-built tool image
 RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
-    if [ -d /sfpi-staging/opt/tenstorrent/sfpi ]; then \
-        echo "Using pre-built SFPI from GHCR tool image" && \
-        mkdir -p /opt/tenstorrent && \
-        cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/; \
-    else \
-        echo "No pre-built SFPI available, will download during dependency installation"; \
-    fi
+    mkdir -p /opt/tenstorrent && \
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
 
 # Copy install dependencies script and required files
 COPY install_dependencies.sh /tmp/install_dependencies.sh
@@ -56,8 +52,7 @@ COPY tt_metal/sfpi-version /tmp/tt_metal/sfpi-version
 
 # Install system dependencies using the install_dependencies.sh script
 # Use --docker flag for Docker-specific optimizations and --no-distributed
-# since we build OpenMPI from source with ULFM support
-# SFPI installation is skipped if already installed from tool image above
+# SFPI is already installed from tool image above
 RUN chmod +x /tmp/install_dependencies.sh && \
     /tmp/install_dependencies.sh --docker --no-distributed && \
     rm -rf /tmp/install_dependencies.sh /tmp/tt_metal
@@ -86,21 +81,10 @@ RUN dnf install -y \
     zlib-devel \
     && dnf clean all
 
-# Install mold linker from pre-built tool image if available, otherwise download
-ARG MOLD_VERSION=2.40.4
-ARG MOLD_SHA256=4c999e19ffa31afa5aa429c679b665d5e2ca5a6b6832ad4b79668e8dcf3d8ec1
+# Copy mold linker from pre-built tool image
 RUN --mount=from=mold-layer,source=/install,target=/mold-staging \
-    if [ -d /mold-staging/bin ]; then \
-        echo "Using pre-built mold from GHCR tool image" && \
-        cp -a /mold-staging/bin/* /usr/local/bin/ && \
-        cp -a /mold-staging/lib/* /usr/local/lib/; \
-    else \
-        echo "No pre-built mold available, downloading..." && \
-        wget -O /tmp/mold.tar.gz https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz && \
-        echo "${MOLD_SHA256}  /tmp/mold.tar.gz" | sha256sum -c - && \
-        tar -xzf /tmp/mold.tar.gz -C /usr/local --strip-components=1 && \
-        rm /tmp/mold.tar.gz; \
-    fi && \
+    cp -a /mold-staging/bin/* /usr/local/bin/ && \
+    cp -a /mold-staging/lib/* /usr/local/lib/ && \
     mold --version
 
 # Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
@@ -128,26 +112,11 @@ RUN wget https://github.com/ccache/ccache/releases/download/v4.7/ccache-4.7.tar.
     rm -rf ccache-4.7* && \
     echo "Installed ccache from source: $(ccache --version)"
 
-# Build OpenMPI 5.0.7 with ULFM support from source
+# Copy OpenMPI (ULFM) from pre-built tool image
 ARG OMPI_TAG=v5.0.7
 ARG OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
-WORKDIR /tmp
-RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.git ompi-src && \
-    cd ompi-src && \
-    git submodule update --init --recursive && \
-    ./autogen.pl && \
-    ./configure \
-        --prefix=${OMPI_PREFIX} \
-        --with-ft=ulfm \
-        --enable-wrapper-rpath \
-        --enable-mpirun-prefix-by-default \
-        --disable-mca-dso \
-        --disable-dlopen && \
-    make -j$(nproc) && \
-    make install && \
-    cd .. && \
-    rm -rf ompi-src
-
+RUN --mount=from=openmpi-layer,source=/install,target=/ompi-staging \
+    cp -a /ompi-staging/opt/openmpi-${OMPI_TAG}-ulfm /opt/
 
 # ENV needed
 ENV PATH=${OMPI_PREFIX}/bin:$PATH
