@@ -5,6 +5,15 @@ from models.demos.clip_vit.tt.tt_clip_text import TtCLIPTextModel
 from models.demos.clip_vit.tt.tt_clip_vision import TtCLIPVisionModel
 
 
+def l2_normalize(tensor: ttnn.Tensor, dim: int = -1, epsilon: float = 1e-12):
+    squared = ttnn.mul(tensor, tensor)
+    sum_squared = ttnn.sum(squared, dim=dim, keepdim=True)
+    sum_squared = ttnn.add(sum_squared, epsilon)
+    l2_norm = ttnn.sqrt(sum_squared)
+    normalized = ttnn.div(tensor, l2_norm)
+    return normalized
+
+
 class TtCLIPModel:
     def __init__(self, config, parameters, device):
         self.config = config
@@ -104,8 +113,8 @@ class TtCLIPModel:
             attention_mask=attention_mask,
         )
 
-        text_embeds = ttnn.layer_norm(text_features, epsilon=1e-12)
-        image_embeds = ttnn.layer_norm(image_features, epsilon=1e-12)
+        text_embeds = l2_normalize(text_features, dim=-1)
+        image_embeds = l2_normalize(image_features, dim=-1)
 
         text_embeds_t = ttnn.permute(text_embeds, (1, 0))
         logits_per_image = ttnn.matmul(image_embeds, text_embeds_t)
