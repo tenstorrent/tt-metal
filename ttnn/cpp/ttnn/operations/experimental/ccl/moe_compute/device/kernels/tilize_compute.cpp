@@ -70,8 +70,7 @@ void print_tile_rows(
 // - Wait for reader to push tokens_per_chunk tokens
 // - Tilize the block
 // - Push tilized output to writer
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Compile-time arguments
     constexpr uint32_t tilize_input_cb_id = get_named_compile_time_arg_val("tilize_input_cb_id");
     constexpr uint32_t tilize_output_cb_id = get_named_compile_time_arg_val("tilize_output_cb_id");
@@ -129,4 +128,3 @@ void MAIN {
     fast_tilize_uninit(tilize_input_cb_id, tilize_output_cb_id);
     cb_pop_front(total_chunks_cb_id, one_page);
 }
-}  // namespace NAMESPACE

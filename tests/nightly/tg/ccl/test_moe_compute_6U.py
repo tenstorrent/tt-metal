@@ -833,7 +833,9 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize("experts", [2 * 16])  # 32 experts for 16 devices = 2 experts per device
-@pytest.mark.parametrize("selected_experts_k, num_layers", [(1, 1), (8, 5)], ids=["perf", "accuracy"])
+@pytest.mark.parametrize(
+    "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
+)
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("enable_trace", [True, False])
@@ -845,6 +847,7 @@ def test_moe_compute(
     experts,
     selected_experts_k,
     num_layers,
+    num_iterations,
     N,
     hidden_size,
     dtype,
@@ -887,7 +890,7 @@ def test_moe_compute(
     #########################################
 
     # Drain tilize core is core (5,0) where indices and scores are sharded
-    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0))})
+    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9))})
 
     #### Expert mapping - per-device [num_devices, experts], replicated on every device ###
     # Each device gets its own row after sharding, but since it's replicated,
@@ -1183,14 +1186,19 @@ def test_moe_compute(
 
         return moe_compute_outputs
 
+    logger.info(f"\n========== Running op ==========")
+    moe_compute_outputs = []
     if enable_trace:
         # Compile the op
-        run_op()
+        for i in range(num_iterations):
+            run_op()
         logger.info(f"Done compiling Op")
 
         # Capture the trace
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        moe_compute_outputs = run_op()
+        for i in range(num_iterations):
+            moe_compute_output = run_op()
+            moe_compute_outputs.append(moe_compute_output)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         logger.info(f"Done capturing trace")
 
@@ -1198,52 +1206,58 @@ def test_moe_compute(
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         logger.info(f"Done executing trace")
     else:
-        moe_compute_outputs = run_op()
+        for i in range(num_iterations):
+            moe_compute_output = run_op()
+            moe_compute_outputs.append(moe_compute_output)
 
     #########################################
     # VALIDATE OUTPUTS PER LAYER
     #########################################
+    logger.info(f"\n========== Starting Validation ==========")
     per_expert_tokens_all_passed = True
     activation_all_passed = True
     e_t_all_passed = True
     matmul_all_passed = True
-    for layer_id in range(num_layers):
-        (
-            per_expert_total_tokens_output_tensor,
-            expert_activation_output_tensor,
-            e_t_output_tensor,
-            output_tensor,
-        ) = moe_compute_outputs[layer_id]
+    for i in range(num_iterations):
+        for layer_id in range(num_layers):
+            (
+                per_expert_total_tokens_output_tensor,
+                expert_activation_output_tensor,
+                e_t_output_tensor,
+                output_tensor,
+            ) = moe_compute_outputs[i][layer_id]
 
-        logger.info(f"\n========== Layer {layer_id} Validation ==========")
-        logger.info(f"Per expert total tokens tensor shape: {per_expert_total_tokens_output_tensor.shape}")
-        logger.info(f"Expert activation tensor shape: {expert_activation_output_tensor.shape}")
-        logger.info(f"E-T (expert-to-token) tensor shape: {e_t_output_tensor.shape}")
-        logger.info(f"Output tensor shape: {output_tensor.shape}")
+            logger.info(f"\n========== Iteration {i} Layer {layer_id} Validation ==========")
+            logger.info(f"Per expert total tokens tensor shape: {per_expert_total_tokens_output_tensor.shape}")
+            logger.info(f"Expert activation tensor shape: {expert_activation_output_tensor.shape}")
+            logger.info(f"E-T (expert-to-token) tensor shape: {e_t_output_tensor.shape}")
+            logger.info(f"Output tensor shape: {output_tensor.shape}")
 
-        # ========== Per Expert Total Tokens Tensor Validation ==========
-        expert_token_counts = per_expert_tokens_goldens[layer_id]
-        if not validate_per_expert_tokens(
-            mesh_device, experts_per_device, num_devices, per_expert_total_tokens_output_tensor, expert_token_counts
-        ):
-            per_expert_tokens_all_passed = False
+            # ========== Per Expert Total Tokens Tensor Validation ==========
+            expert_token_counts = per_expert_tokens_goldens[layer_id]
+            if not validate_per_expert_tokens(
+                mesh_device, experts_per_device, num_devices, per_expert_total_tokens_output_tensor, expert_token_counts
+            ):
+                per_expert_tokens_all_passed = False
 
-        # ========== Expert Activation Tensor Validation ==========
-        golden_activation = activation_goldens[layer_id]
-        if not validate_activation(
-            mesh_device, experts_per_device, num_devices, expert_activation_output_tensor, golden_activation
-        ):
-            activation_all_passed = False
+            # ========== Expert Activation Tensor Validation ==========
+            golden_activation = activation_goldens[layer_id]
+            if not validate_activation(
+                mesh_device, experts_per_device, num_devices, expert_activation_output_tensor, golden_activation
+            ):
+                activation_all_passed = False
 
-        # ========== E-T (Expert-to-Token) Tensor Validation ==========
-        golden_e_t = e_t_goldens[layer_id]
-        if not validate_e_t(mesh_device, total_tokens, experts_per_device, num_devices, e_t_output_tensor, golden_e_t):
-            e_t_all_passed = False
+            # ========== E-T (Expert-to-Token) Tensor Validation ==========
+            golden_e_t = e_t_goldens[layer_id]
+            if not validate_e_t(
+                mesh_device, total_tokens, experts_per_device, num_devices, e_t_output_tensor, golden_e_t
+            ):
+                e_t_all_passed = False
 
-        # ========== Matmul Output Tensor Validation ==========
-        # TODO: (GR)
-        # if not validate_matmul(layer_id, experts_per_device, output_tensor):
-        #     matmul_all_passed = False
+            # ========== Matmul Output Tensor Validation ==========
+            # TODO: (GR)
+            # if not validate_matmul(layer_id, experts_per_device, output_tensor):
+            #     matmul_all_passed = False
 
     # Asserts
     logger.info(f"\n========== Asserts ==========")

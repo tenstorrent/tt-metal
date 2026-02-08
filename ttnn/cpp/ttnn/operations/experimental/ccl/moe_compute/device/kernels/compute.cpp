@@ -134,7 +134,6 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_w2c_md, 0));
 
     // Precompute NUM_CHUNKS_PER_EXPERT
-    // NOTE: hardcoded to 2 experts
     volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md_read_ptr[0]);
     uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;

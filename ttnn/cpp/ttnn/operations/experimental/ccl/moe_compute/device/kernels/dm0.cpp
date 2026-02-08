@@ -154,7 +154,6 @@ void kernel_main() {
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_ready_semaphore_addr), 1);
 
     // Precompute NUM_CHUNKS_PER_EXPERT
-    // NOTE: hardcoded to 2 experts
     volatile tt_l1_ptr uint32_t* metadata_ready_semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_ready_semaphore_id));
     uint32_t encoded_metadata_value = *metadata_ready_semaphore_ptr;
