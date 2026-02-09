@@ -1,5 +1,5 @@
 [tool.uv.extra-build-dependencies]
-mmcv = ["pkg_resources"]
+mmcv = ["setuptools", "wheel"]
 [build-system]
 requires = [
   "setuptools==70.1.0",
