@@ -103,8 +103,7 @@ inline void llk_unpack_tilizeA_B_init(
         unpA_face_r_dim,
         unpB_face_r_dim,
         num_faces,
-        num_faces,
-        100 /* nop_count */);
+        num_faces);
 
     if (!isUnpackerConfiguredCorrectly) {
         DPRINT_UNPACK(DPRINT << "llk_unpack_tilizeA_B_init - Need to reconfigure unpacker for tilizeA_B." << ENDL());
@@ -154,8 +153,7 @@ inline void llk_unpack_tilizeA_B(
         face_r_dim,
         face_r_dim,
         num_faces,
-        num_faces,
-        0 /* nop_count */);
+        num_faces);
 
     if (!isUnpackerConfiguredCorrectly) {
         DPRINT_UNPACK(DPRINT << "llk_unpack_tilizeA_B - Need to reconfigure unpacker for tilizeA_B." << ENDL());

@@ -49,8 +49,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpA_face_r_dim,
         unpB_face_r_dim,
         unpA_num_faces,
-        unpB_num_faces,
-        100 /* nop_count */);
+        unpB_num_faces);
 
     if (!isUnpackerConfiguredCorrectly) {
         DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul_init - Need to reconfigure unpacker for AB matmul." << ENDL());
@@ -112,8 +111,7 @@ inline void llk_unpack_AB_matmul(
         unpA_face_r_dim,
         unpB_face_r_dim,
         unpA_num_faces,
-        unpB_num_faces,
-        0 /* nop_count */);
+        unpB_num_faces);
 
     if (!isUnpackerConfiguredCorrectly) {
         DPRINT_UNPACK(DPRINT << "llk_unpack_AB_matmul - Need to reconfigure unpacker for AB matmul." << ENDL());
