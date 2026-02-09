@@ -111,45 +111,11 @@ $$\mu=\frac{1}{N}\sum_{i=0}^{N-1}x_i$$
 
 $$\sigma^2=\frac{1}{N}\sum_{i=0}^{N-1}(x_i-\mu)^2$$
 
-The input tensor may not have a width that is aligned to tile boundaries (i.e. multiples of 32). This will be problematic during the mean and variance calculations, as these operations use `reduce_tile()` to sum the elements into a column vector for each tile row. That means that full tiles are processed, even though the last tile may only be partially-filled with input data. There are no guarantees for what data might exist in these out-of-bounds portions of the tile (i.e., they should be treated as garbage values).
-
-To address this, the data in the "garbage" regions need to not contribute to the reduction. LayerNorm achieves this by creating two scaler tiles for `reduce_tile()`: One that has 1's in all columns (used to reduce full tiles), and one that contains 1's in the columns where the valid data exists, and 0's otherwise (used to reduce the final tile if it is partially-filled). This makes sure that the garbage data is multiplied by 0 in the reduction and does not contribute to the final value.
-
-The reduce tiles have a special form. For a reduction across columns 0 to $C$ they must contain the reduction constant (1 in LayerNorm since we want to do a simple sum, but can be anything) in row 0 and 16 of the scaler tile, and 0's elsewhere.
-
-For example, a reduction across the full tile should have a scaler tile that looks like:
-
-```
-             32 columns
-Row 0:  1 1 1 1 1 ... 1 1 1 1 1
-Row 1:  0 0 0 0 0 ... 0 0 0 0 0
-Row 2:  0 0 0 0 0 ... 0 0 0 0 0
-...
-Row 16: 1 1 1 1 1 ... 1 1 1 1 1
-Row 17: 0 0 0 0 0 ... 0 0 0 0 0
-Row 18: 0 0 0 0 0 ... 0 0 0 0 0
-...
-Row 31: 0 0 0 0 0 ... 0 0 0 0 0
-```
-
-To have only the first 3 columns participate in the reduction, the tile should look like:
-
-```
-             32 columns
-Row 0:  1 1 1 0 0 ... 0 0 0 0 0
-Row 1:  0 0 0 0 0 ... 0 0 0 0 0
-Row 2:  0 0 0 0 0 ... 0 0 0 0 0
-...
-Row 16: 1 1 1 0 0 ... 0 0 0 0 0
-Row 17: 0 0 0 0 0 ... 0 0 0 0 0
-Row 18: 0 0 0 0 0 ... 0 0 0 0 0
-...
-Row 31: 0 0 0 0 0 ... 0 0 0 0 0
-```
+The input tensor may not have a width that is aligned to tile boundaries (i.e. multiples of 32). This will be problematic during the mean and variance calculations, as these operations use `reduce_tile()` to sum the elements into a column vector for each tile row. That means that full tiles are processed, even though the last tile may only be partially-filled with input data. There are no guarantees for what data might exist in these out-of-bounds portions of the tile (i.e., they should be treated as garbage values). Care must be taken to exclude these elements from the reduction, the details of which are outside the scope of this document.
 
 Additionally, to account for non-aligned shapes, the `Tensor::logical_shape()` function must be used in order to query the tensor dimensions, not `Tensor::padded_shape()`.
 
-Implementing the above two changes gets rid of the periodicity in the LayerNorm error, making it smooth and continuous across tile boundaries. The following figures sample the width in intervals of 27, ensuring non-tile-alignment for most samples.
+Addressing the above two issues gets rid of the periodicity in the LayerNorm error, making it smooth and continuous across tile boundaries. The following figures sample the width in intervals of 27, ensuring non-tile-alignment for most samples.
 
 Without changes:
 
