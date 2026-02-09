@@ -86,11 +86,14 @@ FORCE_INLINE bool is_master(uint32_t master_x, uint32_t master_y, uint32_t worke
     return master_x == worker_x && master_y == worker_y;
 }
 
+#ifndef INCREMENT_ARG_IDX_DEFINED
+#define INCREMENT_ARG_IDX_DEFINED
 uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args = 1) {
     uint32_t old_arg_idx = arg_idx;
     arg_idx += num_args;
     return old_arg_idx;
 }
+#endif
 
 // Used to signal an operation that it can start processing data, resulting in overlapping
 struct OpSignaler {

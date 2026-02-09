@@ -330,6 +330,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     std::map<std::string, std::string> defines;
     std::map<std::string, std::string> in0_injector_defines;
+
+    // OpSignaler for synchronizing matmul output writers each time an output block is written
+    defines["FUSE_OP_SIGNALER"] = "1";
+    auto op_signaler_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+    auto op_signaler_dummy_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
@@ -545,6 +551,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
+    // Collect NOC coordinates for all worker cores (for OpSignaler)
+    std::vector<CoreCoord> all_worker_cores_noc;
+    all_worker_cores_noc.reserve(num_cores);
+    for (const auto& c : cores) {
+        all_worker_cores_noc.push_back(device->worker_core_from_logical_core(c));
+    }
+
     // NOTE: Uniform per-core M/N ranges are required for DM forward handshakes to match across links.
     // If neighboring cores along a forwarding chain iterate different (M,N) counts, the sender can wait
     // for requests that the receiver will never issue, leading to deadlock. Keep the original uniform
@@ -628,6 +641,19 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
+        // Push OpSignaler runtime args (matches OpSignaler constructor in worker_sync_utils.hpp)
+        {
+            in0_args.push_back(static_cast<uint32_t>(num_cores));                      // num_workers_to_sync
+            in0_args.push_back(static_cast<uint32_t>(core_id));                        // curr_worker_index
+            in0_args.push_back(static_cast<uint32_t>(op_signaler_sync_semaphore_id));  // worker_sync_sem
+            for (const auto& noc_core : all_worker_cores_noc) {
+                in0_args.push_back(static_cast<uint32_t>(noc_core.x));
+                in0_args.push_back(static_cast<uint32_t>(noc_core.y));
+            }
+            in0_args.push_back(0);  // num_fused_op_cores_to_signal (empty op)
+            in0_args.push_back(static_cast<uint32_t>(op_signaler_dummy_semaphore_id));  // signal_op_sem (dummy)
+            in0_args.push_back(1);                                                      // mcast_signal_op_cores
+        }
         if (in1_idx == 0) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
@@ -656,6 +682,19 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+        }
+        // Push OpSignaler runtime args (matches OpSignaler constructor in worker_sync_utils.hpp)
+        {
+            in1_args.push_back(static_cast<uint32_t>(num_cores));                      // num_workers_to_sync
+            in1_args.push_back(static_cast<uint32_t>(core_id));                        // curr_worker_index
+            in1_args.push_back(static_cast<uint32_t>(op_signaler_sync_semaphore_id));  // worker_sync_sem
+            for (const auto& noc_core : all_worker_cores_noc) {
+                in1_args.push_back(static_cast<uint32_t>(noc_core.x));
+                in1_args.push_back(static_cast<uint32_t>(noc_core.y));
+            }
+            in1_args.push_back(0);  // num_fused_op_cores_to_signal (empty op)
+            in1_args.push_back(static_cast<uint32_t>(op_signaler_dummy_semaphore_id));  // signal_op_sem (dummy)
+            in1_args.push_back(1);                                                      // mcast_signal_op_cores
         }
         if (in0_idx == 0) {
             // in1 sender

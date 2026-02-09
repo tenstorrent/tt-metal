@@ -5,7 +5,12 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
+#ifdef FUSE_OP_SIGNALER
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#endif
+#ifdef FUSE_AG
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -111,6 +116,18 @@ void kernel_main() {
 #endif
     const auto in3_reader = TensorAccessor(in3_args, in3_addr, in3_tile_size);
 #endif
+#endif
+
+#ifdef FUSE_OP_SIGNALER
+    // OpSignaler runtime args start after output addresses and optional FUSE_AG args
+    uint32_t op_signaler_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
+#ifdef FUSE_AG
+    op_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
+#endif
+    OpSignaler op_signaler;
+    if constexpr (is_output_writer) {
+        op_signaler = OpSignaler(op_signaler_rt_args_idx);
+    }
 #endif
 
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
@@ -282,6 +299,11 @@ void kernel_main() {
              */
             defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
             defer_write = defer_write && !is_injector_core;
+#ifdef FUSE_OP_SIGNALER
+            // Disable deferred writes so all cores sync at the same point (end of each output block).
+            // Deferred writes stagger sync points across cores, which deadlocks the OpSignaler.
+            defer_write = false;
+#endif
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
@@ -308,6 +330,11 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     }
+#ifdef FUSE_OP_SIGNALER
+                    DPRINT << "MATMUL:SIGNALING AND SYNCING OP" << ENDL();
+                    noc_async_write_barrier();
+                    op_signaler.synchronize_workers_and_signal_op(0);
+#endif
                 }
             }
         }
