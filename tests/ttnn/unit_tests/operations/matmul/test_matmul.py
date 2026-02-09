@@ -1895,10 +1895,10 @@ def test_matmul_transpose_with_core_grid(device, m, k, n, transpose_a, transpose
     shape_b = (n, k) if transpose_b == True else (k, n)
 
     input_tensor_a = ttnn.rand(
-        shape_a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=42
+        shape_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=42
     )
     input_tensor_b = ttnn.rand(
-        shape_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=43
+        shape_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=43
     )
 
     # Get core grid from device
