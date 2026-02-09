@@ -100,46 +100,22 @@ def setup_eltwise_mul(
     tile_16x16_desc = ttnn.TileDescriptor(TILE_16x16)
 
     # CB for in0: alias of in0_tensor with 16x16 tile format
-    cb_in0_format = ttnn.CBFormatDescriptor(
-        buffer_index=cb_in0_index,
-        data_format=ttnn.bfloat16,
-        page_size=tile_16x16_size,
-        tile=tile_16x16_desc,
-    )
-    cb_in0_descriptor = ttnn.CBDescriptor(
-        total_size=mul_num_tiles * tile_16x16_size,
-        core_ranges=core_ranges,
-        format_descriptors=[cb_in0_format],
-    )
-    cb_in0_descriptor.set_buffer_from_tensor(in0_tensor)
+    cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
+    cb_in0_descriptor.total_size = mul_num_tiles * tile_16x16_size
+    cb_in0_descriptor.format_descriptors[0].tile = tile_16x16_desc
+    cb_in0_descriptor.format_descriptors[0].page_size = tile_16x16_size
 
     # CB for in1: alias of in1_tensor with 16x16 tile format
-    cb_in1_format = ttnn.CBFormatDescriptor(
-        buffer_index=cb_in1_index,
-        data_format=ttnn.bfloat16,
-        page_size=tile_16x16_size,
-        tile=tile_16x16_desc,
-    )
-    cb_in1_descriptor = ttnn.CBDescriptor(
-        total_size=mul_num_tiles * tile_16x16_size,
-        core_ranges=core_ranges,
-        format_descriptors=[cb_in1_format],
-    )
-    cb_in1_descriptor.set_buffer_from_tensor(in1_tensor)
+    cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
+    cb_in1_descriptor.total_size = mul_num_tiles * tile_16x16_size
+    cb_in1_descriptor.format_descriptors[0].tile = tile_16x16_desc
+    cb_in1_descriptor.format_descriptors[0].page_size = tile_16x16_size
 
     # CB for out: output with 16x16 tile format (tensor-backed)
-    cb_out_format = ttnn.CBFormatDescriptor(
-        buffer_index=cb_out_index,
-        data_format=ttnn.bfloat16,
-        page_size=tile_16x16_size,
-        tile=tile_16x16_desc,
-    )
-    cb_out_descriptor = ttnn.CBDescriptor(
-        total_size=mul_num_tiles * tile_16x16_size,
-        core_ranges=core_ranges,
-        format_descriptors=[cb_out_format],
-    )
-    cb_out_descriptor.set_buffer_from_tensor(out_tensor)
+    cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
+    cb_out_descriptor.total_size = mul_num_tiles * tile_16x16_size
+    cb_out_descriptor.format_descriptors[0].tile = tile_16x16_desc
+    cb_out_descriptor.format_descriptors[0].page_size = tile_16x16_size
 
     # CB for scalar source: receives mcasted scalar (tensor-backed)
     cb_scalar_src_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_scalar_src_index, scalar_src_tensor)
@@ -566,46 +542,22 @@ def setup_eltwise_add(
     assert num_tiles == 1, f"Expected 1 tile (32x32 view), got {num_tiles}"
 
     # CB for in0: down_proj output aliased with 32x32 tile format
-    cb_in0_format = ttnn.CBFormatDescriptor(
-        buffer_index=cb_in0_index,
-        data_format=in0_dtype,
-        page_size=in0_size_bytes,
-        tile=cb_tile_desc,
-    )
-    cb_in0_descriptor = ttnn.CBDescriptor(
-        total_size=in0_size_bytes,
-        core_ranges=core_ranges,
-        format_descriptors=[cb_in0_format],
-    )
-    cb_in0_descriptor.set_buffer_from_tensor(in0_tensor)
+    cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
+    cb_in0_descriptor.total_size = in0_size_bytes
+    cb_in0_descriptor.format_descriptors[0].tile = cb_tile_desc
+    cb_in0_descriptor.format_descriptors[0].page_size = in0_size_bytes
 
     # CB for in1: replicated tensor (tensor-backed)
-    cb_in1_format = ttnn.CBFormatDescriptor(
-        buffer_index=cb_in1_index,
-        data_format=in0_dtype,
-        page_size=in0_size_bytes,  # page_size = slice size for reading
-        tile=cb_tile_desc,
-    )
-    cb_in1_descriptor = ttnn.CBDescriptor(
-        total_size=in1_size_bytes,
-        core_ranges=core_ranges,
-        format_descriptors=[cb_in1_format],
-    )
-    cb_in1_descriptor.set_buffer_from_tensor(in1_tensor)
+    cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
+    cb_in1_descriptor.total_size = in1_size_bytes
+    cb_in1_descriptor.format_descriptors[0].tile = cb_tile_desc
+    cb_in1_descriptor.format_descriptors[0].page_size = in0_size_bytes  # page_size = slice size for reading
 
     # CB for out: output (tensor-backed, uses 32x32 CB view)
-    cb_out_format = ttnn.CBFormatDescriptor(
-        buffer_index=cb_out_index,
-        data_format=in0_dtype,
-        page_size=cb_tile_size_bytes,
-        tile=cb_tile_desc,
-    )
-    cb_out_descriptor = ttnn.CBDescriptor(
-        total_size=num_tiles * cb_tile_size_bytes,
-        core_ranges=core_ranges,
-        format_descriptors=[cb_out_format],
-    )
-    cb_out_descriptor.set_buffer_from_tensor(out_tensor)
+    cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
+    cb_out_descriptor.total_size = num_tiles * cb_tile_size_bytes
+    cb_out_descriptor.format_descriptors[0].tile = cb_tile_desc
+    cb_out_descriptor.format_descriptors[0].page_size = cb_tile_size_bytes
 
     # Per-core sender_index values
     sender_index_core_values = []
