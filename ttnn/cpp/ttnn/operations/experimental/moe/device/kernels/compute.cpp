@@ -8,6 +8,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/pack_untilize.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -40,10 +41,10 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_w2c_rdy = tt::CBIndex::c_3;
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_4;
+    constexpr auto cb_c2s_out = tt::CBIndex::c_5;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_0;
-    constexpr auto cb_c2s_out = tt::CBIndex::c_1;
 
     // Constants for MoE
     constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
@@ -101,21 +102,24 @@ void kernel_main() {
     // Unpacker A is for W0,W1 and W2, so Bf4_b
     reconfig_data_format_srca(cb_r2c_w0_w1);
 
-    // Initialize matmul for W0
-    mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
-
-    // Initialize SFPU for SILU and eltwise multiply
-    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
-
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
+        // Initialize matmul for W0
+        mm_block_init(
+            cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+
+        // Initialize SFPU for SILU and eltwise multiply
+        PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+
         //---------------------------------------------------------------------
         // Compute in @ {W0,W1}
         //---------------------------------------------------------------------
+        cb_wait_front(cb_s2c_in, num_w0_w1_tiles_h);
+
         for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
-            uint32_t in0_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
+            uint32_t in0_index = 0;
 
             tile_regs_acquire();
             for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
@@ -163,15 +167,18 @@ void kernel_main() {
             pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
             tile_regs_release();
         }
+        cb_pop_front(cb_s2c_in, num_w0_w1_tiles_h);
 
         // Signal to DM1 that the output from this core is ready
         cb_reserve_back(cb_c2w_rdy, 1);
         cb_push_back(cb_c2w_rdy, 1);
 
+        // pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
+
         //---------------------------------------------------------------------
         // Compute in2 @ W2 (in pairs of 4)
         //---------------------------------------------------------------------
-        uint32_t out_tile_index = (expert_id & 1) ? num_w0_w1_tiles_h : 0;
+        cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
         for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
             uint32_t dm1_step = 0;
             uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];
@@ -218,12 +225,15 @@ void kernel_main() {
 
             tile_regs_wait();
             // Pack this in-place for now.
-            pack_tile</*out_of_order_output=*/true>(0, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(1, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(2, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
-            pack_tile</*out_of_order_output=*/true>(3, cb_c2s_out, /*output_tile_index=*/out_tile_index++);
+            pack_tile(0, cb_c2s_out);
+            pack_tile(1, cb_c2s_out);
+            pack_tile(2, cb_c2s_out);
+            pack_tile(3, cb_c2s_out);
+            // pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out, /*block_rt_dim=*/1,
+            // /*block_c_index=*/iter);
             tile_regs_release();
         }
+        cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
     }  // end for (expert_id)
 
     // Drain the pipeline - the last dummy push
