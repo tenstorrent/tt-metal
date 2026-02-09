@@ -24,7 +24,8 @@ from models.common.llama_models import (
 )
 
 from models.common.sampling.generator import format_sampling_params
-from models.tt_transformers.tt.generator import SamplingParams
+from models.tt_transformers.tt.common import SamplingParams
+from models.common.warmup import DecodeWarmupMixin
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
@@ -41,7 +42,7 @@ def get_padded_prefill_len(seq_len: int) -> int:
         return 2 ** (seq_len - 1).bit_length()
 
 
-class Generator:
+class Generator(DecodeWarmupMixin):
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.

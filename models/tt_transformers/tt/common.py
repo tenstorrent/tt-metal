@@ -5,6 +5,7 @@
 import math
 import os
 import re
+from dataclasses import dataclass
 from enum import Enum
 from types import SimpleNamespace
 from typing import List, Optional, Union
@@ -15,6 +16,7 @@ from PIL import Image as PIL_Image
 from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
+
 
 
 class URL(BaseModel):
@@ -50,6 +52,7 @@ InterleavedTextMedia = Union[
 class Mode(Enum):
     DECODE = "decode"
     PREFILL = "prefill"
+
 
 
 class HostEmbedding(torch.nn.Module):

@@ -243,6 +243,10 @@ class Generator:
 
             return logits
 
+    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params):
+        logger.warning("Warmup model prefill not implemented for Qwen3_VL Generator")
+        logger.warning("Tracing in prefill mode is not supported for Qwen3_VL")
+
     # [INFO] this is called by vLLM
     def read_decode_output(self, tt_out, async_read=False):
         return self._ttt_generator.read_decode_output(tt_out, async_read=async_read)
