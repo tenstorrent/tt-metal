@@ -47,6 +47,7 @@ cd "openmpi-${OMPI_VERSION}"
     --enable-static \
     --with-slurm \
     --with-pic
+
 make -j"$(nproc)"
 make install
 cd /

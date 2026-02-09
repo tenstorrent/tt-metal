@@ -27,9 +27,8 @@ name: "Build tt-metal docker artifact"
 
 # Required to push images to GHCR (organization or user). Without this you may see:
 # "denied: installation not allowed to Create organization package"
-#permissions:
-#  contents: read
-#  packages: write
+permissions:
+  packages: write
 
 on:
   workflow_call:
@@ -656,6 +655,7 @@ jobs:
             TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
             TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
             TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
+            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
             PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
             PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
           cache-to: type=inline
@@ -680,6 +680,7 @@ jobs:
             TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
             TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
             TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
+            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
             PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
             PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
           cache-to: type=inline
@@ -704,6 +705,7 @@ jobs:
             TOOL_CMAKE_IMAGE=${{ needs.check-tool-images.outputs.cmake-tag }}
             TOOL_YQ_IMAGE=${{ needs.check-tool-images.outputs.yq-tag }}
             TOOL_SFPI_IMAGE=${{ needs.check-tool-images.outputs.sfpi-tag }}
+            TOOL_OPENMPI_IMAGE=${{ needs.check-tool-images.outputs.openmpi-tag }}
             PYTHON_CI_BUILD_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-build-venv-tag }}
             PYTHON_CI_TEST_VENV_IMAGE=${{ needs.check-python-venv-images.outputs.ci-test-venv-tag }}
           cache-to: type=inline

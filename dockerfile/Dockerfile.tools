@@ -220,8 +220,10 @@ COPY --from=sfpi-builder /install/ /install/
 
 #############################################################
 # OpenMPI - built from source with ULFM for manylinux
-# Outputs: /opt/openmpi-<tag>-ulfm/bin, lib, include, ...
-# Consumed by Dockerfile.manylinux to avoid rebuilding OpenMPI each time.
+# Outputs: /install/openmpi-<tag>-ulfm/bin, lib, include, ...
+# Consumed by Dockerfile and Dockerfile.manylinux via:
+#   COPY --from=openmpi-layer /install/ /opt/
+# which produces /opt/openmpi-<tag>-ulfm/ in the final image.
 #############################################################
 
 FROM quay.io/pypa/manylinux_2_34_x86_64 AS openmpi-builder
@@ -265,4 +267,5 @@ RUN OMPI_TAG=${OMPI_TAG} \
     /bin/bash /tmp/install-openmpi.sh
 
 FROM scratch AS openmpi
-COPY --from=openmpi-builder /opt/ /install/
+ARG OMPI_TAG
+COPY --from=openmpi-builder /opt/openmpi-${OMPI_TAG}-ulfm/ /install/openmpi-${OMPI_TAG}-ulfm/
