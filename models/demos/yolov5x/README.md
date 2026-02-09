@@ -81,12 +81,12 @@ pytest --disable-warnings models/demos/yolov5x/tests/pcc/test_ttnn_yolov5x.py::t
 **N150**
 | Resolution  | PCC (threshold: 0.99) | Performance (FPS, N150)  | Demo Status |
 |-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9941650             | 66.00                    | Passed      |
+| 640x640     | 0.9941650             | 67                       | Passed      |
 
 **N300**
 | Resolution  | PCC (threshold: 0.99) | Performance (FPS, N300)  | Demo Status |
 |-------------|-----------------------|--------------------------|-------------|
-| 640x640     | 0.9941650             | 120.00                   | Passed      |
+| 640x640     | 0.9941650             | 120                      | Passed      |
 
 
 ## Details
