@@ -5,8 +5,7 @@
 """
 Unit tests for ReduceToOneB1 operation.
 
-This test validates the 3-level reduction tree for a 4x2 mesh,
-matching the configuration from test_deepseek_b1_reduce_to_one.py.
+This test validates the 3-level reduction tree for a 4x2 mesh
 """
 
 import pytest

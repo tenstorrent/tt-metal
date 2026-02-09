@@ -31,7 +31,6 @@ file(
     slice_reshard_async/device/kernels/*
     strided_all_gather_async/device/kernels/*
     deepseek_moe_reduce_scatter/device/kernels/*
-    deepseek_b1_reduce_to_one/device/kernels/*
 )
 
 target_sources(
@@ -122,9 +121,6 @@ target_sources(
         deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.cpp
-        deepseek_b1_reduce_to_one/deepseek_b1_reduce_to_one.cpp
-        deepseek_b1_reduce_to_one/device/deepseek_b1_reduce_to_one_op.cpp
-        deepseek_b1_reduce_to_one/device/deepseek_b1_reduce_to_one_program.cpp
         all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
