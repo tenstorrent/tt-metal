@@ -29,7 +29,7 @@ static uint32_t compute_max_num_slices(
     if (output_layout == tt::tt_metal::Layout::TILE) {
         return tt::div_up(output_sliced_dim, slice_rounding_value);
     }
-    return (output_sliced_dim > 1) ? (output_sliced_dim - 1) : 1;
+    return output_sliced_dim;
 }
 
 static uint32_t compute_L1_usage_for_slice_config(
@@ -245,18 +245,17 @@ static Op2DSliceConfig determine_slice_config_internal(
                 device,
                 conv_bypass,
                 true);  // Mark as retry attempt
-        } else {
-            // Switch from height slicing to width slicing and try again.
-            return determine_slice_config_internal(
-                op_slice_attr,
-                input_shape,
-                output_shape,
-                Op2DSliceConfig{.slice_type = Op2DSliceConfig::SliceType::DRAM_WIDTH, .num_slices = 0},
-                output_layout,
-                device,
-                conv_bypass,
-                true);  // Mark as retry attempt
         }
+        // Switch from height slicing to width slicing and try again.
+        return determine_slice_config_internal(
+            op_slice_attr,
+            input_shape,
+            output_shape,
+            Op2DSliceConfig{.slice_type = Op2DSliceConfig::SliceType::DRAM_WIDTH, .num_slices = 0},
+            output_layout,
+            device,
+            conv_bypass,
+            true);  // Mark as retry attempt
     }
 
     // If we haven't found a valid config, this is fatal

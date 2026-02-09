@@ -611,8 +611,6 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         sliding_window::calculate_precise_halo_output_elems(halo_config, input_shard_shape);
     uint32_t halo_output_size = precise_halo_output_size * pool_datum_size;
 
-    printf("Halo output elems: %u, size: %u bytes\n", precise_halo_output_size, halo_output_size);
-
     // Calculate halo CB overhead (pad CBs and untilize CBs if input is tiled)
     uint32_t halo_cb_overhead = 0;
 
@@ -625,7 +623,7 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
 
     // Untilize output CBs: needed if input is TILE layout
     // Halo always operates on row-major data, so tiled inputs need untilization
-    // When untilizing, we need 2 CBs for double buffering
+    // When untilizing, we need 2 CBs for 2 data movement cores
     if (input_layout == tt::tt_metal::Layout::TILE) {
         // Halo uses a fixed block size for untilization (UNTILIZE_BLOCK_SIZE = 32)
         // The untilize CB is sized based on this block size, not the full shard height
@@ -698,21 +696,6 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     uint32_t halo_phase_size = halo_input_cb_size + halo_output_size + halo_cb_overhead;
     uint32_t pool_phase_size = halo_output_size + pool_cb_usage + output_tensor_size;
     uint32_t total_size = std::max(halo_phase_size, pool_phase_size);
-
-    printf(
-        "Pool2D Slice L1 Usage Calculation:\n"
-        "  Halo Input CB Size: %u bytes\n"
-        "  Halo Output Size: %u bytes\n"
-        "  Halo CB Overhead: %u bytes\n"
-        "  Pool CB Usage: %u bytes\n"
-        "  Output Tensor Size: %u bytes\n"
-        "  Total L1 Size (with reuse): %u bytes\n",
-        halo_input_cb_size,
-        halo_output_size,
-        halo_cb_overhead,
-        pool_cb_usage,
-        output_tensor_size,
-        total_size);
 
     return pool2d_slice_l1_usage{
         .halo_input_size = halo_input_cb_size,
