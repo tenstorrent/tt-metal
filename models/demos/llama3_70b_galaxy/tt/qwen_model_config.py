@@ -432,6 +432,16 @@ class TtQwenModelArgs(TtModelArgs):
                 else min(64, (seqlen + chunk_start_idx) & -(seqlen + chunk_start_idx)),
             )
 
+            # For flexible chunked SDPA (prefix caching with chunk_start_idx_tensor): chunk sizes must
+            # match KV cache block_size so one trace works for any block-aligned chunk at replay.
+            # Required by llama_attention when use_chunked_sdpa is True (chunk_start_idx > 0).
+            self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"] = lambda seqlen, page_size: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(7, 10),
+                exp_approx_mode=False,
+                q_chunk_size=min(page_size, 128),
+                k_chunk_size=min(page_size, 128),
+            )
+
             def find_largest_divisor(n, max_divisor=8):
                 for i in range(max_divisor, 0, -1):
                     if n % i == 0:

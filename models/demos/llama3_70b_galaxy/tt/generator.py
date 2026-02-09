@@ -148,6 +148,8 @@ class Generator:
                         pad_rows = batch - current_batch
                         padding = torch.full((pad_rows, page_table.shape[1]), -1, dtype=torch.int32)
                         warmup_page_table = torch.cat([page_table, padding], dim=0)
+                    else:
+                        warmup_page_table = page_table
                 else:
                     warmup_page_table = page_table
                 warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
@@ -445,7 +447,7 @@ class Generator:
             tt_out_logits_all_users = tt_out_logits_all_users[:, :, : self.model.vocab_size]
             return tt_out_logits_all_users
 
-        logger.info(f"[PREFILL_MAIN] Finished prefill for all users up to {batch_seq_len} tokens")
+        logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens.")
         return output_toks
 
     def prefill_forward_single_user_text(
@@ -520,82 +522,61 @@ class Generator:
             # not the absolute position in the full sequence. The tensor only contains
             # positions [num_cached_tokens, seq_len), so we need to adjust the index.
             last_token_idx_relative = last_token_idx - num_cached_tokens
-
-            (
-                tt_prefill_input,
-                tt_user_id,
-                tt_page_table,
-                tt_chunk_page_table,
-                tt_chunk_start_idx,
-            ) = self.model.prepare_inputs_prefill(
-                tokens,
-                user_id=user_id,
-                page_table=page_table_user_padded,
-                chunk_page_table=chunk_page_table,  # Pass chunk_page_table for conversion to ttnn tensor
-                chunk_start_idx=chunk_start_idx,
-                batch_size=batch_size,
-            )
-            full_rot_mats = self.model.get_or_create_prefill_rot_mats()
-
-            tt_toks = self.model.ttnn_prefill_forward(
-                x=tt_prefill_input,
-                user_id=tt_user_id,
-                page_table=tt_page_table,
-                chunk_page_table=tt_chunk_page_table,
-                chunk_start_idx=tt_chunk_start_idx,
-                start_pos=chunk_start_idx,  # Python int for attention (SDPA path, program config)
-                get_last_token=last_token_idx_relative,  # Use RELATIVE index for slicing within chunk
-                kv_cache=kv_cache,
-                rot_mats=full_rot_mats,
-                batch_size=batch_size,
-            )
-            tt_toks = self.model.process_output_prefill(
-                tt_toks,
-                last_token_idx=last_token_idx_relative,
-                tt_out_logits_saved=tt_out_logits_saved,
-                user_id=user_id,
-            )
-
-            return tt_toks
+            prefill_page_table = page_table_user_padded
+            prefill_chunk_page_table = chunk_page_table
+            prefill_chunk_start_idx = chunk_start_idx
+            prefill_start_pos = chunk_start_idx  # Python int for attention (SDPA path, program config)
+            prefill_get_last_token = last_token_idx_relative  # RELATIVE index for slicing within chunk
+            prefill_last_token_idx = last_token_idx_relative
         else:
             # Non-prefix-cached path
-            (
-                tt_prefill_input,
-                tt_user_id,
-                tt_page_table,
-                tt_chunk_page_table,
-                tt_chunk_start_idx,
-            ) = self.model.prepare_inputs_prefill(
-                tokens,
-                user_id=user_id,
-                page_table=page_table_user,
-                chunk_page_table=None,
-                chunk_start_idx=0,
-                batch_size=batch_size,
-            )
-            full_rot_mats = self.model.get_or_create_prefill_rot_mats()
-            tt_toks = self.model.ttnn_prefill_forward(
-                x=tt_prefill_input,
-                user_id=tt_user_id,
-                page_table=tt_page_table,
-                chunk_page_table=tt_chunk_page_table,
-                chunk_start_idx=tt_chunk_start_idx,
-                start_pos=0,
-                get_last_token=last_token_idx,
-                kv_cache=kv_cache,
-                rot_mats=full_rot_mats,
-                batch_size=batch_size,
-            )
-            tt_toks = self.model.process_output_prefill(
-                tt_toks, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved, user_id=user_id
-            )
-            return tt_toks
+            prefill_page_table = page_table_user
+            prefill_chunk_page_table = None
+            prefill_chunk_start_idx = 0
+            prefill_start_pos = 0
+            prefill_get_last_token = last_token_idx
+            prefill_last_token_idx = last_token_idx
+
+        (
+            tt_prefill_input,
+            tt_user_id,
+            tt_page_table,
+            tt_chunk_page_table,
+            tt_chunk_start_idx,
+        ) = self.model.prepare_inputs_prefill(
+            tokens,
+            user_id=user_id,
+            page_table=prefill_page_table,
+            chunk_page_table=prefill_chunk_page_table,
+            chunk_start_idx=prefill_chunk_start_idx,
+            batch_size=batch_size,
+        )
+        full_rot_mats = self.model.get_or_create_prefill_rot_mats()
+        tt_toks = self.model.ttnn_prefill_forward(
+            x=tt_prefill_input,
+            user_id=tt_user_id,
+            page_table=tt_page_table,
+            chunk_page_table=tt_chunk_page_table,
+            chunk_start_idx=tt_chunk_start_idx,
+            start_pos=prefill_start_pos,
+            get_last_token=prefill_get_last_token,
+            kv_cache=kv_cache,
+            rot_mats=full_rot_mats,
+            batch_size=batch_size,
+        )
+        tt_toks = self.model.process_output_prefill(
+            tt_toks,
+            last_token_idx=prefill_last_token_idx,
+            tt_out_logits_saved=tt_out_logits_saved,
+            user_id=user_id,
+        )
+        return tt_toks
 
     def _easy_trace_prefill(
         self,
         tokens,  # New tokens to prefill (without the cached tokens), padded by get_padded_prefill_len()
         last_token_idx,
-        prefill_seq_len,
+        prefill_seq_len,  # New tokens to prefill (without the cached tokens), padded by get_padded_prefill_len()
         page_table=None,
         kv_cache=None,
         user_id=0,
@@ -605,7 +586,8 @@ class Generator:
     ):
         """
         Tracing with prefix caching support.
-        Trace key is (prefill_seq_len, batch_size) - does not differentiate between num_cached_tokens.
+        Trace key is (prefill_seq_len, batch_size, use_ring, use_start_pos)
+        Does not differentiate between num_cached_tokens (only zero or non-zero).
         page_table is padded to fixed max shape so one trace can be reused for any num_cached_blocks.
         """
         # Extract single user's page table row for batch_size=1
@@ -654,12 +636,13 @@ class Generator:
                 kv_cache=kv_cache,
                 user_id=user_id,
                 batch_size=batch_size,
-                start_pos=chunk_start_idx,  # RoPE start_pos for this trace key
+                start_pos=chunk_start_idx,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out_trace
 
+        logger.info("Executing prefill trace")
         tt_out_trace = self._prefill_forward_trace_text(
             self.trace_id_prefill[trace_key],
             self.trace_inputs_prefill[trace_key],
@@ -686,7 +669,7 @@ class Generator:
     ):
         """
         Captures a trace for the prefill_forward method with prefix caching support.
-        Uses full rot mats + chunk_start_idx device tensor; slice is inside the trace.
+        Uses full rot mats + chunk_start_idx device tensor; slicing inside the trace.
         """
         # Get host tensors (tokens, user_id, page_table, chunk_page_table, chunk_start_idx)
         host_inputs = self.model.prepare_prefill_inputs_host(
@@ -927,6 +910,7 @@ class Generator:
         """
         Captures a trace for the decode_forward method.
         """
+
         # Compile run
         self._decode_forward_no_trace_text(
             tokens,
@@ -958,6 +942,8 @@ class Generator:
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        logger.info("Done Capturing Decode Trace")
+
         return trace_id, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
 
     def _decode_forward_trace_text(
@@ -973,6 +959,7 @@ class Generator:
         Executes the trace for the decode_forward method but does not read back outputs.
         """
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+
         return tt_out_trace
 
     def _decode_easy_trace_text(
@@ -1142,9 +1129,8 @@ class Generator:
             for i, user in enumerate(user_id):
                 padded_page_table[user, :] = page_table[i, :]
         else:
-            padded_page_table[user_id, :] = page_table[
-                0, :
-            ]  # 0 here because we remove previous users from the page table before calling this function
+            padded_page_table[user_id, :] = page_table[0, :]
+            # 0 here because we remove previous users from the page table before calling this function
 
         return padded_page_table
 
