@@ -127,6 +127,7 @@ def test_model_inference(
         dtype=dtype,
         num_layers=num_layers,
         use_prefetcher=use_prefetcher,
+        use_hf_rope=True,
     )
 
     if (
@@ -195,26 +196,7 @@ def test_model_inference(
     if run_ref_pt:
         logger.info("Loading reference model...")
         state_dict_prefix = model_args.get_state_dict_prefix("", None)
-        reference_state_dict = {
-            k[len(state_dict_prefix) :]: v
-            for k, v in state_dict.items()
-            if (
-                any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-                or any(
-                    [
-                        f"{state_dict_prefix}{name}" in k
-                        for name in [
-                            "tok_embeddings.weight",
-                            "learnable_embedding.weight",
-                            "norm.weight",
-                            "output.weight",
-                        ]
-                    ]
-                )
-            )
-        }
-        reference_model = model_args.reference_transformer()
-        reference_model.load_state_dict(reference_state_dict)
+        reference_model = model_args.reference_transformer(load_checkpoint=True)
         # Embedding on host
         embd = model_args.reference_embedding()
         if model_args.is_llama_vision():
