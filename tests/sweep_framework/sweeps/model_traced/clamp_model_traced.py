@@ -98,14 +98,16 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config,
-    min,
-    max,
     storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
+
+    # Extract min/max from kwargs (avoid shadowing Python built-ins)
+    min_val = kwargs.get("min", None)
+    max_val = kwargs.get("max", None)
 
     # Extract placement information from kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
@@ -123,7 +125,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    torch_output_tensor = torch.clamp(torch_input_tensor_a, min=min, max=max)
+    torch_output_tensor = torch.clamp(torch_input_tensor_a, min=min_val, max=max_val)
 
     # Convert to ttnn tensor (mesh or single device)
     if is_host:
@@ -154,7 +156,7 @@ def run(
         )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.clamp(input_tensor_a, min=min, max=max, memory_config=output_memory_config)
+    output_tensor = ttnn.clamp(input_tensor_a, min=min_val, max=max_val, memory_config=output_memory_config)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
