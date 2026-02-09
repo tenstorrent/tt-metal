@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
-#ifdef FUSE_OP_SIGNALER
+#ifdef SRS_FUSE_OP_SIGNALER
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #endif
 #ifdef FUSE_AG
@@ -104,15 +104,15 @@ void kernel_main() {
     }
 #endif
 
-#ifdef FUSE_OP_SIGNALER
+#ifdef SRS_FUSE_OP_SIGNALER
     // OpSignaler runtime args start after output addresses and optional FUSE_AG args
-    uint32_t op_signaler_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
+    uint32_t srs_fuse_signaler_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
 #ifdef FUSE_AG
-    op_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
+    srs_fuse_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
 #endif
-    OpSignaler op_signaler;
+    OpSignaler srs_fuse_signaler;
     if constexpr (is_output_writer) {
-        op_signaler = OpSignaler(op_signaler_rt_args_idx);
+        srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
     }
 #endif
 
@@ -270,7 +270,7 @@ void kernel_main() {
              */
             defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
             defer_write = defer_write && !is_injector_core;
-#ifdef FUSE_OP_SIGNALER
+#ifdef SRS_FUSE_OP_SIGNALER
             // Disable deferred writes so all cores sync at the same point (end of each output block).
             // Deferred writes stagger sync points across cores, which deadlocks the OpSignaler.
             defer_write = false;
@@ -301,9 +301,9 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     }
-#ifdef FUSE_OP_SIGNALER
+#ifdef SRS_FUSE_OP_SIGNALER
                     noc_async_write_barrier();
-                    op_signaler.synchronize_workers_and_signal_op(0);
+                    srs_fuse_signaler.synchronize_workers_and_signal_op(0);
 #endif
                 }
             }

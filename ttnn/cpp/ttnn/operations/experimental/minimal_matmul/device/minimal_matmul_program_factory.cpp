@@ -332,9 +332,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     std::map<std::string, std::string> in0_injector_defines;
 
     // OpSignaler for synchronizing matmul output writers each time an output block is written
-    defines["FUSE_OP_SIGNALER"] = "1";
-    auto op_signaler_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
-    auto op_signaler_dummy_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+    defines["SRS_FUSE_OP_SIGNALER"] = "1";
+    auto srs_fuse_signaler_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+    auto srs_fuse_signaler_dummy_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
 
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
@@ -645,13 +645,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         {
             in0_args.push_back(static_cast<uint32_t>(num_cores));                      // num_workers_to_sync
             in0_args.push_back(static_cast<uint32_t>(core_id));                        // curr_worker_index
-            in0_args.push_back(static_cast<uint32_t>(op_signaler_sync_semaphore_id));  // worker_sync_sem
+            in0_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_sync_semaphore_id));  // worker_sync_sem
             for (const auto& noc_core : all_worker_cores_noc) {
                 in0_args.push_back(static_cast<uint32_t>(noc_core.x));
                 in0_args.push_back(static_cast<uint32_t>(noc_core.y));
             }
             in0_args.push_back(0);  // num_fused_op_cores_to_signal (empty op)
-            in0_args.push_back(static_cast<uint32_t>(op_signaler_dummy_semaphore_id));  // signal_op_sem (dummy)
+            in0_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_dummy_semaphore_id));  // signal_op_sem (dummy)
             in0_args.push_back(1);                                                      // mcast_signal_op_cores
         }
         if (in1_idx == 0) {
@@ -687,13 +687,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         {
             in1_args.push_back(static_cast<uint32_t>(num_cores));                      // num_workers_to_sync
             in1_args.push_back(static_cast<uint32_t>(core_id));                        // curr_worker_index
-            in1_args.push_back(static_cast<uint32_t>(op_signaler_sync_semaphore_id));  // worker_sync_sem
+            in1_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_sync_semaphore_id));  // worker_sync_sem
             for (const auto& noc_core : all_worker_cores_noc) {
                 in1_args.push_back(static_cast<uint32_t>(noc_core.x));
                 in1_args.push_back(static_cast<uint32_t>(noc_core.y));
             }
             in1_args.push_back(0);  // num_fused_op_cores_to_signal (empty op)
-            in1_args.push_back(static_cast<uint32_t>(op_signaler_dummy_semaphore_id));  // signal_op_sem (dummy)
+            in1_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_dummy_semaphore_id));  // signal_op_sem (dummy)
             in1_args.push_back(1);                                                      // mcast_signal_op_cores
         }
         if (in0_idx == 0) {
