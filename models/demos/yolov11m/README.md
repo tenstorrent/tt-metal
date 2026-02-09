@@ -69,6 +69,18 @@ pytest models/experimental/yolo_eval/evaluate.py::test_yolov11m[res0-device_para
 ```
 Note: The model is evaluated with 500 samples.
 
+## Model Performance Summary
+
+**Note:** Performance numbers are measured on **N150 AND N300** platform.
+| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
+|------------|------------------- |----------------------|-------------------------|-------------|
+| 640x640    | True               | 0.9992749            | 88                      | Passed      |
+
+| Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
+|------------|--------------------|----------------------|-------------------------|-------------|
+| 640x640    | True               | 0.9992749            | 153                     | Passed      |
+
+
 ## Details
 - The entry point to the `yolov11m` is located at : `models/demos/yolov11m/tt/ttnn_yolov11.py`
 - Batch Size : `1` (Single Device), `2` (Multi Device).
