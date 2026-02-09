@@ -137,6 +137,12 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         help="Maximum number of tokens to prefill.",
     )
+    p.add_argument(
+        "--profile-decode",
+        action="store_true",
+        default=False,
+        help="Profile decode performance: skip prefill (use random tokens), and run only first dense layer + first MoE layer during decode.",
+    )
     return p
 
 
@@ -253,7 +259,7 @@ def run_demo(
     repeat_batches: int = 1,
     signpost: bool = False,
     prefill_max_tokens: int = None,
-    force_recalculate: bool = False,
+    profile_decode: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -352,7 +358,7 @@ def run_demo(
                 enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
-                force_recalculate=force_recalculate,
+                profile_decode=profile_decode,
             )
         # Build the prompt list
         pre_tokenized_prompts = None
@@ -452,6 +458,7 @@ def main() -> None:
         enable_mem_profile=args.enable_mem_profile,
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
+        profile_decode=args.profile_decode,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
