@@ -1,0 +1,14 @@
+﻿ttnn.MatmulMultiCoreReuseProgramConfig
+======================================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.MatmulMultiCoreReuseProgramConfig:
+
+
+.. autoclass:: ttnn.MatmulMultiCoreReuseProgramConfig
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :inherited-members:
+   :member-order: bysource
