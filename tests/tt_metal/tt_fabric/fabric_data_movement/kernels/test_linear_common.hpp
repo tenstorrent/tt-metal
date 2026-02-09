@@ -139,9 +139,20 @@ void set_state(
                     connection_manager, route_id, hop_info.mcast.start_distance, hop_info.mcast.range, fh, packet_size);
             } break;
             case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
-                // with_state not implemented yet for this packet type
-                break;
-            }
+                tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader fh(
+                    {0, 0},                                    // dummy noc_addresses
+                    0,                                         // dummy semaphore_noc_address
+                    {static_cast<uint16_t>(packet_size / 2)},  // dummy chunk_size
+                    1,                                         // val
+                    true                                       // flush
+                );
+                fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state<
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::PayloadSize |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::WriteChunkSizes |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::Val |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::Flush>(
+                    connection_manager, route_id, hop_info.mcast.start_distance, hop_info.mcast.range, fh, packet_size);
+            } break;
             default: {
                 ASSERT(false);
             } break;
@@ -188,9 +199,20 @@ void set_state(
                     connection_manager, route_id, hop_info.ucast.num_hops, fh, packet_size);
             } break;
             case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
-                // with_state not implemented yet for this packet type
-                break;
-            }
+                tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader fh(
+                    {0, 0},                                    // dummy noc_addresses
+                    0,                                         // dummy semaphore_noc_address
+                    {static_cast<uint16_t>(packet_size / 2)},  // dummy chunk_size
+                    1,                                         // val
+                    true                                       // flush
+                );
+                fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state<
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::PayloadSize |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::WriteChunkSizes |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::Val |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::Flush>(
+                    connection_manager, route_id, hop_info.ucast.num_hops, fh, packet_size);
+            } break;
             default: {
                 ASSERT(false);
             } break;
@@ -250,9 +272,20 @@ void set_state(
                     UnicastFusedAtomicIncUpdateMask::Flush>(connection_manager, route_id, ranges, fh, packet_size);
             } break;
             case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
-                // with_state not implemented yet for this packet type
-                break;
-            }
+                tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader fh(
+                    {0, 0},                                    // dummy noc_addresses
+                    0,                                         // dummy semaphore_noc_address
+                    {static_cast<uint16_t>(packet_size / 2)},  // dummy chunk_size
+                    1,                                         // val
+                    true                                       // flush
+                );
+                fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state<
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::PayloadSize |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::WriteChunkSizes |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::Val |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::Flush>(
+                    connection_manager, route_id, ranges, fh, packet_size);
+            } break;
             default: {
                 ASSERT(false);
             } break;
@@ -298,9 +331,19 @@ void set_state(
                     UnicastFusedAtomicIncUpdateMask::Flush>(connection_manager, route_id, fh, packet_size);
             } break;
             case NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC: {
-                // with_state not implemented yet for this packet type
-                break;
-            }
+                tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader fh(
+                    {0, 0},                                    // dummy noc_addresses
+                    0,                                         // dummy semaphore_noc_address
+                    {static_cast<uint16_t>(packet_size / 2)},  // dummy chunk_size
+                    1,                                         // val
+                    true                                       // flush
+                );
+                fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state<
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::PayloadSize |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::WriteChunkSizes |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::Val |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::Flush>(connection_manager, route_id, fh, packet_size);
+            } break;
             default: {
                 ASSERT(false);
             } break;
