@@ -62,7 +62,7 @@ def get_device_role(coord: ttnn.MeshCoordinate, root_coord: ttnn.MeshCoordinate)
     return MESH_LEAF
 
 
-class ReduceToRootB1:
+class ReduceToOneB1:
     """
     Multi-device reduce-to-one implementation using ttnn.generic_op.
 
@@ -179,7 +179,7 @@ class ReduceToRootB1:
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
         # Kernel path
-        kernel_path = "models/demos/deepseek_v3_b1/micro_ops/reduce_to_root_b1/kernels/reduce_to_root_kernel.cpp"
+        kernel_path = "models/demos/deepseek_v3_b1/micro_ops/reduce_to_one_b1/kernels/reduce_to_one_kernel.cpp"
 
         # Get output core from output tensor shard spec (for ROOT1 gather)
         output_sample = output_tensors_per_device[0]
