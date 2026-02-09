@@ -241,6 +241,8 @@ class SamplingGenerator:
         force_argmax = self.tt_sampling._force_argmax_sampling
         use_internal_trace = enable_trace and self.enable_internal_trace
 
+        self.seed_manager.get_new_values()
+
         if not use_internal_trace:
             tt_out = self._run_sampling(
                 logits,

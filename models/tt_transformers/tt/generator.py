@@ -84,7 +84,7 @@ def _apply_prefill_sampling_state(
     sampling_module.reset_sampling_params(sampling_params)
     if sampling_params.seed is not None:
         sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
-    sampling_module.seed_manager.get_new_values(empty_slots, replicate_seeds=True)
+    # sampling_module.seed_manager.get_new_values(empty_slots, replicate_seeds=True)
     if prompt_tokens is not None:
         sampling_module.reset_prompt_tokens(prompt_tokens)
     sampling_module.reset_output_state()
@@ -743,7 +743,6 @@ class Generator:
                 sampling_module = getattr(self.model[i], "sampling", None)
                 assert sampling_module is not None, "Sampling module not found in model for sampling on device."
                 sampling_module.reset_sampling_params(formatted_params)
-                sampling_module.seed_manager.get_new_values()
                 if reset_batch:
                     sampling_module.reset_prompt_tokens(prompt_chunks[i])
                     sampling_module.reset_output_state(output_chunks[i])

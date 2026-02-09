@@ -350,7 +350,6 @@ class Generator:
             sampling_module.reset_prompt_tokens(prefill_ids)
             sampling_module.reset_output_state()
             sampling_module.seed_manager.reset_seed(sampling_params.seed, empty_slots)
-            sampling_module.seed_manager.get_new_values(empty_slots)
             tt_sampled, tt_log_probs = sampling_module.sample(
                 tt_logits_batch,
                 tt_out_tok=None,
@@ -548,7 +547,6 @@ class Generator:
             "is_cur_pos_sharded": is_cur_pos_sharded,
             "is_page_table_sharded": is_page_table_sharded,
         }
-        self.model.sampling.seed_manager.get_new_values()
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
