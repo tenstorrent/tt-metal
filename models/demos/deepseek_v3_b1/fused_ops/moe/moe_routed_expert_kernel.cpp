@@ -14,9 +14,6 @@
 //
 // Shared expert pipeline (fused):
 //   3a. Gate/Up KN-sliced matmul (128 cores, overlaps with step 4)
-//   4a. Gate Gather A (64 gate cores → sender, pop src)
-//   4b. Up Gather B (64 up cores → sender, pop src)
-//   5c. Gated Reduce (sender core): SiLU(sum(gate)) * sum(up)
 //
 // Optimizations:
 //   - gate_proj and up_proj share same CB (ResetCBIn1 between uses)
@@ -32,7 +29,6 @@
 #include "../../unified_kernels/eltwise_mul.hpp"
 #include "../../unified_kernels/eltwise_add.hpp"
 #include "../../unified_kernels/kn_sliced_matmul.hpp"
-#include "../../unified_kernels/gated_reduce.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr.
 // Mirrors Python-side MoeRoutedExpertOp / MoeSharedExpertOp split.
@@ -45,9 +41,6 @@ struct Core {
     };
     struct Shared {
         static constexpr bool is_compute_core = get_named_compile_time_arg_val("is_shared_compute_core") == 1;
-        static constexpr bool is_gate_compute_core = get_named_compile_time_arg_val("is_shared_gate_compute_core") == 1;
-        static constexpr bool is_up_compute_core = get_named_compile_time_arg_val("is_shared_up_compute_core") == 1;
-        static constexpr bool is_gated_reduce_core = get_named_compile_time_arg_val("is_shared_gated_reduce_core") == 1;
     };
     // Combined: cores that receive the input mcast
     static constexpr bool is_input_mcast_receiver =
@@ -200,44 +193,6 @@ void kernel_main() {
             // KN-sliced matmul (reader — no-op for NCRISC)
             using GUMatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::ReaderCTArgs;
             deepseek_b1_ops::KNSlicedMatmul::ReaderArgs gu_matmul_args{};
-
-            // Gate Gather (A) sender
-            deepseek_b1_ops::Gather::SenderArgs ag_args{
-                get_named_compile_time_arg_val("shared_ag_dest_noc_x"),
-                get_named_compile_time_arg_val("shared_ag_dest_noc_y"),
-                get_named_compile_time_arg_val("shared_ag_data_size_bytes"),
-                get_named_compile_time_arg_val("shared_ag_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_ag_src_cb"),
-                get_named_compile_time_arg_val("shared_ag_src_num_pages"),
-                0,
-                0,
-                0,
-                0,  // sender_grid (unused with UsePerCoreSenderIdx)
-                0,  // row_major (unused)
-                get_named_compile_time_arg_val("shared_ag_receiver_data_addr"),
-                get_named_compile_time_arg_val("shared_ag_sender_idx"),
-            };
-
-            // Up Gather (B) sender
-            deepseek_b1_ops::Gather::SenderArgs bg_args{
-                get_named_compile_time_arg_val("shared_bg_dest_noc_x"),
-                get_named_compile_time_arg_val("shared_bg_dest_noc_y"),
-                get_named_compile_time_arg_val("shared_bg_data_size_bytes"),
-                get_named_compile_time_arg_val("shared_bg_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_bg_src_cb"),
-                get_named_compile_time_arg_val("shared_bg_src_num_pages"),
-                0,
-                0,
-                0,
-                0,
-                0,
-                get_named_compile_time_arg_val("shared_bg_receiver_data_addr"),
-                get_named_compile_time_arg_val("shared_bg_sender_idx"),
-            };
-
-            // Gated Reduce (reader — no-op for NCRISC)
-            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ReaderCTArgs;
-            deepseek_b1_ops::GatedReduce::ReaderArgs gated_reduce_args{};
         } shared;
     } moe;
 
@@ -397,30 +352,6 @@ void kernel_main() {
             // KN-sliced matmul (writer — no-op for BRISC)
             using GUMatmulCTArgs = deepseek_b1_ops::KNSlicedMatmul::WriterCTArgs;
             deepseek_b1_ops::KNSlicedMatmul::WriterArgs gu_matmul_args{};
-
-            // Gate Gather (A) receiver
-            deepseek_b1_ops::Gather::ReceiverArgs ag_args{
-                get_named_compile_time_arg_val("shared_ag_noc0_num_senders"),
-                0,  // noc1_num_senders
-                get_named_compile_time_arg_val("shared_ag_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_ag_noc1_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_ag_dst_cb"),
-                get_named_compile_time_arg_val("shared_ag_dst_num_pages"),
-            };
-
-            // Up Gather (B) receiver
-            deepseek_b1_ops::Gather::ReceiverArgs bg_args{
-                get_named_compile_time_arg_val("shared_bg_noc0_num_senders"),
-                0,  // noc1_num_senders
-                get_named_compile_time_arg_val("shared_bg_noc0_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_bg_noc1_receiver_semaphore_id"),
-                get_named_compile_time_arg_val("shared_bg_dst_cb"),
-                get_named_compile_time_arg_val("shared_bg_dst_num_pages"),
-            };
-
-            // Gated Reduce (writer — no-op for BRISC)
-            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs;
-            deepseek_b1_ops::GatedReduce::WriterArgs gated_reduce_args{};
         } shared;
     } moe;
 
@@ -544,21 +475,6 @@ void kernel_main() {
                 get_named_compile_time_arg_val("shared_gu_k_per_core"),
                 get_named_compile_time_arg_val("shared_gu_act_total_tiles"),
             };
-
-            // Gather (compute — no-op for TRISC)
-            deepseek_b1_ops::Gather::ComputeArgs ag_args{};
-            deepseek_b1_ops::Gather::ComputeArgs bg_args{};
-
-            // Gated Reduce (compute)
-            using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::ComputeCTArgs<
-                get_named_compile_time_arg_val("shared_gated_reduce_tiles_per_k"),
-                get_named_compile_time_arg_val("shared_gated_reduce_k_num_tiles")>;
-            deepseek_b1_ops::GatedReduce::ComputeArgs gated_reduce_args{
-                get_named_compile_time_arg_val("shared_gated_reduce_group1_cb"),
-                get_named_compile_time_arg_val("shared_gated_reduce_group2_cb"),
-                get_named_compile_time_arg_val("shared_gated_reduce_intermed_cb"),
-                get_named_compile_time_arg_val("shared_gated_reduce_mcast_src_cb"),
-            };
         } shared;
     } moe;
 
@@ -631,41 +547,6 @@ void kernel_main() {
             true>  // UpdateSemaphoreAddr
             expert_scale_mcast;
         expert_scale_mcast(moe.routed.expert_scale_mcast_args);
-    }
-
-    // 5c. Shared Expert: Gate Gather (A) — 64 gate cores send to sender core
-    //     Placed after mcasts so sender BRISC doesn't block routed expert
-    //     pop_src=true: frees KNSlicedMatmul output after sending
-    {
-        DeviceZoneScopedN("SHARED_GATE_GATHER");
-        deepseek_b1_ops::Gather::Op<
-            Core::Shared::is_gate_compute_core,
-            Core::Shared::is_gated_reduce_core,
-            true,  // pop_src
-            true>  // UsePerCoreSenderIdx
-            shared_gate_gather;
-        shared_gate_gather(moe.shared.ag_args);
-    }
-
-    // 5d. Shared Expert: Up Gather (B) — 64 up cores send to sender core
-    {
-        DeviceZoneScopedN("SHARED_UP_GATHER");
-        deepseek_b1_ops::Gather::Op<
-            Core::Shared::is_up_compute_core,
-            Core::Shared::is_gated_reduce_core,
-            true,  // pop_src
-            true>  // UsePerCoreSenderIdx
-            shared_up_gather;
-        shared_up_gather(moe.shared.bg_args);
-    }
-
-    // 5e. Shared Expert: Gated Reduce — SiLU(sum(gate)) * sum(up)
-    //     Runs on sender core after receiving both gathers
-    {
-        DeviceZoneScopedN("SHARED_GATED_REDUCE");
-        deepseek_b1_ops::GatedReduce::Op<Moe::Shared::GatedReduceCTArgs, Core::Shared::is_gated_reduce_core>
-            gated_reduce;
-        gated_reduce(moe.shared.gated_reduce_args);
     }
 
     // 6. gate_proj: DRAM Streaming Matmul + SiLU (PopIn0=false, keep input for up_proj)
