@@ -30,32 +30,36 @@ def create_program_descriptor(
         ProgramDescriptor ready for execution via ttnn.generic_op
     """
     # ========== 1. EXTRACT TENSOR METADATA ==========
-    # Never hard-code dtype, tile size, or element size. Extract from tensors,
-    # just like C++ program factories do (see upsample_program_factory_multicore_interleaved.cpp).
+    # Prefer buffer query methods — they work for any layout (tiled or row-major)
+    # and account for padding/alignment automatically.
     #
-    # Available metadata APIs:
-    #   input_tensor.dtype                                  # DataType enum (bfloat16, float32, ...)
-    #   input_tensor.layout                                 # Layout enum (TILE_LAYOUT, ROW_MAJOR_LAYOUT)
-    #   input_tensor.element_size()                         # bytes per element (2 for bf16, 4 for f32)
-    #   input_tensor.tile.tile_shape                        # (height, width), e.g. (32, 32)
-    #   input_tensor.tile.get_tile_size(input_tensor.dtype) # full tile size in bytes (e.g. 2048 for bf16)
-    #   input_tensor.padded_shape                           # shape with padding
-    #   input_tensor.volume()                               # total element count
+    # Buffer query APIs (layout-agnostic, preferred):
+    #   tensor.buffer_page_size()          # page size in bytes (tile size or stick size)
+    #   tensor.buffer_aligned_page_size()  # page size rounded to DRAM/L1 alignment
+    #   tensor.buffer_num_pages()          # total pages (tiles or sticks)
     #
-    # For TILE_LAYOUT (this example):
-    #   page_size  = tensor.tile.get_tile_size(tensor.dtype)   # one tile
-    #   num_pages  = tensor.volume() // (tile_h * tile_w)      # number of tiles
+    # Standalone utilities (for intermediate CBs with no tensor):
+    #   ttnn.tile_size(dtype)              # tile size in bytes for a 32x32 tile
+    #   ttnn.round_up(val, mult)           # round up to nearest multiple
+    #   ttnn.div_up(a, b)                  # ceiling division
+    #   ttnn.get_dram_alignment()          # DRAM alignment in bytes (e.g. 32)
+    #   ttnn.get_l1_alignment()            # L1 alignment in bytes (e.g. 16)
     #
-    # For ROW_MAJOR_LAYOUT:
-    #   page_size  = tensor.padded_shape[-1] * tensor.element_size()   # one row (stick)
-    #   num_pages  = tensor.volume() // tensor.padded_shape[-1]        # number of rows
+    # Layout-specific APIs (still valid, use when you need explicit control):
+    #   TILE_LAYOUT:      tensor.tile.get_tile_size(dtype)  — tile size in bytes
+    #   ROW_MAJOR_LAYOUT: tensor.padded_shape[-1] * tensor.element_size()  — stick size
+    #
+    # Other tensor metadata:
+    #   tensor.dtype                       # DataType enum (bfloat16, float32, ...)
+    #   tensor.layout                      # Layout enum (TILE_LAYOUT, ROW_MAJOR_LAYOUT)
+    #   tensor.element_size()              # bytes per element (2 for bf16, 4 for f32)
+    #   tensor.tile.tile_shape             # (height, width), e.g. (32, 32)
+    #   tensor.padded_shape                # shape with padding
+    #   tensor.volume()                    # total element count
 
-    input_dtype = input_tensor.dtype
-    output_dtype = output_tensor.dtype
-    tile_height, tile_width = input_tensor.tile.tile_shape
-    input_page_size = input_tensor.tile.get_tile_size(input_dtype)
-    output_page_size = output_tensor.tile.get_tile_size(output_dtype)
-    num_pages = input_tensor.volume() // (tile_height * tile_width)
+    input_page_size = input_tensor.buffer_page_size()
+    output_page_size = output_tensor.buffer_page_size()
+    num_pages = input_tensor.buffer_num_pages()
 
     # ========== 2. CORE GRID AND WORK DISTRIBUTION ==========
     # Example: use single core for simplicity
@@ -73,7 +77,7 @@ def create_program_descriptor(
         format_descriptors=[
             ttnn.CBFormatDescriptor(
                 buffer_index=cb_in,
-                data_format=input_dtype,
+                data_format=input_tensor.dtype,
                 page_size=input_page_size,
             )
         ],
@@ -85,7 +89,7 @@ def create_program_descriptor(
         format_descriptors=[
             ttnn.CBFormatDescriptor(
                 buffer_index=cb_out,
-                data_format=output_dtype,
+                data_format=output_tensor.dtype,
                 page_size=output_page_size,
             )
         ],

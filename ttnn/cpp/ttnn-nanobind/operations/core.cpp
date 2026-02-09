@@ -19,6 +19,10 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/core_coord.hpp>
+
+#include <nanobind/stl/vector.h>
 
 // NOLINTBEGIN(bugprone-unused-raii)
 
@@ -470,6 +474,112 @@ void py_module(nb::module_& mod) {
         >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
         ...     ttnn.split_work_to_cores(core_rangeset, 100)
         >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
+        )doc");
+
+    // --- Math utilities ---
+
+    mod.def(
+        "round_up",
+        [](uint32_t a, uint32_t b) -> uint32_t { return tt::round_up(a, b); },
+        nb::arg("value"),
+        nb::arg("multiple"),
+        R"doc(
+            Round up a value to the nearest multiple.
+
+            Args:
+                value (int): The value to round up.
+                multiple (int): The multiple to round up to. Must be non-zero.
+
+            Returns:
+                int: Smallest multiple of ``multiple`` >= ``value``.
+
+            Example:
+            >>> ttnn.round_up(100, 32)  # Returns 128
+            >>> ttnn.round_up(128, 32)  # Returns 128
+        )doc");
+
+    mod.def(
+        "div_up",
+        [](uint32_t a, uint32_t b) -> uint32_t { return tt::div_up(a, b); },
+        nb::arg("numerator"),
+        nb::arg("denominator"),
+        R"doc(
+            Ceiling division: returns ceil(a / b).
+
+            Args:
+                numerator (int): The numerator.
+                denominator (int): The denominator. Must be non-zero.
+
+            Returns:
+                int: ceil(numerator / denominator)
+
+            Example:
+            >>> ttnn.div_up(100, 32)  # Returns 4
+            >>> ttnn.div_up(128, 32)  # Returns 4
+        )doc");
+
+    // --- Work distribution utilities ---
+
+    mod.def(
+        "find_max_divisor",
+        &tt::tt_metal::find_max_divisor,
+        nb::arg("val"),
+        nb::arg("start_max_div"),
+        R"doc(
+            Find the maximum divisor of val, starting from start_max_div downward.
+            Excludes 5 and 7 as divisors.
+
+            Args:
+                val (int): Value to find a divisor of.
+                start_max_div (int): Starting point to search downward from.
+
+            Returns:
+                int: The largest divisor of val <= start_max_div (excluding 5, 7).
+
+            Example:
+            >>> ttnn.find_max_divisor(32, 8)  # Returns 8
+            >>> ttnn.find_max_divisor(30, 8)  # Returns 6
+        )doc");
+
+    mod.def(
+        "grid_to_cores",
+        nb::overload_cast<uint32_t, uint32_t, uint32_t, bool>(&tt::tt_metal::grid_to_cores),
+        nb::arg("num_cores"),
+        nb::arg("grid_size_x"),
+        nb::arg("grid_size_y"),
+        nb::arg("row_wise") = false,
+        R"doc(
+            Convert a grid specification to a list of CoreCoord objects.
+
+            Args:
+                num_cores (int): Number of cores to generate coordinates for.
+                grid_size_x (int): Width of the core grid.
+                grid_size_y (int): Height of the core grid.
+                row_wise (bool, optional): Iterate row-wise. Defaults to False.
+
+            Returns:
+                list[CoreCoord]: List of core coordinates.
+
+            Example:
+            >>> cores = ttnn.grid_to_cores(4, 8, 8)
+        )doc");
+
+    mod.def(
+        "grid_to_cores",
+        nb::overload_cast<CoreCoord, CoreCoord, bool>(&tt::tt_metal::grid_to_cores),
+        nb::arg("start"),
+        nb::arg("end"),
+        nb::arg("row_wise") = false,
+        R"doc(
+            Convert a core range to a list of CoreCoord objects.
+
+            Args:
+                start (CoreCoord): Start coordinate of the range.
+                end (CoreCoord): End coordinate of the range (inclusive).
+                row_wise (bool, optional): Iterate row-wise. Defaults to False.
+
+            Returns:
+                list[CoreCoord]: List of core coordinates.
         )doc");
 }
 
