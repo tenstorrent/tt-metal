@@ -1,0 +1,16 @@
+{"ts":"2026-02-09T15:16:52+00:00","event":"start","agent":"ttnn-kernel-designer","operation":"row_standardize","input_files":["ttnn/ttnn/operations/row_standardize/row_standardize_spec.md"],"predecessor_agent":"ttnn-operation-planner"}
+{"event":"input_parse","field":"operation_name","value":"row_standardize","confidence":"HIGH","ts":"2026-02-09T15:17:04+00:00"}
+{"event":"input_parse","field":"phases","value":"tilize,mean,subtract,square,variance,add_eps_rsqrt,normalize,untilize","confidence":"HIGH","ts":"2026-02-09T15:17:04+00:00"}
+{"event":"helper_analysis","file":"tilize_helpers.hpp","applicable":true,"functions":["tilize<input_cb, output_cb>(block_width_tiles, num_blocks)"],"ts":"2026-02-09T15:17:04+00:00"}
+{"event":"helper_analysis","file":"untilize_helpers.hpp","applicable":true,"functions":["untilize<block_width_tiles, input_cb, output_cb>(num_blocks)"],"ts":"2026-02-09T15:17:04+00:00"}
+{"event":"helper_analysis","file":"reduce_helpers_compute.hpp","applicable":true,"functions":["reduce<SUM, REDUCE_ROW, WaitUpfrontNoPop>()","reduce<SUM, REDUCE_ROW, BulkWaitBulkPop>()"],"ts":"2026-02-09T15:17:04+00:00"}
+{"event":"helper_analysis","file":"binary_op_helpers.hpp","applicable":true,"functions":["sub<COL>()","square<>()","mul<COL>()"],"ts":"2026-02-09T15:17:04+00:00"}
+{"event":"helper_analysis","file":"scalar_helpers.hpp","applicable":true,"functions":["generate_bcast_scalar_bfloat16()","generate_bcast_scalar()"],"ts":"2026-02-09T15:17:04+00:00"}
+{"event":"helper_analysis","file":"reduce_helpers_dataflow.hpp","applicable":true,"functions":["generate_reduce_scaler()"],"ts":"2026-02-09T15:17:04+00:00"}
+{"event":"design_decision","phase":"add_eps_rsqrt","choice":"USE HELPER (add) + raw rsqrt","helper":"add<SCALAR> with rsqrt post_op lambda","rationale":"add helper handles CB ops, rsqrt chained as PostOp for fused single-tile operation","ts":"2026-02-09T15:18:14+00:00"}
+{"event":"design_decision","phase":"sub_mean","choice":"WaitUpfrontNoPop for cb_tilized, WaitAndPopPerTile for cb_mean","rationale":"cb_tilized persists for reuse in sub, cb_mean consumed immediately per tile","ts":"2026-02-09T15:18:14+00:00"}
+{"event":"design_decision","phase":"square","choice":"WaitUpfrontNoPop for cb_xmm input","rationale":"cb_xmm tiles must persist for Phase 7 normalize, safer than NoWaitNoPop","ts":"2026-02-09T15:18:14+00:00"}
+{"event":"design_decision","phase":"normalize","choice":"WaitUpfrontPopAtEnd for cb_xmm, WaitAndPopPerTile for cb_invstd","rationale":"cb_xmm finally consumed and should be popped, cb_invstd is single tile consumed once","ts":"2026-02-09T15:18:14+00:00"}
+{"event":"design_decision","phase":"add_eps_rsqrt","choice":"NO HELPER - raw tile API","rationale":"binary_op PostOp parameter is accepted but never invoked in implementation. Must use raw add_tiles_bcast_scalar + rsqrt_tile with manual DST management.","ts":"2026-02-09T15:19:19+00:00"}
+{"event":"action","type":"write_design","file":"ttnn/ttnn/operations/row_standardize/kernel_design.md","ts":"2026-02-09T15:20:45+00:00"}
+{"event":"complete","final_status":"SUCCESS","phases_with_helpers":7,"raw_phases":1,"output_file":"ttnn/ttnn/operations/row_standardize/kernel_design.md","ts":"2026-02-09T15:21:47+00:00"}
