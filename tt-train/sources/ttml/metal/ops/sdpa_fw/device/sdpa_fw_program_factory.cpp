@@ -4,6 +4,8 @@
 
 #include "sdpa_fw_program_factory.hpp"
 
+#include <fmt/core.h>
+
 #include <bit>
 #include <cmath>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -61,6 +63,37 @@ constexpr uint32_t kIntermediateTiles = 2U;  // max_val at col 0, recip_sum_exp 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
+const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
+
+/**
+ * Calculate work-balanced pair distribution for causal SDPA.
+ *
+ * For causal attention, row i within a sequence processes (i+1) K/V tiles.
+ * By pairing row i with row (St-1-i), each pair has constant work = St+1.
+ * This enables perfect work balance across cores.
+ *
+ * @param total_pairs Total number of pairs = NC * St / 2
+ * @param num_cores Number of cores to distribute across
+ * @return Vector of (start_pair_idx, num_pairs) for each core
+ */
+std::vector<std::pair<uint32_t, uint32_t>> calculate_balanced_pair_distribution(
+    uint32_t total_pairs, uint32_t num_cores) {
+    std::vector<std::pair<uint32_t, uint32_t>> distribution;
+    distribution.reserve(num_cores);
+
+    const uint32_t pairs_per_core = total_pairs / num_cores;
+    const uint32_t remainder = total_pairs % num_cores;
+
+    uint32_t current_pair = 0;
+    for (uint32_t core = 0; core < num_cores; ++core) {
+        // First 'remainder' cores get one extra pair
+        const uint32_t pairs_for_this_core = pairs_per_core + (core < remainder ? 1 : 0);
+        distribution.emplace_back(current_pair, pairs_for_this_core);
+        current_pair += pairs_for_this_core;
+    }
+
+    return distribution;
+}
 
 }  // namespace
 
@@ -79,7 +112,7 @@ struct SDPAForwardKernels {
 
 /**
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
- *        for each core in the grid.
+ *        for each core in the grid. (Standard row-based distribution)
  */
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
@@ -139,6 +172,55 @@ void assign_per_core_runtime_args(
     }
 }
 
+/**
+ * Set up the runtime arguments for balanced parallelism mode.
+ * In this mode, work is distributed by pairs rather than rows.
+ * Each pair consists of a "light" row (early in sequence, less work) and
+ * a "heavy" row (late in sequence, more work), providing balanced total work.
+ */
+void assign_per_core_runtime_args_balanced(
+    tt::tt_metal::Program& program,
+    const SDPAForwardKernels& kernels,
+    const tt::tt_metal::Buffer* query_buffer,
+    const tt::tt_metal::Buffer* key_buffer,
+    const tt::tt_metal::Buffer* value_buffer,
+    const tt::tt_metal::Buffer* output_buffer,
+    const tt::tt_metal::Buffer* intermediates_buffer,
+    uint32_t num_cores,
+    uint32_t num_cores_y,
+    const std::vector<std::pair<uint32_t, uint32_t>>& pair_distribution,
+    const tt::tt_metal::CoreRangeSet& all_cores) {
+    for (uint32_t i = 0; i < num_cores; i++) {
+        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        const auto& [start_pair_idx, num_pairs] = pair_distribution[i];
+
+        // Reader kernel: (query_addr, key_addr, value_addr, mask_addr(unused), num_pairs, start_pair_idx)
+        SetRuntimeArgs(
+            program,
+            kernels.reader,
+            core,
+            {query_buffer->address(),
+             key_buffer->address(),
+             value_buffer->address(),
+             0,  // mask_addr unused for balanced causal - mask generated on chip
+             num_pairs,
+             start_pair_idx});
+
+        // Writer kernel: (output_addr, intermediates_addr, num_pairs, start_pair_idx)
+        SetRuntimeArgs(
+            program,
+            kernels.writer,
+            core,
+            {output_buffer->address(),
+             intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
+             num_pairs,
+             start_pair_idx});
+
+        // Compute kernel: (start_pair_idx, num_pairs)
+        SetRuntimeArgs(program, kernels.compute_group_1, core, {start_pair_idx, num_pairs});
+    }
+}
+
 SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     // -------------------------------------------------------------------------
@@ -193,15 +275,89 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const uint32_t num_available_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-    /* TODO[optimization](vmelnykov): #29160 - explore more efficient ways to split work across kernels.
-     * For example, instead of processing a single row per core, process multiple rows at once
-     * (e.g., q_chunks_size = 2). This allows better utilization of available cores, improves
-     * matmul efficiency (subblock 2x4), and amortizes init/acquire/release overhead across rows.
-     *
-     */
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
+    // -------------------------------------------------------------------------
+    // Balanced Parallelism Decision
+    // -------------------------------------------------------------------------
+    // For causal SDPA, work per row follows triangular pattern: row i processes (i+1) K/V tiles.
+    // By pairing row i with row (St-1-i), each pair has constant work = St+1.
+    // This enables near-perfect work balance across cores.
+    //
+    // Conditions for balanced parallelism:
+    // 1. Causal mask (triangular workload pattern)
+    // 2. Even number of sequence tiles (St % 2 == 0) for clean pairing
+    // 3. Enough work for all cores (total_pairs >= num_available_cores)
+    const uint32_t pairs_per_seq = St / 2;
+    const uint32_t total_pairs = NC * pairs_per_seq;
+    // const bool use_balanced_parallelism = (mask_type == AttentionMaskType::Causal) && (St % 2 == 0) &&
+    //                                       (total_pairs >= num_available_cores) && (St > 0);
+
+    const bool use_balanced_parallelism = false;  // for testing
+
+    // Variables for work distribution (will be set based on parallelism mode)
+    uint32_t num_cores = 0;
+    tt::tt_metal::CoreRangeSet all_cores{};
+    tt::tt_metal::CoreRangeSet core_group_1{};
+    tt::tt_metal::CoreRangeSet core_group_2{};
+    uint32_t num_rows_per_core_group_1 = 0;
+    uint32_t num_rows_per_core_group_2 = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> pair_distribution;
+
+    if (use_balanced_parallelism) {
+        // Use all available cores for balanced distribution
+        num_cores = std::min(num_available_cores, total_pairs);
+        all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
+        core_group_1 = all_cores;  // All cores in one group for balanced mode
+
+        // Calculate pair distribution across cores
+        pair_distribution = calculate_balanced_pair_distribution(total_pairs, num_cores);
+
+        // For balanced mode, num_rows_per_core is 2 * num_pairs (each pair = 2 rows)
+        // But kernels will loop over pairs, not rows directly
+        num_rows_per_core_group_1 = pair_distribution.empty() ? 0 : pair_distribution[0].second * 2;
+    } else {
+        // Standard row-based distribution (existing approach)
+        auto work_split = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
+        num_cores = std::get<0>(work_split);
+        all_cores = std::get<1>(work_split);
+        core_group_1 = std::get<2>(work_split);
+        core_group_2 = std::get<3>(work_split);
+        num_rows_per_core_group_1 = std::get<4>(work_split);
+        num_rows_per_core_group_2 = std::get<5>(work_split);
+    }
+
+    // Debug prints for configuration
+    fmt::print("\n=== SDPA Forward Configuration ===\n");
+    fmt::print("Batch (B): {}, Query Heads (qNH): {}, KV Heads (kNH): {}\n", qB, qNH, kNH);
+    fmt::print("Sequence Length (qS): {}, St (tiles): {}\n", qS, St);
+    fmt::print("Query Embed (qEmbd): {}, qWt (tiles): {}\n", qEmbd, qWt);
+    fmt::print("Key Embed (kEmbd): {}, kWt (tiles): {}\n", kEmbd, kWt);
+    fmt::print("Value Embed (vEmbd): {}, vWt (tiles): {}\n", vEmbd, vWt);
+    fmt::print("Heads per group: {}\n", heads_per_group);
+    fmt::print("NC (B * qNH): {}, Total rows: {}\n", NC, total_rows_to_process);
+    fmt::print(
+        "Grid size: {}x{}, Available cores: {}\n",
+        compute_with_storage_grid_size.x,
+        compute_with_storage_grid_size.y,
+        num_available_cores);
+    fmt::print("Mask type: {}\n", static_cast<int>(mask_type));
+    fmt::print("Pairs per seq: {}, Total pairs: {}\n", pairs_per_seq, total_pairs);
+    fmt::print("USE_BALANCED_PARALLELISM: {}\n", use_balanced_parallelism);
+    fmt::print("Num cores used: {}\n", num_cores);
+    if (use_balanced_parallelism) {
+        fmt::print("Pair distribution (first 5 cores):\n");
+        for (uint32_t i = 0; i < std::min(num_cores, 5u); i++) {
+            fmt::print(
+                "  Core {}: start_pair={}, num_pairs={}\n", i, pair_distribution[i].first, pair_distribution[i].second);
+        }
+    } else {
+        fmt::print(
+            "Standard mode: rows_per_core_g1={}, rows_per_core_g2={}\n",
+            num_rows_per_core_group_1,
+            num_rows_per_core_group_2);
+    }
+    fmt::print("==================================\n\n");
 
     const uint32_t block_size = get_block_size(qWt, 4U);
 
@@ -334,6 +490,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             break;
     }
 
+    // Add balanced parallelism define if using that mode
+    if (use_balanced_parallelism) {
+        defines[kBalancedParallelismDefKey] = "1";
+    }
+
     SDPAForwardKernels kernels;
 
     // Reader compile-time arguments
@@ -342,6 +503,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         St,               // num tile in seq len dim (S/TILE_H)
         qNH,              // number of heads in query
         heads_per_group,  // number of heads per group
+        pairs_per_seq,    // pairs per sequence (St/2) - for balanced parallelism
     };
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
@@ -356,9 +518,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        qWt,  // num tile in inner dim in query(d/TILE_W)
-        St,   // num tile in seq len dim (S/TILE_H)
-        qNH,  // number of heads in query
+        qWt,            // num tile in inner dim in query(d/TILE_W)
+        St,             // num tile in seq len dim (S/TILE_H)
+        qNH,            // number of heads in query
+        pairs_per_seq,  // pairs per sequence (St/2) - for balanced parallelism
     };
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
@@ -366,71 +529,110 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, /* writer_compile_args */ writer_compile_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
-    // 4) Create compute kernels for rmsnorm_fw
+    // 4) Create compute kernels
     // -------------------------------------------------------------------------
 
-    // Group 1 compile-time arguments
-    std::vector<uint32_t> compute_group_1_args = {
-        num_rows_per_core_group_1,  // per_core_block_cnt
-        block_size,                 // per_core_block_size
-        qWt,                        // num tile in inner dim in query(d/TILE_W)
-        St,                         // num_seq_len / TILE_H
-        scaler,                     // sqrt(Et) - sdpa scaler factor
-        minus_one,                  // used to transform mask from 1/0 to 0/-1
-        custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
-    };
+    if (use_balanced_parallelism) {
+        // For balanced parallelism, all cores are in one group with uniform work
+        // num_pairs is passed as compile-time arg (max pairs per core)
+        const uint32_t max_pairs_per_core = pair_distribution.empty() ? 0 : pair_distribution[0].second;
 
-    kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
+        std::vector<uint32_t> compute_args = {
+            max_pairs_per_core,  // num_pairs (or max_pairs if some cores have fewer)
+            block_size,          // per_core_block_size
+            qWt,                 // num tile in inner dim in query(d/TILE_W)
+            St,                  // num_seq_len / TILE_H
+            scaler,              // sqrt(Et) - sdpa scaler factor
+            minus_one,           // used to transform mask from 1/0 to 0/-1
+            custom_inf,          // used to transform mask from 0/-1 to 0/-1e9F
+            pairs_per_seq,       // pairs per sequence (St/2) - for pair-to-row mapping
+        };
 
-    // Group 2 (if present) compile-time arguments
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_group_2_args = {
-            num_rows_per_core_group_2,  // per_core_block_cnt
+        kernels.compute_group_1 = create_compute_kernel(
+            program, all_cores, compute_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
+    } else {
+        // Standard mode: two potential core groups with different row counts
+
+        // Group 1 compile-time arguments
+        std::vector<uint32_t> compute_group_1_args = {
+            num_rows_per_core_group_1,  // per_core_block_cnt
             block_size,                 // per_core_block_size
             qWt,                        // num tile in inner dim in query(d/TILE_W)
             St,                         // num_seq_len / TILE_H
             scaler,                     // sqrt(Et) - sdpa scaler factor
             minus_one,                  // used to transform mask from 1/0 to 0/-1
             custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
+            pairs_per_seq,              // pairs per sequence (unused in standard mode, but kept for consistency)
         };
 
-        kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
+        kernels.compute_group_1 = create_compute_kernel(
+            program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
+
+        // Group 2 (if present) compile-time arguments
+        if (!core_group_2.ranges().empty()) {
+            std::vector<uint32_t> compute_group_2_args = {
+                num_rows_per_core_group_2,  // per_core_block_cnt
+                block_size,                 // per_core_block_size
+                qWt,                        // num tile in inner dim in query(d/TILE_W)
+                St,                         // num_seq_len / TILE_H
+                scaler,                     // sqrt(Et) - sdpa scaler factor
+                minus_one,                  // used to transform mask from 1/0 to 0/-1
+                custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
+                pairs_per_seq,              // pairs per sequence (unused in standard mode)
+            };
+
+            kernels.compute_group_2 = create_compute_kernel(
+                program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
+        }
     }
 
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        query_buffer,
-        key_buffer,
-        value_buffer,
-        mask_buffer,
-        output_buffer,
-        intermediates_buffer,
-        num_cores,
-        num_cores_y,
-        num_rows_per_core_group_1,
-        num_rows_per_core_group_2,
-        core_group_1,
-        core_group_2);
+    if (use_balanced_parallelism) {
+        assign_per_core_runtime_args_balanced(
+            program,
+            kernels,
+            query_buffer,
+            key_buffer,
+            value_buffer,
+            output_buffer,
+            intermediates_buffer,
+            num_cores,
+            num_cores_y,
+            pair_distribution,
+            all_cores);
+    } else {
+        assign_per_core_runtime_args(
+            program,
+            kernels,
+            query_buffer,
+            key_buffer,
+            value_buffer,
+            mask_buffer,
+            output_buffer,
+            intermediates_buffer,
+            num_cores,
+            num_cores_y,
+            num_rows_per_core_group_1,
+            num_rows_per_core_group_2,
+            core_group_1,
+            core_group_2);
+    }
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
     // -------------------------------------------------------------------------
     return cached_program_t{
         std::move(program),
-        {/* sdpa_fw_reader_kernel  = */ kernels.reader,
-         /* sdpa_fw_writer_kernel  = */ kernels.writer,
-         /* sdpa_fw_kernel_group_1 = */ kernels.compute_group_1,
-         /* sdpa_fw_kernel_group_2 = */ kernels.compute_group_2,
-         /* core_group_1              = */ core_group_1,
-         /* core_group_2              = */ core_group_2,
-         /* num_cores                 = */ num_cores,
-         /* num_cores_y               = */ num_cores_y}};
+        {/* sdpa_fw_reader_kernel      = */ kernels.reader,
+         /* sdpa_fw_writer_kernel      = */ kernels.writer,
+         /* sdpa_fw_kernel_group_1     = */ kernels.compute_group_1,
+         /* sdpa_fw_kernel_group_2     = */ kernels.compute_group_2,
+         /* core_group_1               = */ core_group_1,
+         /* core_group_2               = */ core_group_2,
+         /* num_cores                  = */ num_cores,
+         /* num_cores_y                = */ num_cores_y}};
 }
 
 void SDPAForwardProgramFactory::override_runtime_arguments(
@@ -468,7 +670,9 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
             runtime_args[kQueryBufferIdx] = query_buffer->address();
             runtime_args[kKeyBufferIdx] = key_buffer->address();
             runtime_args[kValueBufferIdx] = value_buffer->address();
-            runtime_args[kMaskBufferIdx] = mask_buffer != nullptr ? mask_buffer->address() : 0;
+            // For causal mask, mask is generated on-chip (mask_buffer is nullptr)
+            // For DRAM mask, use actual mask buffer address
+            runtime_args[kMaskBufferIdx] = (mask_buffer != nullptr) ? mask_buffer->address() : 0;
         }
 
         // Update output buffer for the writer kernel

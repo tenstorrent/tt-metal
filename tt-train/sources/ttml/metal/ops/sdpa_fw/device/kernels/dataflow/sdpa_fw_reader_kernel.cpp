@@ -33,7 +33,8 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(1);               // (S / TILE_H)
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);          // num of heads in query
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(3);  // num of heads per group
-    constexpr auto query_args = TensorAccessorArgs<4>();
+    constexpr uint32_t pairs_per_seq = get_compile_time_arg_val(4);    // Ht/2 - pairs per sequence for balanced mode
+    constexpr auto query_args = TensorAccessorArgs<5>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
 
@@ -56,7 +57,71 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-    // while we process one q_chunk (head of Q), we stream all K and V chunks (heads of K and V)
+    DPRINT << "READER: start=" << start_row << " rows=" << num_rows_to_process << ENDL();
+
+#ifdef BALANCED_PARALLELISM
+    // Balanced parallelism mode: process pairs of rows (light + heavy)
+    // Runtime args: num_rows_to_process = num_pairs, start_row = start_pair_idx
+    const uint32_t num_pairs = num_rows_to_process;
+    const uint32_t start_pair_idx = start_row;
+
+    for (uint32_t p = 0; p < num_pairs; ++p) {
+        const uint32_t global_pair_idx = start_pair_idx + p;
+
+        // Map pair index to sequence and position within sequence
+        const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
+        const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
+
+        // Calculate the two row indices for this pair
+        const uint32_t light_row_in_seq = pair_in_seq;
+        const uint32_t heavy_row_in_seq = Ht - 1 - pair_in_seq;
+
+        const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
+        const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
+
+        // Process light row
+        {
+            const uint32_t global_row_idx = light_global_row;
+            const uint32_t q_start_idx = global_row_idx * qWt;
+            read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+
+            const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;
+            const uint32_t batch_idx = global_row_idx / (Ht * q_heads);
+            const uint32_t kv_group_idx = q_head_idx / heads_per_group;
+            const uint32_t kv_offset = (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;
+            const uint32_t q_row_tile = global_row_idx % Ht;
+            const uint32_t num_kv_tiles_to_read = q_row_tile + 1;
+
+            for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {
+                const uint32_t kv_start_idx = kv_offset + h * qWt;
+                read_tiles_by_row(cb_key, key_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
+                read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
+            }
+        }
+
+        // Process heavy row
+        {
+            const uint32_t global_row_idx = heavy_global_row;
+            const uint32_t q_start_idx = global_row_idx * qWt;
+            read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+
+            const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;
+            const uint32_t batch_idx = global_row_idx / (Ht * q_heads);
+            const uint32_t kv_group_idx = q_head_idx / heads_per_group;
+            const uint32_t kv_offset = (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;
+            const uint32_t q_row_tile = global_row_idx % Ht;
+            const uint32_t num_kv_tiles_to_read = q_row_tile + 1;
+
+            for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {
+                const uint32_t kv_start_idx = kv_offset + h * qWt;
+                read_tiles_by_row(cb_key, key_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
+                read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
+            }
+        }
+    }
+    DPRINT << "READER DONE" << ENDL();
+#else
+    // Standard mode: process rows sequentially
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t global_row_idx = start_row + i;
         const uint32_t q_start_idx = global_row_idx * qWt;
@@ -100,4 +165,6 @@ void kernel_main() {
             read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, qWt, tile_bytes, qWt);
         }
     }
+    DPRINT << "READER DONE" << ENDL();
+#endif
 }
