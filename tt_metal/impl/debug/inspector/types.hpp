@@ -52,6 +52,8 @@ struct MeshDeviceData {
 struct MeshWorkloadRuntimeIdEntry {
     uint64_t workload_id = 0;
     uint64_t runtime_id = 0;
+    std::string name;
+    std::string parameters;
 };
 
 struct MeshWorkloadData {

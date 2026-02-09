@@ -168,6 +168,8 @@ void Data::rpc_get_mesh_workloads_runtime_ids(rpc::Inspector::GetMeshWorkloadsRu
         auto entry = all_runtime_ids[i];
         entry.setWorkloadId(runtime_ids[i].workload_id);
         entry.setRuntimeId(runtime_ids[i].runtime_id);
+        entry.setName(runtime_ids[i].name);
+        entry.setParameters(runtime_ids[i].parameters);
     }
 }
 

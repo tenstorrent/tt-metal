@@ -354,11 +354,17 @@ void Inspector::mesh_workload_set_operation_name_and_parameters(
     }
     try {
         auto* data = get_inspector_data();
+        if (!data) {
+            return;
+        }
+
+        const auto workload_id = mesh_workload->get_id();
+
+        // Update workload-level metadata + YAML log
         std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
+        auto& mesh_workload_data = data->mesh_workloads_data[workload_id];
         mesh_workload_data.name = std::string(operation_name);
         mesh_workload_data.parameters = std::string(operation_parameters);
-        // Keep log/event name stable for tooling compatibility.
         data->logger.log_mesh_workload_operation_name_and_parameters(
             mesh_workload_data, operation_name, operation_parameters);
     } catch (const std::exception& e) {
@@ -373,11 +379,27 @@ void Inspector::mesh_workload_set_runtime_id(
     }
     try {
         auto* data = get_inspector_data();
+        if (!data) {
+            return;
+        }
 
-        std::lock_guard<std::mutex> lock(data->runtime_ids_mutex);
-        data->runtime_ids.push_back({mesh_workload->get_id(), runtime_id});
+        const auto workload_id = mesh_workload->get_id();
 
-        // Keep only the last MAX_RUNTIME_ID_ENTRIES
+        // Lock both structures in a consistent order
+        std::scoped_lock locks(data->runtime_ids_mutex, data->mesh_workloads_mutex);
+
+        inspector::MeshWorkloadRuntimeIdEntry entry;
+        entry.workload_id = workload_id;
+        entry.runtime_id = runtime_id;
+
+        // Snapshot latest annotation if present
+        auto it = data->mesh_workloads_data.find(workload_id);
+        if (it != data->mesh_workloads_data.end()) {
+            entry.name = it->second.name;
+            entry.parameters = it->second.parameters;
+        }
+
+        data->runtime_ids.push_back(std::move(entry));
         if (data->runtime_ids.size() > inspector::Data::MAX_RUNTIME_ID_ENTRIES) {
             data->runtime_ids.pop_front();
         }
