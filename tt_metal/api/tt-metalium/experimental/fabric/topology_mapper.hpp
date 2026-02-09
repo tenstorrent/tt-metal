@@ -366,32 +366,6 @@ private:
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> build_fabric_node_id_to_mesh_rank_mapping() const;
 
     /**
-     * @brief Create bidirectional mappings between logical fabric nodes and physical ASIC IDs
-     *
-     * This function performs the core topology mapping by creating bidirectional mappings between logical fabric nodes
-     * (from the mesh graph) and physical ASIC IDs (from the physical system descriptor). It uses a constraint
-     * satisfaction algorithm to find valid mappings that preserve the logical connectivity structure in the physical
-     * topology.
-     *
-     * The algorithm:
-     * 1. Validates that the logical graph can fit within the physical topology
-     * 2. Uses degree-based pruning and forward checking to efficiently search for valid mappings
-     * 3. Maintains consistency by ensuring logical edges are present in the physical topology
-     * 4. Updates chip_topology_mapping_ entries with mapping information (fabric_node_id, mesh_coord, etc.)
-     *
-     * @param adjacency_map_physical Multi-mesh physical adjacency graph
-     * @param adjacency_map_logical Multi-mesh logical adjacency graph
-     * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
-     * @param fabric_node_id_to_mesh_rank Mapping of mesh IDs to fabric node IDs to mesh host ranks
-     */
-    void populate_fabric_node_id_to_asic_id_mappings(
-        const MeshId mesh_id,
-        const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_map_physical,
-        const ::tt::tt_fabric::AdjacencyGraph<FabricNodeId>& adjacency_map_logical,
-        const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
-        const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank);
-
-    /**
      * @brief Broadcast chip info to hosts
      *
      * Broadcasts chip topology info (including tray_id and asic_location) to target hosts.
