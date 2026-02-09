@@ -38,7 +38,6 @@ FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-build-venv-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHON_ENV_DIR=/opt/venv
-ENV PATH="${PYTHON_ENV_DIR}/bin:/usr/local/bin:${PATH}"
 
 # Install uv from official distroless image
 COPY --from=uv-layer /uv /uvx /usr/local/bin/
@@ -51,13 +50,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Create relocatable virtual environment and install base packages
-# umask 000 ensures the venv is world-writable for runtime pip installs
-# Note: We set PATH instead of using activate since activate is bash-specific
-RUN umask 000 && \
-    uv venv --relocatable $PYTHON_ENV_DIR && \
-    PATH="$PYTHON_ENV_DIR/bin:$PATH" \
-    uv pip install --no-cache-dir uv build numpy setuptools
+# Create relocatable virtual environment
+RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+
+# Set environment variables for the venv (must be Docker ENV so they persist
+# across RUN layers and are visible to uv's build subprocesses)
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Install base packages
+RUN umask 000 && uv pip install --no-cache build numpy setuptools
 
 # Export as scratch image with only the venv
 FROM scratch AS ci-build-venv
@@ -72,7 +74,6 @@ FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS ci-test-venv-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHON_ENV_DIR=/opt/venv
-ENV PATH="${PYTHON_ENV_DIR}/bin:/usr/local/bin:${PATH}"
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
 # Install uv from official distroless image
@@ -93,6 +94,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Create relocatable virtual environment (separate RUN so the venv is fully
+# materialized on disk before any pip installs reference it)
+RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
+
+# Set environment variables for the venv (must be Docker ENV, not shell export,
+# so they persist across RUN layers and are inherited by uv's build subprocesses)
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Pre-install setuptools so pkg_resources is available for packages like mmcv
+# that use it at build time. This must be a separate RUN from the requirements
+# install so the package is fully on disk when uv resolves build dependencies.
+RUN umask 000 && uv pip install --no-cache setuptools
+
 # Create directory structure for requirements files
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
@@ -105,20 +120,13 @@ COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-met
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
 
-# Create relocatable virtual environment and install all packages
-# Install torch from CPU index first, then other requirements
-# index-strategy unsafe-best-match is used to avoid pulling in transitive dependencies
+# Install all packages
+# - torch from CPU index first
+# - Then requirements files with unsafe-best-match to avoid transitive dep conflicts
 # umask 000 ensures the venv is world-writable for runtime pip installs
-# Note: We set PATH instead of using activate since activate is bash-specific
-# setuptools is installed early because mmcv needs pkg_resources at build time
-# but doesn't declare it as a build dependency; --no-build-isolation-package mmcv
-# tells uv to skip build isolation for mmcv so it can find setuptools from the venv
-
 RUN umask 000 && \
-    uv venv --relocatable $PYTHON_ENV_DIR && \
-    uv pip install --no-cache uv build setuptools && \
     uv pip install --no-cache --index-url https://download.pytorch.org/whl/cpu torch && \
-    uv pip install --index-strategy unsafe-best-match --no-cache --no-build-isolation-package mmcv -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match --no-cache -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
