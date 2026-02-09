@@ -1033,35 +1033,32 @@ class Glm4MoeLiteDenseOnlyTT:
         )
         ttnn.copy_host_to_device_tensor(host_pos, self._trace_positions_tt)
 
-        # Trace-mode RoPE: copy small per-step cos/sin slices from host into
-        # persistent sharded tensors. This avoids any host writes during trace
-        # capture (e.g. `ttnn.embedding`) on mesh.
-        pos_clamped = start_pos.to(torch.int64).clamp_min(0)
-        pos_clamped = torch.clamp(pos_clamped, 0, max(0, int(self.max_seq_len) - 1)).to(torch.int64)
-        rope_dim = int(self.hparams.qk_rope_head_dim)
-        cos_rows = self.rope["cos_matrix_host"][0, 0, pos_clamped, :rope_dim].to(dtype=torch.bfloat16)
-        sin_rows = self.rope["sin_matrix_host"][0, 0, pos_clamped, :rope_dim].to(dtype=torch.bfloat16)
-        cos_batch = cos_rows.unsqueeze(0).unsqueeze(2).contiguous()  # [1,B,1,D]
-        sin_batch = sin_rows.unsqueeze(0).unsqueeze(2).contiguous()  # [1,B,1,D]
-
-        host_cos = ttnn.from_torch(
-            cos_batch,
+        # Trace-mode RoPE: copy rot_idxs (positions) to device and generate cos/sin
+        # *inside* the trace graph. Copying host-side RoPE slices directly into
+        # sharded tensors is not layout-safe and can corrupt decode.
+        pos_clamped = start_pos.to(torch.int32).clamp_min(0)
+        pos_clamped = torch.clamp(pos_clamped, 0, max(0, int(self.max_seq_len) - 1)).to(torch.int32)
+        padded_batch = int(self._trace_rot_idxs_padded_batch)
+        if padded_batch < batch:
+            raise RuntimeError(f"trace rot_idxs padded batch too small: padded={padded_batch} batch={batch}")
+        if padded_batch != batch:
+            rot_idxs_padded = torch.nn.functional.pad(
+                pos_clamped.view(1, batch),
+                (0, padded_batch - batch),
+                "constant",
+                0,
+            )
+        else:
+            rot_idxs_padded = pos_clamped.view(1, batch)
+        host_rot_idxs = ttnn.from_torch(
+            rot_idxs_padded,
             device=None,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-        host_sin = ttnn.from_torch(
-            sin_batch,
-            device=None,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mapper,
-        )
-        ttnn.copy_host_to_device_tensor(host_cos, self._trace_cos_batch_tt)
-        ttnn.copy_host_to_device_tensor(host_sin, self._trace_sin_batch_tt)
+        ttnn.copy_host_to_device_tensor(host_rot_idxs, self._trace_rot_idxs_tt)
 
         host_pt = ttnn.from_torch(
             page_table.to(torch.int32),
@@ -1077,13 +1074,34 @@ class Glm4MoeLiteDenseOnlyTT:
         """Decode step using persistent TT inputs, producing device logits."""
         assert self._trace_tokens_tt is not None
         assert self._trace_positions_tt is not None
+        assert self._trace_rot_idxs_tt is not None
         assert self._trace_cos_batch_tt is not None
         assert self._trace_sin_batch_tt is not None
         assert self._trace_trans_matrix_tt is not None
+        assert self._trace_rope_sharded_mem_config is not None
         assert self._trace_page_table_tt is not None
 
         batch = int(self._trace_batch)
 
+        # Generate RoPE cos/sin inside the trace from rot_idxs, then shard into
+        # the decode layout expected by rotary_embedding_llama(is_decode_mode=True).
+        rope_dim = int(self.hparams.qk_rope_head_dim)
+        padded_batch = int(self._trace_rot_idxs_padded_batch)
+        cos_rows = ttnn.embedding(self._trace_rot_idxs_tt, self.rope["cos_matrix"], layout=ttnn.TILE_LAYOUT)
+        sin_rows = ttnn.embedding(self._trace_rot_idxs_tt, self.rope["sin_matrix"], layout=ttnn.TILE_LAYOUT)
+        cos_batch_view = ttnn.unsqueeze_to_4D(cos_rows)  # [1,1,B_pad,D]
+        sin_batch_view = ttnn.unsqueeze_to_4D(sin_rows)  # [1,1,B_pad,D]
+        if padded_batch != batch:
+            cos_batch_view = ttnn.slice(cos_batch_view, [0, 0, 0, 0], [1, 1, batch, rope_dim])
+            sin_batch_view = ttnn.slice(sin_batch_view, [0, 0, 0, 0], [1, 1, batch, rope_dim])
+        cos_batch_rm = ttnn.clone(cos_batch_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sin_batch_rm = ttnn.clone(sin_batch_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        cos_decode = ttnn.transpose(cos_batch_rm, 1, 2)  # [1,B,1,D]
+        sin_decode = ttnn.transpose(sin_batch_rm, 1, 2)  # [1,B,1,D]
+        cos_decode_sharded = ttnn.interleaved_to_sharded(cos_decode, self._trace_rope_sharded_mem_config)
+        sin_decode_sharded = ttnn.interleaved_to_sharded(sin_decode, self._trace_rope_sharded_mem_config)
+        ttnn.copy(cos_decode_sharded, self._trace_cos_batch_tt)
+        ttnn.copy(sin_decode_sharded, self._trace_sin_batch_tt)
         cos_batch = self._trace_cos_batch_tt
         sin_batch = self._trace_sin_batch_tt
         trans_matrix = self._trace_trans_matrix_tt
