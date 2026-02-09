@@ -7,6 +7,66 @@
 namespace compute_kernel_lib {
 
 // =============================================================================
+// CB Query Helpers
+// =============================================================================
+
+/**
+ * @brief Get the number of pages in a circular buffer
+ *
+ * Derives page count from fifo_size / fifo_page_size, which works on both
+ * read and write CB interfaces. (fifo_num_pages is only populated for write interfaces.)
+ */
+ALWI uint32_t get_cb_num_pages(uint32_t cb_id) {
+    auto& cb = get_local_cb_interface(cb_id);
+    return cb.fifo_size / cb.fifo_page_size;
+}
+
+// =============================================================================
+// Tile Size and CB Page Size Validation
+// =============================================================================
+
+/**
+ * @brief Get tile size in bytes for a data format
+ *
+ * Computes tile size using the same formulas as MUL_WITH_TILE_SIZE().
+ * Assumes standard 32x32 tiles (1024 elements).
+ * Only supports Float16, Float16_b, Float32, and Bfp8_b.
+ *
+ * @param format Data format
+ * @return Tile size in bytes (0 for unsupported formats)
+ */
+ALWI uint32_t get_tile_size_for_data_format(DataFormat format) {
+    ASSERT(
+        format == DataFormat::Float16 || format == DataFormat::Float16_b ||
+        format == DataFormat::Float32 || format == DataFormat::Bfp8_b);
+
+    constexpr uint32_t datum_shift = 10;  // 32x32 tiles = 1024 elements
+    constexpr uint32_t exp_shift = 6;     // 64 exponents
+
+    switch (format) {
+        case DataFormat::Float16:
+        case DataFormat::Float16_b: return (1 << (datum_shift + 1));            // 2048 bytes
+        case DataFormat::Float32: return (1 << (datum_shift + 2));               // 4096 bytes
+        case DataFormat::Bfp8_b: return (1 << datum_shift) + (1 << exp_shift);  // 1088 bytes
+        default: return 0;
+    }
+}
+
+/**
+ * @brief Validate that a CB's page size equals the tile size for its data format
+ *
+ * Uses unpack_src_format to determine the data format (same as pack_dst_format on all TRISCs).
+ * On compute kernels (TRISC), fifo_page_size is stored in 16-byte units, so we shift left
+ * by CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT to convert back to bytes.
+ */
+ALWI bool is_valid_cb_tile_page_size(uint32_t cb_id, DataFormat format) {
+    uint32_t tile_size = get_tile_size_for_data_format(format);
+    uint32_t page_size_bytes = get_local_cb_interface(cb_id).fifo_page_size
+                               << CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT;
+    return tile_size > 0 && page_size_bytes == tile_size;
+}
+
+// =============================================================================
 // ReduceDataFormatReconfigMode Helper Functions
 // =============================================================================
 
@@ -84,12 +144,12 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
 template <ReduceInputPolicy input_policy>
 ALWI void assert_input_cb_size(uint32_t input_cb, uint32_t tiles_per_bulk, uint32_t total_tiles) {
     if constexpr (waits_per_tile(input_policy)) {
-        ASSERT(get_local_cb_interface(input_cb).fifo_num_pages >= 1);
+        ASSERT(get_cb_num_pages(input_cb) >= 1);
     } else if constexpr (waits_bulk(input_policy)) {
-        ASSERT(get_local_cb_interface(input_cb).fifo_num_pages >= tiles_per_bulk);
-        ASSERT(get_local_cb_interface(input_cb).fifo_num_pages % tiles_per_bulk == 0);
+        ASSERT(get_cb_num_pages(input_cb) >= tiles_per_bulk);
+        ASSERT(get_cb_num_pages(input_cb) % tiles_per_bulk == 0);
     } else {  // waits_upfront or no_wait
-        ASSERT(get_local_cb_interface(input_cb).fifo_num_pages >= total_tiles);
+        ASSERT(get_cb_num_pages(input_cb) >= total_tiles);
     }
 }
 
@@ -97,10 +157,10 @@ template <ReduceInputPolicy input_policy>
 ALWI void assert_output_cb_size(uint32_t output_cb, uint32_t total_outputs) {
     if constexpr (should_pop(input_policy)) {
         // Per-tile reserve/push: only needs 1 page
-        ASSERT(get_local_cb_interface(output_cb).fifo_num_pages >= 1);
+        ASSERT(get_cb_num_pages(output_cb) >= 1);
     } else {
         // Bulk reserve upfront: needs all outputs
-        ASSERT(get_local_cb_interface(output_cb).fifo_num_pages >= total_outputs);
+        ASSERT(get_cb_num_pages(output_cb) >= total_outputs);
     }
 }
 
@@ -142,7 +202,9 @@ ALWI void reduce(
     ASSERT(input_cb != output_cb);
     ASSERT(input_cb != scaler_cb);
     ASSERT(output_cb != scaler_cb);
-    UNPACK(ASSERT(get_local_cb_interface(scaler_cb).fifo_num_pages == 1));
+    UNPACK(ASSERT(is_valid_cb_tile_page_size(input_cb, (DataFormat)unpack_src_format[input_cb])));
+    UNPACK(ASSERT(is_valid_cb_tile_page_size(scaler_cb, (DataFormat)unpack_src_format[scaler_cb])));
+    PACK(ASSERT(is_valid_cb_tile_page_size(output_cb, (DataFormat)pack_dst_format[output_cb])));
     ASSERT(input_block_shape.rows > 0);
     ASSERT(input_block_shape.cols > 0);
     ASSERT(input_block_shape.batches > 0);
