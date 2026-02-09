@@ -259,30 +259,8 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
         }
         return SliceRmProgramFactory{};
     }
-#if 1
-    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    uint32_t output_single_tile_size = input_single_tile_size;
-    // Calculate output shape manually, as output is not valid yet
-    std::vector<uint32_t> out_shape(input.padded_shape().rank());
-    for (size_t i = 0; i < out_shape.size(); ++i) {
-        out_shape[i] = (args.slice_end[i] - args.slice_start[i] + args.step[i] - 1) / args.step[i];
-    }
-    uint32_t num_tiles_per_row = out_shape[out_shape.size() - 1] / TILE_WIDTH;
-    uint32_t num_tiles_per_col = out_shape[out_shape.size() - 2] / TILE_HEIGHT;
-
-    // Check if the circular buffer (CB) can accommodate at least two rows or columns of tiles for double buffering.
-    bool enough_space_width = ttnn::operations::data_movement::is_enough_space(
-        input, output_single_tile_size, output_single_tile_size, 2 * num_tiles_per_col);
-    bool enough_space_height = ttnn::operations::data_movement::is_enough_space(
-        input, output_single_tile_size, output_single_tile_size, 2 * num_tiles_per_row);
-
-    if (enough_space_width || enough_space_height) {
-        return SliceTileInterleavedProgramFactory{};
-    }
-#endif
-
-    return SliceTileProgramFactory{};
+    return SliceTileInterleavedProgramFactory{};
+    // return SliceTileProgramFactory{};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SliceDeviceOperation::tensor_return_value_t>

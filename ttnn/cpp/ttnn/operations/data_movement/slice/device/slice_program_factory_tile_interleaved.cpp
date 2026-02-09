@@ -65,7 +65,7 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
     KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-        "slice_reader_unary_tile_row_col_interleaved.cpp",
+        "slice_reader_unary_tile_interleaved.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -77,7 +77,7 @@ SliceTileInterleavedProgramFactory::cached_program_t SliceTileInterleavedProgram
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-        "slice_writer_unary_tile_row_col_interleaved.cpp",
+        "slice_writer_unary_tile_interleaved.cpp",
         all_cores,
         WriterDataMovementConfig(writer_compile_time_args));
 
