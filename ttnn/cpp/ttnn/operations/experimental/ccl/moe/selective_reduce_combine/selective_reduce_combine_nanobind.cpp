@@ -133,8 +133,8 @@ void bind_selective_reduce_combine(nb::module_& mod) {
                const uint32_t num_links,
                const uint32_t token_parallel_core_dim,
                const uint32_t data_parallel_core_dim,
-               const CoreRangeSet worker_core_range_set,
-               const CoreRangeSet mux_core_range_set,
+               const CoreRangeSet& worker_core_range_set,
+               const CoreRangeSet& mux_core_range_set,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& optional_output_tensor,
                const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {

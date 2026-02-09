@@ -11,25 +11,24 @@
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::ccl::moe {
+namespace ttnn::operations::experimental::ccl::moe {
 
 SelectiveReduceCombineDeviceOperation::program_factory_t SelectiveReduceCombineDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return UnifiedSelectReduce{};
 }
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-parameter"
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(
         operation_attributes.axis.has_value() && operation_attributes.axis.value() == 1,
         "Only cluster axis==1 is supported");
 }
 
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
-#pragma clang diagnostic pop
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
 
 SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -68,7 +67,7 @@ SelectiveReduceCombineDeviceOperation::create_output_tensors(
         create_device_tensor(output_spec, tensor_args.dense_input_tensor.device()));
 }
 
-}  // namespace ttnn::operations::ccl::moe
+}  // namespace ttnn::operations::experimental::ccl::moe
 
 namespace ttnn::prim {
 ttnn::Tensor selective_reduce_combine(
@@ -86,12 +85,12 @@ ttnn::Tensor selective_reduce_combine(
     uint32_t num_links,
     const uint32_t num_token_parallel_cores,
     const uint32_t num_data_parallel_cores,
-    const CoreRangeSet worker_core_range_set,
-    const CoreRangeSet mux_core_range_set,
+    const CoreRangeSet& worker_core_range_set,
+    const CoreRangeSet& mux_core_range_set,
     const ttnn::MemoryConfig& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
-    using OperationType = ttnn::operations::ccl::moe::SelectiveReduceCombineDeviceOperation;
+    using OperationType = ttnn::operations::experimental::ccl::moe::SelectiveReduceCombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .hidden_size = hidden_size,

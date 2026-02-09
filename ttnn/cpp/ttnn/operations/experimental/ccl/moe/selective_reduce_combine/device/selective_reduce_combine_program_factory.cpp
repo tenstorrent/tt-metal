@@ -15,7 +15,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::ccl::moe {
+namespace ttnn::operations::experimental::ccl::moe {
 namespace detail {
 
 std::vector<uint32_t> data_parallel_split(
@@ -66,7 +66,7 @@ auto launch_mux_workers(
         l1_unreserved_base_address);
 
     const auto needed_mux_core_range_set =
-        select_from_corerangeset(mux_core_range_set, 0, num_links * neighbors.size() - 1);
+        select_from_corerangeset(mux_core_range_set, 0, num_links * (neighbors.size() - 1));
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
@@ -113,17 +113,6 @@ void add_termination_master_rt_args(
         }
     }
 }
-
-// TODO make this reflect Saad's real stuff
-/*
-struct Header {
-   uint32_t k[2]; // k+1 if not activated
-   uint32_t expert_weight[2]; // bfloat16 scores
-   uint32_t token_id; // which token in source device's buffer
-}
-*/
-uint32_t metadata_entry_size(const uint32_t num_local_experts) { return 2 * num_local_experts + 1; }
-constexpr auto metadata_entry_bytes = 4;
 
 }  // namespace detail
 SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::cached_mesh_workload_t
@@ -294,7 +283,8 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
     }
-    const auto [neighbors, directions] = common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
+    const auto [neighbors, directions] =
+        operations::ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 
     // launch mux
     const auto [mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps] = detail::launch_mux_workers(
@@ -328,7 +318,7 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         reader_config);
 
     // launch writer kernel
-    const uint32_t flat_mesh_idx = common::get_linearized_index(mesh_coordinate, mesh_view);
+    const uint32_t flat_mesh_idx = operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
 
     const auto start_coord =
         mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
@@ -371,10 +361,11 @@ SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::create_at(
         writer_compile_time_args);
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
+    using operations::ccl::common::stringify;
     std::map<std::string, std::string> writer_defines = {
-        {"DEST_CHIP_ID", common::stringify(dest_chip_id)},
-        {"DEST_MESH_ID", common::stringify(dest_mesh_id)},
-        {"DIRECTIONS", common::stringify(directions)}};
+        {"DEST_CHIP_ID", stringify(dest_chip_id)},
+        {"DEST_MESH_ID", stringify(dest_mesh_id)},
+        {"DIRECTIONS", stringify(directions)}};
 
     if (axis.has_value()) {
         writer_defines["REPLICATE_GROUP_AXIS"] = std::to_string(axis.value());
@@ -501,4 +492,4 @@ void SelectiveReduceCombineDeviceOperation::UnifiedSelectReduce::override_runtim
     }
 }
 
-}  // namespace ttnn::operations::ccl::moe
+}  // namespace ttnn::operations::experimental::ccl::moe
