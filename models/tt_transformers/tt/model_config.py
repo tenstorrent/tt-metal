@@ -464,7 +464,7 @@ class ModelArgs:
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
         prefetcher=None,
-        use_hf_rope=True,
+        use_hf_rope=False,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
