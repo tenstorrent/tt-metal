@@ -299,7 +299,9 @@ PYTORCH_INDEX="https://download.pytorch.org/whl/cpu"
 
 if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
     echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
-    uv pip install --extra-index-url "$PYTORCH_INDEX" setuptools==80 wheel==0.45.1
+    uv pip install --extra-index-url "$PYTORCH_INDEX" \
+        --index-strategy unsafe-best-match \
+        setuptools==80 wheel==0.45.1
 else
     echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
     uv pip install --upgrade wheel setuptools==80
