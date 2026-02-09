@@ -28,6 +28,12 @@ struct tensor_args_t {
     ttnn::Tensor dL_dout;
     std::optional<ttnn::Tensor> preallocated_da = std::nullopt;
     std::optional<ttnn::Tensor> preallocated_dgamma_components = std::nullopt;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input", "gamma", "rms", "dL_dout", "preallocated_da", "preallocated_dgamma_components");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input, gamma, rms, dL_dout, preallocated_da, preallocated_dgamma_components);
+    }
 };
 
 // Output tensor specs and tensors

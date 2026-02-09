@@ -4,12 +4,19 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::layernorm_bw::device {
 
 // Attributes for the backward operation (add more if needed)
-struct operation_attributes_t {};
+struct operation_attributes_t {
+    static constexpr auto attribute_names = std::make_tuple();
+    auto attribute_values() const {
+        return std::make_tuple();
+    }
+};
 
 // Tensors required for backward
 struct tensor_args_t {

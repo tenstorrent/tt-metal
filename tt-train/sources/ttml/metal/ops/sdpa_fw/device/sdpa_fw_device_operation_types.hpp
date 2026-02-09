@@ -31,6 +31,12 @@ struct tensor_args_t {
 
     std::optional<ttnn::Tensor> preallocated_intermediate;
     std::optional<ttnn::Tensor> preallocated_output;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("query", "key", "value", "mask", "preallocated_intermediate", "preallocated_output");
+    auto attribute_values() const {
+        return std::forward_as_tuple(query, key, value, mask, preallocated_intermediate, preallocated_output);
+    }
 };
 
 using tensor_return_value_t = std::vector<ttnn::Tensor>;

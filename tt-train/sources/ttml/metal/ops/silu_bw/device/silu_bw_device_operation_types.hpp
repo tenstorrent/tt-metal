@@ -23,6 +23,11 @@ struct tensor_args_t {
     ttnn::Tensor input;
     ttnn::Tensor dL_dout;
     std::optional<ttnn::Tensor> preallocated_da = std::nullopt;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "dL_dout", "preallocated_da");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input, dL_dout, preallocated_da);
+    }
 };
 
 // Output tensor specs and tensors

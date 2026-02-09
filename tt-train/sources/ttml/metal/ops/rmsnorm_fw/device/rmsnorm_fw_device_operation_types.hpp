@@ -26,6 +26,12 @@ struct tensor_args_t {
 
     std::optional<ttnn::Tensor> preallocated_rms;
     std::optional<ttnn::Tensor> preallocated_output;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("input", "gamma", "preallocated_rms", "preallocated_output");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input, gamma, preallocated_rms, preallocated_output);
+    }
 };
 
 using tensor_return_value_t = std::vector<ttnn::Tensor>;

@@ -33,6 +33,29 @@ struct tensor_args_t {
     // Preallocated gradient tensors (optional)
     std::optional<ttnn::Tensor> preallocated_grad_key;
     std::optional<ttnn::Tensor> preallocated_grad_value;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "grad_output",
+        "attn_output",
+        "query",
+        "key",
+        "value",
+        "attn_mask",
+        "intermediates",
+        "preallocated_grad_key",
+        "preallocated_grad_value");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            grad_output,
+            attn_output,
+            query,
+            key,
+            value,
+            attn_mask,
+            intermediates,
+            preallocated_grad_key,
+            preallocated_grad_value);
+    }
 };
 
 using tensor_return_value_t = std::tuple<ttnn::Tensor, ttnn::Tensor>;  // [grad_K, grad_V]

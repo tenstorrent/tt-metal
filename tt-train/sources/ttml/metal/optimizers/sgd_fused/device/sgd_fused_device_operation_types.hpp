@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <ttnn/tensor/tensor.hpp>
+#include <tuple>
 
 #include "metal/ttnn_all_includes.hpp"
 
@@ -17,6 +18,12 @@ struct operation_attributes_t {
     float dampening{0.0F};
     float weight_decay{0.0F};
     bool nesterov{false};
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("lr", "momentum", "dampening", "weight_decay", "nesterov");
+    auto attribute_values() const {
+        return std::forward_as_tuple(lr, momentum, dampening, weight_decay, nesterov);
+    }
 };
 
 struct tensor_args_t {

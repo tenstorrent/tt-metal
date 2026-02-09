@@ -22,6 +22,11 @@ struct tensor_args_t {
     const ttnn::Tensor& target;
 
     std::optional<ttnn::Tensor> preallocated_output;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input", "target", "preallocated_output");
+    auto attribute_values() const {
+        return std::forward_as_tuple(input, target, preallocated_output);
+    }
 };
 
 using tensor_return_value_t = ttnn::Tensor;  // return loss: tensor with shape (N, 1, H, 1)
