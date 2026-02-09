@@ -23,17 +23,6 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 CCL_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7))])
 
 
-def compute_reference_reduce_to_one(data_per_device):
-    """
-    Compute the reference output for reduce_to_one operation.
-    Simple sum of all device tensors.
-    """
-    result = data_per_device[0].clone()
-    for i in range(1, len(data_per_device)):
-        result = result + data_per_device[i]
-    return result
-
-
 def setup_reduce_to_root_test(mesh_device):
     """Common setup for reduce_to_root tests. Returns test configuration."""
     # Log mesh device info
