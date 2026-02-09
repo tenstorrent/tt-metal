@@ -249,54 +249,6 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b) {
 
 }  // namespace detail
 
-bool is_legacy_only(
-    const Tensor& lhs,
-    const auto& rhs,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations) {
-    const auto& output_mem_cfg = memory_config.value_or(output ? output->memory_config() : MemoryConfig{});
-
-    if (detail::any_sharded_block_format(lhs, rhs) or detail::any_subtile_broadcasted_block_format(lhs, rhs)) {
-        TT_FATAL(
-            lhs_activations.size() <= 1,
-            "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
-            "but note there may be issues");
-        TT_FATAL(
-            rhs_activations.empty(),
-            "rhs_activations not supported for legacy-only configuration; Override with use_legacy=False but note "
-            "there may be issues");
-        return true;
-    }
-
-    return false;
-}
-
-template bool is_legacy_only<Tensor>(
-    const Tensor& lhs,
-    const Tensor& rhs,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
-
-template bool is_legacy_only<float>(
-    const Tensor& lhs,
-    const float& rhs,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
-
-template bool is_legacy_only<int32_t>(
-    const Tensor& lhs,
-    const int32_t& rhs,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
-
 namespace detail {
 
 inline auto invoke_binary_ng(
@@ -309,26 +261,9 @@ inline auto invoke_binary_ng(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
+    [[maybe_unused]] const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (use_legacy ? *use_legacy
-                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
-                         (not detail::is_binary_ng_only(lhs, rhs))) {
-        const std::vector activations(post_activations.begin(), post_activations.end());
-        const std::optional lhs_activation =
-            lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
-
-        if constexpr (requires { detail::preprocess_inputs(binary_op_type, lhs, rhs); }) {
-            auto [a, b] = detail::preprocess_inputs(binary_op_type, lhs, rhs);
-
-            return ttnn::prim::binary(a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
-        } else {
-            return ttnn::prim::binary(
-                lhs, rhs, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
-        }
-    }
-
     const auto a_dtype = lhs.dtype();
     const DataType b_dtype = [&] {
         if constexpr (requires { rhs.dtype(); }) {
@@ -661,13 +596,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (use_legacy ? *use_legacy
-                   : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
-                         (not detail::is_binary_ng_only(lhs, rhs))) {
-        {
-            return detail::binary_impl(binary_op_type, lhs, rhs, dtype, memory_config, output);
-        }
-    }
+    TT_FATAL(*use_legacy != true, "invoke should not be called with use_legacy=True");
 
     return detail::invoke_binary_ng(
         lhs,
