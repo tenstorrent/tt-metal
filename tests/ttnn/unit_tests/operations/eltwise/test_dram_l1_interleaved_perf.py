@@ -31,8 +31,10 @@ Root cause analysis (Wormhole B0, 2 NOCs, 12 DRAM banks, 64 L1 banks):
   bypassing the L1 fabric entirely.  Destination L1 cores only receive
   NOC_1 write traffic -- no L1 slave port contention on the read path.
 
-  At high tiles/core (~156+), the sustained bidirectional L1 traffic
+  At ~156 tiles/core (9984 tiles), the sustained bidirectional L1 traffic
   saturates the L1 slave interface, making L1->L1 slower than DRAM->L1.
+  The crossover is confined to a narrow window (~9984-10048 tiles);
+  at 11264+ tiles L1->L1 returns to being faster.
   The per-tile noc_async_read_barrier() in the reader kernel amplifies
   this: contention-induced read latency is serialized per tile.
 
@@ -59,23 +61,36 @@ MEMORY_CONFIGS = {
 
 # Shapes chosen to produce tile counts matching the issue chart.
 # Each tile is 32x32. num_tiles = (H/32) * (W/32).
+# Shapes marked (*) evenly split across 64 cores (tiles_per_core * 64).
 #   (1,1,  320,  320) ->    100 tiles
 #   (1,1, 1024, 1024) ->   1024 tiles
 #   (1,1, 1024, 2048) ->   2048 tiles
-#   (1,1, 2048, 2560) ->   5120 tiles
-#   (1,1, 3072, 3328) ->   9984 tiles  (156 tiles/core, evenly splits 64 cores)
-#   (1,1, 3200, 3200) ->  10000 tiles  (156.25 tiles/core, uneven split)
-#   (1,1, 2048, 5024) ->  10048 tiles  (157 tiles/core, evenly splits 64 cores)
-#   (1,1, 3200, 4096) ->  12800 tiles
+#   (1,1, 2048, 2560) ->   5120 tiles  (*)  80 tiles/core
+#   (1,1, 3584, 2048) ->   7168 tiles  (*) 112 tiles/core
+#   (1,1, 4096, 2048) ->   8192 tiles  (*) 128 tiles/core
+#   (1,1, 4608, 2048) ->   9216 tiles  (*) 144 tiles/core
+#   (1,1, 3072, 3328) ->   9984 tiles  (*) 156 tiles/core
+#   (1,1, 3200, 3200) ->  10000 tiles       156.25 tiles/core (uneven)
+#   (1,1, 2048, 5024) ->  10048 tiles  (*) 157 tiles/core
+#   (1,1, 5632, 2048) ->  11264 tiles  (*) 176 tiles/core
+#   (1,1, 6144, 2048) ->  12288 tiles  (*) 192 tiles/core
+#   (1,1, 3200, 4096) ->  12800 tiles       200 tiles/core
+#   (1,1, 7168, 2048) ->  14336 tiles  (*) 224 tiles/core
 TILE_COUNT_SHAPES = [
     ((1, 1, 320, 320), 100),
     ((1, 1, 1024, 1024), 1024),
     ((1, 1, 1024, 2048), 2048),
     ((1, 1, 2048, 2560), 5120),
+    ((1, 1, 3584, 2048), 7168),
+    ((1, 1, 4096, 2048), 8192),
+    ((1, 1, 4608, 2048), 9216),
     ((1, 1, 3072, 3328), 9984),
     ((1, 1, 3200, 3200), 10000),
     ((1, 1, 2048, 5024), 10048),
+    ((1, 1, 5632, 2048), 11264),
+    ((1, 1, 6144, 2048), 12288),
     ((1, 1, 3200, 4096), 12800),
+    ((1, 1, 7168, 2048), 14336),
 ]
 
 
