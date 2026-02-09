@@ -229,14 +229,14 @@ Node: bh-glx-d01u08
 while attempting to start process rank 0.
 ```
 
-**Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker) and require a local build of tt-metal. Unlike the Docker-based scripts (`run_validation_*.sh`, `run_fabric_tests_*.sh`), they don't use containers.
+**Cause**: The `recover_*.sh` scripts run binaries directly on the host (not via Docker) and require a local build of tt-metal. Unlike the Docker-based scripts (`run_validation.sh`, `run_fabric_tests.sh`), they don't use containers.
 
 **Key distinction**:
 | Script Type | Requires Build? | Uses Docker? |
 |-------------|----------------|--------------|
 | `recover_*.sh` | **Yes** | No |
-| `run_validation_*.sh` | No | Yes |
-| `run_fabric_tests_*.sh` | No | Yes |
+| `run_validation.sh` | No | Yes |
+| `run_fabric_tests.sh` | No | Yes |
 | `run_dispatch_tests.sh` | No | Yes |
 
 **Solution**: Build tt-metal before running recovery scripts:
@@ -251,14 +251,14 @@ source python_env/bin/activate
 ./tools/scaleout/exabox/recover_4x32.sh <hosts>
 ```
 
-**Alternative - Use Docker-based validation instead**: If you don't need a local build, use the Docker-based validation scripts which don't require building:
+**Alternative - Use Docker-based validation instead**: If you don't need a local build, use the Docker-based validation script which doesn't require building:
 
 ```bash
 # This doesn't require a build - it uses Docker
-./tools/scaleout/exabox/run_validation_4x32.sh <hosts> <docker-image>
+./tools/scaleout/exabox/run_validation.sh --hosts <hosts> --image <docker-image>
 ```
 
-**Common confusion**: People often confuse the `recover_*.sh` scripts (developer tools, require build) with the `run_validation_*.sh` scripts (operator tools, use Docker). For hardware qualification, use the Docker-based scripts.
+**Common confusion**: People often confuse the `recover_*.sh` scripts (developer tools, require build) with the `run_validation.sh` script (operator tool, uses Docker). For hardware qualification, use the Docker-based scripts.
 
 ---
 
@@ -498,7 +498,7 @@ This error typically appears across multiple MPI ranks with the same hostname me
 
 1. **Identify which FSD file is being used**:
    - For `recover_*.sh` scripts: Check the `--factory-descriptor-path` argument in the script
-   - For `run_validation_*.sh` scripts: Check the `--cabling-descriptor-path` and `--deployment-descriptor-path` arguments
+   - For `run_validation.sh`: Check the `--cabling-descriptor-path` and `--deployment-descriptor-path` arguments (run with `--help` for usage)
 
 2. **Find the correct FSD for your cluster**:
    - Check `/data/scaleout_configs/` for available FSD files
@@ -648,7 +648,7 @@ export TT_METAL_DISABLE_MULTI_AERISC=1
 
 ## Fabric Test Fails with "Graph could not fit in physical topology"
 
-**Symptom**: Running `run_fabric_tests_4x32.sh` fails with:
+**Symptom**: Running `run_fabric_tests.sh --config 4x32` fails with:
 ```
 TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology for mesh 0.
 Could not find valid mapping for mesh 0 under the given constraints.
@@ -667,7 +667,7 @@ The error originates from `tt_metal/fabric/topology_mapper.cpp` during `Topology
 **Diagnosing the cause**:
 ```bash
 # Run physical validation first
-./run_validation_4x32.sh <hosts> <docker-image>
+./run_validation.sh --hosts <hosts> --image <docker-image>
 ```
 - If validation shows missing connections → Fix the hardware/cabling issue first
 - If validation passes (all links healthy) → It's a host ordering issue, continue below
@@ -696,7 +696,7 @@ Hosts are connected in a ring: 1-2, 2-3, 3-4, 4-1. There are no diagonal connect
 
 **Example**: For a pod with hosts `b02u08`, `b02u02`, `b09u02`, `b09u08`:
 - Log onto `b02u08` (Host 1)
-- Run: `./run_fabric_tests_4x32.sh b02u08,b02u02,b09u02,b09u08 <docker-image>`
+- Run: `./run_fabric_tests.sh --config 4x32 --hosts b02u08,b02u02,b09u02,b09u08 --image <docker-image>`
 
 The host order must follow the physical ring topology.
 
@@ -709,7 +709,7 @@ The host order must follow the physical ring topology.
 
 **Diagnostic**: If you're unsure about connectivity, run physical validation first:
 ```bash
-./run_validation_4x32.sh <hosts> <docker-image>
+./run_validation.sh --hosts <hosts> --image <docker-image>
 ```
 
 The validation output shows which hosts have physical connections to each other.
@@ -746,10 +746,10 @@ The error originates from `tt_metal/impl/context/metal_context.cpp` during `Meta
    sleep 30
 
    # Validate cluster health
-   ./run_validation_4x32.sh <hosts> <docker-image>
+   ./run_validation.sh --hosts <hosts> --image <docker-image>
 
    # Only proceed if validation passes
-   ./run_fabric_tests_4x32.sh <hosts> <docker-image>
+   ./run_fabric_tests.sh --config 4x32 --hosts <hosts> --image <docker-image>
    ```
 
 3. **Pipeline best practice**: Implement retry logic with reset on failure. Early exit if reset + validation fails multiple times.
@@ -787,7 +787,7 @@ The error originates from `tt_metal/impl/device/device_manager.cpp` during `Devi
 
 3. **Run physical validation first**: This catches unhealthy links before attempting fabric tests:
    ```bash
-   ./run_validation_4x32.sh <hosts> <docker-image>
+   ./run_validation.sh --hosts <hosts> --image <docker-image>
    ```
    If validation shows missing connections or unhealthy links, fix those issues before running fabric tests.
 
@@ -798,10 +798,10 @@ The error originates from `tt_metal/impl/device/device_manager.cpp` during `Devi
    sleep 60
 
    # Validate - exit early if cluster is unhealthy
-   ./run_validation_4x32.sh <hosts> <docker-image> || exit 1
+   ./run_validation.sh --hosts <hosts> --image <docker-image> || exit 1
 
    # Run fabric tests
-   ./run_fabric_tests_4x32.sh <hosts> <docker-image>
+   ./run_fabric_tests.sh --config 4x32 --hosts <hosts> --image <docker-image>
    ```
 
 **Note**: These clusters are not 100% stable. Running reset + validation before every test batch significantly improves reliability.

@@ -201,13 +201,13 @@ For day-to-day use when you just need to verify a cluster is working.
 
 **Important: These scripts require a local build!**
 
-Unlike the Docker-based qualification scripts above (`run_validation_*.sh`, `run_fabric_tests_*.sh`), the recovery scripts run binaries directly on the host and require you to build tt-metal first.
+Unlike the Docker-based qualification scripts above (`run_validation.sh`, `run_fabric_tests.sh`), the recovery scripts run binaries directly on the host and require you to build tt-metal first.
 
 | Script Type | Requires Build? | Uses Docker? |
 |-------------|----------------|--------------|
 | `recover_*.sh` | **Yes** | No |
-| `run_validation_*.sh` | No | Yes |
-| `run_fabric_tests_*.sh` | No | Yes |
+| `run_validation.sh` | No | Yes |
+| `run_fabric_tests.sh` | No | Yes |
 
 **Build first:**
 ```bash
@@ -225,7 +225,7 @@ source python_env/bin/activate
 
 Look for `All Detected Links are healthy` in the output.
 
-**If you see "could not access or execute an executable"**: You haven't built tt-metal. Either build it (see above) or use the Docker-based `run_validation_*.sh` scripts instead, which don't require a build.
+**If you see "could not access or execute an executable"**: You haven't built tt-metal. Either build it (see above) or use the Docker-based `run_validation.sh` script instead (run with `--help` for usage), which doesn't require a build.
 
 ## Troubleshooting
 
