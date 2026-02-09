@@ -1333,6 +1333,7 @@ class MoeRoutedExpert:
             ("mul_cb_out", mul_cb_out),  # final fused output
             ("mul_num_tiles", mul_num_tiles),
             ("mul_cb_scalar", mul_cb_scalar),  # scalar working buffer for expert scale
+            ("mul_fp32_dest_acc_en", 1),  # Use FP32 accumulation for mul
             ("up_proj_per_core_n", up_proj_params["per_core_n"]),  # tiles in mm_out format for cb_wait
             # down_proj matmul compute args (compute cores)
             ("down_proj_cb_in0", down_proj_mcast_dst_cb),  # Mcasted fused output

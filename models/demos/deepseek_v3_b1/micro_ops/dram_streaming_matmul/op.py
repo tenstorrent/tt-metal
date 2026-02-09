@@ -476,6 +476,7 @@ class DRAMStreamingMatmul:
             ("dram_mm_mul_num_tiles", mul_num_tiles),
             # Scalar mul parameters
             ("dram_mm_cb_scalar", cb_id_scalar if enable_scalar_mul else 0),
+            ("dram_mm_mul_fp32_dest_acc_en", 1),  # Use FP32 accumulation for mul
         ]
 
         # Unified kernel descriptor (same pattern as matmul)

@@ -108,7 +108,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_mul_num_tiles"),
         get_named_compile_time_arg_val("dram_mm_cb_out"),
         get_named_compile_time_arg_val("dram_mm_per_core_n"),
-        get_named_compile_time_arg_val("dram_mm_cb_scalar")>;
+        get_named_compile_time_arg_val("dram_mm_cb_scalar"),
+        get_named_compile_time_arg_val("dram_mm_mul_fp32_dest_acc_en")>;
 #endif
 
     // ========================================================================
