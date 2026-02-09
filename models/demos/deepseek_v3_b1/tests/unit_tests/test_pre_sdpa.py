@@ -39,7 +39,6 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("secondary_cluster_axis", [1])
-@pytest.mark.parametrize("using_persistent_buffers", [True])
 @pytest.mark.parametrize("mesh_rows, mesh_cols, skip_ccl", [(4, 2, False), (1, 1, True)])
 @pytest.mark.parametrize("num_iters, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
@@ -63,7 +62,6 @@ def test_pre_sdpa(
     use_fp32,
     cluster_axis,
     secondary_cluster_axis,
-    using_persistent_buffers,
     skip_ccl,
     num_iters,
     num_warmup_iter,
@@ -586,7 +584,6 @@ def test_pre_sdpa(
         semaphores=semaphores,
         cluster_axis=cluster_axis,
         secondary_cluster_axis=secondary_cluster_axis,
-        using_persistent_buffers=using_persistent_buffers,
         epsilon=epsilon,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=skip_ccl,
@@ -617,7 +614,6 @@ def test_pre_sdpa(
             semaphores=semaphores,
             cluster_axis=cluster_axis,
             secondary_cluster_axis=secondary_cluster_axis,
-            using_persistent_buffers=using_persistent_buffers,
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=skip_ccl,
@@ -649,7 +645,6 @@ def test_pre_sdpa(
             semaphores=semaphores,
             cluster_axis=cluster_axis,
             secondary_cluster_axis=secondary_cluster_axis,
-            using_persistent_buffers=using_persistent_buffers,
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=skip_ccl,
