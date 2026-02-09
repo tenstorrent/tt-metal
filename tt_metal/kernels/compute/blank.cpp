@@ -4,6 +4,4 @@
 
 #include "api/compute/blank.h"
 
-namespace NAMESPACE {
-void MAIN {}
-}  // namespace NAMESPACE
+void kernel_main() {}

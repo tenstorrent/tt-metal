@@ -29,8 +29,6 @@
 #include "api/compute/transpose_wh.h"
 #include "sdpa_bw_compute_utils.hpp"
 
-namespace NAMESPACE {
-
 // ----------------------------------------------------------------------
 // SDPA Backward Compute Kernel for Key and Value Gradients (dK, dV)
 // ----------------------------------------------------------------------
@@ -93,13 +91,11 @@ constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per ro
 constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;           // Output: grad_K
 constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;         // Output: grad_V
 
-const uint32_t onetile = 1U;
-
 // in future optimization we can process data by chunks(for example 2 at once)
 const uint32_t tiles_per_row = qWt;       // assuming qWt == kWt == vWt
 const uint32_t num_of_interm_tiles = 2U;  // number of tiles in intermediates buffer per head
 
-void MAIN {
+void kernel_main() {
     // Runtime args - needed for causal mask to know global position within sequence
     const uint32_t start_row = get_arg_val<uint32_t>(0);
 
@@ -256,5 +252,3 @@ void MAIN {
     cb_pop_front(cb_attn_mask, onetile);
 #endif
 }
-
-}  // namespace NAMESPACE

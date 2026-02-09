@@ -5,9 +5,8 @@
 #include <cstdint>
 #include "llk_pack_common.h"
 #include "llk_pack.h"
-namespace NAMESPACE {
 
-void pack_main() {
+void kernel_main() {
     uint32_t per_core_num_blocks = get_compile_time_arg_val(0);
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
@@ -35,4 +34,3 @@ void pack_main() {
         }
     }
 }
-}  // namespace NAMESPACE

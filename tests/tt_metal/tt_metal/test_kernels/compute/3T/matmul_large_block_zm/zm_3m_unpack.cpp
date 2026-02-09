@@ -8,7 +8,6 @@
 #include "llk_unpack_untilize_api.h"
 #include "llk_unpack_A_api.h"
 #include "llk_unpack_AB_matmul_api.h"
-namespace NAMESPACE {
 
 inline void tilize_activation(uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks) {
     // Tilize block code
@@ -118,7 +117,7 @@ inline void unpack_for_matmul_output_row(
     }
 }
 
-void unpack_main() {
+void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);
     llk_unpack_AB_matmul_init(0);
     // inner block size in tiles
@@ -220,4 +219,3 @@ void unpack_main() {
         llk_pop_tiles(1, in1_block_num_tiles);
     }
 }
-}  // namespace NAMESPACE

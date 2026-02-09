@@ -29,8 +29,6 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 
-namespace NAMESPACE {
-
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);  // rows to process in this kernel
 constexpr uint32_t block_size = get_compile_time_arg_val(1);         // size of block
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
@@ -361,7 +359,7 @@ void reduce_sum_exp_x() {
     cb_pop_front(cb_exp_sum_before_reduction, onetile);
 }
 
-void MAIN {
+void kernel_main() {
     if constexpr (do_mask_w) {
         cb_wait_front(cb_mask, onetile);
         cb_wait_front(cb_max_mask, onetile);
@@ -450,5 +448,3 @@ void MAIN {
     }
     cb_pop_front(cb_reduction_scaler, onetile);
 }
-
-}  // namespace NAMESPACE

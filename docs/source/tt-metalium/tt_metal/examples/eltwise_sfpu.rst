@@ -187,8 +187,7 @@ The compute kernel is the most interesting and different one. The flow is genera
     #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
     #include "compute_kernel_api/eltwise_unary/exp.h"
 
-    namespace NAMESPACE {
-    void MAIN {
+    void kernel_main() {
         uint32_t n_tiles = get_arg_val<uint32_t>(0);
 
         // Initialize the SFPU
@@ -214,7 +213,6 @@ The compute kernel is the most interesting and different one. The flow is genera
             tile_regs_release();
             cb_push_back(tt::CBIndex::c_16, 1);
         }
-    }
     }
 
 Set up runtime arguments

@@ -70,8 +70,7 @@ The following example demonstrates a typical compute kernel structure for achiev
     #include "compute_kernel_api/tile_move_copy.h"
     #include "compute_kernel_api/binary.h"
 
-    namespace NAMESPACE {
-    void MAIN {
+    void kernel_main() {
         constexpr auto cb_in0 = tt::CBIndex::c_in0;
         constexpr auto cb_in1 = tt::CBIndex::c_in1;
         constexpr auto cb_out0 = tt::CBIndex::c_out0;
@@ -125,7 +124,6 @@ The following example demonstrates a typical compute kernel structure for achiev
             cb_pop_front(cb_in1, 1);
         }
     }
-    } // NAMESPACE
 
 .. warning::
     Failing to call ``copy_tile_init()`` and ``pack_reconfig_data_format()`` will result in data being treated as 16-bit, leading to a loss of precision, even if ``fp32_dest_acc_en`` is enabled.
