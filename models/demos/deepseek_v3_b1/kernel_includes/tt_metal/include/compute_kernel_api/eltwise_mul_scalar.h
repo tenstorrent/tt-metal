@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/bcast.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/bcast.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_binary_api.h"
