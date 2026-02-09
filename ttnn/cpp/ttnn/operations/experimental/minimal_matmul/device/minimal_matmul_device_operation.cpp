@@ -137,6 +137,12 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             "If fused_ternary_scalar is provided, both fused_ternary_input_a and fused_ternary_input_b must be "
             "provided");
 
+        TT_FATAL(
+            !operation_attributes.fused_activation.has_value(),
+            "minimal_matmul does not support using fused_activation together with ternary inputs "
+            "(dit_minimal_matmul_addcmul_fused). "
+            "Please use either fused_activation or ternary inputs, not both.");
+
         const auto& ternary_a = tensor_args.fused_ternary_input_a.value();
         const auto& ternary_b = tensor_args.fused_ternary_input_b.value();
 

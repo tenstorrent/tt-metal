@@ -23,7 +23,6 @@ struct ExecuteDitMinimalMatmulAddcmulFused {
         const ttnn::Tensor& addcmul_input_tensor1,
         const ttnn::Tensor& addcmul_input_tensor2,
         const std::optional<ttnn::Tensor>& bias_tensor = std::nullopt,
-        std::optional<unary::UnaryWithParam> fused_activation = std::nullopt,
         const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,

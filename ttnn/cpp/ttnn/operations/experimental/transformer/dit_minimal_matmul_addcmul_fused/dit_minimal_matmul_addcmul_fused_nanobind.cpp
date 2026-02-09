@@ -22,7 +22,7 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
         mod,
         ttnn::experimental::dit_minimal_matmul_addcmul_fused,
         R"doc(
-        dit_minimal_matmul_addcmul_fused(matmul_input_tensor, matmul_weight_tensor, scalar, addcmul_input_tensor1, addcmul_input_tensor2, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None)
+        dit_minimal_matmul_addcmul_fused(matmul_input_tensor, matmul_weight_tensor, scalar, addcmul_input_tensor1, addcmul_input_tensor2, bias_tensor=None, *, config=None, memory_config=None, dtype=None, compute_kernel_config=None)
 
         Experimental fused operation combining minimal_matmul and addcmul for improved performance in DiT transformer blocks.
         This operation is designed to optimize the common pattern: output = input1 + (scalar * matmul(input, weight) * input2)
@@ -38,7 +38,7 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
             \text{{output}} = \text{{addcmul\_input\_tensor1}} + (\text{{scalar}} \times \text{{matmul\_output}} \times \text{{addcmul\_input\_tensor2}})
 
         This is equivalent to:
-            intermediate = minimal_matmul(matmul_input_tensor, matmul_weight_tensor, bias_tensor, fused_activation)
+            intermediate = minimal_matmul(matmul_input_tensor, matmul_weight_tensor, bias_tensor)
             output = addcmul(addcmul_input_tensor1, intermediate, addcmul_input_tensor2, value=scalar)
 
         Parameters
@@ -82,10 +82,6 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
 
         Keyword Args
         ------------
-        fused_activation : Optional[ttnn.operations.eltwise.unary.common.UnaryWithParam], default: None
-            Optional fused unary activation applied per output tile during packing in the matmul stage.
-            Examples: (ttnn.UnaryOpType.GELU, False), (ttnn.UnaryOpType.RELU, False)
-
         config : Optional[MinimalMatmulConfig], default: None
             Execution configuration for the matmul in tile units. If omitted, defaults are selected.
             Fields (all in tiles):
@@ -159,7 +155,6 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
                const ttnn::Tensor& addcmul_input_tensor1,
                const ttnn::Tensor& addcmul_input_tensor2,
                const std::optional<ttnn::Tensor>& bias_tensor,
-               const std::optional<unary::UnaryWithParam>& fused_activation,
                const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<const DataType> dtype,
@@ -171,7 +166,6 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
                     addcmul_input_tensor1,
                     addcmul_input_tensor2,
                     bias_tensor,
-                    fused_activation,
                     config,
                     memory_config,
                     dtype,
@@ -184,7 +178,6 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
             nb::arg("addcmul_input_tensor2"),
             nb::arg("bias_tensor") = nb::none(),
             nb::kw_only(),
-            nb::arg("fused_activation") = nb::none(),
             nb::arg("config") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("dtype") = nb::none(),
