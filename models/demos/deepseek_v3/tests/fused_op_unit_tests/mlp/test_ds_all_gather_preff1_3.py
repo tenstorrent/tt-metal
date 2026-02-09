@@ -34,12 +34,9 @@ PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US = {
-    ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
-    ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
+    ("decode", 1): {"kernel": 141, "op_to_op": 0.0},
+    ("prefill", 128): {"kernel": 440, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
-    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
-    ("prefill", 32768): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
-    ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
 }
 
 
@@ -354,7 +351,7 @@ def test_ds_all_gather_preff1_3(
         assert seq_len == 1, "Decode only supports seq_len=1"
     else:
         assert mode == "prefill", "Unsupported mode"
-        maybe_skip_long_seq(seq_len, LONG_SEQ_ENV_VAR)
+        # Skip removed: now handled by pytest.param marks for seq_len > 8192
 
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()

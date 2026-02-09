@@ -40,12 +40,9 @@ PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US = {
-    ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: set real targets
-    ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},
+    ("decode", 1): {"kernel": 146, "op_to_op": 0.0},
+    ("prefill", 128): {"kernel": 296, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 32768): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},
 }
 
 
@@ -350,12 +347,42 @@ def _build_ff2_inputs(
         torch_input = torch.randn(num_layers, 1, seq_len, intermediate_size, dtype=torch.bfloat16)
 
     # Convert to TTNN tensor - sharded across mesh on dims (0, -1)
+    # Match production: mul output is L1 WIDTH_SHARDED for decode (cfg["mul"]["memory_config"])
+    # For prefill, use DRAM INTERLEAVED (production uses DRAM for prefill)
+    if mode == "decode":
+        from models.demos.deepseek_v3.utils.config_helpers import get_activation_sharding_core_counts_for_dram_matmul
+
+        max_num_cores = mesh_device.core_grid.x * mesh_device.core_grid.y
+        inner_num_cores = max(
+            get_activation_sharding_core_counts_for_dram_matmul(intermediate_size // mesh_width, max_num_cores)
+        )
+
+        # Create L1 WIDTH_SHARDED memory config matching production mul output
+        activation_mem_config = ttnn.create_sharded_memory_config_(
+            shape=(
+                32,  # USERS_PER_ROW (batch_size for decode)
+                intermediate_size // mesh_width // inner_num_cores,
+            ),
+            core_grid=ttnn.num_cores_to_corerangeset(
+                inner_num_cores,
+                ttnn.CoreCoord(mesh_device.core_grid.x, mesh_device.core_grid.y),
+                row_wise=True,
+            ),
+            strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            tile_layout=True,
+            use_height_and_width_as_shard_shape=True,
+        )
+    else:
+        # Prefill uses DRAM_MEMORY_CONFIG (cfg["mul"]["memory_config"] = DRAM for prefill)
+        activation_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=activation_mem_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -473,7 +500,6 @@ def test_ds_ff2(
         assert seq_len == 1, "Decode only supports seq_len=1"
     else:
         assert mode == "prefill", "Unsupported mode"
-        maybe_skip_long_seq(seq_len, LONG_SEQ_ENV_VAR)
 
     # Trace capture replays pre-compiled binaries. When program cache is disabled, ops may
     # trigger compilation/program writes during capture, which is forbidden and can TT_FATAL.

@@ -40,12 +40,9 @@ PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US = {
-    ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: set real targets
-    ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},
+    ("decode", 1): {"kernel": 191, "op_to_op": 0.0},
+    ("prefill", 128): {"kernel": 359, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 32768): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},
 }
 
 
@@ -326,9 +323,42 @@ def _build_ff1_3_inputs(
         ("decode", 1, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 128, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 1024, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 8192, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 32768, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 131072, 0.97, 0.5, 0.5, 0.0),
+        pytest.param(
+            "prefill",
+            8192,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(
+                os.getenv("DEEPSEEK_V3_LONG_SEQ_TESTS") is None,
+                reason="Set DEEPSEEK_V3_LONG_SEQ_TESTS=1 to enable long seq tests",
+            ),
+        ),
+        pytest.param(
+            "prefill",
+            32768,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(
+                os.getenv("DEEPSEEK_V3_LONG_SEQ_TESTS") is None,
+                reason="Set DEEPSEEK_V3_LONG_SEQ_TESTS=1 to enable long seq tests",
+            ),
+        ),
+        pytest.param(
+            "prefill",
+            131072,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(
+                os.getenv("DEEPSEEK_V3_LONG_SEQ_TESTS") is None,
+                reason="Set DEEPSEEK_V3_LONG_SEQ_TESTS=1 to enable long seq tests",
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real_weights", "random_weights"])
@@ -374,7 +404,6 @@ def test_ds_ff1_3(
         assert seq_len == 1, "Decode only supports seq_len=1"
     else:
         assert mode == "prefill", "Unsupported mode"
-        maybe_skip_long_seq(seq_len, LONG_SEQ_ENV_VAR)
 
     if trace_mode and not program_cache_enabled:
         pytest.skip("Trace mode requires program cache enabled (skip trace + no_program_cache).")
@@ -417,9 +446,42 @@ def test_ds_ff1_3(
         ("decode", 1, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 128, 0.97, 0.5, 0.5, 0.0),
         ("prefill", 1024, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 8192, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 32768, 0.97, 0.5, 0.5, 0.0),
-        ("prefill", 131072, 0.97, 0.5, 0.5, 0.0),
+        pytest.param(
+            "prefill",
+            8192,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(
+                os.getenv("DEEPSEEK_V3_LONG_SEQ_TESTS") is None,
+                reason="Set DEEPSEEK_V3_LONG_SEQ_TESTS=1 to enable long seq tests",
+            ),
+        ),
+        pytest.param(
+            "prefill",
+            32768,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(
+                os.getenv("DEEPSEEK_V3_LONG_SEQ_TESTS") is None,
+                reason="Set DEEPSEEK_V3_LONG_SEQ_TESTS=1 to enable long seq tests",
+            ),
+        ),
+        pytest.param(
+            "prefill",
+            131072,
+            0.97,
+            0.5,
+            0.5,
+            0.0,
+            marks=pytest.mark.skipif(
+                os.getenv("DEEPSEEK_V3_LONG_SEQ_TESTS") is None,
+                reason="Set DEEPSEEK_V3_LONG_SEQ_TESTS=1 to enable long seq tests",
+            ),
+        ),
     ],
 )
 @pytest.mark.parametrize("use_real_weights", [True, False], ids=["real_weights", "random_weights"])

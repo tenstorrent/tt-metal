@@ -35,12 +35,9 @@ PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US = {
-    ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: set real targets
-    ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},
+    ("decode", 1): {"kernel": 1260, "op_to_op": 0.0},
+    ("prefill", 128): {"kernel": 1600, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 32768): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},
 }
 
 
@@ -466,7 +463,6 @@ def test_ds_reduce_scatter_post_ff2(
         assert seq_len == 1, "Decode only supports seq_len=1"
     else:
         assert mode == "prefill", "Unsupported mode"
-        maybe_skip_long_seq(seq_len, LONG_SEQ_ENV_VAR)
 
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()

@@ -34,8 +34,8 @@ PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US = {
-    ("decode", 32): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
-    ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
+    ("decode", 32): {"kernel": 142, "op_to_op": 0.0},  # TODO: Add theoretical targets
+    ("prefill", 128): {"kernel": 200, "op_to_op": 0.0},  # TODO: Add theoretical targets
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: Add theoretical targets
 }
 
@@ -432,7 +432,7 @@ def test_ds_embedding(
         assert seq_len == 1, "Decode mode uses seq_len=1, batch=32"
     else:
         assert mode == "prefill", "Unsupported mode"
-        maybe_skip_long_seq(seq_len, LONG_SEQ_ENV_VAR, threshold=2048)
+        # Skip removed: now handled by pytest.param marks for seq_len > 2048
 
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()
@@ -531,7 +531,7 @@ def test_ds_embedding_single_device(
         assert seq_len == 1, "Decode mode uses seq_len=1, batch=32"
     else:
         assert mode == "prefill", "Unsupported mode"
-        maybe_skip_long_seq(seq_len, LONG_SEQ_ENV_VAR, threshold=2048)
+        # Skip removed: now handled by pytest.param marks for seq_len > 2048
 
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()

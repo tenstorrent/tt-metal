@@ -44,12 +44,9 @@ PERF_MEASURE_ITERS = 100
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 DEVICE_PERF_TARGETS_US = {
-    ("decode", 1): {"kernel": 0.0, "op_to_op": 0.0},  # TODO: set real targets
-    ("prefill", 128): {"kernel": 0.0, "op_to_op": 0.0},
+    ("decode", 1): {"kernel": 134, "op_to_op": 0.0},
+    ("prefill", 128): {"kernel": 476, "op_to_op": 0.0},
     ("prefill", 1024): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 8192): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 32768): {"kernel": 0.0, "op_to_op": 0.0},
-    ("prefill", 131072): {"kernel": 0.0, "op_to_op": 0.0},
 }
 
 
@@ -402,8 +399,6 @@ def test_ds_distributed_norm(
     # trigger compilation/program writes during capture, which is forbidden and can TT_FATAL.
     if trace_mode and not program_cache_enabled:
         pytest.skip("Trace mode requires program cache enabled (skip trace + no_program_cache).")
-
-    maybe_skip_long_seq(seq_len, LONG_SEQ_ENV_VAR)
 
     if not program_cache_enabled:
         mesh_device.disable_and_clear_program_cache()
