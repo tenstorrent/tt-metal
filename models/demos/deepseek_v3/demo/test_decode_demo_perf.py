@@ -46,6 +46,7 @@ def _assert_within_margin(metric_name: str, measured: float, expected: float, ma
 # ---------------------------------------------------------------------------
 # Test
 # ---------------------------------------------------------------------------
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "margin",
     [pytest.param(PERF_MARGIN, id="decode_e2e_perf")],
@@ -69,7 +70,7 @@ def test_decode_demo_perf(margin):
     # ------------------------------------------------------------------
     logger.info("Step 1: Running device profiler …")
     clear_profiler_runtime_artifacts()
-    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"], op_support_count=5000)
 
     # ------------------------------------------------------------------
     # Step 2 – Locate the raw CSV produced by the profiler

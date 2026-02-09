@@ -74,7 +74,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
         pytest.param(
             1,
             1,
-            10,
+            13,
             5,
             True,
             None,
