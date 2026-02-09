@@ -64,6 +64,50 @@ def print_tensor_chunked(tensor, name="Tensor", chunk_size=32):
         print(f"{name} [{start}:{end}] (dim {dim_idx}): {chunk}")
 
 
+def print_tensor_tiled(tensor, name="Tensor", tile_size=32):
+    """
+    Print tensor as tiles of [tile_size, tile_size] along the last two dimensions.
+    For a tensor with shape [B, H, S, D], prints tiles of [S, D] dimension.
+    """
+    if isinstance(tensor, ttnn.Tensor):
+        tensor_np = ttnn.to_torch(tensor).float().numpy()
+    else:
+        tensor_np = tensor.float().numpy() if isinstance(tensor, torch.Tensor) else tensor
+
+    shape = tensor_np.shape
+    if len(shape) < 2:
+        print(f"{name} (full): {tensor_np}")
+        return
+
+    # Last two dimension indices
+    dim_2nd_last = len(shape) - 2
+    dim_last = len(shape) - 1
+    dim_2nd_last_size = shape[dim_2nd_last]
+    dim_last_size = shape[dim_last]
+
+    num_tiles_2nd_last = (dim_2nd_last_size + tile_size - 1) // tile_size
+    num_tiles_last = (dim_last_size + tile_size - 1) // tile_size
+
+    print(f"{name} shape: {shape}")
+    tile_idx = 0
+    for tile_2nd_last_idx in range(num_tiles_2nd_last):
+        start_2nd_last = tile_2nd_last_idx * tile_size
+        end_2nd_last = min(start_2nd_last + tile_size, dim_2nd_last_size)
+
+        for tile_last_idx in range(num_tiles_last):
+            start_last = tile_last_idx * tile_size
+            end_last = min(start_last + tile_size, dim_last_size)
+
+            # Create slice for all dimensions
+            slices = [slice(None)] * len(shape)
+            slices[dim_2nd_last] = slice(start_2nd_last, end_2nd_last)
+            slices[dim_last] = slice(start_last, end_last)
+
+            tile = tensor_np[tuple(slices)]
+            print(f"{name} tile {tile_idx} = [{start_2nd_last}:{end_2nd_last}, {start_last}:{end_last}]: {tile}")
+            tile_idx += 1
+
+
 def nearest_pow_2(x):
     if x < 1:
         raise ValueError("x must be >= 1")
@@ -203,7 +247,7 @@ def run_flash_mla_prefill_impl(
     ### Torch Setup
     ######################
     q = torch.randn(batch, nh, seq_len, kv_lora_rank + d_rope).float()  # (B, H, S (1 for decode), D)
-    k = torch.randn(batch, nkv, seq_len, kv_lora_rank + d_rope).float()  # (B, H, S, D)
+    k = torch.randn(batch, 1, seq_len, kv_lora_rank + d_rope).float()  # (B, H, S, D)
     v = k[..., :kv_lora_rank]  # (B, H, S, D)
     v_out = torch.randn(batch, nh, kv_lora_rank, v_head_dim).float()
     logger.debug(f"v_out shape: {v_out.shape}")
@@ -304,73 +348,71 @@ def run_flash_mla_prefill_impl(
             pytest.skip(f"Ref impl PCC {out_pcc} < 0.99")
 
     # Second path
-    # print("Running second SDPA path...")
-    # tt_v_post_repeat = ttnn.repeat(tt_v, [1, nh, 1, 1])
-    # signpost(header="New v_out matmul")
-    # tt_v_pre_sdpa = ttnn.linear(tt_v_post_repeat, tt_v_out, dtype=ttnn.bfloat16)
-    # # Repeat K as a current limitation of the SDPA op
-    # tt_k_post_repeat = ttnn.repeat(tt_k, [1, nh, 1, 1])
-    # print("Calling SDPA with shapes: ", tt_q.shape, tt_k_post_repeat.shape, tt_v_pre_sdpa.shape)
-    # Set numpy print options to full print without trailing zeros
-    # i dont want print like this 1.1437500000000000e+01 make it 11.4375
+    print("Running second SDPA path...")
+    print("tt_v shape is: ", tt_v.shape)
+    tt_v_post_repeat = ttnn.repeat(tt_v, [1, nh, 1, 1])
+    signpost(header="New v_out matmul")
+    print("tt_v_post_repeat shape is: ", tt_v_post_repeat.shape)
+    print("tt_v_out shape is: ", tt_v_out.shape)
+    tt_v_pre_sdpa = ttnn.linear(tt_v_post_repeat, tt_v_out)
+    # Repeat K as a current limitation of the SDPA op
+    tt_k_post_repeat = ttnn.repeat(tt_k, [1, nh, 1, 1])
+    print("Calling SDPA with shapes: ", tt_q.shape, tt_k_post_repeat.shape, tt_v_pre_sdpa.shape)
+
     # print_tensor_chunked(tt_k_post_repeat, "TT_K")
-    # print_tensor_chunked(tt_q, "TT_Q")
-    # print_tensor_chunked(tt_k, "TT_K")
-    # print_tensor_chunked(tt_v_pre_sdpa, "TT_V")
-    # print("TT_v_pre_sdpa tensor dtype is: ", tt_v_pre_sdpa.dtype)
-    # print("TT_Q_tensor dtype is: ", tt_q.dtype)
-    # print("tt_k_post_repeat tensor dtype is: ", tt_v_out.dtype)
-    # tt_new_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
-    #     tt_q,
-    #     tt_k_post_repeat,
-    #     tt_v_pre_sdpa,
-    #     scale=scale,
-    #     program_config=sdpa_program_config,
-    #     compute_kernel_config=compute_kernel_config,
-    #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    #     use_mla=True,
-    #     head_dim_v=v_head_dim,
-    #     is_causal=True,
-    #     attn_mask=None,
-    # )
-    # print("tt_new_sdpa_out shape is: ", tt_new_sdpa_out.shape)
+    # print_tensor_tiled(tt_q, "TT_Q")
+    # print_tensor_tiled(tt_k, "TT_K")
+    # print_tensor_tiled(tt_v_pre_sdpa, "TT_V")
+    print("TT_v_pre_sdpa tensor dtype is: ", tt_v_pre_sdpa.dtype)
+    print("TT_Q_tensor dtype is: ", tt_q.dtype)
+    print("tt_k_post_repeat tensor dtype is: ", tt_v_out.dtype)
+    tt_new_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
+        tt_q,
+        tt_k_post_repeat,
+        tt_v_pre_sdpa,
+        scale=scale,
+        program_config=sdpa_program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        use_mla=True,
+        head_dim_v=v_head_dim,
+        is_causal=True,
+        attn_mask=None,
+    )
+    print("tt_new_sdpa_out shape is: ", tt_new_sdpa_out.shape)
     # print_tensor_chunked(tt_new_sdpa_out, "TT_NEW_SDPA_OUT")
-    # if run_old_path:
-    #     ref_tt_impl_out_torch = ttnn.to_torch(tt_out)
-    #     new_tt_impl_out_torch = ttnn.to_torch(tt_new_sdpa_out)
+    if run_old_path:
+        ref_tt_impl_out_torch = ttnn.to_torch(tt_out)
+        new_tt_impl_out_torch = ttnn.to_torch(tt_new_sdpa_out)
 
-    #     # ########################
-    #     # ### Validation
-    #     # ########################
-    #     # out_t = scaled_dot_product_attention_reference(
-    #     #     q,
-    #     #     k,
-    #     #     v,
-    #     #     scale,
-    #     #     is_causal=True,
-    #     #     use_online_softmax=False,
-    #     # )
+        pcc_threshold = 0.99
+        # if dtype == ttnn.bfloat4_b:
+        #     pcc_threshold = 0.98
 
-    #     pcc_threshold = 0.99
-    #     # if dtype == ttnn.bfloat4_b:
-    #     #     pcc_threshold = 0.98
-
-    #     out_pass, out_pcc = comp_pcc(ref_tt_impl_out_torch, new_tt_impl_out_torch, pcc_threshold)
-    #     print(f"Output PCC: {out_pcc}")
-    # ttnn.synchronize_device(device)
-    # assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
+        out_pass, out_pcc = comp_pcc(ref_tt_impl_out_torch, new_tt_impl_out_torch, pcc_threshold)
+        print(f"Output PCC: {out_pcc}")
+    ttnn.synchronize_device(device)
+    assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
 
 
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, kv_lora_rank, d_rope, v_head_dim",
     [
-        (1, 32, 1, 1, 96, 32, 64),
+        # working cases
+        # (1, 32, 1, 1, 512, 64, 128) ,
+        (1, 4096, 16, 16, 512, 64, 128),
+        # (1, 32, 1, 1, 256, 32, 32),
+        #  (1, 32, 1, 1, 128, 64, 32) ,
+        #  (1, 32, 1, 1, 128, 64, 32) ,
+        #  (1, 32, 1, 1, 32, 64, 32) ,
+        #  (1, 32, 1, 1, 96, 64, 32) ,
+        #  (1, 32, 1, 1, 96, 96, 64) ,
     ],
 )
 @pytest.mark.parametrize(
     "q_dtype, dtype",
     [
-        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
     ],
 )
 def test_flash_mla_prefill(

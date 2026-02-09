@@ -218,7 +218,7 @@ void kernel_main() {
                         q_reader, cb_q_in, q_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
                     noc_async_read_barrier();
                     DPRINT << "Printing Q tiles... " << ENDL();
-                    for (uint32_t i = 0; i < 2; i++) {
+                    for (uint32_t i = 0; i < 9; i++) {
                         DPRINT << "Q Tile id: " << i << ENDL();
                         dprint_cb_tile_sdpa<false, false>(cb_q_in, i);
                         DPRINT << ENDL();
@@ -296,7 +296,7 @@ void kernel_main() {
                         noc_async_read_barrier();
 
                         DPRINT << "Printing transposed K tiles... " << ENDL();
-                        for (uint32_t i = 0; i < 2; i++) {
+                        for (uint32_t i = 0; i < 9; i++) {
                             DPRINT << "K Tile id: " << i << ENDL();
                             dprint_cb_tile_sdpa<false, false>(cb_k_in, i);
                             DPRINT << ENDL();

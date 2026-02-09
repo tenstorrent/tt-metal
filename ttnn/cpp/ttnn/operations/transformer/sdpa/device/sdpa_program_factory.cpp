@@ -306,7 +306,8 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         "mul_bcast_granularity must be a power of 2. Got {}.",
         mul_bcast_granularity);
 
-    uint32_t dht_granularity = std::min(DHt, dst_size);
+    // uint32_t dht_granularity = std::min(DHt, dst_size);
+    uint32_t dht_granularity = 1;
     uint32_t log2_dht_granularity = std::log2(dht_granularity);
     // Sometimes DHt is not a power of 2, so granularity should be 1
     if (dht_granularity != (1 << log2_dht_granularity)) {

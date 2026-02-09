@@ -977,6 +977,8 @@ class MLA1D(AbstractModule):
 
         seq_len = x.shape[2]
 
+        new_attention_mode = True
+
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
 
@@ -1042,11 +1044,12 @@ class MLA1D(AbstractModule):
             is_decode_mode=False,
         )
 
-        signpost(header="new mm")
-        print("tt_kv_nope shape is: ", tt_kv_nope.shape)
-        tt_kv_nope_expanded = ttnn.repeat(tt_kv_nope, [1, num_heads_local, 1, 1])
-        print("tt_kv_nope_expanded shape is: ", tt_kv_nope_expanded.shape)
-        v_in = ttnn.linear(tt_kv_nope_expanded, **cfg["wkv_b2"])
+        if new_attention_mode:
+            signpost(header="new mm")
+            print("tt_kv_nope shape is: ", tt_kv_nope.shape)
+            tt_kv_nope_expanded = ttnn.repeat(tt_kv_nope, [1, num_heads_local, 1, 1])
+            print("tt_kv_nope_expanded shape is: ", tt_kv_nope_expanded.shape)
+            v_in = ttnn.linear(tt_kv_nope_expanded, **cfg["wkv_b2"], dtype=kvpe_cache.dtype)
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
         # TODO: Add Norm here for KVPE
@@ -1054,6 +1057,9 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_kv_rope)
 
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
+
+        if new_attention_mode:
+            tt_kvpe_expanded = ttnn.repeat(tt_kvpe, [1, num_heads_local, 1, 1])
 
         # Update KVPE Cache
         batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
@@ -1070,18 +1076,43 @@ class MLA1D(AbstractModule):
 
         # FlashMLA
         print("tt_kvpe dtype is: ", tt_kvpe.dtype)
-        attn_out = ttnn.transformer.flash_mla_prefill(
-            tt_q,
-            tt_kvpe,
-            **cfg["flash_mla"],
-        )  # [1, num_heads_local, seq_len, kv_lora_rank]
+        if new_attention_mode == False:
+            attn_out = ttnn.transformer.flash_mla_prefill(
+                tt_q,
+                tt_kvpe,
+                **cfg["flash_mla"],
+            )  # [1, num_heads_local, seq_len, kv_lora_rank]
+            signpost(header="old mm")
+            v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
+        else:
+            cfg["flash_mla"]["head_dim_v"] = 128
+            print("cfg[flash_mla] = ", cfg["flash_mla"])
+            #             tt_new_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
+            #     tt_q,
+            #     tt_k_post_repeat,
+            #     tt_v_pre_sdpa,
+            #     scale=scale,
+            #     program_config=sdpa_program_config,
+            #     compute_kernel_config=compute_kernel_config,
+            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            #     use_mla=True,
+            #     head_dim_v=v_head_dim,
+            #     is_causal=True,
+            #     attn_mask=None,
+            # )
+            v_out = ttnn.transformer.scaled_dot_product_attention(
+                tt_q,
+                tt_kvpe_expanded,
+                v_in,
+                **cfg["flash_mla"],
+                use_mla=True,
+            )  # [1, num_heads_local, seq_len, kv_lora_rank]
         ttnn.deallocate(tt_q)
         # print("cfg[flash_mla] = ", cfg["flash_mla"])
 
         # wkv_b2
         # attn_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        signpost(header="old mm")
-        v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
+
         # print("cfg[wkv_b2] = ", cfg["wkv_b2"])
 
         # Permute BEFORE all_gather to avoid large tensor permute at 32K+ seq_len
