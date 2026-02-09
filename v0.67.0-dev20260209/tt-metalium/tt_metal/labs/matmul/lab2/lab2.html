@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lab 2: Multi Core Matrix Multiplication &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/labs/matmul/lab2/lab2.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+    <link rel="next" title="Advanced Topics" href="../../../advanced_topics/index.html" />
+    <link rel="prev" title="Lab 1: Single Core Matrix Multiplication" href="../lab1/lab1.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../index.html">Lab Exercises</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../lab1/lab1.html">Lab 1: Single Core Matrix Multiplication</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Lab 2: Multi Core Matrix Multiplication</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#introduction">Introduction</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#from-single-core-to-multi-core-matrix-multiplication">From Single Core to Multi Core Matrix Multiplication</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#work-distribution-for-multi-core-programs">Work Distribution for Multi Core Programs</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#work-distribution-in-tt-metalium">Work Distribution in TT-Metalium</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#inspecting-and-choosing-cores">Inspecting and Choosing Cores</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#exercise-1-multi-core-matrix-multiplication">Exercise 1: Multi Core Matrix Multiplication</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#data-reuse-in-multi-core-matrix-multiplication">Data Reuse in Multi Core Matrix Multiplication</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#motivation">Motivation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#blocked-matrix-multiplication">Blocked Matrix Multiplication</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#limiting-on-chip-memory-usage">Limiting On-Chip Memory Usage</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#blocked-matrix-multiplication-with-data-reuse-pseudocode">Blocked Matrix Multiplication with Data Reuse Pseudocode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#data-reuse-evaluation">Data Reuse Evaluation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#blocked-matrix-multiplication-in-tt-metalium">Blocked Matrix Multiplication in TT-Metalium</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#exercise-2-multi-core-matrix-multiplication-with-data-reuse">Exercise 2: Multi Core Matrix Multiplication with Data Reuse</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#potential-additional-optimizations">Potential Additional Optimizations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#conclusion">Conclusion</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../environment_variables/index.html">Environment Variables</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Lab Exercises</a></li>
+      <li class="breadcrumb-item active">Lab 2: Multi Core Matrix Multiplication</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../../_sources/tt_metal/labs/matmul/lab2/lab2.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="lab-2-multi-core-matrix-multiplication">
+<h1>Lab 2: Multi Core Matrix Multiplication<a class="headerlink" href="#lab-2-multi-core-matrix-multiplication" title="Permalink to this heading"></a>
+</h1>
+<section id="introduction">
+<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this heading"></a>
+</h2>
+<p>In Lab 1, you reviewed the standard matrix multiplication algorithm, implemented a tiled CPU version,
+and then mapped the same computation to a single Tensix core using TT-Metalium.
+In this lab, you will extend your matrix multiplication implementation from a single Tensix core to
+multiple cores by exploiting core-level parallelism.
+Then you will introduce a data reuse optimization that reduces traffic to device memory by keeping
+partial results in on-chip SRAM.</p>
+</section>
+<section id="from-single-core-to-multi-core-matrix-multiplication">
+<h2>From Single Core to Multi Core Matrix Multiplication<a class="headerlink" href="#from-single-core-to-multi-core-matrix-multiplication" title="Permalink to this heading"></a>
+</h2>
+<p>The single-core TT-Metalium matmul implementation from Lab 1 created tiled tensors in the device DRAM and used two dataflow kernels
+to transfer data between the device DRAM and on-chip circular buffers, and a compute kernel to perform the matrix multiplication.
+In this lab, you will keep the same basic structure, but instead of running on a single core, you will:</p>
+<ul class="simple">
+<li><p>Create circular buffers and kernels on a <strong>set of cores</strong>.</p></li>
+<li><p>Divide the output tiles among those cores.</p></li>
+<li><p>Ensure that each core receives appropriate runtime arguments so that it processes the correct subset of output tiles.</p></li>
+</ul>
+<section id="work-distribution-for-multi-core-programs">
+<h3>Work Distribution for Multi Core Programs<a class="headerlink" href="#work-distribution-for-multi-core-programs" title="Permalink to this heading"></a>
+</h3>
+<p>The key idea in multi core programs is <strong>work distribution</strong>, where we break a large problem into smaller,
+ideally independent pieces and assign them to different cores to run in parallel.
+In a Single Program, Multiple Data (SPMD) computational model, each core executes the same code but operates on
+a different subset of the data. Achieving optimal performance generally requires keeping all cores busy
+(i.e., minimize idle time), and avoiding unnecessary communication.</p>
+<p>Applying this principle to matrix multiplication, the computation itself is unchanged: we still multiply
+an <code class="docutils literal notranslate"><span class="pre">MxK</span></code> matrix <code class="docutils literal notranslate"><span class="pre">A</span></code> with a <code class="docutils literal notranslate"><span class="pre">KxN</span></code> matrix <code class="docutils literal notranslate"><span class="pre">B</span></code> to produce an <code class="docutils literal notranslate"><span class="pre">MxN</span></code> matrix <code class="docutils literal notranslate"><span class="pre">C</span></code>, and we still
+process data in tiles. However, instead of a single core computing all of <code class="docutils literal notranslate"><span class="pre">C</span></code>, the tiles of <code class="docutils literal notranslate"><span class="pre">C</span></code>
+are divided among multiple cores, and each core is responsible for computing a subset of those tiles
+in parallel with the others.</p>
+<p>At a high level, the host code for multi core matrix multiplication needs to perform the following steps:</p>
+<ol class="arabic">
+<li>
+<p><strong>Determine the number of available (or desired) cores</strong></p>
+<p>To distribute work among the cores, we need to know how many cores are available and how many of
+these cores we want to use. If the dataset is large enough and we only have one computational task,
+we may use all available cores. If we have multiple computational steps to perform, we may partition
+the work so that each step is performed on a subset of the cores.</p>
+</li>
+<li>
+<p><strong>Determine the amount of parallelizable work</strong></p>
+<p>The amount of parallelizable work is specific to a given problem, and there may be multiple ways
+to partition the work. For the case of matrix multiplication, one way to partition the work is
+to observe that the computation is independent for each tile of the output matrix.</p>
+</li>
+<li>
+<p><strong>Partition work among cores</strong></p>
+<p>If the amount of parallelizable work is larger than the number of cores, we need to split the work
+among the cores as evenly as possible. For matrix multiplication, each tile of the output takes the
+same amount of computation, so we can simply divide the number of tiles by the number of cores.
+In more complex cases, different parallelizable parts of the computation may require different amounts
+of work, so a more sophisticated method of splitting the work may be needed.</p>
+</li>
+<li>
+<p><strong>Configure each core</strong></p>
+<p>For each core, we need to configure it to perform the correct subset of the work.
+While each core will execute the same code, the code usually needs to be parameterizable so each
+core can be configured to perform the correct subset of the work.
+For matrix multiplication, the parameters will include the output tiles that each core should process,
+and depending on exact implementation details, may also include the input tiles that each core should process.</p>
+</li>
+</ol>
+</section>
+<section id="work-distribution-in-tt-metalium">
+<h3>Work Distribution in TT-Metalium<a class="headerlink" href="#work-distribution-in-tt-metalium" title="Permalink to this heading"></a>
+</h3>
+<p>In this section, we describe TT-Metalium APIs for work distribution, and how they can be used to distribute work
+needed to perform matrix multiplication on multiple cores.</p>
+<p>In the Tenstorrent architecture, the cores are organized into a 2D grid with each core uniquely identified
+by an index <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">y)</span></code> in this grid.</p>
+<figure class="align-center" id="id1">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/tensix_core_grid.png"><img alt="Tensix Core Grid" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/tensix_core_grid.png" style="width: 700px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 1: Tensix Core Grid</span><a class="headerlink" href="#id1" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>As shown in Figure 1, core coordinates use the <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> dimensions of the grid, rather than the
+<code class="docutils literal notranslate"><span class="pre">row</span></code> and <code class="docutils literal notranslate"><span class="pre">column</span></code> dimensions. As an example, core <code class="docutils literal notranslate"><span class="pre">(1,</span> <span class="pre">2)</span></code> is the core in the third row and the second
+column, not the other way around.</p>
+<p><code class="docutils literal notranslate"><span class="pre">x</span></code> coordinates range from 0 to <code class="docutils literal notranslate"><span class="pre">C</span> <span class="pre">-</span> <span class="pre">1</span></code>, where <code class="docutils literal notranslate"><span class="pre">C</span></code> is the number of
+grid columns. Similarly, <code class="docutils literal notranslate"><span class="pre">y</span></code> coordinates range from 0 to <code class="docutils literal notranslate"><span class="pre">R</span> <span class="pre">-</span> <span class="pre">1</span></code>, where <code class="docutils literal notranslate"><span class="pre">R</span></code> is the number of grid rows.
+While the exact coordinates are not important in many cases, they are useful when examining logs and debug
+messages. They also become relevant when examining performance in more detail.</p>
+<section id="determine-number-of-available-tensix-cores">
+<h4>Determine Number of Available Tensix Cores<a class="headerlink" href="#determine-number-of-available-tensix-cores" title="Permalink to this heading"></a>
+</h4>
+<p>TT-Metalium provides a utility function <code class="docutils literal notranslate"><span class="pre">compute_with_storage_grid_size()</span></code> that returns the dimensions
+of the core grid as a <code class="docutils literal notranslate"><span class="pre">CoreCoord</span></code> object with elements <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code>, representing the number of
+Tensix cores along the horizontal and vertical dimensions, respectively.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">core_grid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">compute_with_storage_grid_size</span><span class="p">();</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">compute_cores</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">core_grid</span><span class="p">.</span><span class="n">x</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">core_grid</span><span class="p">.</span><span class="n">y</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="split-work-among-tensix-cores">
+<h4>Split Work Among Tensix Cores<a class="headerlink" href="#split-work-among-tensix-cores" title="Permalink to this heading"></a>
+</h4>
+<p>Tenstorrent devices support multiple parallelization strategies. The grid structure of the Tensix processor
+enables various approaches to distributing work. In this lab, we will use a simple SPMD computational model
+similar to GPU programming to implement matrix multiplication on multiple cores. Each core will be responsible
+for producing approximately <code class="docutils literal notranslate"><span class="pre">num_output_tiles/num_cores</span></code> output tiles.</p>
+<p>We will use a simple strategy of dividing the work as evenly as possible among the cores. We will also make a
+simplifying assumption that the matrix dimensions are divisible by the tile size.
+For example, if the matrix dimensions are <code class="docutils literal notranslate"><span class="pre">288x288</span></code> and the tile size is <code class="docutils literal notranslate"><span class="pre">32x32</span></code>, then the number of output
+tiles is <code class="docutils literal notranslate"><span class="pre">9</span> <span class="pre">*</span> <span class="pre">9</span> <span class="pre">=</span> <span class="pre">81</span></code>. Let us assume we choose to implement the matrix multiplication on <code class="docutils literal notranslate"><span class="pre">11</span></code> cores
+because other cores are needed for other tasks. Since <code class="docutils literal notranslate"><span class="pre">81</span> <span class="pre">/</span> <span class="pre">11</span> <span class="pre">=</span> <span class="pre">7.36</span></code>, and the number of output tiles must be
+an integer, we choose <code class="docutils literal notranslate"><span class="pre">8</span></code> as the maximum number of output tiles per core.
+One way to divide the tiles is to assign the first four cores <code class="docutils literal notranslate"><span class="pre">8</span></code> output tiles each, and assign the remaining
+seven cores <code class="docutils literal notranslate"><span class="pre">7</span></code> output tiles each.</p>
+<p>The diagram in Figure 2 shows how the output tiles are distributed among the cores. Each square represents a tile, and the
+color of the square corresponds to the core that is responsible for producing that tile.</p>
+<figure class="align-center" id="id2">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/work_distribution_11_cores.png"><img alt="Output Tile Distribution on Multiple Cores (Each color represents a different core)" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/work_distribution_11_cores.png" style="width: 700px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 2: Output Tile Distribution on Multiple Cores</span><a class="headerlink" href="#id2" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>TT-Metalium includes utilities to simplify work distribution across cores.
+This is done in two steps:</p>
+<ol class="arabic simple">
+<li><p>Determine the <strong>amount</strong> of work each core should do.</p></li>
+<li><p>Assign <strong>specific instances of work</strong> to specific cores, based on the amount of work each core should do,
+as determined in the first step.</p></li>
+</ol>
+<p>TT-Metalium provides a utility function <code class="docutils literal notranslate"><span class="pre">tt::tt_metal::split_work_to_cores(core_grid,</span> <span class="pre">work_units)</span></code>,
+which can be used to determine the amount of work each core should do.
+The function calculates how many work units each core should process, based on the total amount of work units
+and the number of available cores. The function distributes the work as evenly as possible,
+even if the number of work units does not divide evenly among the cores.</p>
+<p><code class="docutils literal notranslate"><span class="pre">work_units</span></code> is simply an integer that represents the total amount of work to be distributed.
+The meaning of <code class="docutils literal notranslate"><span class="pre">work_units</span></code> is determined by the specific problem being solved and the parallelization
+strategy being used. For example, for matrix multiplication, <code class="docutils literal notranslate"><span class="pre">work_units</span></code> could be any of the following:</p>
+<ul class="simple">
+<li><p>Number of elements in the output matrix. Since each output element can be computed in parallel,
+we could choose to assign individual elements to cores. While possible, this would be a poor choice
+when targeting Tenstorrent devices, since they can efficiently multiply whole tiles.</p></li>
+<li><p>Number of tiles in the output matrix. Similar to the above, we could choose to assign individual
+tiles to cores.</p></li>
+<li><p>Number of larger blocks in the output matrix. We could increase tile size, or use blocks
+of tiles in the output matrix as units of work to be assigned to cores.</p></li>
+</ul>
+<p>If we assume that work units are the output tiles, the function may be called as follows:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/work_split.hpp&gt;</span>
+
+<span class="n">CoreCoord</span><span class="w"> </span><span class="n">core_grid</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">compute_with_storage_grid_size</span><span class="p">();</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">work_units</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">M</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">N</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">(</span><span class="n">TILE_HEIGHT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">TILE_WIDTH</span><span class="p">);</span>
+
+<span class="k">auto</span><span class="w"> </span><span class="p">[</span><span class="n">num_cores</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">core_group_1</span><span class="p">,</span><span class="w"> </span><span class="n">core_group_2</span><span class="p">,</span><span class="w"> </span><span class="n">work_per_core_1</span><span class="p">,</span><span class="w"> </span><span class="n">work_per_core_2</span><span class="p">]</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">split_work_to_cores</span><span class="p">(</span><span class="n">core_grid</span><span class="p">,</span><span class="w"> </span><span class="n">work_units</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The function returns a tuple containing several values:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">uint32_t</span> <span class="pre">num_cores</span></code>: Number of cores used for the operation.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CoreRangeSet</span> <span class="pre">all_cores</span></code>: Set of all cores assigned to the operation.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CoreRangeSet</span> <span class="pre">core_group_1</span></code>: Primary group of cores, each handling <code class="docutils literal notranslate"><span class="pre">work_per_core_1</span></code> amount of work.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CoreRangeSet</span> <span class="pre">core_group_2</span></code>: Secondary group of cores, each handling <code class="docutils literal notranslate"><span class="pre">work_per_core_2</span></code> amount of work
+(empty if the work divides evenly).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">uint32_t</span> <span class="pre">work_per_core_1</span></code>: Number of work units (e.g., output tiles) each core
+in the primary group processes.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">uint32_t</span> <span class="pre">work_per_core_2</span></code>: Number of work units (e.g., output tiles) each core
+in the secondary group processes (0 if the work divides evenly).</p></li>
+</ul>
+<p>The following properties describe the output of <code class="docutils literal notranslate"><span class="pre">tt::tt_metal::split_work_to_cores</span></code>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">all_cores</span></code> is the set of cores assigned work for this operation, containing exactly <code class="docutils literal notranslate"><span class="pre">num_cores</span></code> cores.</p></li>
+<li><p>If there are more cores in <code class="docutils literal notranslate"><span class="pre">core_grid</span></code> than the number of work units,
+<code class="docutils literal notranslate"><span class="pre">all_cores</span></code> may contain fewer cores than <code class="docutils literal notranslate"><span class="pre">core_grid</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">all_cores</span></code> is always the union of <code class="docutils literal notranslate"><span class="pre">core_group_1</span></code> and <code class="docutils literal notranslate"><span class="pre">core_group_2</span></code>.</p></li>
+<li><p>The total amount of work <code class="docutils literal notranslate"><span class="pre">work_units</span></code> is always fully assigned:
+<code class="docutils literal notranslate"><span class="pre">work_per_core_1</span> <span class="pre">*</span> <span class="pre">core_group_1.num_cores()</span> <span class="pre">+</span> <span class="pre">work_per_core_2</span> <span class="pre">*</span> <span class="pre">core_group_2.num_cores()</span> <span class="pre">==</span> <span class="pre">work_units</span></code>.</p></li>
+<li><p>The function automatically handles uneven work distribution; there is no need to manage edge cases manually.</p></li>
+</ul>
+<p>Given the earlier example of splitting <code class="docutils literal notranslate"><span class="pre">81</span></code> output tiles across a grid with <code class="docutils literal notranslate"><span class="pre">11</span></code> cores, <code class="docutils literal notranslate"><span class="pre">split_work_to_cores</span></code>
+may distribute the work as follows:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">num_cores</span></code> = <code class="docutils literal notranslate"><span class="pre">11</span></code> (all cores are used)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">all_cores</span></code> = Set containing coordinates of all <code class="docutils literal notranslate"><span class="pre">11</span></code> cores</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">core_group_1</span></code> = A subset of four cores (each processing <code class="docutils literal notranslate"><span class="pre">8</span></code> tiles)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">core_group_2</span></code> = A subset of seven cores (each processing <code class="docutils literal notranslate"><span class="pre">7</span></code> tiles)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">work_per_core_1</span></code> = <code class="docutils literal notranslate"><span class="pre">8</span></code> (tiles per core in the primary group)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">work_per_core_2</span></code> = <code class="docutils literal notranslate"><span class="pre">7</span></code> (tiles per core in the secondary group)</p></li>
+</ul>
+<p>A <code class="docutils literal notranslate"><span class="pre">CoreRangeSet</span></code> is a compact representation of an arbitrary set of logical cores, implemented as a collection
+of rectangular <code class="docutils literal notranslate"><span class="pre">CoreRange</span></code> objects. For example, <code class="docutils literal notranslate"><span class="pre">all_cores</span></code> contains every core that will do work, while
+<code class="docutils literal notranslate"><span class="pre">core_group_1</span></code> and <code class="docutils literal notranslate"><span class="pre">core_group_2</span></code> are disjoint subsets of those same cores. Rather than storing every core
+individually, each <code class="docutils literal notranslate"><span class="pre">CoreRangeSet</span></code> stores a vector of <code class="docutils literal notranslate"><span class="pre">CoreRange</span></code> objects.</p>
+<p>Each <code class="docutils literal notranslate"><span class="pre">CoreRange</span></code> object is itself defined by two <code class="docutils literal notranslate"><span class="pre">CoreCoord</span></code> objects, <code class="docutils literal notranslate"><span class="pre">start_coord</span></code> and <code class="docutils literal notranslate"><span class="pre">end_coord</span></code>,
+each containing coordinates of the opposite corners of a rectangle of cores. The range includes all <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">y)</span></code>
+cores where <code class="docutils literal notranslate"><span class="pre">start_coord.x</span> <span class="pre">&lt;=</span> <span class="pre">x</span> <span class="pre">&lt;=</span> <span class="pre">end_coord.x</span></code> and <code class="docutils literal notranslate"><span class="pre">start_coord.y</span> <span class="pre">&lt;=</span> <span class="pre">y</span> <span class="pre">&lt;=</span> <span class="pre">end_coord.y</span></code>.
+The <code class="docutils literal notranslate"><span class="pre">CoreCoord</span></code> class is just a pair of integer coordinates <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">y)</span></code> identifying a single core
+on the device grid.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">CoreRangeSet</span></code> class exposes a number of helpers, including:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">num_cores()</span></code>: Returns the total number of logical cores covered by the <code class="docutils literal notranslate"><span class="pre">CoreRangeSet</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ranges()</span></code>: Returns a const reference to a container of <code class="docutils literal notranslate"><span class="pre">CoreRange</span></code> objects to allow iterating over
+all <code class="docutils literal notranslate"><span class="pre">CoreRange</span></code> objects in the set.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">contains(CoreCoord)</span></code>: Returns <code class="docutils literal notranslate"><span class="pre">true</span></code> if and only if the given <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">y)</span></code> core lies inside at least
+one of the <code class="docutils literal notranslate"><span class="pre">CoreRange</span></code> rectangles in the set, and <code class="docutils literal notranslate"><span class="pre">false</span></code> otherwise.</p></li>
+</ul>
+<p>Finally, the <code class="docutils literal notranslate"><span class="pre">CoreRange</span></code> class provides an iterator interface to iterate over all <code class="docutils literal notranslate"><span class="pre">CoreCoord</span></code> objects in the range.</p>
+<p>It is important to only create kernels on cores that have been assigned work (i.e., those in <code class="docutils literal notranslate"><span class="pre">all_cores</span></code> or <code class="docutils literal notranslate"><span class="pre">core_group_*</span></code>,
+and <strong>not</strong> over all cores in <code class="docutils literal notranslate"><span class="pre">core_grid</span></code>).
+Creating kernels on unused cores can cause undefined behavior or crashes if kernels are created but runtime arguments are not
+set on the core.</p>
+</section>
+<section id="create-circular-buffers-and-kernels-on-multiple-cores">
+<h4>Create Circular Buffers and Kernels on Multiple Cores<a class="headerlink" href="#create-circular-buffers-and-kernels-on-multiple-cores" title="Permalink to this heading"></a>
+</h4>
+<p>Circular buffers (CBs) have to be created on each core participating in the computation.
+Each participating core will use its CBs to store the required tiles of matrices <code class="docutils literal notranslate"><span class="pre">A</span></code>, <code class="docutils literal notranslate"><span class="pre">B</span></code>, and <code class="docutils literal notranslate"><span class="pre">C</span></code>.</p>
+<p>Each core can access only the CB instances created on that core; CBs are not shared across cores.
+Therefore, CB identifiers, such as <code class="docutils literal notranslate"><span class="pre">CBIndex::c_0</span></code>, don’t have to be unique across cores. In fact,
+it is common to use the same CB identifier for all cores running the same kernels, so that kernel code
+can be reused across cores.
+Given this, CBs can be created on all participating cores simply by passing <code class="docutils literal notranslate"><span class="pre">all_cores</span></code> (rather than a single core)
+to the function that creates circular buffers.
+Note that the <code class="docutils literal notranslate"><span class="pre">create_cb</span></code> helper function you used in Lab 1 needs to be updated to accept a <code class="docutils literal notranslate"><span class="pre">CoreRangeSet</span></code> of cores,
+which can then be passed on to the <code class="docutils literal notranslate"><span class="pre">CreateCircularBuffer</span></code> function.
+Alternatively, you could update <code class="docutils literal notranslate"><span class="pre">create_cb</span></code> to take a variant argument similar to the <code class="docutils literal notranslate"><span class="pre">CreateCircularBuffer</span></code> function,
+so it can accept either a single core or a set of cores.</p>
+<p>Similarly, reader, compute, and writer kernels need to be created on all participating cores,
+which is also done by passing <code class="docutils literal notranslate"><span class="pre">all_cores</span></code> to the function that creates kernels.</p>
+</section>
+<section id="set-per-core-runtime-arguments">
+<h4>Set Per-Core Runtime Arguments<a class="headerlink" href="#set-per-core-runtime-arguments" title="Permalink to this heading"></a>
+</h4>
+<p>The way to assign <strong>specific instances of work</strong> to specific cores is through runtime arguments for each kernel instance.
+We need to determine what arguments are needed for each kernel instance so that kernels on each core get sufficient
+information to perform only those operations that are needed for the output tiles assigned to that core.
+The reader and writer kernels need to generate correct tile indices into the underlying tensors, while the compute kernel
+needs to loop over the correct number of output tiles and inner dimension tiles.</p>
+<p>All kernel arguments that need to be different between cores must be passed as runtime arguments and set differently for each core.
+This is because their values will be known only at runtime, when the work distribution is known.
+Arguments that are the same for all cores and are known at compile time can be passed as either compile-time arguments or runtime arguments.
+As discussed in Lab 1, choosing compile-time vs. runtime arguments trades off potential performance gains
+from compile-time constants against the cost of recompiling kernels for each different set of argument values.</p>
+<p>To set core-specific runtime arguments, you will need to iterate over all core ranges in <code class="docutils literal notranslate"><span class="pre">core_group_1</span></code> and then iterate over all cores
+in the range and set the runtime arguments for each core. Similarly, you should also iterate over all core ranges in
+<code class="docutils literal notranslate"><span class="pre">core_group_2</span></code> to set core-specific runtime arguments corresponding to the amount of work for the secondary group of cores.</p>
+</section>
+</section>
+<section id="inspecting-and-choosing-cores">
+<h3>Inspecting and Choosing Cores<a class="headerlink" href="#inspecting-and-choosing-cores" title="Permalink to this heading"></a>
+</h3>
+<p>As shown earlier, the number of available compute cores on the device can be obtained using the
+<code class="docutils literal notranslate"><span class="pre">compute_with_storage_grid_size()</span></code> TT-Metalium C++ API. To call this API, you need to get the <code class="docutils literal notranslate"><span class="pre">device</span></code> object,
+which can be obtained from the program state object (i.e., <code class="docutils literal notranslate"><span class="pre">prog_state.mesh_device.get()</span></code>).</p>
+<p>In this lab, you will run matrix multiplication with a varying number of cores.
+The number of cores actually used is entirely controlled by which cores you include in your core sets when creating circular buffers and kernels.
+Any cores without kernels created on them will remain idle for that program (in real applications, they would be allocated to other tasks).</p>
+<p>To use <strong>all</strong> available compute cores, you can pass the full available compute grid to the work-splitting helper, obtain <code class="docutils literal notranslate"><span class="pre">all_cores</span></code>, and then
+create CBs and kernels on all cores in <code class="docutils literal notranslate"><span class="pre">all_cores</span></code>, passing appropriate runtime arguments to the kernels.
+To use fewer cores, you can modify the core grid to select only a subset of cores simply by modifying the
+<code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> dimensions of the core grid before passing it to the work-splitting helper.
+The rest of the code can usually remain the same, because the work-splitting helper automatically distributes the work evenly among
+the smaller set of cores.
+As a result, the same total number of output tiles ends up spread across this reduced set of cores, with each tile still computed exactly once.
+It is important to remember that <strong>every core on which you create a kernel must also receive appropriate runtime arguments for that kernel</strong>.
+Creating a kernel on a core without setting runtime arguments can lead to undefined behavior, including crashes or hangs.</p>
+</section>
+<section id="exercise-1-multi-core-matrix-multiplication">
+<h3>Exercise 1: Multi Core Matrix Multiplication<a class="headerlink" href="#exercise-1-multi-core-matrix-multiplication" title="Permalink to this heading"></a>
+</h3>
+<p>In this exercise, you will implement matrix multiplication on multiple Tensix cores by
+modifying your Lab 1 solution.</p>
+<p>Perform the following steps:</p>
+<ol class="arabic simple">
+<li><p>Create a new program for multi core matrix multiplication by copying your Lab 1 solution for
+single core matrix multiplication in TT-Metalium, then extend it to distribute work across
+multiple cores, as described in the following steps.</p></li>
+<li><p>Make the core grid used for computation parameterizable and add assertions to ensure the
+specified core grid size is valid (i.e., not outside the boundaries of the available compute grid).
+Then use the <code class="docutils literal notranslate"><span class="pre">split_work_to_cores</span></code> function to determine
+the number of output tiles each core should compute, as described in the previous sections.</p></li>
+<li><p>Create CBs on all cores participating in the computation, and create reader, compute, and writer
+kernels on all participating cores, as described in the previous sections.</p></li>
+<li><p>Set core-specific runtime arguments for the reader, compute, and writer kernels so that kernels
+on each core perform the operations appropriate for the subset of output tiles assigned to that core.</p></li>
+<li><p>Update the reader kernel to read the subset of input tiles required for the subset of output tiles
+assigned to a given core, based on the parameters passed to the kernel as runtime arguments.
+Similarly, update the writer kernel to write the subset of output tiles assigned to a given core,
+based on the runtime arguments.
+Finally, update the compute kernel to compute results for the appropriate number of output tiles, based
+on the runtime arguments.</p></li>
+<li><p>Verify correctness by comparing the results against the reference matrix multiplication
+you created in Exercise 1 of Lab 1.</p></li>
+<li>
+<p>Run the multi core implementation using:</p>
+<ul class="simple">
+<li><p>Work distributed over a <code class="docutils literal notranslate"><span class="pre">5x5</span></code> core grid</p></li>
+<li><p>Work distributed over a <code class="docutils literal notranslate"><span class="pre">10x10</span></code> core grid</p></li>
+<li><p>Work distributed over <strong>all</strong> available compute cores.</p></li>
+</ul>
+</li>
+<li><p>Profile and compare the performance of the three runs using the device profiler introduced in Lab 1.
+Ensure that you build with the Release option and that DPRINTs are disabled.</p></li>
+<li><p>Create a plot showing the relationship between speedup and the number of cores used.
+The speedup should be expressed relative to the performance of the single core implementation from Lab 1.</p></li>
+</ol>
+<p><strong>Important Note</strong></p>
+<p>If you are working on a device with fewer than 100 Tensix cores, adjust the core grid sizes accordingly.</p>
+</section>
+</section>
+<section id="data-reuse-in-multi-core-matrix-multiplication">
+<h2>Data Reuse in Multi Core Matrix Multiplication<a class="headerlink" href="#data-reuse-in-multi-core-matrix-multiplication" title="Permalink to this heading"></a>
+</h2>
+<section id="motivation">
+<h3>Motivation<a class="headerlink" href="#motivation" title="Permalink to this heading"></a>
+</h3>
+<p>In the basic multi core implementation, each core computes one output tile at a time.
+For each output tile <code class="docutils literal notranslate"><span class="pre">C[i,j]</span></code>, the reader kernel fetches <strong>all</strong> tiles along the
+inner dimension <code class="docutils literal notranslate"><span class="pre">K</span></code> for both the corresponding row of <code class="docutils literal notranslate"><span class="pre">A</span></code> and column of <code class="docutils literal notranslate"><span class="pre">B</span></code>.
+This is inefficient because tiles from the input matrices are fetched
+from DRAM multiple times.</p>
+<p>Consider a concrete example with matrices <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> of shape <code class="docutils literal notranslate"><span class="pre">4x4</span></code> tiles, producing
+the resulting matrix <code class="docutils literal notranslate"><span class="pre">C</span></code> of shape <code class="docutils literal notranslate"><span class="pre">4x4</span></code> tiles. To compute output tiles <code class="docutils literal notranslate"><span class="pre">C[0,0]</span></code> and <code class="docutils literal notranslate"><span class="pre">C[0,1]</span></code>:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Output Tile</p></th>
+<th class="head"><p>Tiles Read from <code class="docutils literal notranslate"><span class="pre">A</span></code></p></th>
+<th class="head"><p>Tiles Read from <code class="docutils literal notranslate"><span class="pre">B</span></code></p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">C[0,0]</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">A[0,0]</span></code>, <code class="docutils literal notranslate"><span class="pre">A[0,1]</span></code>, <code class="docutils literal notranslate"><span class="pre">A[0,2]</span></code>, <code class="docutils literal notranslate"><span class="pre">A[0,3]</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">B[0,0]</span></code>, <code class="docutils literal notranslate"><span class="pre">B[1,0]</span></code>, <code class="docutils literal notranslate"><span class="pre">B[2,0]</span></code>, <code class="docutils literal notranslate"><span class="pre">B[3,0]</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">C[0,1]</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">A[0,0]</span></code>, <code class="docutils literal notranslate"><span class="pre">A[0,1]</span></code>, <code class="docutils literal notranslate"><span class="pre">A[0,2]</span></code>, <code class="docutils literal notranslate"><span class="pre">A[0,3]</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">B[0,1]</span></code>, <code class="docutils literal notranslate"><span class="pre">B[1,1]</span></code>, <code class="docutils literal notranslate"><span class="pre">B[2,1]</span></code>, <code class="docutils literal notranslate"><span class="pre">B[3,1]</span></code></p></td>
+</tr>
+</tbody>
+</table>
+<p>Notice that the entire row <code class="docutils literal notranslate"><span class="pre">0</span></code> of <code class="docutils literal notranslate"><span class="pre">A</span></code> is read twice; once for <code class="docutils literal notranslate"><span class="pre">C[0,0]</span></code> and once for <code class="docutils literal notranslate"><span class="pre">C[0,1]</span></code>.
+In general, for an <code class="docutils literal notranslate"><span class="pre">MxK</span></code> matrix multiplied by a <code class="docutils literal notranslate"><span class="pre">KxN</span></code> matrix, producing <code class="docutils literal notranslate"><span class="pre">MxN</span></code> output tiles:</p>
+<ul class="simple">
+<li><p>Each row of <code class="docutils literal notranslate"><span class="pre">A</span></code> is read <code class="docutils literal notranslate"><span class="pre">N</span></code> times (once per column of <code class="docutils literal notranslate"><span class="pre">C</span></code> in that row)</p></li>
+<li><p>Each column of <code class="docutils literal notranslate"><span class="pre">B</span></code> is read <code class="docutils literal notranslate"><span class="pre">M</span></code> times (once per row of <code class="docutils literal notranslate"><span class="pre">C</span></code> in that column)</p></li>
+</ul>
+<p>This redundant DRAM traffic can become the performance bottleneck, especially as matrix
+dimensions grow.
+A simple optimization would be to store the whole row of <code class="docutils literal notranslate"><span class="pre">A</span></code> in a temporary on-chip SRAM, and then
+use it to compute all the output tiles in the row. However, this simple approach doesn’t scale
+well to large matrices because the amount of available on-chip memory may not be sufficient to hold the entire
+row of <code class="docutils literal notranslate"><span class="pre">A</span></code>. Also, this approach only reuses data in rows of <code class="docutils literal notranslate"><span class="pre">A</span></code>, but not in columns of <code class="docutils literal notranslate"><span class="pre">B</span></code>.</p>
+</section>
+<section id="blocked-matrix-multiplication">
+<h3>Blocked Matrix Multiplication<a class="headerlink" href="#blocked-matrix-multiplication" title="Permalink to this heading"></a>
+</h3>
+<p>Instead of considering one row at a time, a more general approach is to group output tiles into
+rectangular blocks and assign such rectangular blocks to cores. For example, consider Core 1 in Figure 2,
+discussed earlier.
+Core 1 needs the first row of <code class="docutils literal notranslate"><span class="pre">A</span></code> and the last column of <code class="docutils literal notranslate"><span class="pre">B</span></code> to compute the output tile in the top right
+corner of the output, and only for that tile. Therefore, this data cannot be reused for any other computation.
+If we distribute work across e.g., <code class="docutils literal notranslate"><span class="pre">9</span></code> cores instead, such that each core computes <code class="docutils literal notranslate"><span class="pre">3x3</span></code> output tiles, then each core
+can use a row of <code class="docutils literal notranslate"><span class="pre">A</span></code> to produce output of three tiles in the same row of the output. Similarly, each core
+can use a column of <code class="docutils literal notranslate"><span class="pre">B</span></code> to produce output of three tiles in the same column of the output.
+This is shown in Figure 3.</p>
+<figure class="align-center" id="id3">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/work_distribution_9_cores.png"><img alt="Output Tile Distribution on Multiple Cores Using Blocking (Each color represents a different core)" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/work_distribution_9_cores.png" style="width: 700px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 3: Output Tile Distribution on Multiple Cores Using Blocking</span><a class="headerlink" href="#id3" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>Observe that there is no data reuse across cores; each core still needs to read input data for its own
+block of output tiles, some of which is the same as the data read by other cores.
+Also observe that this approach requires the number of tiles to be a multiple of the number of cores in each
+dimension of the core grid to ensure that blocks of tiles are rectangular, thus maximizing data reuse.</p>
+<p>Comparing Figure 3 to Figure 2, we went from using <code class="docutils literal notranslate"><span class="pre">11</span></code> cores to using <code class="docutils literal notranslate"><span class="pre">9</span></code> cores.
+As a result, the maximum number of tiles per core increased from <code class="docutils literal notranslate"><span class="pre">8</span></code> to <code class="docutils literal notranslate"><span class="pre">9</span></code>. While this increases
+the amount of computation each core performs, it can still provide a net performance benefit
+when the program is memory-bound, because the performance gain from data reuse
+may outweigh the performance loss from having fewer compute cores.
+Alternatively, we could pad the matrix dimensions to make them a multiple of the number of cores
+in each dimension.</p>
+<p>If the program is compute-bound, we may choose to:</p>
+<ul class="simple">
+<li><p>Not use blocking if a lower number of cores causes performance degradation because data reuse
+is not beneficial.</p></li>
+<li><p>Add more cores across one or both dimensions of the core grid, if a higher number of cores
+is available and will divide the number of tiles evenly.</p></li>
+</ul>
+</section>
+<section id="limiting-on-chip-memory-usage">
+<h3>Limiting On-Chip Memory Usage<a class="headerlink" href="#limiting-on-chip-memory-usage" title="Permalink to this heading"></a>
+</h3>
+<p>Assigning rectangular blocks of output tiles to cores doesn’t address the problem that bringing, for example,
+an entire row of <code class="docutils literal notranslate"><span class="pre">A</span></code> into on-chip SRAM may not be possible due to limited on-chip memory.
+In fact, for data reuse to be fully effective with blocking, we need multiple rows of input tiles
+in on-chip memory at the same time. The solution is to break down the <code class="docutils literal notranslate"><span class="pre">K</span></code> dimension into smaller chunks
+of tiles and compute <strong>partial results</strong> for each chunk, which require only a subset of the input
+tiles that is small enough to fit in on-chip SRAM.
+Since partial results eventually need to be accumulated, they should also be stored in on-chip SRAM to
+avoid performance degradation due to repeated accesses to off-chip DRAM.</p>
+<p>We will again assume multiplication of two matrices <code class="docutils literal notranslate"><span class="pre">A</span></code> of shape <code class="docutils literal notranslate"><span class="pre">MxK</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> of shape <code class="docutils literal notranslate"><span class="pre">KxN</span></code>,
+with the resulting matrix <code class="docutils literal notranslate"><span class="pre">C</span></code> having shape <code class="docutils literal notranslate"><span class="pre">MxN</span></code>.
+We will assume that all the matrix dimensions are divisible by the tile size, and use the notation:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">Mt</span> <span class="pre">=</span> <span class="pre">M</span> <span class="pre">/</span> <span class="pre">TILE_HEIGHT</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Nt</span> <span class="pre">=</span> <span class="pre">N</span> <span class="pre">/</span> <span class="pre">TILE_WIDTH</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Kt</span> <span class="pre">=</span> <span class="pre">K</span> <span class="pre">/</span> <span class="pre">TILE_WIDTH</span></code></p></li>
+</ul>
+<p>to denote the number of tiles in the <code class="docutils literal notranslate"><span class="pre">M</span></code>, <code class="docutils literal notranslate"><span class="pre">N</span></code>, and <code class="docutils literal notranslate"><span class="pre">K</span></code> dimensions, respectively.</p>
+<p>In blocked matrix multiplication, each core is responsible for computing a rectangular block of
+output tiles <code class="docutils literal notranslate"><span class="pre">C_block</span></code> consisting of</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">M_block_tiles</span></code> rows of tiles, and</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">N_block_tiles</span></code> columns of tiles.</p></li>
+</ul>
+<p>The division of the <code class="docutils literal notranslate"><span class="pre">Mt</span></code> and <code class="docutils literal notranslate"><span class="pre">Nt</span></code> dimensions into blocks is done simply by dividing
+the number of tiles in each dimension by the number of cores in that dimension of the core grid.</p>
+<p>To compute all tiles in <code class="docutils literal notranslate"><span class="pre">C_block</span></code>, the core needs the matching tiles from <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code>:</p>
+<ul class="simple">
+<li>
+<p>The tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> covering all rows of this block and the full K range:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">M_block_tiles</span> <span class="pre">x</span> <span class="pre">Kt</span></code> block of tiles (call this <code class="docutils literal notranslate"><span class="pre">A_block</span></code>)</p></li>
+</ul>
+</li>
+<li>
+<p>The tiles of <code class="docutils literal notranslate"><span class="pre">B</span></code> covering the full K range and all columns of this block:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">Kt</span> <span class="pre">x</span> <span class="pre">N_block_tiles</span></code> block of tiles (call this <code class="docutils literal notranslate"><span class="pre">B_block</span></code>).</p></li>
+</ul>
+</li>
+</ul>
+<p>Taken together, <code class="docutils literal notranslate"><span class="pre">A_block</span></code> and <code class="docutils literal notranslate"><span class="pre">B_block</span></code> are typically too large to fit in on-chip SRAM.
+To fix this, we split the <code class="docutils literal notranslate"><span class="pre">Kt</span></code> dimension into smaller K-blocks of size <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code>,
+such that <code class="docutils literal notranslate"><span class="pre">num_k_blocks</span> <span class="pre">=</span> <span class="pre">Kt</span> <span class="pre">/</span> <span class="pre">K_block_tiles</span></code>.
+For each K-block index <code class="docutils literal notranslate"><span class="pre">b</span></code> in range <code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">..</span> <span class="pre">num_k_blocks</span> <span class="pre">-</span> <span class="pre">1</span></code> we define:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">A_slab(b)</span></code>: tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code>, not consisting of full rows, but rather of only appropriate <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code> tiles
+in the row (size: <code class="docutils literal notranslate"><span class="pre">M_block_tiles</span> <span class="pre">*</span> <span class="pre">K_block_tiles</span></code>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">B_slab(b)</span></code>: tiles of <code class="docutils literal notranslate"><span class="pre">B</span></code>, not consisting of full columns, but rather of only appropriate <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code> tiles
+in the column (size: <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span> <span class="pre">*</span> <span class="pre">N_block_tiles</span></code>).</p></li>
+</ul>
+<p>If we choose <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code> carefully, then both <code class="docutils literal notranslate"><span class="pre">A_slab(b)</span></code> and <code class="docutils literal notranslate"><span class="pre">B_slab(b)</span></code>, and
+the partial results for <code class="docutils literal notranslate"><span class="pre">C_block</span></code> can all fit into the on-chip SRAM at the same time.</p>
+<figure class="align-center" id="id4">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/split_k_dimension.png"><img alt="Splitting the Kt dimension into K-blocks" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/split_k_dimension.png" style="width: 1100px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 4: Splitting the Kt dimension into K-blocks</span><a class="headerlink" href="#id4" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>An example is shown in Figure 4, where each rectangle represents a tile.
+In this example, <code class="docutils literal notranslate"><span class="pre">Mt</span></code> = 9, <code class="docutils literal notranslate"><span class="pre">Nt</span></code> = 9, <code class="docutils literal notranslate"><span class="pre">Kt</span></code> = 6, with the core grid size being <code class="docutils literal notranslate"><span class="pre">3x3</span></code>.
+As a result, <code class="docutils literal notranslate"><span class="pre">M_block_tiles</span> <span class="pre">=</span> <span class="pre">3</span></code> and <code class="docutils literal notranslate"><span class="pre">N_block_tiles</span> <span class="pre">=</span> <span class="pre">3</span></code>, which means <code class="docutils literal notranslate"><span class="pre">C_block</span></code> has shape <code class="docutils literal notranslate"><span class="pre">3x3</span></code>.
+One of the <code class="docutils literal notranslate"><span class="pre">C_block</span></code> tiles is highlighted in purple in the output matrix <code class="docutils literal notranslate"><span class="pre">C</span></code>.
+The corresponding <code class="docutils literal notranslate"><span class="pre">A_block</span></code> and <code class="docutils literal notranslate"><span class="pre">B_block</span></code> tiles are highlighted in shades of red and blue in the
+input matrices <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code>, respectively. If we assume that <code class="docutils literal notranslate"><span class="pre">A_block</span></code> and <code class="docutils literal notranslate"><span class="pre">B_block</span></code> are too large
+to fit in on-chip SRAM, we split the <code class="docutils literal notranslate"><span class="pre">Kt</span></code> dimension into <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code> = <code class="docutils literal notranslate"><span class="pre">2</span></code>, which means
+there are <code class="docutils literal notranslate"><span class="pre">num_k_blocks</span></code> = <code class="docutils literal notranslate"><span class="pre">3</span></code> K-blocks. Therefore:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">A_slab(b)</span></code> has shape <code class="docutils literal notranslate"><span class="pre">3x2</span></code> tiles, and</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">B_slab(b)</span></code> has shape <code class="docutils literal notranslate"><span class="pre">2x3</span></code> tiles.</p></li>
+</ul>
+<p>Each “slab” is indicated by a different shade of its respective color in Figure 4.</p>
+<p>To see what computation needs to be performed such that each slab is read
+only once, consider the computation for a single output tile <code class="docutils literal notranslate"><span class="pre">C[i][j]</span></code> within <code class="docutils literal notranslate"><span class="pre">C_block</span></code>:</p>
+<figure class="align-center">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/sum_standard.png"><img alt="``C[i][j] = ∑ₖ A[i][k] * B[k][j]``" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/sum_standard.png" style="width: 170px;"></a>
+</figure>
+<p>We can split the sum over <code class="docutils literal notranslate"><span class="pre">k</span></code> into consecutive chunks corresponding to K-blocks.
+Each K-block <code class="docutils literal notranslate"><span class="pre">b</span></code> spans some range of <code class="docutils literal notranslate"><span class="pre">k</span></code> values: <code class="docutils literal notranslate"><span class="pre">(b</span> <span class="pre">*</span> <span class="pre">K_block_tiles)</span> <span class="pre">..</span> <span class="pre">((b</span> <span class="pre">+</span> <span class="pre">1)</span> <span class="pre">*</span> <span class="pre">K_block_tiles</span> <span class="pre">-</span> <span class="pre">1)</span></code>.
+Given this, we can decompose the computation of <code class="docutils literal notranslate"><span class="pre">C[i][j]</span></code> as follows:</p>
+<p>Decomposing the original equation across K-blocks, we get:</p>
+<figure class="align-center">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/sum_composite.png"><img alt="``C[i][j] = ∑_{b=0}^{num_k_blocks-1} ∑_{k in block b} A[i][k] * B[k][j]``" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/sum_composite.png" style="width: 300px;"></a>
+</figure>
+<p>Define the partial result for block <code class="docutils literal notranslate"><span class="pre">b</span></code> as:</p>
+<figure class="align-center">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/sum_block_b.png"><img alt="``C[i][j](b) = ∑_{k in block b} A[i][k] * B[k][j]``" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/sum_block_b.png" style="width: 200px;"></a>
+</figure>
+<p>A key observation is that the partial result equation needs only tiles from the current K-block <code class="docutils literal notranslate"><span class="pre">b</span></code>
+to compute the partial result for <code class="docutils literal notranslate"><span class="pre">C[i][j](b)</span></code>, which is exactly what <code class="docutils literal notranslate"><span class="pre">A_slab(b)</span></code> and <code class="docutils literal notranslate"><span class="pre">B_slab(b)</span></code>
+contain. Considering the example in Figure 4, this means that only the slabs with the same shading of
+their respective color (e.g. lightest blue and lightest red) need to be in on-chip SRAM at the same
+time. This makes intuitive sense, since matrix multiplication involves multiplying elements with
+matching <code class="docutils literal notranslate"><span class="pre">K</span></code> indices.</p>
+<p>To get the final result, we need to add partial results for all K-blocks:</p>
+<figure class="align-center">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/sum_across_blocks.png"><img alt="``C[i][j] = ∑_{b=0}^{num_k_blocks-1} C[i][j](b)``" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab2/sum_across_blocks.png" style="width: 210px;"></a>
+</figure>
+<p>Observe that the above equations concern only a single tile of the output <code class="docutils literal notranslate"><span class="pre">C[i][j]</span></code>.
+This computation needs to be done for all tiles in <code class="docutils literal notranslate"><span class="pre">C_block</span></code>, i.e., for all <code class="docutils literal notranslate"><span class="pre">i</span></code> and <code class="docutils literal notranslate"><span class="pre">j</span></code>
+in <code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">..</span> <span class="pre">M_block_tiles</span> <span class="pre">-</span> <span class="pre">1</span></code> and <code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">..</span> <span class="pre">N_block_tiles</span> <span class="pre">-</span> <span class="pre">1</span></code>.
+If we did this naively, we would iterate over <code class="docutils literal notranslate"><span class="pre">i</span></code> and <code class="docutils literal notranslate"><span class="pre">j</span></code> in the outer loops and then
+compute the partial result for each tile, which would not be conducive to data reuse.
+Instead, we need to iterate over K-blocks in the outer loop, bring <code class="docutils literal notranslate"><span class="pre">A_slab(b)</span></code> and <code class="docutils literal notranslate"><span class="pre">B_slab(b)</span></code>
+into on-chip SRAM, and then compute the contribution of this K-block to all <code class="docutils literal notranslate"><span class="pre">C[i][j]</span></code> tiles
+in <code class="docutils literal notranslate"><span class="pre">C_block</span></code>.
+Given that matrix multiplication is a linear transformation, such loop interchange does not
+change the result (ignoring floating-point considerations), as discussed in Lab 1.</p>
+<p>Note that if understanding the above equations with respect to tiles is confusing,
+try thinking of them as individual elements rather than tiles.
+The underlying math is the same, but it becomes easier to verify your understanding.</p>
+</section>
+<section id="blocked-matrix-multiplication-with-data-reuse-pseudocode">
+<h3>Blocked Matrix Multiplication with Data Reuse Pseudocode<a class="headerlink" href="#blocked-matrix-multiplication-with-data-reuse-pseudocode" title="Permalink to this heading"></a>
+</h3>
+<p>The overall approach can be summarized by the following pseudocode for a compute core:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// For every K-block:</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">..</span><span class="w"> </span><span class="n">num_k_blocks</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">Ensure</span><span class="w"> </span><span class="n">that</span><span class="w"> </span><span class="n">A_slab</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="n">CB0</span><span class="w"> </span><span class="c1">// Size: M_block_tiles * K_block_tiles.</span>
+<span class="w">    </span><span class="n">Ensure</span><span class="w"> </span><span class="n">that</span><span class="w"> </span><span class="n">B_slab</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="n">CB1</span><span class="w"> </span><span class="c1">// Size: K_block_tiles * N_block_tiles.</span>
+<span class="w">    </span><span class="c1">// For every output tile (i,j) in this C_block:</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">..</span><span class="w"> </span><span class="n">M_block_tiles</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="c1">// For every row in C_block</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">j</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">..</span><span class="w"> </span><span class="n">N_block_tiles</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="c1">// For every column in C_block</span>
+<span class="w">            </span><span class="c1">// Get the current accumulator tile for C(i,j)</span>
+<span class="w">            </span><span class="n">acc_tile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">zero_tile</span><span class="p">()</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">               </span><span class="c1">// Middle or last K-block: partial result for C(i, j) already exists.</span>
+<span class="w">               </span><span class="c1">// Load the partial result built so far</span>
+<span class="w">               </span><span class="n">acc_tile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">partial_C_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">j</span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+
+<span class="w">            </span><span class="c1">// Compute partial result for block b and add it to acc_tile</span>
+<span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">k_local</span><span class="w"> </span><span class="n">in</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">..</span><span class="w"> </span><span class="n">K_block_tiles</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="c1">// Iterate over K dimension of the K-block</span>
+<span class="w">                </span><span class="c1">// Indices into the current A and B slabs</span>
+<span class="w">                </span><span class="n">a_tile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">A_slab_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">k_local</span><span class="p">)</span>
+<span class="w">                </span><span class="n">b_tile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">B_slab_tile</span><span class="p">(</span><span class="n">k_local</span><span class="p">,</span><span class="w"> </span><span class="n">j</span><span class="p">)</span>
+
+<span class="w">                </span><span class="c1">// Multiply and accumulate into the accumulator tile</span>
+<span class="w">                </span><span class="n">acc_tile</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">matmul</span><span class="p">(</span><span class="n">a_tile</span><span class="p">,</span><span class="w"> </span><span class="n">b_tile</span><span class="p">)</span>
+<span class="w">            </span><span class="p">}</span>
+
+<span class="w">            </span><span class="c1">// Store updated result for C(i,j)</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">num_k_blocks</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">               </span><span class="c1">// Last K-block: acc_tile has the final result for C(i,j)</span>
+<span class="w">               </span><span class="c1">// Store it to the final destination.</span>
+<span class="w">               </span><span class="n">final_C_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">j</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">acc_tile</span>
+<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">               </span><span class="c1">// Not last K-block: acc_tile is a partial result to be reused later</span>
+<span class="w">               </span><span class="n">partial_C_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">j</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">acc_tile</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="data-reuse-evaluation">
+<h3>Data Reuse Evaluation<a class="headerlink" href="#data-reuse-evaluation" title="Permalink to this heading"></a>
+</h3>
+<p>Consider the example in Figure 4, where <code class="docutils literal notranslate"><span class="pre">Mt</span> <span class="pre">=</span> <span class="pre">9</span></code>, <code class="docutils literal notranslate"><span class="pre">Nt</span> <span class="pre">=</span> <span class="pre">9</span></code>, <code class="docutils literal notranslate"><span class="pre">Kt</span> <span class="pre">=</span> <span class="pre">6</span></code>,
+and the core grid is <code class="docutils literal notranslate"><span class="pre">3x3</span></code>.
+With the basic (non-blocked) approach, each core computes one output tile at a time.
+For each output tile <code class="docutils literal notranslate"><span class="pre">C[i][j]</span></code>, the core reads the full corresponding row of tiles
+of <code class="docutils literal notranslate"><span class="pre">A</span></code> and the full corresponding column of tiles of <code class="docutils literal notranslate"><span class="pre">B</span></code> from DRAM.</p>
+<p>For each output tile <code class="docutils literal notranslate"><span class="pre">C[i][j]</span></code> we need <code class="docutils literal notranslate"><span class="pre">Kt</span> <span class="pre">=</span> <span class="pre">6</span></code> tiles from <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">Kt</span> <span class="pre">=</span> <span class="pre">6</span></code> tiles from <code class="docutils literal notranslate"><span class="pre">B</span></code>.
+Given that the basic multi core approach doesn’t involve any reuse, such reads are repeated
+for every one of the <code class="docutils literal notranslate"><span class="pre">Mt</span> <span class="pre">*</span> <span class="pre">Nt</span> <span class="pre">=</span> <span class="pre">81</span></code> output tiles in <code class="docutils literal notranslate"><span class="pre">C</span></code>, resulting in
+<code class="docutils literal notranslate"><span class="pre">Mt</span> <span class="pre">*</span> <span class="pre">Nt</span> <span class="pre">*</span> <span class="pre">2</span> <span class="pre">*</span> <span class="pre">Kt</span> <span class="pre">=</span> <span class="pre">81</span> <span class="pre">*</span> <span class="pre">2</span> <span class="pre">*</span> <span class="pre">6</span> <span class="pre">=</span> <span class="pre">972</span></code> tile reads.</p>
+<p>With the blocking strategy and K-blocking described earlier, the core computes an
+entire <code class="docutils literal notranslate"><span class="pre">3x3</span></code> <code class="docutils literal notranslate"><span class="pre">C_block</span></code> at a time and splits the inner dimension into K-blocks.
+For any given core, every tile of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> that it needs for its own <code class="docutils literal notranslate"><span class="pre">C_block</span></code>
+will be read exactly once.
+Since each core computes only the output tiles in its own <code class="docutils literal notranslate"><span class="pre">C_block</span></code>, it needs
+to read only <code class="docutils literal notranslate"><span class="pre">M_block_tiles</span> <span class="pre">*</span> <span class="pre">Kt</span></code> tiles from <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">Kt</span> <span class="pre">*</span> <span class="pre">N_block_tiles</span></code> tiles from <code class="docutils literal notranslate"><span class="pre">B</span></code>,
+which for this example means <code class="docutils literal notranslate"><span class="pre">18</span></code> tiles from <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">18</span></code> tiles from <code class="docutils literal notranslate"><span class="pre">B</span></code>.
+Each of the <code class="docutils literal notranslate"><span class="pre">num_cores</span> <span class="pre">=</span> <span class="pre">9</span></code> cores reads this many tiles, for a total of
+<code class="docutils literal notranslate"><span class="pre">num_cores</span> <span class="pre">*</span> <span class="pre">(M_block_tiles</span> <span class="pre">*</span> <span class="pre">Kt</span> <span class="pre">+</span> <span class="pre">Kt</span> <span class="pre">*</span> <span class="pre">N_block_tiles)</span> <span class="pre">=</span> <span class="pre">9</span> <span class="pre">*</span> <span class="pre">(3</span> <span class="pre">*</span> <span class="pre">6</span> <span class="pre">+</span> <span class="pre">6</span> <span class="pre">*</span> <span class="pre">3)</span> <span class="pre">=</span> <span class="pre">324</span></code> tile reads.</p>
+<p>Thus the blocking strategy reduces the total number of tile reads by a factor of <code class="docutils literal notranslate"><span class="pre">3</span></code>
+for this example.
+Such a reduction can produce significant performance improvements when the operation is
+memory-bound.</p>
+</section>
+<section id="blocked-matrix-multiplication-in-tt-metalium">
+<h3>Blocked Matrix Multiplication in TT-Metalium<a class="headerlink" href="#blocked-matrix-multiplication-in-tt-metalium" title="Permalink to this heading"></a>
+</h3>
+<p>Most of the code needed for blocked matrix multiplication is similar to the basic multi core
+implementation from Exercise 1.
+The key new addition is the introduction of an intermediate circular buffer (CB) to hold partial results.
+As discussed in Lab 1, kernels can read from and write to the same CB, allowing the CB to be used
+as temporary storage for partial results. Since CBs behave as FIFO queues, they are not typically used
+as raw memory storage. Instead, they are used as a stream of tiles that carry partial results between
+phases of the computation.
+In the context of blocked matrix multiplication, this results in the following pattern:</p>
+<ul class="simple">
+<li><p>The compute kernel produces a block of partial results into an intermediate
+CB using <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>, <code class="docutils literal notranslate"><span class="pre">pack_tile</span></code> and <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code>.</p></li>
+<li><p>On the next K-block, the same compute kernel reloads these partial results from the CB so it can
+accumulate the next K-block’s contributions.
+It calls <code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code> to ensure the previous partial results are available, reads them
+and uses <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code> to indicate they have been consumed.</p></li>
+<li><p>The kernel computes another K-block’s contributions and adds them to the partial results.</p></li>
+<li><p>If this is not the last K-block, write the updated partial results back to the intermediate CB
+(again via <code class="docutils literal notranslate"><span class="pre">reserve_back</span></code> / <code class="docutils literal notranslate"><span class="pre">pack_tile</span></code> / <code class="docutils literal notranslate"><span class="pre">push_back</span></code>) to be used in the next iteration.</p></li>
+<li><p>If this is the last K-block, write the fully accumulated tiles into a separate output CB
+(also via <code class="docutils literal notranslate"><span class="pre">reserve_back</span></code> / <code class="docutils literal notranslate"><span class="pre">pack_tile</span></code> / <code class="docutils literal notranslate"><span class="pre">push_back</span></code>), for the writer kernel to consume.</p></li>
+</ul>
+<p>As can be seen, the CB holding partial results is not treated as a raw memory array; it is still a FIFO queue.
+What changes is who consumes and produces that queue over time: the compute kernel both produces
+and later consumes tiles from the same CB, using the standard reserve/push/wait/pop protocol
+to keep the streaming semantics, while treating the tiles themselves as partial sums rather than
+final outputs.</p>
+</section>
+<section id="exercise-2-multi-core-matrix-multiplication-with-data-reuse">
+<h3>Exercise 2: Multi Core Matrix Multiplication with Data Reuse<a class="headerlink" href="#exercise-2-multi-core-matrix-multiplication-with-data-reuse" title="Permalink to this heading"></a>
+</h3>
+<p>In this exercise, you will implement a blocked multi core matrix multiplication with
+data reuse on the device, based on the blocking and intermediate CB ideas
+described above.
+You will compare performance to the multi core implementation with equivalent
+core grid sizes from Exercise 1.</p>
+<p>Follow these steps to complete the exercise:</p>
+<ol class="arabic">
+<li><p>Create a new program for data reuse by copying your multi core matrix multiplication
+program from Exercise 1, then extend it to add blocking variables and an intermediate CB,
+as described in the following steps.
+Make sure matrix and tile sizes are parameterizable and set to the same values
+as in previous exercises: <code class="docutils literal notranslate"><span class="pre">A</span></code>: <code class="docutils literal notranslate"><span class="pre">640x320</span></code>, and <code class="docutils literal notranslate"><span class="pre">B</span></code>: <code class="docutils literal notranslate"><span class="pre">320x640</span></code>.
+Use predefined variables <code class="docutils literal notranslate"><span class="pre">TILE_HEIGHT</span></code> and <code class="docutils literal notranslate"><span class="pre">TILE_WIDTH</span></code> to compute the number of tiles.
+As before, you can assume that <code class="docutils literal notranslate"><span class="pre">TILE_HEIGHT</span> <span class="pre">==</span> <span class="pre">TILE_WIDTH</span></code>, and that <code class="docutils literal notranslate"><span class="pre">M</span></code>, <code class="docutils literal notranslate"><span class="pre">N</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">K</span></code> are divisible by <code class="docutils literal notranslate"><span class="pre">TILE_HEIGHT</span></code>.</p></li>
+<li>
+<p>Add a parameter for <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code>.
+This parameter needs to be chosen so it divides <code class="docutils literal notranslate"><span class="pre">Kt</span></code> evenly.
+A lower value of <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code> allows for larger matrix sizes to fit into the
+available on-chip SRAM, since lower <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code> means fewer tiles in each slab.
+A higher value increases on-chip SRAM usage, but results in fewer iterations of the
+outer loop over K-blocks, which means that partial results, whose size does not depend
+on <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code>, are loaded from and stored into CBs fewer times.</p>
+<p>The tile size is <code class="docutils literal notranslate"><span class="pre">32x32</span></code> on all Tenstorrent architectures, as of the time of this writing.
+Given the matrix sizes above, the number of tiles in the <code class="docutils literal notranslate"><span class="pre">K</span></code> dimension is <code class="docutils literal notranslate"><span class="pre">Kt</span> <span class="pre">=</span> <span class="pre">320</span> <span class="pre">/</span> <span class="pre">32</span> <span class="pre">=</span> <span class="pre">10</span></code>.
+Given this, valid values for <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code> are <code class="docutils literal notranslate"><span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">2</span></code>, <code class="docutils literal notranslate"><span class="pre">5</span></code>, or <code class="docutils literal notranslate"><span class="pre">10</span></code>.
+The impact of this parameter on performance is often small, particularly for small matrix sizes,
+and may be overwhelmed by other factors.
+Set <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code> to <code class="docutils literal notranslate"><span class="pre">2</span></code> to demonstrate that your code works with a non-trivial value
+of this parameter.</p>
+<p>Note: Should the tile size be different on the architecture you are working with,
+the value of <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code> may need to be adjusted accordingly.
+To be on the safe side, add an assertion to check that <code class="docutils literal notranslate"><span class="pre">K_block_tiles</span></code> divides <code class="docutils literal notranslate"><span class="pre">Kt</span></code> evenly.</p>
+</li>
+<li><p>Make the core grid used for computation parameterizable, then determine appropriate values
+for the other blocking variables, based on the core grid size and the matrix sizes.
+Also assume that the number of tiles divides evenly into the number of cores in the
+corresponding dimension.</p></li>
+<li>
+<p>Size circular buffers based on the blocking variables, keeping in mind the following:</p>
+<ul>
+<li><p>Input CBs need to store full <code class="docutils literal notranslate"><span class="pre">A_slab</span></code> and <code class="docutils literal notranslate"><span class="pre">B_slab</span></code> and should use double buffering.</p></li>
+<li><p>Output CB needs to store the full <code class="docutils literal notranslate"><span class="pre">C_block</span></code>, and should not use double buffering.
+Since each core computes a whole <code class="docutils literal notranslate"><span class="pre">C_block</span></code>, there is no need to double buffer.</p></li>
+<li><p>Intermediate CB needs to store the partial results, whose size is the same as a full <code class="docutils literal notranslate"><span class="pre">C_block</span></code>.
+Since the same kernel will both produce and consume the partial results, double buffering
+would not provide any benefit.</p></li>
+<li>
+<p>Create CBs on all cores participating in the computation. Since in this exercise it is not
+necessary to use the <code class="docutils literal notranslate"><span class="pre">split_work_to_cores</span></code> function, you can construct the set of all
+cores from the core grid dimensions, as follows:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CoreRangeSet</span><span class="w"> </span><span class="n">all_cores</span><span class="p">{</span><span class="n">CoreRange</span><span class="p">(</span><span class="n">CoreCoord</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">),</span><span class="w"> </span><span class="n">CoreCoord</span><span class="p">(</span><span class="n">core_grid</span><span class="p">.</span><span class="n">x</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">core_grid</span><span class="p">.</span><span class="n">y</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">))};</span>
+</pre></div>
+</div>
+</li>
+</ul>
+</li>
+<li><p>Modify reader and writer kernels to read and write the appropriate tiles from the circular buffers.
+The reader kernel should read the appropriate tiles (<code class="docutils literal notranslate"><span class="pre">A_slab(b)</span></code> and <code class="docutils literal notranslate"><span class="pre">B_slab(b)</span></code>) from the circular buffers
+in the same order that the compute kernel will use them.
+Order tiles within each slab in the CB in row-major order.
+The writer kernel should read the <code class="docutils literal notranslate"><span class="pre">C_block</span></code> tiles from the output circular buffer in row-major order and write
+them to the output tensor in appropriate locations.</p></li>
+<li>
+<p>Modify the compute kernel to use the intermediate buffer to reload and update partial results.</p>
+<ul>
+<li><p>When you call <code class="docutils literal notranslate"><span class="pre">mm_init</span></code>, one of the arguments is the output circular buffer index.
+Given that matrix multiplication results will be written into either the output or intermediate
+buffers, you can use either of the two circular buffer indices in a call to <code class="docutils literal notranslate"><span class="pre">mm_init</span></code>.
+This is because <code class="docutils literal notranslate"><span class="pre">mm_init</span></code> uses the output circular buffer index only to determine output data
+format related parameters, which are the same for both the output and intermediate CBs.</p></li>
+<li><p>An efficient way to accumulate partial results is to use the destination register array.
+Recall that the <code class="docutils literal notranslate"><span class="pre">matmul_tiles</span></code> function adds to the existing values in the destination register
+rather than overwriting existing content. Therefore, if a partial sum is first loaded into
+the destination register, <code class="docutils literal notranslate"><span class="pre">matmul_tiles</span></code> will also accumulate the result into the destination
+register in one operation.</p></li>
+<li>
+<p>Storing partial results into the intermediate CB is done in the same manner as storing
+the final results into the output buffer. However, loading data from the intermediate buffer
+into the destination register requires a new operation:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">copy_tile(in_cb_id,</span> <span class="pre">in_tile_index,</span> <span class="pre">dst_tile_index)</span></code> defined in
+<code class="docutils literal notranslate"><span class="pre">tt_metal/hw/inc/api/compute/tile_move_copy.h</span></code> copies a tile from the intermediate
+CB to the destination register array at the specified index.</p></li>
+<li><p>Before calling this function, you need to call <code class="docutils literal notranslate"><span class="pre">copy_tile_to_dst_init_short(in_cb_id)</span></code>
+to set up the Tensix Engine for the copy operation.</p></li>
+<li><p>Since the compute kernel code will alternate between copying data and multiplying tiles,
+after the copy operation completes, we need to call <code class="docutils literal notranslate"><span class="pre">mm_init_short(in0_cb_id,</span> <span class="pre">in1_cb_id)</span></code>
+to set up the Tensix Engine for multiplication again.
+Observe that we are calling <code class="docutils literal notranslate"><span class="pre">_short</span></code> versions of the initialization functions
+(both <code class="docutils literal notranslate"><span class="pre">mm_init_short</span></code> and <code class="docutils literal notranslate"><span class="pre">copy_tile_to_dst_init_short</span></code>), which are faster
+than the “full” versions. The first call to <code class="docutils literal notranslate"><span class="pre">mm_init</span></code> performs more initialization
+steps that are no longer needed in subsequent calls, and these operations are common to
+both the copy and multiplication operations, which is why the <code class="docutils literal notranslate"><span class="pre">_short</span></code> versions are
+sufficient for later calls.</p></li>
+<li><p>For optimal performance, <strong>make sure to call these initialization functions only when required</strong>.</p></li>
+</ul>
+</li>
+<li><p>Remember that an efficient way to initialize all the tiles in the destination register array
+to <code class="docutils literal notranslate"><span class="pre">0</span></code> is to call <code class="docutils literal notranslate"><span class="pre">tile_regs_acquire</span></code>.</p></li>
+<li><p>Remember that <code class="docutils literal notranslate"><span class="pre">tile_regs_acquire</span></code> does more than just set the destination register array to <code class="docutils literal notranslate"><span class="pre">0</span></code>.
+As such, it must always be called before using the destination register.
+Specifically, it must be called before calling <code class="docutils literal notranslate"><span class="pre">copy_tile</span></code>, but does <strong>not</strong> need to be called
+between a call to <code class="docutils literal notranslate"><span class="pre">copy_tile</span></code> and a call to <code class="docutils literal notranslate"><span class="pre">matmul_tiles</span></code> (doing so would be destructive,
+because it would overwrite the data that was just copied into the destination register array).</p></li>
+<li>
+<p>When writing to or reading from the intermediate CBs, you could wait/reserve the
+number of tiles for the whole block of partial results at once. However, a simpler option is
+to just push and pop one tile at a time. This is possible because the <code class="docutils literal notranslate"><span class="pre">i,</span> <span class="pre">j</span></code> loop nest
+iterates over indices in the same order for every block.</p>
+<p>Don’t forget to call <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code> for the intermediate CB at the appropriate time to
+free up space for the next iteration.</p>
+</li>
+<li><p>Similar reasoning applies to the output circular buffer. However, given that the output CB is written by the
+compute kernel and read by the writer kernel, it is better for the compute kernel to push one tile at a time
+to allow the writer kernel to start writing the results as soon as they are available.</p></li>
+<li><p>When writing the final results for the <code class="docutils literal notranslate"><span class="pre">C_block</span></code> tiles into the output CB, write the tiles
+in row-major order, as the writer kernel expects.</p></li>
+</ul>
+</li>
+<li><p>Modify the code that sets runtime arguments to pass appropriate parameters for the kernels
+on each core.
+Note that in this case it is not required to use the <code class="docutils literal notranslate"><span class="pre">split_work_to_cores</span></code> function,
+because we are making a simplifying assumption that the number of tiles divides evenly into the
+number of cores in the appropriate dimension. You can simply iterate over the <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code>
+dimensions of the core grid, construct <code class="docutils literal notranslate"><span class="pre">CoreCoord</span></code> for each coordinate and set the runtime
+arguments for the corresponding core.</p></li>
+<li><p>Run your data reuse implementation and compare the output tensor to the reference implementation
+to ensure that the results are correct.</p></li>
+<li>
+<p>Finally, profile your data reuse implementation using the device profiler for the following cases:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">5x5</span></code> core grid</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">10x10</span></code> core grid</p></li>
+</ul>
+<p>Compare the firmware time of the data reuse implementation against the basic multi core implementation
+with equivalent core grid sizes from Exercise 1.</p>
+</li>
+<li><p>Create a plot showing the relationship between speedup and the number of cores used.
+The speedup should be expressed relative to the performance of the single core implementation from Lab 1.
+Compare this plot to the one from Exercise 1.</p></li>
+</ol>
+<p><strong>Important Note</strong></p>
+<p>If you are working on a device with fewer than 100 Tensix cores, adjust the core grid sizes and/or matrix sizes
+accordingly to ensure that the number of tiles divides evenly into the number of cores in the appropriate dimension.</p>
+</section>
+</section>
+<section id="potential-additional-optimizations">
+<h2>Potential Additional Optimizations<a class="headerlink" href="#potential-additional-optimizations" title="Permalink to this heading"></a>
+</h2>
+<p>In this lab, you explored basic optimizations to implement data reuse in a multi core matrix multiplication program.
+There are many other ways in which the code could be further optimized. Here we list some examples:</p>
+<ol class="arabic">
+<li><p><strong>Use Multiple Destination Registers in the Destination Register Array</strong>
+As discussed in Lab 1, the destination register array in the Tensix core can hold multiple tiles of data.
+So far, we have only used a single tile in the destination register array, but the TT-Metalium
+programming model exposes the array capable of holding up to eight tiles of data.
+We could leverage this extra storage to keep multiple output tiles active at once.
+By doing this, we could amortize the cost of setting up the Tensix Engine for multiplication and reduce how often
+data is packed into CBs. Conceptually, instead of computing a single output tile, packing it, and then moving on
+to the next, we compute a small rectangular patch (up to eight tiles) of the output in one shot while the
+corresponding input tiles are already in CB. Once that patch is fully accumulated in the destination registers,
+we pack all of its tiles out together in a batch.
+This better matches the hardware’s vectorization and register file structure and typically provides a throughput improvement.</p></li>
+<li>
+<p><strong>Subblocking the Output</strong>
+On top of using multiple destination registers, we could go further by introducing subblocking:
+instead of treating everything a core is responsible for as one big output region, we break
+that region into smaller rectangular patches. The main motivation for this is reduction in on-chip memory usage.
+A smaller patch means fewer output tiles need to live in registers at once and fewer partial results need to be
+stored in the intermediate CB. That makes it easier to keep the active data set within on-chip memory limits,
+allowing more aggressive blocking along the inner dimension, and often enables larger overall matrix sizes without
+exceeding on-chip memory limits.</p>
+<p>Mechanically, subblocking just adds one more level of tiling around the loops you already have.
+Rather than sweeping the entire per-core output area in a single nested loop, we first step over patches,
+and inside each patch we iterate over its local tile coordinates. For each patch we reload its partial
+results into the destination registers, run the inner dimension accumulation for that patch, and then
+store updated results back to the appropriate buffer. The overall pattern of blocking along the inner dimension,
+using an intermediate CB for partial results, and exploiting multiple destination registers stays the same.
+Subblocking simply applies it to a smaller output region at a time so the live data footprint is more tightly controlled.</p>
+</li>
+<li>
+<p><strong>Sharing Memory for Output and Intermediate CBs</strong>
+Given that the amount of on-chip SRAM is limited, TT-Metalium CBs support sharing the same memory region for multiple CBs.
+We can exploit this by observing that partial results and output results are never “live” at the same time;
+we always finish consuming one before we start writing to the other.
+Dedicating a separate region for partial results means less room for inputs or larger tiles.</p>
+<p>In practice, sharing memory between the output and intermediate CBs can be achieved by configuring
+a single circular buffer allocation and exposing it through two logical views
+(two different CB indices) that point into the same physical memory. The compute kernel then enforces a strict ordering:
+wait for all tiles in a given range to be written out, reuse that range as intermediate storage for partials,
+and only after those partials are fully consumed reuse it again for final output.</p>
+</li>
+<li><p><strong>Batching Tile Reads and Writes</strong>
+Another possible optimization is to read multiple tiles that are contiguous in memory, instead of one tile at a time.
+In the exercises so far, each tile for <code class="docutils literal notranslate"><span class="pre">A</span></code> or <code class="docutils literal notranslate"><span class="pre">B</span></code> is fetched with its own DRAM read, which is simple but involves
+multiple transfers, which may result in larger per-read overhead. Because the matrices are stored in a tiled layout, with
+tiles stored in row-major order, the tiles needed for a contiguous segment of a row are also contiguous in memory.
+That means a core could reserve space for multiple tiles (e.g., an entire row slice of a K-block) in its circular buffer and then
+read all those tiles at once, reducing the number of DRAM transactions, which usually improves effective bandwidth,
+and lowers the per-tile cost of getting data into on-chip SRAM.</p></li>
+</ol>
+</section>
+<section id="conclusion">
+<h2>Conclusion<a class="headerlink" href="#conclusion" title="Permalink to this heading"></a>
+</h2>
+<p>In this lab, you extended your understanding of matrix multiplication on Tenstorrent devices beyond a single core.
+You saw how:</p>
+<ul class="simple">
+<li><p>The same reader-compute-writer kernel structure from Lab 1 can be reused in a <strong>multi core</strong> setting by carefully
+distributing output tiles among cores.</p></li>
+<li><p>TT-Metalium’s static parallelism model requires you to <strong>explicitly choose which cores participate</strong> and how many tiles
+each core processes, and to ensure that every core with kernels also receives runtime arguments derived from tensor metadata.</p></li>
+<li><p>Introducing <strong>data reuse</strong> through blocking and intermediate CBs allows partial results to remain on-chip across multiple passes
+over the inner dimension, reducing traffic to device memory and often improving performance.</p></li>
+</ul>
+<p>The concepts introduced here, multi core work distribution and data reuse, are fundamental when scaling workloads on Tenstorrent devices.
+They also provide a foundation for more advanced topics.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../lab1/lab1.html" class="btn btn-neutral float-left" title="Lab 1: Single Core Matrix Multiplication" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../../advanced_topics/index.html" class="btn btn-neutral float-right" title="Advanced Topics" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

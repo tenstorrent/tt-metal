@@ -1,0 +1,8 @@
+﻿ttnn.complex\_tensor
+====================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.complex_tensor:
+
+.. autooperation:: ttnn.complex_tensor
