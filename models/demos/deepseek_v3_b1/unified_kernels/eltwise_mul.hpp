@@ -64,6 +64,7 @@ struct EltwiseMul {
     // cb_in0_wait: CB to wait on for cb_in0's data (for CB aliasing, e.g., wait on 1x32 CB but read from 16x16 CB)
     // cb_in0_wait_tiles: number of tiles to wait for on cb_in0_wait
     // cb_scalar: CB containing scalar tile (16x16 format, scalar at [0,0])
+    // fp32_dest_acc_en: whether to enable FP32 dest accumulation
     template <
         uint32_t cb_in0_,
         uint32_t cb_in1_,
@@ -71,7 +72,8 @@ struct EltwiseMul {
         uint32_t num_tiles_,
         uint32_t cb_in0_wait_,
         uint32_t cb_in0_wait_tiles_,
-        uint32_t cb_scalar_>
+        uint32_t cb_scalar_,
+        uint32_t fp32_dest_acc_en_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -80,6 +82,7 @@ struct EltwiseMul {
         static constexpr uint32_t cb_in0_wait = cb_in0_wait_;
         static constexpr uint32_t cb_in0_wait_tiles = cb_in0_wait_tiles_;
         static constexpr uint32_t cb_scalar = cb_scalar_;
+        static constexpr bool fp32_dest_acc_en = fp32_dest_acc_en_ == 1;
     };
 
     // ========================================================================
@@ -129,7 +132,9 @@ struct EltwiseMul {
             // ================================================================
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
 
-            mul_tiles_bcast_scalar_hw_startup_fp32(CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
+            deepseek_mul_tiles_bcast_scalar_hw_startup<CTArgs::fp32_dest_acc_en>(
+                CTArgs::cb_in0, CTArgs::cb_scalar, CTArgs::cb_out);
+            deepseek_mul_tiles_bcast_scalar_init_short(CTArgs::cb_in0, CTArgs::cb_scalar);
 
             // Wait for both inputs
             // cb_in0_wait allows waiting on a different CB (for CB aliasing)
@@ -144,14 +149,13 @@ struct EltwiseMul {
 
             // Step 1: cb_in0 * scalar -> dest (using scalar broadcast)
             cb_wait_front(CTArgs::cb_scalar, 1);
-            mul_tiles_bcast_scalar_init_short_fp32(CTArgs::cb_in0, CTArgs::cb_scalar);
             for (uint32_t i = 0; i < num_tiles; i++) {
-                mul_tiles_bcast_scalar_fp32(CTArgs::cb_in0, CTArgs::cb_scalar, i, 0, i);
+                deepseek_mul_tiles_bcast_scalar<CTArgs::fp32_dest_acc_en>(CTArgs::cb_in0, CTArgs::cb_scalar, i, 0, i);
             }
             // Step 2: dest * cb_in1 -> dest (using binary dest reuse)
-            binary_dest_reuse_tiles_init_fp32(CTArgs::cb_in1);
+            deepseek_binary_dest_reuse_tiles_init<CTArgs::fp32_dest_acc_en>(CTArgs::cb_in1);
             for (uint32_t i = 0; i < num_tiles; i++) {
-                binary_dest_reuse_tiles_fp32(CTArgs::cb_in1, i, i);
+                deepseek_binary_dest_reuse_tiles<CTArgs::fp32_dest_acc_en>(CTArgs::cb_in1, i, i);
             }
             tile_regs_commit();
             tile_regs_wait();

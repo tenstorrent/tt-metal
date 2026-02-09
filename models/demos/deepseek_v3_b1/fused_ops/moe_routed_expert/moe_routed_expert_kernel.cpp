@@ -482,7 +482,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("mul_num_tiles"),       // number of 16x16 tiles
         get_named_compile_time_arg_val("up_proj_cb_mm_out"),   // wait on this CB before reading mul_cb_in0
         get_named_compile_time_arg_val("up_proj_per_core_n"),  // number of tiles in mm_out format
-        get_named_compile_time_arg_val("mul_cb_scalar")>;      // scalar CB for expert scale
+        get_named_compile_time_arg_val("mul_cb_scalar"),       // scalar CB for expert scale
+        get_named_compile_time_arg_val("mul_fp32_dest_acc_en")>;
 
     // ------------------------------------------------------------------------
     // down_proj_gather (no-op for TRISC)
@@ -511,7 +512,6 @@ void kernel_main() {
 
     // ------------------------------------------------------------------------
     // Eltwise Add (down_proj + fused_add)
-    // use_short_init = true with proper reconfig_data_format for new CBs
     // ------------------------------------------------------------------------
     using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<
         get_named_compile_time_arg_val("add_cb_in0"),
@@ -522,8 +522,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("add_cb_in0_wait_tiles"),
         get_named_compile_time_arg_val("add_cb_in1_wait_tiles"),
         get_named_compile_time_arg_val("add_sender_index"),
-        get_named_compile_time_arg_val("add_slice_size_bytes"),
-        true>;  // use_short_init with reconfig_data_format
+        get_named_compile_time_arg_val("add_slice_size_bytes")>;
 #endif
 
     // ============================================================================
