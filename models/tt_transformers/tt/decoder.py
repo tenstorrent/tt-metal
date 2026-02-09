@@ -166,7 +166,9 @@ class TransformerBlock(LightweightModule):
                 prefetcher=self.prefetcher,
                 TG=args.is_galaxy,
             )
-            self.ff_norm.enable_all_gather = False  # all_gather after normalization is not needed if model uses pre_ff_norm because the output of ff_norm is already sharded correctly so it can be added with the residual without all_gather and mesh_partition
+            self.ff_norm.enable_all_gather = (
+                False  # output of ff_norm should be sharded if model uses pre_ff_norm, so skip all_gather
+            )
         else:
             # If pre_feedforward_layernorm is not in state_dict, we do not use it
             self.pre_ff_norm = None
@@ -258,9 +260,7 @@ class TransformerBlock(LightweightModule):
         hidden_states = self.ff_norm(hidden_states, mode, norm_config=ff_norm_config)
 
         if self.pre_ff_norm is not None:
-            # The output of the ff_norm is replicated across the device
-            # but the residual is fractured across the devices.
-            # If ff_norm uses distributed norm, then the output is already sharded correctly across devices, so no need to all_gather and mesh_partition, otherwise we need to mesh_partition the output of ff_norm to match the sharding of the residual for the addition
+            # Mesh partition ff_norm output to match residual sharding, skip if using distributed norm, because output is already sharded
             if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
                 hidden_states = ttnn.mesh_partition(
                     hidden_states,

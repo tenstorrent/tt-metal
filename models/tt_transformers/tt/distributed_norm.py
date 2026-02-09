@@ -16,7 +16,7 @@ class DistributedNorm(LightweightModule):
         self.prefetcher = prefetcher
         self.ag_config_key = ag_config_key
 
-        # This flag is to enable or disable the all_gather after the distributed norm, but if model uses pre_ff or post_ff normalization then all_gather+mesh_partition is not needed as the output of distributed norm is already sharded
+        # Flag to control whether all_gather is performed after distributed norm (can be disabled when output should remain sharded)
         self.enable_all_gather = enable_all_gather
 
         if TG:
