@@ -69,8 +69,6 @@ template <
     p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
-    const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(srca_operand_id);
 
     // Currently, there is a constraint that tile size is equal to the fifo page size
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
@@ -85,9 +83,7 @@ template <
     bool to_from_int8 = false,
     p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
 inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
-    std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
-    const std::uint32_t num_faces = get_operand_num_faces(srcb_operand_id);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(srcb_operand_id);
+    const std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
 
     // Currently, there is a constraint that tile size is equal to the fifo page size
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
@@ -103,9 +99,6 @@ template <
     p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
 inline void llk_unpack_reconfig_data_format_srca(
     const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
-    std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
-    std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
-
     if (should_reconfigure_cbs(srca_old_operand, srca_new_operand)) {
         llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(srca_new_operand);
     } else if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
@@ -120,9 +113,6 @@ template <
     p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
 inline void llk_unpack_reconfig_data_format_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
-    std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
-    std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
-
     if (should_reconfigure_cbs(srcb_old_operand, srcb_new_operand)) {
         llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(srcb_new_operand);
     } else if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {

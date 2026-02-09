@@ -11,12 +11,6 @@
  * LLK UNPACK TILIZE
  *************************************************************************/
 
-inline void llk_unpack_tilize_mop_config(const std::uint32_t operand) {
-    std::uint32_t operand_id = get_operand_id(operand);
-    const bool narrow_tile = get_operand_narrow_tile(operand_id);
-    _llk_unpack_tilize_mop_config_(narrow_tile);
-}
-
 inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint32_t ct_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
@@ -26,19 +20,13 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
         unpack_src_format[operand_id], unpack_dst_format[operand_id], ct_dim, face_r_dim, narrow_tile);
 }
 
-inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
-    std::uint32_t operand_id = get_operand_id(operand);
-    const uint num_faces = get_operand_num_faces(operand);
-    _llk_unpack_tilize_uninit_((uint)unpack_dst_format[operand_id], num_faces, face_r_dim);
-}
-
 inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t block_ct_dim) {
-    std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const bool narrow_tile = get_operand_narrow_tile(operand_id);
 
-    std::uint32_t base_address =
+    const std::uint32_t base_address =
         get_local_cb_interface(operand_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
     WAYPOINT("UPTW");
@@ -63,15 +51,15 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
     }
 }
 
+inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    _llk_unpack_tilize_uninit_((std::uint32_t)unpack_dst_format[operand_id], num_faces, face_r_dim);
+}
+
 /*************************************************************************
  * LLK UNPACK TILIZE SRC A, UNPACK SRC B
  *************************************************************************/
-
-// TODO: add support for all the template parameters
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
-inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, const std::uint32_t num_faces = 4) {
-    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(narrow_tile, num_faces);
-}
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_init(
@@ -82,12 +70,16 @@ inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
     const std::uint32_t unpB_face_r_dim = FACE_R_DIM) {
 
-    const std::uint32_t operand_id = get_operand_id(operandA);
-    const bool narrow_tile = get_operand_narrow_tile(operand_id);
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+    const bool narrow_tile = get_operand_narrow_tile(operandA_id);
+
+    LLK_ASSERT(get_operand_src_format(operandA_id) == get_operand_src_format(operandB_id), "Operands must have same src format");
+    LLK_ASSERT(get_operand_dst_format(operandA_id) == get_operand_dst_format(operandB_id), "Operands must have same dst format");
 
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
-        unpack_src_format[operand_id],
-        unpack_dst_format[operand_id],
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
         narrow_tile,
         ct_dim,
         num_faces,
@@ -105,8 +97,8 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t block_ct_dim,
     std::uint32_t num_faces = 4,
     std::uint32_t unpA_face_r_dim = FACE_R_DIM) {
-    std::uint32_t operandA_id = get_operand_id(operandA);
-    std::uint32_t operandB_id = get_operand_id(operandB);
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
 
     // TODO: RT face_r_dim should be taken from get_operand_face_r_dim(operandA_id);
     // But currently ops do not populate that array correctly
@@ -152,7 +144,7 @@ inline void llk_unpack_tilizeA_B_block(
 }
 
 inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {
-    std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    _llk_unpack_tilizeA_B_uninit_((uint)unpack_dst_format[operand_id], face_r_dim);
+    _llk_unpack_tilizeA_B_uninit_((std::uint32_t)unpack_dst_format[operand_id], face_r_dim);
 }
