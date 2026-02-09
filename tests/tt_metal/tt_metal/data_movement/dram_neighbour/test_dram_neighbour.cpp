@@ -351,5 +351,59 @@ TEST_F(GenericMeshDeviceFixture, numBankSweepClosestNeighbourTest) {
 
 }
 
+TEST_F(GenericMeshDeviceFixture, randomCoreToDramAssignmentTest) {  
+    shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();  
+      
+    // Test parameters  
+    uint32_t test_id = 200;  
+    uint32_t num_of_transactions = 1;  
+    uint32_t pages_per_bank = 1;  
+    DataFormat l1_data_format = DataFormat::Float16_b;  
+    uint32_t page_size_bytes = tt::tile_size(l1_data_format);  
+      
+    auto grid_size = mesh_device->logical_grid_size();  
+    uint32_t max_dram_banks = mesh_device->num_dram_channels();  
+
+    for(uint32_t num_banks = 1; num_banks < max_dram_banks; num_banks++) {        
+        std::map<uint32_t, uint32_t> core_dram_map;  
+        std::random_device rd;  
+        std::mt19937 gen(rd());  
+        
+        std::vector<CoreCoord> available_cores;  
+        for (uint32_t x = 0; x < grid_size.x && available_cores.size() < num_banks; x++) {  
+            for (uint32_t y = 0; y < grid_size.y && available_cores.size() < num_banks; y++) {  
+                available_cores.push_back(CoreCoord(x, y));  
+            }  
+        }  
+        
+        std::shuffle(available_cores.begin(), available_cores.end(), gen);  
+        
+        std::vector<uint32_t> available_banks(num_banks);  
+        std::iota(available_banks.begin(), available_banks.end(), 0);  
+        std::shuffle(available_banks.begin(), available_banks.end(), gen);  
+        
+        for (uint32_t i = 0; i < num_banks; i++) {  
+            const auto& core = available_cores[i];  
+            uint32_t packed_core = (static_cast<uint32_t>(core.x) << 16) | static_cast<uint32_t>(core.y);  
+            core_dram_map[packed_core] = available_banks[i];  
+            
+            log_info(tt::LogTest, "Random assignment: Core ({}, {}) -> DRAM bank {}",   
+                    core.x, core.y, available_banks[i]);  
+        }  
+        
+        unit_tests::dm::dram_neighbour::DramNeighbourConfig test_config(  
+            test_id,  
+            num_of_transactions,  
+            num_banks,  
+            pages_per_bank,  
+            page_size_bytes,  
+            l1_data_format,  
+            core_dram_map);  
+        
+        EXPECT_TRUE(unit_tests::dm::dram_neighbour::run_dm_neighbour(mesh_device, test_config));  
+
+    }
+}
+
 
 }  // namespace tt::tt_metal
