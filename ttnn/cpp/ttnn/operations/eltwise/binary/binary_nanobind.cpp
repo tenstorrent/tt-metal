@@ -2537,6 +2537,7 @@ void py_module(nb::module_& mod) {
         With INT32 inputs, rounding_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
         When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero for fast approximation.
         When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero (accurate mode).
+        When :attr:`rounding_mode` is `floor` or `trunc`, the operation uses SFPU division for better precision and `fast_and_approximate_mode=True` is not valid.
         )doc");
 
     detail::bind_binary_composite_overload(

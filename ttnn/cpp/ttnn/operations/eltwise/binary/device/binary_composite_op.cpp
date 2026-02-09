@@ -280,6 +280,11 @@ Tensor ExecuteDiv::invoke(
     TT_FATAL(
         (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
+
+    TT_FATAL(
+        !(rounding_mode.has_value() && fast_and_approximate_mode),
+        "fast_and_approximate_mode cannot be used with rounding_mode ('trunc' or 'floor')");
+
     if (output_tensor.has_value()) {
         BinaryOperationWithFastApprox<BinaryOpType::DIV>::invoke(
             input,
