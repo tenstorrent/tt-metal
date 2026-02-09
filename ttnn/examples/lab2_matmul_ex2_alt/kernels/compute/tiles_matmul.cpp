@@ -8,8 +8,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // Note: The argument index to get_compile_time_arg_val() must be a compile time constant.
     const uint32_t num_k_blocks = get_compile_time_arg_val(0);
     const uint32_t M_block_tiles = get_compile_time_arg_val(1);
@@ -102,4 +101,3 @@ void MAIN {
         cb_pop_front(cb_in1, B_slab_tiles);  // Done with B_slab(b), free space in CB1
     }
 }
-}  // namespace NAMESPACE
