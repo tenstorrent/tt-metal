@@ -24,7 +24,7 @@ SuperPod (2, 4, or 9 pods)
        └─ Galaxy (1 host = 32 Blackhole chips)
 ```
 
-A **Pod** combines 4 Galaxies (128 chips) into a unified compute mesh using TT-Fabric. A **SuperPod** connects multiple pods (2, 4, or 9 — different product definitions, but each is considered a SuperPod) for large-scale workloads.
+A **Pod** combines 4 Galaxies (128 chips) into a unified compute mesh using TT-Fabric. A **SuperPod** connects multiple pods (2, 4, or 9 - different product definitions, but each is considered a SuperPod) for large-scale workloads.
 
 ### Supported Pod Configurations
 
@@ -39,11 +39,11 @@ For the full list of officially supported topologies with cable lengths and conf
 | **8×16** | 4 | 128 | 2×2 grid | Torus XY |
 | **16×8** | 4 | 128 | 1×4 column | Torus XY |
 
-The pod shape is a function of the workload — choose the topology that best matches your application's communication patterns.
+The pod shape is a function of the workload - choose the topology that best matches your application's communication patterns.
 
-All multi-Galaxy topologies use **2D Torus** connectivity (wrap-around on both X and Y), enabling shorter hop counts and multiple routing paths. The **cabling differs** between topologies — each has its own cutsheet, cable lengths, and physical layout.
+All multi-Galaxy topologies use **2D Torus** connectivity (wrap-around on both X and Y), enabling shorter hop counts and multiple routing paths. The **cabling differs** between topologies - each has its own cutsheet, cable lengths, and physical layout.
 
-**Note:** 8×16 and 16×8 both use 4 Galaxies but with different host arrangements and cabling. They are **not** interchangeable — each requires its own cutsheet and cabling. MGD files for all topologies are in `tt_metal/fabric/mesh_graph_descriptors/`.
+**Note:** 8×16 and 16×8 both use 4 Galaxies but with different host arrangements and cabling. They are **not** interchangeable - each requires its own cutsheet and cabling. MGD files for all topologies are in `tt_metal/fabric/mesh_graph_descriptors/`.
 
 ---
 
@@ -57,7 +57,7 @@ One Galaxy (32 chips) as a self-contained mesh. Used for single-host development
 
 ---
 
-#### 4×32 (Quad Galaxy — Linear)
+#### 4×32 (Quad Galaxy - Linear)
 
 Four Galaxies arranged in a horizontal line, forming an elongated 32-column × 4-row mesh. Optimized for 1D data flow: pipeline parallelism, ring allreduce, video generation (Wan2.1/2.2), and low-latency decode (Blitz, DeepSeek).
 
@@ -71,7 +71,7 @@ Four Galaxies arranged in a horizontal line, forming an elongated 32-column × 4
 
 ---
 
-#### 8×16 (Quad Galaxy — 2×2 Grid)
+#### 8×16 (Quad Galaxy - 2×2 Grid)
 
 Four Galaxies arranged in a 2×2 grid. Optimized for 2D data flow: all-to-all collectives and 2D tensor parallelism.
 
@@ -85,17 +85,17 @@ Four Galaxies arranged in a 2×2 grid. Optimized for 2D data flow: all-to-all co
 
 ---
 
-#### 16×8 (Quad Galaxy — 1×4 Column)
+#### 16×8 (Quad Galaxy - 1×4 Column)
 
 Four Galaxies stacked vertically in a single column. An alternative orientation to 8×16, using the same 4 Galaxies but with a different cabling pattern and host layout.
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/16x8_topology.png?raw=true" width="400"/>
 
-*Host layout: 4 Galaxy chassis stacked vertically (no inter-Galaxy cabling shown — see cabling web tool view below).*
+*Host layout: 4 Galaxy chassis stacked vertically (no inter-Galaxy cabling shown - see cabling web tool view below).*
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/16x8_cabling.png?raw=true" width="700"/>
 
-*[Cabling web toolview ](https://aus2-cablegen.aus2.tenstorrent.com/?file=https://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_16x8_torus-2d.textproto) (16×8 torus-2d configuration): 4 Galaxies across 2 racks with a different inter-Galaxy cable pattern than 8×16.*
+*[Cabling web tool view](https://aus2-cablegen.aus2.tenstorrent.com/?file=https://github.com/tenstorrent/tt-CableGen/blob/main/defined_topologies/CablingDescriptors/BH_GALAXY_big_mesh_16x8_torus-2d.textproto) (16×8 torus-2d configuration pre-loaded): 4 Galaxies across 2 racks with a different inter-Galaxy cable pattern than 8×16.*
 
 ---
 
@@ -103,7 +103,7 @@ Four Galaxies stacked vertically in a single column. An alternative orientation 
 
 Multiple pods can be connected into a SuperPod. The topology below corresponds to the **SP4** (4-pod SuperPod) configuration. We also support **SP2** and **SP9** configurations, which will be documented separately.
 
-The image shows 4 pods in 4×32 topology (16 Galaxies total) in an exploded view — pods are spread apart to make inter-pod cables visible; in a physical deployment they are racked together.
+The image shows 4 pods in 4×32 topology (16 Galaxies total) in an exploded view - pods are spread apart to make inter-pod cables visible; in a physical deployment they are racked together.
 
 <img src="https://github.com/tenstorrent/tutorial-assets/blob/main/media/tt_metal/scaleout/exabox/images/4_pods_4x32_topology.png" width="700"/>
 
@@ -113,7 +113,7 @@ The image shows 4 pods in 4×32 topology (16 Galaxies total) in an exploded view
 
 The Exabox SuperPod uses **4×32 topology** for all 9 pods, optimized for video generation and low-latency decode workloads.
 
-**Inter-pod connectivity** is workload-driven (not uniform 1:1 between nodes) — daisy-chain connections for decode pipelines with overlay connections for pod-to-pod communication.
+**Inter-pod connectivity** is workload-driven (not uniform 1:1 between nodes) - daisy-chain connections for decode pipelines with overlay connections for pod-to-pod communication.
 
 For routing details, see [TT-Fabric Architecture](../../../tech_reports/TT-Fabric/TT-Fabric-Architecture.md).
 
@@ -148,8 +148,8 @@ The [Top Level Topologies spreadsheet](https://docs.google.com/spreadsheets/d/1m
 
 1. Find your topology and connectivity variant in the spreadsheet
 2. Download the **Cabling Guide CSV**
-3. **Update hostnames and locations** — the downloaded cutsheet describes connections in logical space with placeholder names. Update it to reflect your specific deployment's hostnames and physical locations before handing it off
-4. Optionally download the **Cabling Descriptor TextProto** — this can be used directly in Step 1 (skip the web tool import), but also requires hostname updates
+3. **Update hostnames and locations** - the downloaded cutsheet describes connections in logical space with placeholder names. Update it to reflect your specific deployment's hostnames and physical locations before handing it off
+4. Optionally download the **Cabling Descriptor TextProto** - this can be used directly in Step 1 (skip the web tool import), but also requires hostname updates
 5. Provide the finalized cutsheet CSV to your cabling technician
 
 **Example cutsheet format:**
@@ -211,7 +211,7 @@ Where:
 
 This step is for managing large deployments where cables or nodes are added to the physical cluster over time. The goal is to grow the virtual state (descriptors) in sync with the physical state of the deployment.
 
-Use the `merge_cluster_configs.py` script to combine the new cabling descriptor with the existing cluster configuration. **Always output to a local directory** to ensure that existing shared state isn't corrupted — only copy to the shared location after verifying the merge (Step 3).
+Use the `merge_cluster_configs.py` script to combine the new cabling descriptor with the existing cluster configuration. **Always output to a local directory** to ensure that existing shared state isn't corrupted - only copy to the shared location after verifying the merge (Step 3).
 
 ### With Existing Deployment Descriptor
 
@@ -274,8 +274,8 @@ ls -la /data/scaleout_configs/<your-config-name>/
 Which tests to run depends on whether the pod is new or previously validated:
 
 **First-time pod bringup** (pod has never been tested):
-1. Run **dispatch tests** to stress compute, memory, and data-movement on each chip — see [Dispatch Tests](./README.md#dispatch-tests)
-2. Run **single-pod fabric tests** to verify coordinated workloads across the mesh — see [Fabric Tests](./README.md#fabric-tests)
+1. Run **dispatch tests** to stress compute, memory, and data-movement on each chip - see [Dispatch Tests](./README.md#dispatch-tests)
+2. Run **single-pod fabric tests** to verify coordinated workloads across the mesh - see [Fabric Tests](./README.md#fabric-tests)
 
 **Existing pod with new inter-pod cabling** (pod already tested/used):
 - Skip dispatch and single-pod fabric tests. Instead, run **multi-pod fabric tests** (documentation coming soon in the top-level README).
