@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import csv
+import os
+
 import pytest
 
 import torch
@@ -9,10 +12,11 @@ import torch
 import ttnn
 
 from math import pi
+from models.common.utility_functions import comp_ulp
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
-def run_lerp_test_float(device, h, w, low, high, end, weight, ttnn_function, torch_function, ulp_threshold=1):
+def run_lerp_test_scalar_weight(device, h, w, low, high, end, weight, ttnn_function, torch_function, ulp_threshold=1):
     torch_input_tensor_a = torch.linspace(low, high, steps=h * w, dtype=torch.bfloat16).reshape((h, w))
     torch_input_tensor_b = torch.full((h, w), end, dtype=torch.bfloat16)
 
@@ -22,8 +26,6 @@ def run_lerp_test_float(device, h, w, low, high, end, weight, ttnn_function, tor
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn_function(input_tensor_a, input_tensor_b, weight)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=ulp_threshold)
@@ -33,14 +35,14 @@ def run_lerp_test_float(device, h, w, low, high, end, weight, ttnn_function, tor
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("weight", [0.5])
 def test_lerp_float_a(device, h, w, weight):
-    run_lerp_test_float(device, h, w, 0, 90, 100, weight, ttnn.lerp, torch.lerp)
+    run_lerp_test_scalar_weight(device, h, w, 0, 90, 100, weight, ttnn.lerp, torch.lerp)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("weight", [0.75])
 def test_lerp_float_b(device, h, w, weight):
-    run_lerp_test_float(device, h, w, 1, 80, 99, weight, ttnn.lerp, torch.lerp, ulp_threshold=2)
+    run_lerp_test_scalar_weight(device, h, w, 1, 80, 99, weight, ttnn.lerp, torch.lerp, ulp_threshold=2)
 
 
 def run_lerp_test_tensor(
@@ -81,8 +83,6 @@ def run_lerp_test_tensor(
         output_tensor = ttnn.empty((h, w), dtype=ttnn_output_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         ttnn_function(input_tensor_a, input_tensor_b, input_weight, output_tensor=output_tensor)
 
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=ulp_threshold)
@@ -103,11 +103,11 @@ def test_lerp_tensor_b(device, h, w, weight):
 
 
 @pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("w", [9472])
 @pytest.mark.parametrize("weight", [0.75])
 def test_lerp_bf16_inputs_fp32_preallocated_output(device, h, w, weight):
     """Lerp with bfloat16 inputs (two tensors + scalar weight) and preallocated float32 output.
     Checks that output is correct within 2 ULP for float32."""
     run_lerp_test_tensor(
-        device, h, w, 1, 80, 99, weight, ttnn.lerp, torch.lerp, ulp_threshold=2, output_dtype="float32"
+        device, h, w, 1, 80, 99, weight, ttnn.lerp, torch.lerp, ulp_threshold=1, output_dtype="float32"
     )
