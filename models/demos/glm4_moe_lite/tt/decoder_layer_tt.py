@@ -21,6 +21,58 @@ def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -
     profile[key] = float(profile.get(key, 0.0)) + float(elapsed_s)
 
 
+def prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
+    *,
+    device: Any,
+    cos_batch: ttnn.Tensor,  # [1,1,B,rope_dim] TILE
+    sin_batch: ttnn.Tensor,  # [1,1,B,rope_dim] TILE
+    trans_matrix: ttnn.Tensor,  # [1,1,32,32] TILE
+    batch: int,
+    rope_dim: int,
+) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.MemoryConfig]:
+    """Prepare HEIGHT_SHARDED cos/sin/trans inputs for decode-mode rotary_embedding_llama."""
+    batch = int(batch)
+    rope_dim = int(rope_dim)
+    if batch <= 0:
+        raise ValueError("batch must be > 0")
+    if rope_dim <= 0:
+        raise ValueError("rope_dim must be > 0")
+
+    grid_size = device.compute_with_storage_grid_size()
+    user_grid = ttnn.num_cores_to_corerangeset(int(batch), grid_size, row_wise=True)
+
+    rope_sharded_cfg = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, rope_dim),
+        core_grid=user_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Match the DeepSeek decode pattern:
+    # - Input cos/sin from gather/embedding is [1, 1, B, rope_dim]
+    # - Decode RoPE kernel expects batch in dim=1: [1, B, 1[32], rope_dim]
+    #
+    # IMPORTANT: Use interleaved_to_sharded (not to_memory_config) to avoid
+    # sharding alignment failures for small batches.
+    cos_decode = ttnn.transpose(cos_batch, 1, 2)  # [1, B, 1[32], rope_dim]
+    sin_decode = ttnn.transpose(sin_batch, 1, 2)  # [1, B, 1[32], rope_dim]
+    cos_decode = ttnn.interleaved_to_sharded(cos_decode, rope_sharded_cfg)
+    sin_decode = ttnn.interleaved_to_sharded(sin_decode, rope_sharded_cfg)
+
+    trans_mat_mem_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+        core_grid=user_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    trans_decode = ttnn.repeat(trans_matrix, ttnn.Shape((1, 1, batch, 1)))
+    trans_decode = ttnn.interleaved_to_sharded(trans_decode, trans_mat_mem_config)
+
+    return cos_decode, sin_decode, trans_decode, rope_sharded_cfg
+
+
 def _mesh_shape(device: Any) -> tuple[int, int]:
     if device.__class__.__name__ != "MeshDevice":
         return (1, 1)
@@ -97,24 +149,55 @@ def prepare_decode_rope_and_positions_tt(
         mesh_mapper=mesh_mapper,
     )
 
-    # Gather per-position RoPE rows in one op (trace-friendly) instead of slicing in Python.
+    # Fetch per-position RoPE cos/sin rows.
+    #
+    # Important for multi-device correctness:
+    # - `ttnn.gather` on MeshDevice has been observed to be fragile for small decode
+    #   batches, and it also builds a large repeated index tensor on host.
+    # - `ttnn.embedding` is the DeepSeek implementation pattern and yields the exact
+    #   [1, batch, rope_dim] rows we need without host-side index expansion.
     positions_clamped = positions.to(torch.int32).clamp_min(0)
     rope_dim = int(rope["cos_matrix"].shape[3])
-    idx_host = positions_clamped.view(1, 1, int(positions_clamped.shape[0]), 1).repeat(1, 1, 1, rope_dim).contiguous()
-    idx_rm = ttnn.from_torch(
-        idx_host,
+
+    batch = int(positions_clamped.shape[0])
+    padded_batch = ((batch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    if padded_batch != batch:
+        positions_padded = torch.nn.functional.pad(
+            positions_clamped.view(1, batch),
+            (0, padded_batch - batch),
+            "constant",
+            0,
+        )
+    else:
+        positions_padded = positions_clamped.view(1, batch)
+
+    rot_idxs = ttnn.from_torch(
+        positions_padded.to(torch.int32),
         device=device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mesh_mapper,
     )
-    idx_tile = ttnn.to_layout(idx_rm, ttnn.TILE_LAYOUT)
-    ttnn.deallocate(idx_rm)
 
-    cos_batch = ttnn.gather(rope["cos_matrix"], dim=2, index=idx_tile)
-    sin_batch = ttnn.gather(rope["sin_matrix"], dim=2, index=idx_tile)
-    ttnn.deallocate(idx_tile)
+    # embedding([1, B], [1,1,S,D]) -> [1, B, D]
+    cos_rows = ttnn.embedding(rot_idxs, rope["cos_matrix"], layout=ttnn.TILE_LAYOUT)
+    sin_rows = ttnn.embedding(rot_idxs, rope["sin_matrix"], layout=ttnn.TILE_LAYOUT)
+    ttnn.deallocate(rot_idxs)
+
+    cos_batch = ttnn.unsqueeze_to_4D(cos_rows)  # [1,1,B_pad,D]
+    sin_batch = ttnn.unsqueeze_to_4D(sin_rows)  # [1,1,B_pad,D]
+    ttnn.deallocate(cos_rows)
+    ttnn.deallocate(sin_rows)
+
+    if padded_batch != batch:
+        cos_sliced = ttnn.slice(cos_batch, [0, 0, 0, 0], [1, 1, batch, rope_dim])
+        sin_sliced = ttnn.slice(sin_batch, [0, 0, 0, 0], [1, 1, batch, rope_dim])
+        ttnn.deallocate(cos_batch)
+        ttnn.deallocate(sin_batch)
+        cos_batch = cos_sliced
+        sin_batch = sin_sliced
+
     return tt_positions, cos_batch, sin_batch
 
 
@@ -154,6 +237,10 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     cos_batch: ttnn.Tensor,
     sin_batch: ttnn.Tensor,
     trans_matrix: ttnn.Tensor,
+    cos_decode: ttnn.Tensor | None = None,
+    sin_decode: ttnn.Tensor | None = None,
+    trans_decode: ttnn.Tensor | None = None,
+    rope_sharded_cfg: ttnn.MemoryConfig | None = None,
     w: Any,
     hparams: Glm4MoeLiteHParams,
     moe_runtime: Any | None = None,
@@ -189,17 +276,26 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     if use_decode_rope and rope_dim % ttnn.TILE_SIZE != 0:
         raise ValueError(f"decode RoPE requires rope_dim divisible by {ttnn.TILE_SIZE}, got rope_dim={rope_dim}")
 
-    rope_sharded_cfg = None
+    owns_decode_rope_inputs = False
     if use_decode_rope:
-        grid_size = device.compute_with_storage_grid_size()
-        user_grid = ttnn.num_cores_to_corerangeset(int(batch), grid_size, row_wise=True)
-        rope_sharded_cfg = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, int(rope_dim)),
-            core_grid=user_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
+        any_provided = cos_decode is not None or sin_decode is not None or trans_decode is not None
+        if any_provided:
+            if cos_decode is None or sin_decode is None or trans_decode is None:
+                raise ValueError("cos_decode, sin_decode, and trans_decode must be provided together")
+            if rope_sharded_cfg is None:
+                rope_sharded_cfg = cos_decode.memory_config()
+        else:
+            cos_decode, sin_decode, trans_decode, rope_sharded_cfg = (
+                prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt(
+                    device=device,
+                    cos_batch=cos_batch,
+                    sin_batch=sin_batch,
+                    trans_matrix=trans_matrix,
+                    batch=batch,
+                    rope_dim=rope_dim,
+                )
+            )
+            owns_decode_rope_inputs = True
 
         def _rope_decode(t: ttnn.Tensor, *, heads: int) -> ttnn.Tensor:
             # Input t expected in [1, heads, B, rope_dim]. RoPE decode kernel
@@ -226,14 +322,14 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             t = ttnn.to_memory_config(t, rope_sharded_cfg)
             t = ttnn.experimental.rotary_embedding_llama(
                 t,
-                cos_batch,
-                sin_batch,
-                trans_matrix,
+                cos_decode,
+                sin_decode,
+                trans_decode,
                 is_decode_mode=True,
             )
 
             # Bring output back to interleaved for downstream ops.
-            t = ttnn.to_memory_config(t, memory_config=ttnn.L1_MEMORY_CONFIG)
+            t = ttnn.to_memory_config(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             if pad_h:
                 t = ttnn.slice(t, [0, 0, 0, 0], [1, batch, heads, rope_dim])
@@ -251,10 +347,40 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             packer_l1_acc=False,
         )
 
-    def _mlp_linear(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
-        if mlp_compute_kernel_config is None:
-            return ttnn.linear(a, b)
-        return ttnn.linear(a, b, compute_kernel_config=mlp_compute_kernel_config)
+    def _mlp_linear(a: ttnn.Tensor, b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None) -> ttnn.Tensor:
+        kwargs: dict[str, object] = {}
+        if memory_config is not None:
+            kwargs["memory_config"] = memory_config
+        if mlp_compute_kernel_config is not None:
+            kwargs["compute_kernel_config"] = mlp_compute_kernel_config
+        return ttnn.linear(a, b, **kwargs)
+
+    tp_axis = _tp_cluster_axis(device)
+    tp_enabled = tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1"
+    mesh_rows, mesh_cols = _mesh_shape(device)
+    tp_size = int((mesh_rows, mesh_cols)[tp_axis]) if tp_axis is not None else 1
+    mesh_rows, mesh_cols = _mesh_shape(device)
+    tp_size = int((mesh_rows, mesh_cols)[tp_axis]) if tp_axis is not None else 1
+
+    def _tp_row_parallel_linear_from_replicated(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+        """Row-parallel matmul helper for TP-sharded weights.
+
+        `layer_weights.py` shards attention weights along the input dim (dim=2 of [1,1,in,out]).
+        To make shapes match, partition the activation's last dim across the same TP axis.
+        The per-device outputs are partial dot products and must be summed across devices.
+        """
+        a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)
+        out = _mlp_linear(a_tp, b)
+        ttnn.deallocate(a_tp)
+        out_reduced = ttnn.all_reduce(
+            out,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+            cluster_axis=tp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(out)
+        return out_reduced
 
     residual = x_embed_tok
     t0 = time.perf_counter() if profile is not None else 0.0
@@ -267,7 +393,10 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     kv = None
     w_q_kv_a = getattr(w, "w_q_kv_a", None)
     if w_q_kv_a is not None:
-        qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
+        if tp_enabled:
+            qkv = _tp_row_parallel_linear_from_replicated(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
+        else:
+            qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,B,q_lora_rank+kvpe_dim]
         q_a = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, batch, int(hparams.q_lora_rank)])
         kv = ttnn.slice(
             qkv,
@@ -276,7 +405,10 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         )
         ttnn.deallocate(qkv)
     else:
-        kv = _mlp_linear(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
+        if tp_enabled:
+            kv = _tp_row_parallel_linear_from_replicated(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
+        else:
+            kv = _mlp_linear(x, w.w_kv_a)  # [1,1,B,kvpe_dim]
     kv_nope = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, batch, int(hparams.kv_lora_rank)])
     kv_rope = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [1, 1, batch, kvpe_dim])
     ttnn.deallocate(kv)
@@ -321,9 +453,15 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # ---- Q path ----
     t0 = time.perf_counter() if profile is not None else 0.0
     if q_a is None:
-        q_a = _mlp_linear(x, w.w_q_a)  # [1,1,B,q_lora_rank]
+        if tp_enabled:
+            q_a = _tp_row_parallel_linear_from_replicated(x, w.w_q_a)  # [1,1,B,q_lora_rank]
+        else:
+            q_a = _mlp_linear(x, w.w_q_a)  # [1,1,B,q_lora_rank]
     q_a = w.q_a_layernorm(q_a, mode="decode")
-    q = _mlp_linear(q_a, w.w_q_b)  # [1,1,B,num_heads*qk_head_dim]
+    if tp_enabled:
+        q = _tp_row_parallel_linear_from_replicated(q_a, w.w_q_b)  # [1,1,B,num_heads*qk_head_dim]
+    else:
+        q = _mlp_linear(q_a, w.w_q_b)  # [1,1,B,num_heads*qk_head_dim]
     ttnn.deallocate(q_a)
 
     q = ttnn.reshape(q, (1, batch, int(hparams.num_attention_heads), int(hparams.qk_head_dim)))
@@ -336,7 +474,16 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     )
     ttnn.deallocate(q)
 
-    q_nope = _mlp_linear(q_nope, w.w_kv_b1)  # [1,H,B,kv_lora_rank]
+    use_tp_kv_b1 = tp_enabled
+    if use_tp_kv_b1:
+        qk_nope = int(hparams.qk_nope_head_dim)
+        qk_nope_per_shard = qk_nope // max(1, int(tp_size))
+        if qk_nope % max(1, int(tp_size)) != 0 or qk_nope_per_shard % int(ttnn.TILE_SIZE) != 0:
+            use_tp_kv_b1 = False
+    if use_tp_kv_b1:
+        q_nope = _tp_row_parallel_linear_from_replicated(q_nope, w.w_kv_b1)  # [1,H,B,kv_lora_rank]
+    else:
+        q_nope = _mlp_linear(q_nope, w.w_kv_b1)  # [1,H,B,kv_lora_rank]
 
     if q_rope.dtype != ttnn.bfloat16:
         q_rope = ttnn.typecast(q_rope, dtype=ttnn.bfloat16)
@@ -350,6 +497,13 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             trans_matrix,
             is_decode_mode=False,
         )  # [1,H,B,rope_dim]
+
+    if use_decode_rope:
+        if owns_decode_rope_inputs:
+            assert cos_decode is not None and sin_decode is not None and trans_decode is not None
+            ttnn.deallocate(cos_decode)
+            ttnn.deallocate(sin_decode)
+            ttnn.deallocate(trans_decode)
 
     q_kvpe = ttnn.concat([q_nope, q_rope], dim=-1)  # [1,H,B,kvpe_dim]
     ttnn.deallocate(q_nope)
@@ -369,8 +523,9 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # Correctness: HF DeepseekV3Attention scales by 1/sqrt(qk_head_dim). Using the same
     # default here avoids decode drift that can eventually flip greedy tokens.
     # Keep `GLM4_MOE_LITE_MLA_SCALE_MODE=kvpe` as an escape hatch for experiments.
-    scale_mode = os.environ.get("GLM4_MOE_LITE_MLA_SCALE_MODE", "").strip().lower()
-    # NOTE: docker-compose passes through empty strings for unset vars; treat that as default.
+    # Keep scale consistent with layer0_tt + HF DeepseekV3Attention.
+    # Default: 1/sqrt(qk_head_dim). Optional escape hatch: kvpe.
+    scale_mode = os.environ.get("GLM4_MOE_LITE_MLA_SCALE_MODE", "qk").strip().lower()
     if scale_mode == "kvpe":
         scale = float(int(kvpe_dim) ** -0.5)
     else:
@@ -398,6 +553,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     # V-cache slicing overhead. Keep an opt-in fallback for older runtimes.
     t0 = time.perf_counter() if profile is not None else 0.0
     use_v_cache_slice = os.environ.get("GLM4_MOE_LITE_MLA_USE_V_CACHE_SLICE", "").strip() == "1"
+    flash_mla_memcfg = ttnn.DRAM_MEMORY_CONFIG
     if use_v_cache_slice:
         v_cache = ttnn.slice(
             kvpe_cache,
@@ -414,7 +570,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             scale=scale,
             program_config=sdpa_program_config,
             compute_kernel_config=compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=flash_mla_memcfg,
         )  # [1,B,H_padded,kv_lora_rank]
         ttnn.deallocate(v_cache)
     else:
@@ -427,7 +583,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             scale=scale,
             program_config=sdpa_program_config,
             compute_kernel_config=compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=flash_mla_memcfg,
         )  # [1,B,H_padded,kv_lora_rank]
     ttnn.deallocate(q_for_decode)
     _profile_add(profile, "flash_mla_decode_s", time.perf_counter() - t0 if profile is not None else 0.0)
@@ -437,14 +593,20 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     attn_latent = ttnn.permute(attn_latent, (0, 2, 1, 3))  # [1,H,B,kv_lora_rank]
 
     t0 = time.perf_counter() if profile is not None else 0.0
-    v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
+    if tp_enabled:
+        v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
+    else:
+        v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,B,v_head_dim]
     ttnn.deallocate(attn_latent)
 
     v = ttnn.permute(v, (0, 2, 1, 3))  # [1,B,H,v_head_dim]
     v = ttnn.reshape(v, (1, batch, 1, int(hparams.num_attention_heads * hparams.v_head_dim)))
     v = ttnn.permute(v, (0, 2, 1, 3))  # [1,1,B,H*v_head_dim]
 
-    attn_out = _mlp_linear(v, w.w_o)  # [1,1,B,hidden]
+    if tp_enabled:
+        attn_out = _tp_row_parallel_linear_from_replicated(v, w.w_o)  # [1,1,B,hidden]
+    else:
+        attn_out = _mlp_linear(v, w.w_o)  # [1,1,B,hidden]
     ttnn.deallocate(v)
 
     x_attn_out = residual + attn_out
@@ -469,8 +631,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         ttnn.deallocate(up)
         mlp_out = _mlp_linear(x_ff, w.w_mlp_down)
         ttnn.deallocate(x_ff)
-        tp_axis = _tp_cluster_axis(device)
-        if tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1":
+        if tp_enabled:
             mlp_out_reduced = ttnn.all_reduce(
                 mlp_out,
                 num_links=1,
@@ -528,8 +689,7 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     ttnn.deallocate(up_shared)
     shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down)
     ttnn.deallocate(x_ff_shared)
-    tp_axis = _tp_cluster_axis(device)
-    if tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1":
+    if tp_enabled:
         shared_out_reduced = ttnn.all_reduce(
             shared_out,
             num_links=1,
@@ -649,6 +809,23 @@ def run_decoder_layer_prefill_update_cache_tt(
             return ttnn.linear(a, b)
         return ttnn.linear(a, b, compute_kernel_config=mlp_compute_kernel_config)
 
+    tp_axis = _tp_cluster_axis(device)
+    tp_enabled = tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1"
+
+    def _tp_row_parallel_linear_from_replicated(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+        a_tp = ttnn.mesh_partition(a, dim=3, cluster_axis=tp_axis)
+        out = _mlp_linear(a_tp, b)
+        ttnn.deallocate(a_tp)
+        out_reduced = ttnn.all_reduce(
+            out,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+            cluster_axis=tp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(out)
+        return out_reduced
+
     residual = x_embed
     t0 = time.perf_counter() if profile is not None else 0.0
     x = w.input_layernorm(x_embed, mode="prefill")  # [1,1,S,hidden]
@@ -660,7 +837,10 @@ def run_decoder_layer_prefill_update_cache_tt(
     kv = None
     w_q_kv_a = getattr(w, "w_q_kv_a", None)
     if w_q_kv_a is not None:
-        qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,S,q_lora_rank+kvpe_dim]
+        if tp_enabled:
+            qkv = _tp_row_parallel_linear_from_replicated(x, w_q_kv_a)  # [1,1,S,q_lora_rank+kvpe_dim]
+        else:
+            qkv = _mlp_linear(x, w_q_kv_a)  # [1,1,S,q_lora_rank+kvpe_dim]
         q_a = ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, seq_len, int(hparams.q_lora_rank)])
         kv = ttnn.slice(
             qkv,
@@ -669,9 +849,15 @@ def run_decoder_layer_prefill_update_cache_tt(
         )
         ttnn.deallocate(qkv)
     else:
-        q_a = _mlp_linear(x, w.w_q_a)  # [1,1,S,q_lora_rank]
+        if tp_enabled:
+            q_a = _tp_row_parallel_linear_from_replicated(x, w.w_q_a)  # [1,1,S,q_lora_rank]
+        else:
+            q_a = _mlp_linear(x, w.w_q_a)  # [1,1,S,q_lora_rank]
     q_a = w.q_a_layernorm(q_a, mode="prefill")
-    q = _mlp_linear(q_a, w.w_q_b)  # [1,1,S,H*qk_head_dim]
+    if tp_enabled:
+        q = _tp_row_parallel_linear_from_replicated(q_a, w.w_q_b)  # [1,1,S,H*qk_head_dim]
+    else:
+        q = _mlp_linear(q_a, w.w_q_b)  # [1,1,S,H*qk_head_dim]
     ttnn.deallocate(q_a)
 
     q = ttnn.reshape(q, (1, seq_len, num_heads, int(hparams.qk_head_dim)))
@@ -681,13 +867,25 @@ def run_decoder_layer_prefill_update_cache_tt(
     ttnn.deallocate(q)
 
     # Project q_nope into KV latent space (per-head).
-    q_nope = _mlp_linear(q_nope, w.w_kv_b1)  # [1,H,S,kv_lora_rank]
+    use_tp_kv_b1 = tp_enabled
+    if use_tp_kv_b1:
+        qk_nope = int(hparams.qk_nope_head_dim)
+        qk_nope_per_shard = qk_nope // max(1, int(tp_size))
+        if qk_nope % max(1, int(tp_size)) != 0 or qk_nope_per_shard % int(ttnn.TILE_SIZE) != 0:
+            use_tp_kv_b1 = False
+    if use_tp_kv_b1:
+        q_nope = _tp_row_parallel_linear_from_replicated(q_nope, w.w_kv_b1)  # [1,H,S,kv_lora_rank]
+    else:
+        q_nope = _mlp_linear(q_nope, w.w_kv_b1)  # [1,H,S,kv_lora_rank]
     _profile_add(profile, "q_path_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- KVPE for the prompt -> fill cache ----
     t0 = time.perf_counter() if profile is not None else 0.0
     if kv is None:
-        kv = _mlp_linear(x, w.w_kv_a)  # [1,1,S,kvpe_dim]
+        if tp_enabled:
+            kv = _tp_row_parallel_linear_from_replicated(x, w.w_kv_a)  # [1,1,S,kvpe_dim]
+        else:
+            kv = _mlp_linear(x, w.w_kv_a)  # [1,1,S,kvpe_dim]
     ttnn.deallocate(x)
 
     kv_nope = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, seq_len, int(hparams.kv_lora_rank)])
@@ -750,8 +948,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     #
     # Correctness: match HF DeepseekV3Attention default scaling of 1/sqrt(qk_head_dim).
     # Keep `GLM4_MOE_LITE_MLA_SCALE_MODE=kvpe` as an escape hatch for experiments.
-    scale_mode = os.environ.get("GLM4_MOE_LITE_MLA_SCALE_MODE", "").strip().lower()
-    # NOTE: docker-compose passes through empty strings for unset vars; treat that as default.
+    scale_mode = os.environ.get("GLM4_MOE_LITE_MLA_SCALE_MODE", "qk").strip().lower()
     if scale_mode == "kvpe":
         scale = float(int(kvpe_dim) ** -0.5)
     else:
@@ -795,12 +992,18 @@ def run_decoder_layer_prefill_update_cache_tt(
     attn_latent = ttnn.slice(attn_latent, [0, 0, 0, 0], [1, num_heads, seq_len, int(hparams.kv_lora_rank)])
 
     t0 = time.perf_counter() if profile is not None else 0.0
-    v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,S,v_head_dim]
+    if tp_enabled:
+        v = _tp_row_parallel_linear_from_replicated(attn_latent, w.w_kv_b2)  # [1,H,S,v_head_dim]
+    else:
+        v = _mlp_linear(attn_latent, w.w_kv_b2)  # [1,H,S,v_head_dim]
     ttnn.deallocate(attn_latent)
 
     v = ttnn.permute(v, (0, 2, 1, 3))  # [1,S,H,v_head_dim]
     v = ttnn.reshape(v, (1, 1, seq_len, int(num_heads * hparams.v_head_dim)))  # [1,1,S,H*v_head_dim]
-    attn_out = _mlp_linear(v, w.w_o)  # [1,1,S,hidden]
+    if tp_enabled:
+        attn_out = _tp_row_parallel_linear_from_replicated(v, w.w_o)  # [1,1,S,hidden]
+    else:
+        attn_out = _mlp_linear(v, w.w_o)  # [1,1,S,hidden]
     ttnn.deallocate(v)
 
     x_attn_out = residual + attn_out
@@ -827,8 +1030,7 @@ def run_decoder_layer_prefill_update_cache_tt(
 
         mlp_out = _mlp_linear(x_ff, w.w_mlp_down)
         ttnn.deallocate(x_ff)
-        tp_axis = _tp_cluster_axis(device)
-        if tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1":
+        if tp_enabled:
             mlp_out_reduced = ttnn.all_reduce(
                 mlp_out,
                 num_links=1,
@@ -871,8 +1073,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         ttnn.deallocate(up_shared)
         shared_out = _mlp_linear(x_ff_shared, w.w_mlp_down)
         ttnn.deallocate(x_ff_shared)
-        tp_axis = _tp_cluster_axis(device)
-        if tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1":
+        if tp_enabled:
             shared_out_reduced = ttnn.all_reduce(
                 shared_out,
                 num_links=1,
