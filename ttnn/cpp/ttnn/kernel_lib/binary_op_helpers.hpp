@@ -376,6 +376,9 @@ ALWI void binary_op(
                 // Execute (unified LLK call)
                 binary_exec<op_type, bcast_dim>(icb_a, icb_b, tile_a, tile_b, dst_idx);
 
+                // Post-operation callback (e.g., rsqrt, recip)
+                post_op(dst_idx);
+
                 // Per-tile streaming
                 if constexpr (waits_per_tile(input_a_policy)) {
                     tile_regs_commit();
