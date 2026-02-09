@@ -271,6 +271,11 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Drain-sync core then signals to non-drain-sync core that they can begin sending the next chunk.
     auto tilize_chunk_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
 
+    // Since both reader and writer are using NoC1, we have the readers wait until all writers have sent their
+    // chunk portion to the matmul cores before reading in another set of tokens to tilize. This frees up NoC1
+    // to do the mcast, which is also a requirement for doing linked mcasts.
+    auto previous_chunk_sent_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_core_range_set, INVALID);
+
     //-------------------------------------------------------------------------
     // Matmul semaphores
     //-------------------------------------------------------------------------
@@ -674,6 +679,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
         {"tilize_chunk_ready_semaphore_id", tilize_chunk_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
+        {"previous_chunk_sent_semaphore_id", previous_chunk_sent_semaphore_id},
     };
 
     std::vector<uint32_t> tilize_compile_time_args = {};
