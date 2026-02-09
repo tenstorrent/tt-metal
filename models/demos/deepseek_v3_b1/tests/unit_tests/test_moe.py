@@ -632,6 +632,54 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index):
         tile=tile_1x32,
     )
 
+    # ── Tensor-backed working buffers for DRAM matmul CBs ──
+    def _create_matmul_working_buf(dev, weights_tensor, core_ranges, num_cores, num_subblocks_k):
+        """Create a tensor-backed working buffer for DRAM streaming matmul."""
+        w_tile = weights_tensor.get_tile()
+        w_shard = weights_tensor.memory_config().shard_spec.shape
+        Kt = w_shard[0] // w_tile.tile_shape[0]
+        subblock_k = Kt // num_subblocks_k
+        num_in1_buffers = 3 * num_subblocks_k
+        in1_CB_tiles = subblock_k * num_in1_buffers
+        tile_h = w_tile.tile_shape[0]
+        tile_w = w_tile.tile_shape[1]
+        shard_h = in1_CB_tiles * tile_h
+        shard_w = tile_w
+        shard_spec = ttnn.ShardSpec(core_ranges, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR)
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+        buf_tensor = ttnn.from_torch(
+            torch.zeros(shard_h, shard_w * num_cores, dtype=torch.bfloat16),
+            dtype=weights_tensor.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            memory_config=mem_config,
+            tile=w_tile,
+        )
+        return buf_tensor
+
+    gate_proj_in1_buf_tensor = _create_matmul_working_buf(
+        device, gate_proj_weights, gate_proj_core_ranges, num_gate_proj_cores, num_subblocks_k=4
+    )
+    up_proj_in1_buf_tensor = _create_matmul_working_buf(
+        device, up_proj_weights, gate_proj_core_ranges, num_gate_proj_cores, num_subblocks_k=4
+    )
+    down_proj_in1_buf_tensor = _create_matmul_working_buf(
+        device, down_proj_weights, gate_proj_core_ranges, num_gate_proj_cores, num_subblocks_k=2
+    )
+
+    # Scalar working buffer (16x16 tile, bfloat16)
+    tile_16x16_buf = ttnn.Tile([16, 16])
+    scalar_shard = ttnn.ShardSpec(gate_proj_core_ranges, (16, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    scalar_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, scalar_shard)
+    mul_scalar_buf_tensor = ttnn.from_torch(
+        torch.zeros(16, 16 * num_gate_proj_cores, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=scalar_mem,
+        tile=tile_16x16_buf,
+    )
+
     return {
         # TTNN tensors for op()
         "ttnn_input": ttnn_input,
@@ -656,6 +704,11 @@ def create_routed_expert_tensors(device, use_hardcoded_expert_index):
         "down_proj_output": down_proj_output,
         "fused_add_tensor": fused_add_tensor,
         "final_output_tensor": final_output_tensor,
+        # Tensor-backed working buffers
+        "gate_proj_in1_buf_tensor": gate_proj_in1_buf_tensor,
+        "up_proj_in1_buf_tensor": up_proj_in1_buf_tensor,
+        "down_proj_in1_buf_tensor": down_proj_in1_buf_tensor,
+        "mul_scalar_buf_tensor": mul_scalar_buf_tensor,
         # Keep-alive references (prevent garbage collection)
         "gate_proj_expert_tensors": gate_proj_expert_tensors,
         "up_proj_expert_tensors": up_proj_expert_tensors,
@@ -735,6 +788,10 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
             r["down_proj_output"],
             r["fused_add_tensor"],
             r["final_output_tensor"],
+            r["gate_proj_in1_buf_tensor"],
+            r["up_proj_in1_buf_tensor"],
+            r["down_proj_in1_buf_tensor"],
+            r["mul_scalar_buf_tensor"],
             use_hardcoded_expert_index=use_hardcoded_expert_index,
         )
     ttnn.synchronize_device(device)
@@ -858,6 +915,7 @@ def test_moe_fused(device, use_hardcoded_expert_index):
     # ── Phase 1: Routed expert ──
     logger.info("Phase 1: Running routed expert...")
     r = create_routed_expert_tensors(device, use_hardcoded_expert_index)
+    s = create_shared_expert_tensors(device, M, K)
 
     num_iterations = 100
     for iteration in range(num_iterations):
@@ -884,6 +942,10 @@ def test_moe_fused(device, use_hardcoded_expert_index):
             r["down_proj_output"],
             r["fused_add_tensor"],
             r["final_output_tensor"],
+            r["gate_proj_in1_buf_tensor"],
+            r["up_proj_in1_buf_tensor"],
+            r["down_proj_in1_buf_tensor"],
+            r["mul_scalar_buf_tensor"],
             use_hardcoded_expert_index=use_hardcoded_expert_index,
         )
     ttnn.synchronize_device(device)
@@ -915,9 +977,6 @@ def test_moe_fused(device, use_hardcoded_expert_index):
         use_hardcoded_expert_index=use_hardcoded_expert_index,
     )
 
-    # Deallocate routed expert device tensors to free L1
-    del r, ttnn_result_scores, ttnn_result_indices, ttnn_result_final
-
     # Verify routed expert gate
     output_indices_top8 = output_indices_torch[0, :8]
     output_scores_top8 = output_scores_torch[0, :8]
@@ -938,7 +997,6 @@ def test_moe_fused(device, use_hardcoded_expert_index):
 
     # ── Phase 2: Shared expert ──
     logger.info("Phase 2: Running shared expert...")
-    s = create_shared_expert_tensors(device, M, K)
 
     for iteration in range(num_iterations):
         ttnn_shared_result = SharedExpertOp.op(
