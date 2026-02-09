@@ -4,8 +4,15 @@ description: "Use this agent when implementing a new TTNN operation using the Py
 model: sonnet
 color: pink
 hooks:
+  PostToolUse:
+    - matcher: "Write|Edit"
+      hooks:
+        - type: command
+          command: ".claude/scripts/track_agent_file.sh"
   Stop:
     - hooks:
+        - type: command
+          command: ".claude/scripts/block_if_tests_not_run.sh"
         - type: command
           command: ".claude/scripts/logging/block_if_uncommitted.sh ttnn-generic-op-builder"
 ---
@@ -35,7 +42,8 @@ Given an operation specification or user requirements, implement a complete TTNN
 
 1. **Template structure**: Read `.claude/references/generic_op_template/` - Copy and modify this structure
 2. **API reference**: Read `.claude/skills/ttnn-generic-op/SKILL.md` - Quick reference for all APIs
-3. **Working examples**:
+3. **Python utility bindings**: Read `.claude/references/ttnn-python-utility-bindings.md` - Buffer queries, math utils, HAL queries, tile_size, work distribution
+4. **Working examples**:
    - `tests/ttnn/unit_tests/operations/debug/test_generic_op.py` - Basic working examples (important, this a CPP equivalent, most important structures are nanobinded)
    - `models/demos/deepseek_v3_b1/micro_ops/rmsnorm/op.py` - Sharded tensor example
 
@@ -122,10 +130,16 @@ ttnn.KernelDescriptor(
 
 ### CB Descriptor
 ```python
-# Extract page size from tensor metadata (never hard-code dtype or tile size):
+# PREFERRED: Use buffer query methods (layout-agnostic, works for tiled or row-major):
+page_size = input_tensor.buffer_page_size()
+num_pages = input_tensor.buffer_num_pages()
+
+# For intermediate CBs with no tensor, use ttnn.tile_size(dtype):
+intermed_page_size = ttnn.tile_size(ttnn.bfloat16)  # 2048
+
+# ALTERNATIVE (still valid, layout-specific):
 #   TILE_LAYOUT:      page_size = tensor.tile.get_tile_size(tensor.dtype)
 #   ROW_MAJOR_LAYOUT: page_size = tensor.padded_shape[-1] * tensor.element_size()
-page_size = input_tensor.tile.get_tile_size(input_tensor.dtype)
 
 ttnn.CBDescriptor(
     total_size=num_pages * page_size,
@@ -238,8 +252,15 @@ void kernel_main() {
 ### Step 6: Implement Basic Test
 
 **Requirements:**
-- Always run tests using pytest
 - Never open devices manually; use the `device` fixture from conftest
+
+### Step 7: Run Tests (MANDATORY)
+
+After writing the test file, you MUST run it to verify that the program descriptor, CB configuration, and stub kernels work end-to-end. Use:
+```bash
+.claude/scripts/dev-test.sh ttnn/ttnn/operations/{op_name}/test_{op_name}.py
+```
+This catches DataFormat errors, CB misconfigurations, and allocation failures BEFORE the kernel writer agent has to deal with them. Do NOT skip this step.
 
 ```python
 import pytest
@@ -338,9 +359,15 @@ def test_{op_name}_runs(device):
 
 5. **Kernel paths**: Use paths relative to the tt-metal base folder
 
-6. **Data formats**: Match CB data format to tensor dtype:
-   - `ttnn.bfloat16` → `ttnn.DataFormat.Float16_b`
-   - `ttnn.float32` → `ttnn.DataFormat.Float32`
+6. **Data formats**: `CBFormatDescriptor.data_format` takes `ttnn.DataType` values directly. There is NO `ttnn.DataFormat` enum in the Python API.
+   ```python
+   # CORRECT:
+   ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=page_size)
+   ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.float32, page_size=page_size)
+
+   # WRONG (ttnn.DataFormat does not exist):
+   ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.DataFormat.Float16_b, ...)
+   ```
 
 ## Common Patterns
 
