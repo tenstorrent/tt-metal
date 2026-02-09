@@ -77,7 +77,6 @@ def test_reshape_block_shard(device, shape):
     shard_shape[-1] = 32
 
     block_sharded_config = ttnn.create_sharded_memory_config(
-        # shape=[128,32],
         shape=shard_shape,
         core_grid=ttnn.CoreGrid(x=1, y=8),
         strategy=ttnn.ShardStrategy.BLOCK,

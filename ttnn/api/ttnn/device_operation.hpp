@@ -585,7 +585,6 @@ typename device_operation_t::tensor_return_value_t launch(
         }
     }
 
-    // operation launched here
     detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
 

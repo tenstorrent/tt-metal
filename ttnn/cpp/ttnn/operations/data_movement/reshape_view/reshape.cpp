@@ -263,7 +263,6 @@ ttnn::Tensor reshape_tiled(
             output_mem_config,
             recreate_mapping_tensor,
             sub_core_grid);
-        // output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt); // i to s
     }
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {
