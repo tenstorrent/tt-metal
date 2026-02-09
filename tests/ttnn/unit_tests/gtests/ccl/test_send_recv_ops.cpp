@@ -150,6 +150,7 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     distributed::SocketConnection socket_connection_10 = distributed::SocketConnection(
         distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord),
         distributed::MeshCoreCoord(end_device_coord, recv_logical_coord));
+
     // distributed::SocketConnection socket_connection_12 = distributed::SocketConnection(
     //     distributed::MeshCoreCoord(intermed_device_coord, copy_logical_coord),
     //     distributed::MeshCoreCoord(intermed_device_coord_2, copy_logical_coord));

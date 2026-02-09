@@ -132,6 +132,8 @@ void kernel_main() {
         uint64_t start_timestamp = get_timestamp();
         socket_reserve_pages(sender_socket, 1);
         uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
+
+        // serialize these two paths
         for (uint32_t j = 0; j < num_whole_packets_link_0; ++j) {
             write_data_to_remote_core_with_ack(
                 fabric_connection,

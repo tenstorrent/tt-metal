@@ -301,7 +301,7 @@ FORCE_INLINE void fabric_socket_notify_sender_stateful(
     DPRINT << "unicast_addr" << ENDL();
     // dead here
     fabric_connection.wait_for_empty_write_slot();
-    DPRINT << "empty writie slot" << ENDL();
+    DPRINT << "empty write slot" << ENDL();
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
     DPRINT << "send payload" << ENDL();
