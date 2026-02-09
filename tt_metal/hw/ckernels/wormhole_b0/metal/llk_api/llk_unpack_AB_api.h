@@ -37,8 +37,7 @@ inline void llk_unpack_AB_init(
         face_r_dim,
         face_r_dim,
         num_faces,
-        num_faces,
-        100 /* nop_count */);
+        num_faces);
 
     if (!isUnpackerConfiguredCorrectly) {
         DPRINT_UNPACK(DPRINT << "llk_unpack_AB_init - Need to reconfigure unpacker for AB." << ENDL());
@@ -78,8 +77,7 @@ inline void llk_unpack_AB(
         face_r_dim,
         face_r_dim,
         num_faces,
-        num_faces,
-        0 /* nop_count */);
+        num_faces);
 
     if (!isUnpackerConfiguredCorrectly) {
         DPRINT_UNPACK(DPRINT << "llk_unpack_AB - Need to reconfigure unpacker for AB." << ENDL());
