@@ -56,6 +56,8 @@ def preprocess_inputs_prefill(
     logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in input_embeds))
 
     max_prompt_len = max(len(x) for x in input_embeds)
+
+    # Check the actual prompt length against max_prefill_len for clarity
     assert (
         max_prompt_len <= max_prefill_len
     ), f"Max prompt length {max_prompt_len} exceeds max prefill len {max_prefill_len} and clipping and retokenizing is not supported for Qwen2.5 VL"
@@ -74,8 +76,25 @@ def preprocess_inputs_prefill(
         user_attention_mask = attention_mask[i]
         actual_prompt_len = int(user_attention_mask.sum().item())
 
-        # Prefill size is nearest power of 2 - FIXME: *really*? power of 2? surely we only need it to be a multiple of 1024 or whatever?
-        prefill_seq_len = min(max_prefill_len, max(2 ** math.ceil(math.log(len(input_embed), 2)), 128))
+        # Prefill size: round up to nearest multiple of 2048 (chunk size) instead of power of 2
+        # This is more memory-efficient and compatible with chunked prefill, which processes in 2048-token chunks.
+        # When the rounded length exceeds max_prefill_chunk_size, pad only to max_prefill_chunk_size and let
+        # chunked prefill handle the rest. This avoids allocating unnecessarily large buffers upfront.
+        # Minimum is 128 to ensure proper alignment.
+        CHUNK_SIZE = 2048
+        if len(input_embed) <= 128:
+            prefill_seq_len = 128
+        else:
+            # Round up to nearest multiple of CHUNK_SIZE
+            rounded_len = math.ceil(len(input_embed) / CHUNK_SIZE) * CHUNK_SIZE
+            # If rounded length exceeds max_prefill_chunk_size, cap at max_prefill_chunk_size.
+            # Chunked prefill will handle sequences larger than max_prefill_chunk_size by processing in chunks,
+            # so we don't need to allocate buffers for the full rounded length upfront.
+            if hasattr(model_args, "max_prefill_chunk_size") and rounded_len > model_args.max_prefill_chunk_size:
+                # Pad to max_prefill_chunk_size (must be multiple of CHUNK_SIZE)
+                prefill_seq_len = min(max_prefill_len, model_args.max_prefill_chunk_size)
+            else:
+                prefill_seq_len = min(max_prefill_len, rounded_len)
 
         # Initialize prefill tensors full of pad tokens
         input_prefill_i = torch.empty((prefill_seq_len, pad_embedding.shape[-1]), dtype=pad_embedding.dtype)
@@ -109,7 +128,22 @@ def multimodal_rope_from_hf(
     Unlike the reference model, we will precompute cos and sin for the entire sequence length including the generated tokens
     """
 
-    max_seq_len = min(model_args.max_seq_len, max(2 ** math.ceil(math.log(inputs.input_ids.shape[-1], 2)), 128))
+    # Round up to nearest multiple of 2048 (chunk size) instead of power of 2 for memory efficiency
+    # This matches the rounding strategy in preprocess_inputs_prefill and is compatible with chunked prefill.
+    # Always cap at max_prefill_chunk_size when available to avoid allocating RoPE matrices larger than needed.
+    CHUNK_SIZE = 2048
+    input_len = inputs.input_ids.shape[-1]
+    if input_len <= 128:
+        max_seq_len = 128
+    else:
+        # Round up to nearest multiple of CHUNK_SIZE
+        rounded_seq_len = math.ceil(input_len / CHUNK_SIZE) * CHUNK_SIZE
+        # Cap at max_prefill_chunk_size to avoid allocating unnecessarily large RoPE matrices.
+        # Chunked prefill can handle sequences larger than max_prefill_chunk_size.
+        if hasattr(model_args, "max_prefill_chunk_size"):
+            max_seq_len = min(model_args.max_seq_len, rounded_seq_len, model_args.max_prefill_chunk_size)
+        else:
+            max_seq_len = min(model_args.max_seq_len, rounded_seq_len)
     padded_inputs = torch.nn.functional.pad(
         inputs.input_ids, (0, max_seq_len - inputs.input_ids.shape[-1]), value=pad_token_id
     )  # [INFO] padding with 0 was done by HF but it makes better sense to pad with the pad_token_id
