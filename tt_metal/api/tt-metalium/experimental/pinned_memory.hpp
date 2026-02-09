@@ -155,9 +155,9 @@ public:
     /**
      * @brief Pin existing host memory for a specific set of mesh coordinates.
      *
-     * Creates pinned system memory for the devices covered by the provided mesh coordinate range set,
-     * mapping the existing host buffer to each device. When map_to_noc is true and supported by the
-     * system, the buffer will be mapped to the NOC for direct device access.
+     * Creates pinned system memory for the devices covered by the provided mesh coordinate range set, mapping the
+     * existing host buffer to each device. When map_to_noc is true and supported by the system, the buffer will be
+     * mapped to the NOC for direct device access. On return, the pinned memory will also be attached to the HostBuffer.
      *
      * @param mesh_device The mesh device to pin memory for
      * @param coordinate_range_set Set of mesh coordinates to pin memory for
@@ -165,7 +165,7 @@ public:
      * @param map_to_noc Whether to map the buffer to the NOC
      * @return Unique pointer to the created PinnedMemory instance
      */
-    static std::unique_ptr<PinnedMemory> Create(
+    static std::shared_ptr<PinnedMemory> Create(
         distributed::MeshDevice& mesh_device,
         const distributed::MeshCoordinateRangeSet& coordinate_range_set,
         HostBuffer& host_buffer,

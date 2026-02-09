@@ -2,13 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/rand.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/rand.h"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(0);
 
     const uint32_t seed = get_arg_val<uint32_t>(0);
@@ -40,4 +38,3 @@ void MAIN {
         cb_push_back(intermed_cb_id, 1);
     }
 }
-}  // namespace NAMESPACE

@@ -514,7 +514,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          sparse-checkout: .github/CODEOWNERS
+          sparse-checkout-cone-mode: false
 
       - name: Get PR changed files
         id: get-files
@@ -1415,6 +1417,9 @@ jobs:
               "@tenstorrent/metalium-developers-ops-data-movement")
                 echo "S09QQRK1CF8"
                 ;;
+              "@tenstorrent/metalium-developers-eltwise")
+                echo "S0ABKSS1D3R"
+                ;;
               *)
                 echo ""  # No Slack group available
                 ;;
@@ -1909,6 +1914,9 @@ jobs:
               "@tenstorrent/metalium-developers-ops-data-movement")
                 echo "S09QQRK1CF8"
                 ;;
+              "@tenstorrent/metalium-developers-eltwise")
+                echo "S0ABKSS1D3R"
+                ;;
               *)
                 echo ""  # No Slack group available
                 ;;
@@ -2119,8 +2127,29 @@ jobs:
 
               if [ -n "$SLACK_GROUP_ID" ]; then
                 echo "Team $team has Slack group: $SLACK_GROUP_ID"
-                SELECTED_SLACK_GROUPS="$SELECTED_SLACK_GROUPS$SLACK_GROUP_ID,"
-                echo "Added pending Slack group: $team -> $SLACK_GROUP_ID"
+
+                # Special handling for metalium-developers-eltwise - only ping group if none of the 3 key members approved
+                if [ "$team" = "@tenstorrent/metalium-developers-eltwise" ]; then
+                  ELTWISE_KEY_MEMBERS="dchenTT mateusznowakTT cmaryanTT"
+                  ELTWISE_APPROVED=false
+                  for key_member in $ELTWISE_KEY_MEMBERS; do
+                    if echo "$APPROVED_REVIEWERS" | grep -q "$key_member"; then
+                      echo "✅ Key eltwise member $key_member has approved, skipping group ping"
+                      ELTWISE_APPROVED=true
+                      break
+                    fi
+                  done
+
+                  if [ "$ELTWISE_APPROVED" = "false" ]; then
+                    echo "⚠️  No key eltwise member approved yet, adding Slack group ping"
+                    SELECTED_SLACK_GROUPS="$SELECTED_SLACK_GROUPS$SLACK_GROUP_ID,"
+                    echo "Added pending Slack group: $team -> $SLACK_GROUP_ID"
+                  fi
+                else
+                  # Standard behavior for other teams with Slack groups
+                  SELECTED_SLACK_GROUPS="$SELECTED_SLACK_GROUPS$SLACK_GROUP_ID,"
+                  echo "Added pending Slack group: $team -> $SLACK_GROUP_ID"
+                fi
               else
                 echo "Team $team has no Slack group, using individual selection"
                 # Select individuals from team
@@ -2460,6 +2489,9 @@ jobs:
                 ;;
               "@tenstorrent/metalium-developers-ops-data-movement")
                 echo "S09QQRK1CF8"
+                ;;
+              "@tenstorrent/metalium-developers-eltwise")
+                echo "S0ABKSS1D3R"
                 ;;
               *)
                 echo ""  # No Slack group available

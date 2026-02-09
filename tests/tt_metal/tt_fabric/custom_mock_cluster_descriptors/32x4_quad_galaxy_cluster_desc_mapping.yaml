@@ -1,0 +1,5 @@
+rank_to_cluster_mock_cluster_desc:
+  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/32x4_quad_galaxy_cluster_desc/32x4_quad_galaxy_cluster_desc_bh-glx-b08u02_slot_0.yaml"
+  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/32x4_quad_galaxy_cluster_desc/32x4_quad_galaxy_cluster_desc_bh-glx-b08u08_slot_0.yaml"
+  2: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/32x4_quad_galaxy_cluster_desc/32x4_quad_galaxy_cluster_desc_bh-glx-b09u08_slot_0.yaml"
+  3: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/32x4_quad_galaxy_cluster_desc/32x4_quad_galaxy_cluster_desc_bh-glx-b09u02_slot_0.yaml"

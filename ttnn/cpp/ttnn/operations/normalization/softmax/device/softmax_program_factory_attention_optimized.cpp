@@ -290,9 +290,9 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         if (i >= num_cores) {
             if (attributes.is_causal_mask) {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0, 0});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0, 0, 0});
             } else {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0});
             }
 
             SetRuntimeArgs(program, softmax_kernels_id, core, {0, 0, 0, 0, 0, 0});

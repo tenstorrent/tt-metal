@@ -503,6 +503,15 @@ void ControlPlane::init_control_plane(
         log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
     }
 
+    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+                                              ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
+                                               std::to_string(world_size) + ".yaml");
+    try {
+        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(*this->topology_mapper_, asic_mapping_file);
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Failed to export ASIC to Fabric node ID mapping: {}", e.what());
+    }
+
     // Initialize routing table generator after topology_mapper is created
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
 
@@ -575,6 +584,15 @@ void ControlPlane::init_control_plane_auto_discovery() {
         tt::tt_fabric::serialize_mesh_coordinates_to_file(*this->topology_mapper_, output_file);
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
+    }
+
+    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+                                              ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
+                                               std::to_string(world_size) + ".yaml");
+    try {
+        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(*this->topology_mapper_, asic_mapping_file);
+    } catch (const std::exception& e) {
+        log_warning(tt::LogFabric, "Failed to export ASIC to Fabric node ID mapping: {}", e.what());
     }
 
     // Initialize routing table generator after topology_mapper is created
@@ -1241,6 +1259,19 @@ eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDire
     return dir;
 }
 
+RoutingDirection ControlPlane::eth_direction_to_routing_direction(eth_chan_directions direction) const {
+    RoutingDirection dir;
+    switch (direction) {
+        case eth_chan_directions::NORTH: dir = RoutingDirection::N; break;
+        case eth_chan_directions::SOUTH: dir = RoutingDirection::S; break;
+        case eth_chan_directions::EAST: dir = RoutingDirection::E; break;
+        case eth_chan_directions::WEST: dir = RoutingDirection::W; break;
+        case eth_chan_directions::Z: dir = RoutingDirection::Z; break;
+        default: TT_FATAL(false, "Invalid Ethernet Direction");
+    }
+    return dir;
+}
+
 std::set<std::pair<chan_id_t, eth_chan_directions>> ControlPlane::get_active_fabric_eth_channels(
     FabricNodeId fabric_node_id) const {
     std::set<std::pair<chan_id_t, eth_chan_directions>> active_fabric_eth_channels;
@@ -1650,6 +1681,8 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
     routing_l1_info_t routing_info = {};
+    routing_info.state_manager.command = RouterCommand::RUN;
+    routing_info.state_manager.state = RouterState::INITIALIZING;
     routing_info.my_mesh_id = *mesh_id;
     routing_info.my_device_id = chip_id;
 
@@ -2091,7 +2124,7 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
     auto fabric_router_channels_on_chip =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_chip_id);
+        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(*this, physical_chip_id);
 
     // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
     if (fabric_router_channels_on_chip.contains(chan_id)) {
@@ -2854,6 +2887,10 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
 
     const auto& requested_intermesh_connections = mesh_graph.get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
+
+    if (requested_intermesh_connections.empty() && requested_intermesh_ports.empty()) {
+        return intermesh_connections;
+    }
 
     TT_FATAL(
         requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),

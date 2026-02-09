@@ -380,7 +380,6 @@ struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
 
         CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::pack_to(
             &args[i], command_tensor.worker_pages_per_slice);
-        i += CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::size_in_words();
     }
 
     void pack_to(args_elem_t* args) const {
@@ -403,7 +402,6 @@ struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
         i += CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::size_in_words();
 
         CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::unpack(&args[i], out.worker_pages_per_slice);
-        i += CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::size_in_words();
     }
 
     void unpack(volatile args_elem_t const* args) {

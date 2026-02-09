@@ -13,12 +13,13 @@
 #elif defined(COMPILE_FOR_TRISC)
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_SCALAR
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/rsqrt.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/experimental/mul_reduce_scalar.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
 #endif
@@ -33,16 +34,13 @@ namespace deepseek_b1_ops {
 //
 // CB States:
 //   NCRISC (Reader):
-//     - Reserves: scalars_cb (1 tile: reduction scalar)
-//     - Pushes: scalars_cb (1 tile)
 //     Note: input_cb and gamma_cb setup done externally via setup_sharded_buffer
 //   BRISC: No-op (next op waits on output if needed)
 //   TRISC (Compute):
-//     - Waits: input_cb (num_tiles), scalars_cb (1), gamma_cb (num_tiles)
-//     - Reserves: interm_cb (num_tiles), output_cb (num_tiles)
+//     - Waits: input_cb (num_tiles), gamma_cb (num_tiles)
+//     - Reserves: output_cb (num_tiles)
 //     - Pushes: output_cb (num_tiles)
 //     - Pops: input_cb (num_tiles) if pop_input=true
-//     - Pops: interm_cb (used internally)
 // ============================================================================
 struct RMSNorm {
     // ========================================================================
@@ -50,11 +48,8 @@ struct RMSNorm {
     // (used as template parameters or in constexpr expressions)
     // ========================================================================
 
-    // Reader CTArgs: num_faces (used as template param in generate_reduce_scaler)
-    template <uint32_t NumFaces>
-    struct ReaderCTArgs {
-        static constexpr uint32_t num_faces = NumFaces;
-    };
+    // Reader CTArgs:none needed
+    struct ReaderCTArgs {};
 
     // Writer CTArgs: none needed
     struct WriterCTArgs {};
@@ -70,20 +65,16 @@ struct RMSNorm {
     // ========================================================================
     // Runtime args structs - different layout per RISC
     // ========================================================================
-    // Reader args (NCRISC): only scalars needed (input_cb and gamma_cb setup done externally)
-    struct ReaderArgs {
-        uint32_t scalars_cb;
-        uint32_t scalar;
-    };
+    // Reader args (NCRISC): none needed
+    struct ReaderArgs {};
     // Writer args (BRISC): none (BRISC is no-op)
     struct WriterArgs {};
     struct ComputeArgs {
         uint32_t input_cb;
-        uint32_t scalars_cb;
-        uint32_t interm_cb;
         uint32_t gamma_cb;
         uint32_t output_cb;
         uint32_t epsilon;
+        float scalar;
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -102,19 +93,12 @@ struct RMSNorm {
 
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
-#if defined(COMPILE_FOR_NCRISC)
-            // ================================================================
-            // NCRISC (Reader) - ReaderConfigDescriptor compiles as NCRISC
-            // ================================================================
-            // Generate reduction scalar (1/sqrt(num_elements))
-            generate_reduce_scaler<CTArgs::num_faces>(args.scalars_cb, args.scalar);
-#elif defined(COMPILE_FOR_TRISC)
+#if defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC (Compute)
             // ================================================================
             // Init block done only once
             binary_op_init_common(args.input_cb, args.input_cb, args.output_cb);
-            cb_wait_front(args.scalars_cb, 1);
             cb_wait_front(args.gamma_cb, CTArgs::num_tiles);  // we don't pop, only wait once and reuse
 
             compute_rmsnorm(args);
@@ -126,40 +110,20 @@ struct RMSNorm {
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
             {
                 // Square the input
-                mul_tiles_init(args.input_cb, args.input_cb);
+                mul_reduce_scalar_init(args.input_cb, args.input_cb);
                 add_rsqrt_tile_init();
                 cb_wait_front(args.input_cb, num_tiles);
-                cb_reserve_back(args.interm_cb, num_tiles);
                 tile_regs_acquire();
-                for (uint32_t i = 0; i < num_tiles; i++) {
-                    mul_tiles(args.input_cb, args.input_cb, i, i, i);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile_block(0, args.interm_cb, num_tiles);
-                cb_push_back(args.interm_cb, num_tiles);
-                tile_regs_release();
-
-                // Calculate the avg of the sum of the squares
-                reduce_init<PoolType::SUM, ReduceDim::REDUCE_SCALAR, CTArgs::fp32_acc>(
-                    args.interm_cb, args.scalars_cb, args.interm_cb);
-                cb_wait_front(args.interm_cb, num_tiles);
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < num_tiles; i++) {
-                    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_SCALAR, CTArgs::fp32_acc>(
-                        args.interm_cb, args.scalars_cb, i, 0, num_tiles);
-                }
-                cb_pop_front(args.interm_cb, num_tiles);
-                cb_pop_front(args.scalars_cb, 1);  // Pop scalar tiles
-                reduce_uninit();
+                mul_reduce_scalar_tile<PoolType::SUM>(args.input_cb, args.input_cb, num_tiles, args.scalar);
+                mul_reduce_scalar_uninit();
             }
             {
-                add_rsqrt_tile<CTArgs::rsqrt_fast_approx, VectorMode::RC_custom, 1>(num_tiles, args.epsilon);
+                add_rsqrt_tile<CTArgs::rsqrt_fast_approx, VectorMode::RC_custom, 1>(0, args.epsilon);
             }
             {
                 // Multiply input by 1/RMS
                 rmsnorm_mul_bcast_scalar_reuse_tiles_init<num_tiles>(args.input_cb);
-                rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles>(args.input_cb, 0, num_tiles, 0);
+                rmsnorm_mul_bcast_scalar_reuse_tiles<num_tiles, true>(args.input_cb, 0, 0, 0);
                 if constexpr (pop_input) {
                     cb_pop_front(args.input_cb, num_tiles);
                 }

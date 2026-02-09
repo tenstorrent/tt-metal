@@ -16,7 +16,7 @@
           "ENABLE_CCACHE": {"value": "TRUE"},
           "TT_UNITY_BUILDS": {"value": "FALSE"}
         },
-        "toolchainFile": "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+        "toolchainFile": "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
       },
       {
         "name": "clang-tidy",
@@ -81,7 +81,7 @@
         "cacheVariables": {
           "BUILD_TT_TRAIN": {"value": "OFF"}
         },
-        "toolchainFile": "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+        "toolchainFile": "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
       }
     ],
     "buildPresets": [
@@ -113,8 +113,7 @@
         "name": "clang-tidy",
         "configurePreset": "clang-tidy",
         "configuration": "Debug",
-        "targets": ["all", "all_verify_interface_header_sets"],
-        "nativeToolOptions": ["-k0"]
+        "targets": ["all", "all_verify_interface_header_sets"]
       },
       {
         "name": "clang-tidy-fix",

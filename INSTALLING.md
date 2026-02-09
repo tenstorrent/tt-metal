@@ -19,7 +19,7 @@ This document provides advanced users and developers with comprehensive instruct
 #### Option 1: **TT-Installer** Script (recommended)
 - For a quick setup, download and run the **TT-Installer** installation script:
 ```
-curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
+curl -fsSL https://github.com/tenstorrent/tt-installer/releases/download/v2.1.0/install.sh -O
 chmod +x install.sh
 ./install.sh --install-container-runtime=no
 ```

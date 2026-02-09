@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,7 +44,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Core range set to run the operation on. Defaults to `None`.
-                indices_tensor (ttnn.Tensor, optional): Preallocated indices tensor. Defaults to `None`.
+                indices_tensor (ttnn.Tensor, optional): Preallocated indices tensor with filled values. Defaults to `None`.
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
@@ -119,7 +119,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
             nb::arg("largest") = true,
             nb::arg("sorted") = true,
             nb::kw_only(),
-            nb::arg("out") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("indices_tensor") = nb::none()});

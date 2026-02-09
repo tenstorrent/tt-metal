@@ -156,7 +156,9 @@ public:
 
     void TearDown() {
         device_open_ = false;
-        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(
+            control_plane, false);
         for (auto& device : this->devices) {
             device->close();
         }

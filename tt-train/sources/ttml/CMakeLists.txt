@@ -151,6 +151,10 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_fused.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.cpp
@@ -308,6 +312,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
+    # AdamW Optimizer (consolidated: supports both half and full precision)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -345,13 +357,12 @@ if(NOT TARGET TT::Metalium)
             "${TT_METAL_HOME}/tt_metal/api/"
             "${TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
             "${TT_METAL_HOME}/tt_metal/hostdevcommon/api"
-            "${TT_METAL_HOME}/tt_metal/include"
+            "${TT_METAL_HOME}/tt_metal/hw/inc"
             "${TT_METAL_HOME}/tt_stl"
             # TTNN
-            "${TT_METAL_HOME}/ttnn"
-            "${TT_METAL_HOME}/ttnn/api"
-            "${TT_METAL_HOME}/ttnn/cpp"
-            "${TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
+            "$ENV{TT_METAL_HOME}/ttnn"
+            "$ENV{TT_METAL_HOME}/ttnn/api"
+            "$ENV{TT_METAL_HOME}/ttnn/cpp"
             "${reflect_SOURCE_DIR}"
         )
 

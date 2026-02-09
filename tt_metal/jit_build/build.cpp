@@ -14,6 +14,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
@@ -87,6 +88,7 @@ void JitBuildEnv::init(
     uint64_t build_key,
     size_t fw_compile_hash,
     tt::ARCH arch,
+    uint32_t max_cbs,
     const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
@@ -94,6 +96,7 @@ void JitBuildEnv::init(
     this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
 
     this->arch_ = arch;
+    this->max_cbs_ = max_cbs;
 
 #ifndef GIT_COMMIT_HASH
     log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
@@ -193,7 +196,7 @@ void JitBuildEnv::init(
         }
         this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
     }
-    if (rtoptions.get_experimental_device_debug_dump_enabled()) {
+    if (rtoptions.get_experimental_noc_debug_dump_enabled()) {
         this->defines_ += "-DDEVICE_DEBUG_DUMP=1 ";
     }
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
@@ -259,6 +262,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_LLK_ASSERT ";
     }
 
+    if (rtoptions.get_disable_sfploadmacro()) {
+        this->defines_ += "-DDISABLE_SFPLOADMACRO ";
+    }
+
     // Includes
     // TODO(pgk) this list is insane
     std::vector<std::string> includeDirs = {
@@ -268,10 +275,8 @@ void JitBuildEnv::init(
         root_ + "ttnn",
         root_ + "ttnn/cpp",
         root_ + "tt_metal",
-        root_ + "tt_metal/include",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/hostdevcommon/api",
-        root_ + "tt_metal/hw/inc/debug",
         root_ + "tt_metal/api/"};
 
     std::ostringstream oss;
@@ -382,14 +387,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         src = env_.root_ + src;
     }
 
-    // Create list of object files for link
-    for (const string& obj : this->objs_) {
-        this->link_objs_ += obj + " ";
-    }
-
     // Append hw build objects compiled offline
     {
-        auto it = std::back_inserter(this->link_objs_);
+        auto it = std::back_inserter(this->extra_link_objs_);
         for (const auto& obj : jit_build_query.link_objs(params)) {
             fmt::format_to(it, "{}{} ", env_.root_, obj);
         }
@@ -401,7 +401,11 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
 }
 
 void JitBuildState::compile_one(
-    const string& out_dir, const JitBuildSettings* settings, const string& src, const string& obj) const {
+    const string& out_dir,
+    const JitBuildSettings* settings,
+    const string& src,
+    const string& obj,
+    const string& obj_temp_path) const {
     // ZoneScoped;
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
@@ -451,13 +455,16 @@ void JitBuildState::compile_one(
     }
 
     // Append common args provided by the build state
+    std::string obj_path = out_dir + obj;
+    fs::path temp_d_path = obj_temp_path;
+    temp_d_path.replace_extension("d");
     cmd += this->cflags_;
     cmd += this->includes_;
     // Add kernel-specific include paths (e.g., kernel source directory for relative includes)
     if (settings) {
         settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
     }
-    cmd += fmt::format("-c -o {} {} ", obj, src);
+    cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, src, temp_d_path.string());
     cmd += defines;
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
@@ -468,12 +475,16 @@ void JitBuildState::compile_one(
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
-    std::string log_file = out_dir + obj + ".log";
-    fs::remove(log_file);
-    if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
-        build_failure(this->target_name_, "compile", cmd, log_file);
+    // log file and dephash file can be renamed after compilation, but the .o file
+    // needs to be renamed after link step to avoid LTO reading inconsistent object files.
+    jit_build::utils::FileRenamer log_file(obj_path + ".log");
+    fs::remove(log_file.path());
+    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
+        build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
-    jit_build::write_dependency_hashes(out_dir, obj);
+    jit_build::utils::FileRenamer dephash_file(obj_path + ".dephash");
+    jit_build::write_dependency_hashes(out_dir, obj_temp_path, dephash_file.path());
+    fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
@@ -481,13 +492,16 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
            !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
-size_t JitBuildState::compile(const string& out_dir, const JitBuildSettings* settings) const {
+size_t JitBuildState::compile(
+    const string& out_dir, const JitBuildSettings* settings, jit_build::utils::FileGroupRenamer& renamer) const {
     // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         if (need_compile(out_dir, this->objs_[i])) {
             launch_build_step(
-                [this, &out_dir, settings, i] { this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i]); },
+                [this, &out_dir, settings, i, obj_temp_path = renamer.generate_temp_path(i)]() {
+                    this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i], obj_temp_path);
+                },
                 events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
@@ -507,7 +521,7 @@ bool JitBuildState::need_link(const string& out_dir) const {
     return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
-void JitBuildState::link_impl(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
+void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
     lflags += tt_metal::MetalContext::instance().hal().get_jit_build_query().linker_flags(
@@ -545,27 +559,24 @@ void JitBuildState::link_impl(const string& out_dir, const JitBuildSettings* set
     cmd += lflags;
     cmd += link_objs;
     std::string elf_name = out_dir + this->target_name_ + ".elf";
-    cmd += "-o " + elf_name;
+    jit_build::utils::FileRenamer elf_file(elf_name);
+    cmd += "-o " + elf_file.path();
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
-    std::string log_file = elf_name + ".log";
-    fs::remove(log_file);
-    if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
-        build_failure(this->target_name_, "link", cmd, log_file);
+    jit_build::utils::FileRenamer log_file(elf_name + ".log");
+    fs::remove(log_file.path());
+    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
+        build_failure(this->target_name_, "link", cmd, log_file.path());
     }
-    std::string hash_path = elf_name + ".dephash";
-    std::ofstream hash_file(hash_path);
+    jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
+    std::ofstream hash_file(dephash_file.path());
     jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
-        std::filesystem::remove(hash_path);
+        std::filesystem::remove(dephash_file.path());
     }
-}
-
-void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings) const {
-    link_impl(out_dir, settings, this->link_objs_);
 }
 
 // Given this elf (A) and a later elf (B):
@@ -576,7 +587,7 @@ void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
-    std::string pathname_out = weakened_firmware_name();
+    jit_build::utils::FileRenamer out_file(weakened_firmware_name());
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
@@ -585,7 +596,7 @@ void JitBuildState::weaken(const string& out_dir) const {
     if (this->firmware_is_kernel_object_) {
         elf.ObjectifyExecutable();
     }
-    elf.WriteImage(pathname_out);
+    elf.WriteImage(out_file.path());
 }
 
 std::string JitBuildState::weakened_firmware_name() const {
@@ -625,10 +636,21 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
 
     fs::create_directories(out_dir);
-    if (compile(out_dir, settings) > 0 || need_link(out_dir)) {
-        link(out_dir, settings);
-        if (this->is_fw_) {
-            weaken(out_dir);
+    {
+        // object files will be created at unique names and renamed after linking
+        std::vector<std::string> obj_paths;
+        obj_paths.reserve(this->objs_.size());
+        for (const auto& obj : this->objs_) {
+            obj_paths.push_back(out_dir + obj);
+        }
+        jit_build::utils::FileGroupRenamer renamer(std::move(obj_paths));
+
+        if (compile(out_dir, settings, renamer) > 0 || need_link(out_dir)) {
+            string link_objs = fmt::format("{} {} ", this->extra_link_objs_, fmt::join(renamer.paths(), " "));
+            link(out_dir, settings, link_objs);
+            if (this->is_fw_) {
+                weaken(out_dir);
+            }
         }
     }
 
@@ -668,7 +690,7 @@ void JitBuildState::link_to_processor(
         link_objs += this->env_.root_ + obj + " ";
     }
 
-    link_impl(out_dir, settings, link_objs);
+    link(out_dir, settings, link_objs);
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {

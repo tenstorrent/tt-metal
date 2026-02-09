@@ -7,17 +7,15 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/eltwise_binary.h"
 #include "../../../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_moe_gate.h"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t bias_cb = get_compile_time_arg_val(1);
     constexpr uint32_t input_indices_cb = get_compile_time_arg_val(2);
@@ -65,4 +63,3 @@ void MAIN {
 
     tile_regs_release();
 }
-}  // namespace NAMESPACE

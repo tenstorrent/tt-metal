@@ -12,6 +12,13 @@ from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeS
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.panoptic_deeplab.tt.common import reshape_flattened_conv_output
 
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(*_args, **_kwargs):
+        pass
+
 
 class TtDeepLabV3PlusHead(LightweightModule):
     """
@@ -52,6 +59,8 @@ class TtDeepLabV3PlusHead(LightweightModule):
         self.decoder_only = num_classes is None
         self.device = device
         self.model_configs = model_configs
+        compute_grid = device.compute_with_storage_grid_size()
+        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
 
         # Initialize decoder with all stages
         self._initialize_decoder(
@@ -83,6 +92,15 @@ class TtDeepLabV3PlusHead(LightweightModule):
         else:
             final_config = base_config
             logger.debug(f"No model_configs provided, using base config for {conv_path}")
+
+        # Debug print memory config
+        shard_type = type(final_config.sharding_strategy).__name__ if final_config.sharding_strategy else "None"
+        act_block_h = (
+            final_config.sharding_strategy.act_block_h_override
+            if hasattr(final_config.sharding_strategy, "act_block_h_override")
+            else 0
+        )
+        logger.info(f"[MEMORY_CONFIG] {conv_path}: sharding={shard_type}, act_block_h_override={act_block_h}")
 
         # Create TtConv2d using TT CNN Builder
         return TtConv2d(final_config, self.device)
@@ -164,10 +182,18 @@ class TtDeepLabV3PlusHead(LightweightModule):
         logger.debug("TtDeepLabV3PlusHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Union[ttnn.Tensor, Tuple[ttnn.Tensor, Dict]]:
+        signpost("DECODER_START")
         y = self.layers(features)
+        signpost("DECODER_END")
         return y
 
     def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
+        if self.is_20_core:
+            return self.layers_20_cores(features)
+        else:
+            return self.layers_110_cores(features)
+
+    def layers_20_cores(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
         """
         Executes the decoder pipeline, mirroring the PyTorch version's logic.
         Simplified to use single conv versions - slicing is handled by Conv2dConfiguration.
@@ -312,6 +338,136 @@ class TtDeepLabV3PlusHead(LightweightModule):
         logger.debug(f"TtDeepLabV3PlusHead layers complete - final output shape: {y.shape}")
         return y
 
+    def layers_110_cores(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
+        """
+        Executes the decoder pipeline for 110-core configuration.
+        """
+        logger.debug(f"TtDeepLabV3PlusHead layers_110_cores - processing features: {list(features.keys())}")
+        y = None
+        feature_keys = self.in_features[::-1]
+
+        # --- Stage 1: ASPP ---
+        aspp_feature_key = feature_keys[0]
+        x = features[aspp_feature_key]
+
+        stage = self.decoder[aspp_feature_key]
+        logger.info(f"🔷 Executing conv: decoder.{aspp_feature_key}.project_conv (ASPP)")
+        y = stage["project_conv"](x)
+        # Keep in L1 for next stages
+        y = ttnn.to_memory_config(y, ttnn.L1_MEMORY_CONFIG)
+        logger.debug(f"TtDeepLabV3PlusHead ASPP stage complete, output shape: {y.shape}")
+
+        # --- Subsequent Fusion Stages (e.g., 'res3', then 'res2') ---
+        for i, f_key in enumerate(feature_keys[1:]):
+            logger.debug(f"TtDeepLabV3PlusHead processing fusion stage {i+1} with feature: {f_key}")
+            previous_y = y
+            x = features[f_key]
+            # Move to L1
+            x_l1 = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+
+            stage = self.decoder[f_key]
+            logger.info(f"🔷 Executing conv: decoder.{f_key}.project_conv")
+            proj_x = stage["project_conv"](x_l1)
+            proj_x = reshape_flattened_conv_output(proj_x, batch_size=1, layer_name=f"decoder.{f_key}.project_conv")
+            proj_x = ttnn.to_memory_config(proj_x, ttnn.L1_MEMORY_CONFIG)
+            logger.debug(f"TtDeepLabV3PlusHead fusion stage {i+1} projection complete, shape: {proj_x.shape}")
+
+            # Upsample operations (convert to ROW_MAJOR temporarily)
+            # Save y shape before layout conversion (layout conversion may flatten the tensor)
+            y_height, y_width = y.shape[1], y.shape[2]
+            y_batch, y_channels = y.shape[0], y.shape[3]
+            scale_h = proj_x.shape[1] // y_height
+            scale_w = proj_x.shape[2] // y_width
+
+            logger.info(
+                f"Decoder upsample stage {i+1} ({f_key}): y_shape=[{y_batch}, {y_height}, {y_width}, {y_channels}], proj_x_shape={proj_x.shape}, scale_factors=({scale_h}, {scale_w})"
+            )
+            logger.info(f"  Target size from proj_x: H={proj_x.shape[1]}, W={proj_x.shape[2]}")
+            logger.info(f"  Calculated output size: H={y_height * scale_h}, W={y_width * scale_w}")
+            if y_height * scale_h != proj_x.shape[1] or y_width * scale_w != proj_x.shape[2]:
+                logger.warning(
+                    f"  Size mismatch! Expected [{proj_x.shape[1]}, {proj_x.shape[2]}] but will get [{y_height * scale_h}, {y_width * scale_w}]"
+                )
+
+            from models.tt_cnn.tt.builder import TtUpsample, UpsampleConfiguration
+
+            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+            # Reshape if flattened (to_layout may flatten to [N, 1, H*W, C])
+            if y.shape[1] == 1 and y.shape[2] == y_height * y_width:
+                y = ttnn.reshape(y, (1, y_height, y_width, y.shape[3]))
+
+            logger.debug(
+                f"Decoder upsample stage {i+1}: input shape={y.shape}, dtype={y.dtype}, layout={y.layout}, scale_factors=({scale_h}, {scale_w})"
+            )
+
+            # Upsample with L1 config
+            upsample_config = UpsampleConfiguration(
+                input_height=y_height,
+                input_width=y_width,
+                channels=y_channels,
+                batch_size=y_batch,
+                scale_factor=(scale_h, scale_w),
+                mode="nearest",  # accuracy changes are negligible, so we use nearest for performance
+                slice_strategy=None,
+            )
+            upsample_layer = TtUpsample(upsample_config, self.device)
+            y_upsampled = upsample_layer(y)
+            y_upsampled_row_major = y_upsampled
+            y_upsampled = ttnn.to_layout(y_upsampled_row_major, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(y_upsampled_row_major)
+
+            # Ensure both tensors have the same dtype before concatenation
+            target_dtype = ttnn.bfloat8_b
+            if proj_x.dtype != target_dtype:
+                proj_x_old = proj_x
+                proj_x = ttnn.typecast(proj_x, target_dtype)
+                ttnn.deallocate(proj_x_old)
+            if y_upsampled.dtype != target_dtype:
+                y_upsampled_old = y_upsampled
+                y_upsampled = ttnn.typecast(y_upsampled, target_dtype)
+                ttnn.deallocate(y_upsampled_old)
+
+            # Concatenate in L1
+            y = ttnn.concat([proj_x, y_upsampled], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+            # Save shape before deallocation for potential reshape later
+            expected_H, expected_W = proj_x.shape[1], proj_x.shape[2]
+
+            ttnn.deallocate(previous_y)
+            ttnn.deallocate(proj_x)
+            ttnn.deallocate(y_upsampled)
+
+            # Use single conv versions - slicing handled by config, ReLU is fused
+            logger.info(f"🔷 Executing conv: decoder.{f_key}.fuse_conv.0")
+            y_conv0 = stage["fuse_conv_0"](y)
+
+            is_flattened = y_conv0.shape[1] == 1 and y_conv0.shape[2] == expected_H * expected_W
+            if is_flattened:
+                N = y_conv0.shape[0]
+                C = y_conv0.shape[3]
+                y_conv0 = ttnn.reshape(y_conv0, (N, expected_H, expected_W, C))
+                logger.debug(
+                    f"Reshaped channel-sliced fuse_conv_0 output from [1, 1, {expected_H * expected_W}, {C}] to [{N}, {expected_H}, {expected_W}, {C}]"
+                )
+
+            logger.info(f"🔷 Executing conv: decoder.{f_key}.fuse_conv.1")
+            y_conv1 = stage["fuse_conv_1"](y_conv0)
+            # ttnn.deallocate(y_conv0)
+
+            is_flattened_conv1 = y_conv1.shape[1] == 1 and y_conv1.shape[2] == expected_H * expected_W
+            if is_flattened_conv1:
+                N = y_conv1.shape[0]
+                C = y_conv1.shape[3]
+                y_conv1 = ttnn.reshape(y_conv1, (N, expected_H, expected_W, C))
+                logger.debug(
+                    f"Reshaped height-sliced fuse_conv_1 output from [1, 1, {expected_H * expected_W}, {C}] to [{N}, {expected_H}, {expected_W}, {C}]"
+                )
+
+            y = y_conv1
+
+        return y
+
 
 class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
     """
@@ -438,7 +594,7 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             y = ttnn.reshape(y, (y.shape[0], current_h, current_w, y.shape[3]))
             logger.debug(f"After reshape: {y.shape}")
 
-        # Convert to interleaved DRAM if sharded
+        # Convert to interleaved L1 if sharded
         if y.is_sharded():
             y = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
         else:
@@ -456,8 +612,14 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
         # Matmul based upsample
         logger.debug(f"y shape: {y.shape}")
-        y = ttnn.reshape(y, (y.shape[0], 128, 256, y.shape[3]))
+        assert y.shape[1] == current_h and y.shape[2] == current_w, (
+            f"Final upsample reshape mismatch: "
+            f"tensor has {y.shape[1]}x{y.shape[2]}, "
+            f"but tracked dims are {current_h}x{current_w}"
+        )
+        signpost("FINAL_UPSAMPLE_SEMSEG_START")
         y = self.final_upsample(y)
+        signpost("FINAL_UPSAMPLE_SEMSEG_END")
 
         # Check allocation after final upsample
         if not y.is_allocated():
@@ -485,7 +647,15 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         return self._last_output_original_channels
 
     def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
-        y = super().layers(features)
+        if self.is_20_core:
+            return self.layers_20_cores(features)
+        else:
+            return self.layers_110_cores(features)
+
+    def layers_20_cores(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
+        signpost("SEMSEG_HEAD_DECODER_START")
+        y = super().layers_20_cores(features)
+        signpost("SEMSEG_HEAD_DECODER_END")
 
         # Save spatial dimensions right after super().layers() before any head convs
         # (these are the actual dimensions for this head, not decoder output)
@@ -493,6 +663,7 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         self._actual_head_w = y.shape[2]
         logger.debug(f"Actual head input dimensions: H={self._actual_head_h}, W={self._actual_head_w}")
 
+        signpost("SEMSEG_HEAD_PREDICTION_START")
         logger.info(f"🔷 Executing conv: semantic_head.head.0")
         y = self.head_0(y)
 
@@ -513,5 +684,34 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
         logger.info(f"🔷 Executing conv: semantic_head.predictor")
         y = self.predictor(y)
+        signpost("SEMSEG_HEAD_PREDICTION_END")
+        return y
 
+    def layers_110_cores(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
+        signpost("SEMSEG_HEAD_DECODER_START")
+        y = super().layers_110_cores(features)
+        signpost("SEMSEG_HEAD_DECODER_END")
+
+        # Save spatial dimensions right after super().layers() before any head convs
+        # (these are the actual dimensions for this head, not decoder output)
+        self._actual_head_h = y.shape[1]
+        self._actual_head_w = y.shape[2]
+        logger.debug(f"Actual head input dimensions: H={self._actual_head_h}, W={self._actual_head_w}")
+
+        signpost("SEMSEG_HEAD_PREDICTION_START")
+        logger.info(f"🔷 Executing conv: semantic_head.head.0")
+        y = self.head_0(y)
+
+        if y.shape[1] == 1 and y.shape[2] == self._actual_head_h * self._actual_head_w:
+            y = ttnn.reshape(y, (y.shape[0], self._actual_head_h, self._actual_head_w, y.shape[3]))
+
+        logger.info(f"🔷 Executing conv: semantic_head.head.1")
+        y = self.head_1(y)
+
+        if y.shape[1] == 1 and y.shape[2] == self._actual_head_h * self._actual_head_w:
+            y = ttnn.reshape(y, (y.shape[0], self._actual_head_h, self._actual_head_w, y.shape[3]))
+
+        logger.info(f"🔷 Executing conv: semantic_head.predictor")
+        y = self.predictor(y)
+        signpost("SEMSEG_HEAD_PREDICTION_END")
         return y

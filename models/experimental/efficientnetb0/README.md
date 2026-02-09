@@ -65,14 +65,14 @@ EfficientNet-B0 is a lightweight and efficient convolutional neural network arch
 - Use the following command to run the performant data evaluation with Trace+2CQs:
 
   ```
-  pytest models/demos/classification_eval/classification_eval.py::test_efficientnetb0_image_classification_eval
+  pytest models/demos/vision/classification/classification_eval/classification_eval.py::test_efficientnetb0_image_classification_eval
   ```
 #### Multi Device (DP=2, N300):
 
 - Use the following command to run the performant data evaluation with Trace+2CQs:
 
   ```
-  pytest models/demos/classification_eval/classification_eval.py::test_efficientnetb0_image_classification_eval_dp
+  pytest models/demos/vision/classification/classification_eval/classification_eval.py::test_efficientnetb0_image_classification_eval_dp
   ```
 
 ## Details

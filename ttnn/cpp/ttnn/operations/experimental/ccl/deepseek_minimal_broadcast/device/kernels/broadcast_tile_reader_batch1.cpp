@@ -20,6 +20,9 @@ constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
 constexpr bool is_sender = get_compile_time_arg_val(3);
 constexpr uint32_t core_noc_x = get_compile_time_arg_val(4);
 constexpr uint32_t core_noc_y = get_compile_time_arg_val(5);
+// Dual-axis broadcast args
+constexpr bool is_secondary_sender = get_compile_time_arg_val(6);
+constexpr bool is_active_broadcaster = get_compile_time_arg_val(7);
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -35,6 +38,7 @@ void kernel_main() {
         uint32_t tensor_address0 = get_arg_val<uint32_t>(arg_idx++);
         uint32_t tile_id_start = get_arg_val<uint32_t>(arg_idx++);
         uint32_t tile_id_end = get_arg_val<uint32_t>(arg_idx++);
+
         uint32_t num_pages_to_read = std::min(tile_id_end - tile_id_start, packet_size_in_pages);
         cb_reserve_back(cb0_id, packet_size_in_pages);
         const uint32_t l1_write_addr = get_write_ptr(cb0_id);

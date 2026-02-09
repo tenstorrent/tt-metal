@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_reduction ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Reduction ALIAS ttnn_op_experimental_reduction)
 
-target_precompile_headers(ttnn_op_experimental_reduction REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_reduction REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_reduction)
 
 target_sources(
@@ -10,6 +10,9 @@ target_sources(
         fast_reduce_nc/device/fast_reduce_nc_device_operation.cpp
         fast_reduce_nc/device/fast_reduce_nc_program_factory.cpp
         fast_reduce_nc/fast_reduce_nc.cpp
+        deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.cpp
+        deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_program_factory.cpp
+        deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.cpp
         integral_image/device/intimg_device_operation.cpp
         integral_image/device/intimg_program_factory.cpp
         integral_image/intimg.cpp

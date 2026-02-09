@@ -148,8 +148,16 @@ class LMHead1D(AbstractModule):
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
         _, _, seq_len, _ = x.shape
+        original_seq_len = seq_len
 
+        pad_rows = 0
         if seq_len > SEQ_LEN_CHUNK_SIZE:  # For large sequence lengths, process the input in chunks
+            if seq_len % SEQ_LEN_CHUNK_SIZE != 0:
+                pad_rows = SEQ_LEN_CHUNK_SIZE - (seq_len % SEQ_LEN_CHUNK_SIZE)
+                x_padded = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+                ttnn.deallocate(x)
+                x = x_padded
+                seq_len += pad_rows
             x = ttnn.reshape(x, [1, even_int_div(seq_len, SEQ_LEN_CHUNK_SIZE), SEQ_LEN_CHUNK_SIZE, -1])
 
         output = ttnn.linear(x, **cfg["linear"])
@@ -160,6 +168,8 @@ class LMHead1D(AbstractModule):
         _, num_chunks, _, output_dim = output.shape
         if num_chunks > 1:
             output = ttnn.reshape(output, [1, 1, -1, output_dim])
+            if pad_rows > 0:
+                output = ttnn.slice(output, [0, 0, 0, 0], [1, 1, original_seq_len, output_dim])
 
         assert output.memory_config() == cfg["output_memory_config"]
 

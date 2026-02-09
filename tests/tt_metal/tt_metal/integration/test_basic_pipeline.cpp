@@ -42,10 +42,6 @@
 #include <tt-metalium/distributed.hpp>
 
 namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::map;
 using std::vector;
@@ -267,94 +263,5 @@ void create_and_run_row_pipeline(
 }
 
 }  // namespace unit_tests::create_pipeline
-
-TEST_F(UnitMeshCQProgramFixture, TensixTestPipelineAcrossRows) {
-    if (this->arch_ != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
-    unit_tests::create_pipeline::PipelineRowConfig test_config{};
-    auto mesh_device = this->devices_[0];
-    // // saturate DRAM
-    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
-    test_config.num_tiles = 64 * 1024;
-    test_config.block_size_tiles = 16;
-    test_config.num_blocks_in_CB = 2;
-    test_config.IO_data_in_dram = true;
-    test_config.num_repetitions = 1;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
-
-    // saturate L1
-    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
-    test_config.num_tiles = 64;
-    test_config.block_size_tiles = 16;
-    test_config.num_blocks_in_CB = 2;
-    test_config.IO_data_in_dram = false;
-    test_config.num_repetitions = 64;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
-
-    // test #1
-    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
-    test_config.num_tiles = 64;
-    test_config.block_size_tiles = 1;
-    test_config.num_blocks_in_CB = 16;
-    test_config.IO_data_in_dram = false;
-    test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
-
-    // test #2
-    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
-    test_config.num_tiles = 64;
-    test_config.block_size_tiles = 2;
-    test_config.num_blocks_in_CB = 16;
-    test_config.IO_data_in_dram = false;
-    test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
-
-    // test #3
-    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
-    test_config.num_tiles = 64;
-    test_config.block_size_tiles = 4;
-    test_config.num_blocks_in_CB = 16;
-    test_config.IO_data_in_dram = false;
-    test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
-
-    // test #4
-    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
-    test_config.num_tiles = 64;
-    test_config.block_size_tiles = 8;
-    test_config.num_blocks_in_CB = 8;
-    test_config.IO_data_in_dram = false;
-    test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
-
-    // test #5
-    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
-    test_config.num_tiles = 64;
-    test_config.block_size_tiles = 16;
-    test_config.num_blocks_in_CB = 4;
-    test_config.IO_data_in_dram = false;
-    test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
-
-    // test #6
-    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
-    test_config.num_tiles = 64;
-    test_config.block_size_tiles = 32;
-    test_config.num_blocks_in_CB = 4;
-    test_config.IO_data_in_dram = false;
-    test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
-
-    // test #7
-    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
-    test_config.num_tiles = 64;
-    test_config.block_size_tiles = 64;
-    test_config.num_blocks_in_CB = 4;
-    test_config.IO_data_in_dram = false;
-    test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
-}
 
 }  // namespace tt::tt_metal

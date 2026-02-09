@@ -2089,7 +2089,7 @@ void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const
         ttnn::nanobind_overload_t{
             [](const binary_operation_t& self,
                const Tensor& input_tensor,
-               uint32_t exponent,
+               int32_t exponent,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
                 return self(input_tensor, exponent, memory_config, output_tensor);
@@ -2220,20 +2220,6 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_operation(
         mod,
-        ttnn::multiply,
-        R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, BFLOAT8_B, UINT16 (range: 0 - 65535), INT32, UINT32)doc");
-
-    detail::bind_binary_inplace_operation(
-        mod,
-        ttnn::multiply_,
-        R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
-        R"doc(\mathrm{{input\_tensor\_a}}_i \times \mathrm{{input\_tensor\_b}}_i)doc");
-
-    detail::bind_binary_operation(
-        mod,
         ttnn::eq,
         R"doc(Compares if :attr:`input_tensor_a` is equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i == \mathrm{{input\_tensor\_b}}_i))doc",
@@ -2340,6 +2326,28 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}} = \verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
+
+    detail::bind_binary_operation_with_fast_approx(
+        mod,
+        ttnn::multiply,
+        R"doc(Multiplies :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i)doc",
+        R"doc(BFLOAT16, FLOAT32, INT32, UINT16, UINT32)doc",
+        R"doc(
+        When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
+        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        )doc");
+    detail::bind_binary_operation_with_fast_approx(
+        mod,
+        ttnn::divide,
+        R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i / \mathrm{{input\_tensor\_b}}_i))doc",
+        R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
+        R"doc(
+        When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero.
+        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handle division by zero.
+        When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.
+        )doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2477,7 +2485,7 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::gcd,
         R"doc(Computes Greatest common divisor of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
-        [supported range [-2147483647, 2147483648]].)doc",
+        [supported range [-2147483648, 2147483647]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|gcd|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
         R"doc(INT32)doc",
@@ -2489,7 +2497,7 @@ void py_module(nb::module_& mod) {
         mod,
         ttnn::lcm,
         R"doc(Computes Least common multiple of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
-        [supported range [-32767, 32768]].)doc",
+        [supported range [-32768, 32767]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|lcm|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
         R"doc(INT32)doc",
@@ -2580,14 +2588,14 @@ void py_module(nb::module_& mod) {
         ttnn::fmod,
         R"doc(Performs an eltwise-fmod operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, FLOAT32)doc");
+        R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_binary_overload_operation(
         mod,
         ttnn::remainder,
         R"doc(Performs an eltwise-modulus operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_inplace_operation(
         mod,
@@ -2661,8 +2669,19 @@ void py_module(nb::module_& mod) {
 
     detail::bind_inplace_operation_with_fast_approx(
         mod,
+        ttnn::multiply_,
+        R"doc(Performs in-place multiplication operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
+        R"doc(\verb|multiply|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        R"doc(BFLOAT16, FLOAT32, UINT16)doc",
+        R"doc(
+        When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
+        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.
+        )doc");
+    detail::bind_inplace_operation_with_fast_approx(
+        mod,
         ttnn::divide_,
-        R"doc(Performs division in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
+        R"doc(Performs in-place division operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|divide|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         R"doc(BFLOAT16, FLOAT32, UINT16)doc",
         R"doc(

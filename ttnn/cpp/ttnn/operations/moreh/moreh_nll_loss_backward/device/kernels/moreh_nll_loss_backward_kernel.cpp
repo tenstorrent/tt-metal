@@ -4,11 +4,10 @@
 
 #include <cstdint>
 
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
     const uint32_t tile_offset = get_arg_val<uint32_t>(1);
@@ -107,4 +106,3 @@ void MAIN {
     cb_pop_front(cb_divisor, onetile);
 #endif
 }
-}  // namespace NAMESPACE

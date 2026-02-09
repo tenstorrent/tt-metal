@@ -43,7 +43,6 @@ pytest==8.4.2
 pytest-cov==7.0.0
 pytest-timeout==2.4.0
 pytest-split==0.10.0
-pytest-xdist==3.8.0
 pytest-benchmark==5.1.0
 jsbeautifier==1.14.7
 datasets==2.9.0

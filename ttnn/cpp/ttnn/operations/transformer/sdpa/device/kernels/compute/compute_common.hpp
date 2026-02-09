@@ -7,19 +7,20 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/binary_max_min.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/softplus.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/reduce_custom.h"
+#include "api/debug/assert.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/binary_max_min.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
+#include "api/compute/reduce_custom.h"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -409,9 +410,13 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
         }
         cb_pop_front(in1_cb, rows);
     } else {
-        constexpr uint32_t dst_tiles = DHT_GRANULARITY;
-        constexpr uint32_t granularity = cols >> LOG2_DHT_GRANULARITY;
-
+#ifdef DHT_GRANULARITY
+        constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
+        constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
+#else
+        constexpr uint32_t dst_tiles = 1;
+        constexpr uint32_t granularity = cols;
+#endif
         PACK((llk_pack_reconfig_l1_acc(pack_accumulate)));
         if (!pack_accumulate) {
             cb_reserve_back(out_cb, num_tiles);
@@ -456,8 +461,15 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     // Postcondition: in1_cb has rows consumed
 
     constexpr uint32_t num_tiles = rows * cols;
+
+#ifdef DHT_GRANULARITY
     constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
     constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
+#else
+    constexpr uint32_t dst_tiles = 1;
+    constexpr uint32_t granularity = cols;
+#endif
+
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, rows);
@@ -651,8 +663,8 @@ void calculate_exponential_polynomial() {
     constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
     constexpr float M_LN2 = -0.69314718055994530942f;     // -ln(2)
 
-    if (!USE_SFPARECIP_INSTR) {
-        ASSERT(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
+    if constexpr (!USE_SFPARECIP_INSTR) {
+        static_assert(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
 
         // Evaluate polynomial f(x) = c0 + c1 * x + c2 * x^2 + ... using Horner's method.
         constexpr float c0 = (POLY_DEGREE == 1)   ? 1.03022936050163882354355235184958220293399209290987f
@@ -670,25 +682,24 @@ void calculate_exponential_polynomial() {
                                                 : 0.16792157982882225102649214918047336097544632172075f;
         constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
 
-        switch (POLY_DEGREE) {
-            case 4:
-                TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
-                TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
-                [[fallthrough]];
-            case 3:
-                TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3));
-                TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
-                [[fallthrough]];
-            case 2:
-                TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2));
-                TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
-                [[fallthrough]];
-            case 1:
-                TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1));
-                TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
-                TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0));
-                TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
-            default: break;
+        // Load polynomial coefficients.
+        if constexpr (POLY_DEGREE >= 4) {
+            TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
+            TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
+        }
+        if constexpr (POLY_DEGREE >= 3) {
+            TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3));
+            TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
+        }
+        if constexpr (POLY_DEGREE >= 2) {
+            TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2));
+            TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
+        }
+        if constexpr (POLY_DEGREE >= 1) {
+            TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
         }
     }
 
@@ -1126,9 +1137,11 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_push_back(out_cb, num_tiles);
 }
 
-void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
-    // out_cb = in0_cb - in1_cb
-
+/**
+ * out_cb = in0_cb - in1_cb
+ * Compile with size optimization to prevent binary size exceeding the limit.
+ */
+__attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -1570,8 +1583,8 @@ void sdpa_inner_loop(
              *  cur_max = max(qk, dim=-1)
              */
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
-                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
+                alias_cur_max, alias_prev_max, processed_k_chunks > 0);
 
             /**
              * sub_exp fuses a few operations.
@@ -1664,8 +1677,8 @@ void sdpa_inner_loop(
             //    This compares the previous max with the sink logit
             reconfig_data_format(cb_attention_sink, cb_identity_scale_in);
 
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_attention_sink, cb_identity_scale_in, Sq_chunk_t>(
-                alias_cur_max, alias_prev_max, 1, true);
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_attention_sink, cb_identity_scale_in, Sq_chunk_t, 1>(
+                alias_cur_max, alias_prev_max, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);

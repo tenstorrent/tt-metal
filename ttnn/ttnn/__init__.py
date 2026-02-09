@@ -158,10 +158,12 @@ from ttnn._ttnn.fabric import (
     FabricTensixConfig,
     FabricUDMMode,
     FabricManagerMode,
+    FabricRouterConfig,
     set_fabric_config,
     MeshId,
     FabricNodeId,
     setup_fabric_connection,
+    setup_routing_plane_connection,
 )
 
 # Import cluster functions and types
@@ -227,7 +229,6 @@ from ttnn.types import (
     ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
-    GrayskullComputeKernelConfig,
     MeshShape,
     MeshCoordinate,
     MeshCoordinateRange,
@@ -385,6 +386,7 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
+    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
 )
 
 from ttnn.operations.normalization import (
@@ -413,7 +415,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology
+from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,

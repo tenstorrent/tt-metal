@@ -1,7 +1,7 @@
 add_library(ttnn_op_data_movement ${LIB_TYPE})
 add_library(TTNN::Ops::DataMovement ALIAS ttnn_op_data_movement)
 
-target_precompile_headers(ttnn_op_data_movement REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_data_movement REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_data_movement)
 set_target_properties(
     ttnn_op_data_movement
@@ -219,6 +219,7 @@ target_sources(
         tilize/device/tilize_multi_core_block_program_factory.cpp
         tilize/device/tilize_single_core_program_factory.cpp
         tilize/device/tilize_multi_core_sharded_program_factory.cpp
+        tilize/device/tilize_multi_core_width_sharded_program_factory.cpp
         tilize/tilize.cpp
         tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
         tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp
@@ -242,10 +243,12 @@ target_sources(
         untilize/device/untilize_device_operation_types.cpp
         untilize/device/factories/untilize_multi_core_parallelize_column_program_factory.cpp
         untilize/device/factories/untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical_program_factory.cpp
+        untilize/device/factories/untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.cpp
         untilize/device/factories/untilize_multi_core_sub_core_grids_program_factory.cpp
         untilize/device/factories/untilize_single_core_program_factory.cpp
         untilize/device/factories/untilize_multi_core_block_program_factory.cpp
         untilize/device/factories/untilize_multi_core_program_factory.cpp
+        untilize/device/factories/untilize_multi_core_nd_shard_input_program_factory.cpp
         untilize/untilize.cpp
         untilize_with_unpadding/device/untilize_with_unpadding_device_operation.cpp
         untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory.cpp
