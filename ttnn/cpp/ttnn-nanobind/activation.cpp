@@ -5,7 +5,7 @@
 #include "activation.hpp"
 
 #include <utility>
-#include <fmt/ranges.h>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
