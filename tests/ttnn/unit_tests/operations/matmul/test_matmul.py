@@ -1877,6 +1877,57 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
     assert_with_pcc(torch_output_tensor, output, 0.999)
 
 
+@pytest.mark.parametrize(
+    "m, k, n",
+    [
+        (8193, 512, 2048),
+        (11008, 256, 2048),
+        # (11008, 8192, 4096), #Original issue: too slow to run, also requires lower PCC
+        # (50272, 16384, 384), #Original issue: too slow to run, also requires lower PCC
+    ],
+)
+@pytest.mark.parametrize("transpose_a", [True])  # "False, " makes torch.matmul() too slow
+@pytest.mark.parametrize("transpose_b", [False])  # ", True" makes ttnn.matmul() too slow for now
+def test_matmul_transpose_with_core_grid(device, m, k, n, transpose_a, transpose_b):
+    torch.manual_seed(0)
+
+    shape_a = (k, m) if transpose_a == True else (m, k)
+    shape_b = (n, k) if transpose_b == True else (k, n)
+
+    input_tensor_a = ttnn.rand(
+        shape_a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=42
+    )
+    input_tensor_b = ttnn.rand(
+        shape_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=43
+    )
+
+    # Get core grid from device
+    compute_grid = device.compute_with_storage_grid_size()
+    core_grid = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
+
+    # ttnn matmul with transpose_a=True, core_grid, and compute_kernel_config
+    output_tensor_c = ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        transpose_a=transpose_a,
+        transpose_b=transpose_b,
+        core_grid=core_grid,
+    )
+    output_tensor = ttnn.to_torch(output_tensor_c)
+
+    # torch equivalent: transpose A then matmul
+    torch_a = ttnn.to_torch(input_tensor_a)
+    torch_b = ttnn.to_torch(input_tensor_b)
+    torch_output_tensor = torch.matmul(
+        torch_a.transpose(-1, -2) if transpose_a == True else torch_a,
+        torch_b.transpose(-1, -2) if transpose_b == True else torch_b,
+    )
+
+    assert len(output_tensor.shape) == len(torch_output_tensor.shape)
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+
 @pytest.mark.parametrize("transpose_a", [True, False])
 @pytest.mark.parametrize("transpose_b", [True, False])
 @pytest.mark.parametrize(
