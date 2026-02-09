@@ -139,6 +139,13 @@ class Glm4MoeLiteForCausalLM(nn.Module):
 
         # Allocate per-layer KVPE cache tensors.
         #
+        # Important: vLLM passes a "standard" KV cache shape in the form
+        # (num_blocks, num_kv_heads, block_size, head_size). GLM-4.7-Flash uses
+        # *Multi-Latent Attention* and the TT kernels expect a packed KVPE cache:
+        # (num_blocks, 1, block_size, kvpe_dim) where kvpe_dim = kv_lora_rank + rope_dim.
+        # Using the standard shape here will silently corrupt cache updates and
+        # produce garbled outputs.
+        #
         # NOTE: Avoid `ttnn.zeros(..., device=MeshDevice)` here. We've seen it
         # hang during server startup (KV cache allocation). Instead, stage a
         # CPU zero tensor and upload it via `ttnn.as_tensor`, which is the
@@ -161,7 +168,11 @@ class Glm4MoeLiteForCausalLM(nn.Module):
             )
 
         tt_dtype = _torch_dtype_to_ttnn(dtype)
-        cache_kv = torch.zeros(self._kv_cache_shape, dtype=dtype, device="cpu")
+
+        num_blocks = int(self._kv_cache_shape[0])
+        block_size = int(self._kv_cache_shape[2])
+        kvpe_dim = int(self.hparams.kv_lora_rank + self.hparams.qk_rope_head_dim)
+        cache_kv = torch.zeros((num_blocks, 1, block_size, kvpe_dim), dtype=dtype, device="cpu")
         mesh_mapper = None
         if self.mesh_device.__class__.__name__ == "MeshDevice":
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
