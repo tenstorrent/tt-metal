@@ -80,7 +80,6 @@ struct EltwiseAdd {
     // cb_in1_wait_tiles: number of tiles to wait for on cb_in1 (before offset update)
     // sender_index: per-core index (0-7) to compute offset into fused_add
     // slice_size_bytes: size of slice (896 * 2 = 1792 bytes for bfloat16)
-    // use_short_init: if true, skip binary_op_init_common and use add_tiles_init_short
     template <
         uint32_t cb_in0_,
         uint32_t cb_in1_,
@@ -90,8 +89,7 @@ struct EltwiseAdd {
         uint32_t cb_in0_wait_tiles_,
         uint32_t cb_in1_wait_tiles_,
         uint32_t sender_index_,
-        uint32_t slice_size_bytes_,
-        bool use_short_init_ = false>
+        uint32_t slice_size_bytes_>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -102,7 +100,6 @@ struct EltwiseAdd {
         static constexpr uint32_t cb_in1_wait_tiles = cb_in1_wait_tiles_;
         static constexpr uint32_t sender_index = sender_index_;
         static constexpr uint32_t slice_size_bytes = slice_size_bytes_;
-        static constexpr bool use_short_init = use_short_init_;
     };
 
     // ========================================================================
@@ -136,14 +133,7 @@ struct EltwiseAdd {
             // ================================================================
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
 
-            if constexpr (CTArgs::use_short_init) {
-                // Short init - call hw_startup then operation-specific init
-                compute_kernel_hw_startup(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
-            } else {
-                // Full init - includes hw_configure calls
-                binary_op_init_common(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
-            }
-            // Initialize eltwise binary for addition
+            compute_kernel_hw_startup(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             add_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
 
             // Wait for cb_in0 (down_proj output)
