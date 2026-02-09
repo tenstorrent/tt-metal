@@ -4,6 +4,13 @@ add_library(TTNN::Ops::Experimental::SSM ALIAS ttnn_op_experimental_ssm)
 target_precompile_headers(ttnn_op_experimental_ssm REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ssm)
 
+set_target_properties(
+    ttnn_op_experimental_ssm
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
 file(
     GLOB_RECURSE kernels
     hc_sum_reduce/device/kernels/*
@@ -14,6 +21,10 @@ file(
 target_sources(
     ttnn_op_experimental_ssm
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

@@ -4,6 +4,13 @@ add_library(TTNN::Ops::Experimental::CNN ALIAS ttnn_op_experimental_cnn)
 target_precompile_headers(ttnn_op_experimental_cnn REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_cnn)
 
+set_target_properties(
+    ttnn_op_experimental_cnn
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
 file(
     GLOB_RECURSE kernels
     convert_to_chw/device/kernels/*
@@ -13,6 +20,10 @@ file(
 target_sources(
     ttnn_op_experimental_cnn
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
