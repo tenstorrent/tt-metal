@@ -65,7 +65,7 @@ jobs:
       matrix:
         test_group: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker_image }}
+      image: ${{ inputs.docker_image }}
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     name: "🦄 Run tests (group ${{ matrix.test_group }}/${{ inputs.test_splits }})"
     steps:
