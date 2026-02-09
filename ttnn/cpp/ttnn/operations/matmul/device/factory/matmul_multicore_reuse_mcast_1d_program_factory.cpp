@@ -2385,11 +2385,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                         log_info(tt::LogOp, "  y={}", y);
                     }
                 }
-                TT_FATAL(
-                    it != worker_y_to_dram_bank_first_col.end(),
-                    "Worker core ({}, {}) y-coordinate not found in first-column DRAM bank mapping.",
-                    core.x,
-                    core.y);
                 bank_id = it->second;
             } else {
                 auto it = worker_y_to_dram_bank_second_col.find(core.y);
@@ -2404,11 +2399,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                         log_info(tt::LogOp, "  y={}", y);
                     }
                 }
-                TT_FATAL(
-                    it != worker_y_to_dram_bank_second_col.end(),
-                    "Worker core ({}, {}) y-coordinate not found in second-column DRAM bank mapping.",
-                    core.x,
-                    core.y);
                 bank_id = it->second;
             }
 
