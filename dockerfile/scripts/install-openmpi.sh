@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build OpenMPI from source with ULFM (User Level Fault Mitigation) support.
 # Used by Dockerfile.tools to produce a pre-built OpenMPI layer for manylinux.
-# Output is installed under ${INSTALL_DIR}/opt/openmpi-${OMPI_TAG}-ulfm/
+# Output is installed under ${OMPI_PREFIX} (default /opt/openmpi-<tag>-ulfm).
 #
 # We build from the official release tarball (not git) so that library SONAMEs
 # are stable (e.g. libopen-pal.so.80.0.5). Building from git would embed the
@@ -11,8 +11,8 @@
 set -euo pipefail
 
 OMPI_TAG="${OMPI_TAG:-v5.0.7}"
-INSTALL_DIR="${INSTALL_DIR:-/install}"
-OMPI_PREFIX="${INSTALL_DIR}/opt/openmpi-${OMPI_TAG}-ulfm"
+INSTALL_DIR="${INSTALL_DIR:-/opt}"
+OMPI_PREFIX="${INSTALL_DIR}/openmpi-${OMPI_TAG}-ulfm"
 
 # Derive version and URL from tag (e.g. v5.0.7 -> 5.0.7, release path v5.0)
 OMPI_VERSION="${OMPI_TAG#v}"
@@ -36,7 +36,12 @@ cd "openmpi-${OMPI_VERSION}"
     --enable-wrapper-rpath \
     --enable-mpirun-prefix-by-default \
     --disable-mca-dso \
-    --disable-dlopen
+    --disable-dlopen \
+    --enable-static \
+    --with-slurm \
+    --with-peruse \
+    --with-pic \
+    --with-verbs
 make -j"$(nproc)"
 make install
 cd /

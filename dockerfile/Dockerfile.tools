@@ -219,12 +219,12 @@ COPY --from=sfpi-builder /install/ /install/
 
 #############################################################
 # OpenMPI - built from source with ULFM for manylinux
-# Outputs: /install/opt/openmpi-<tag>-ulfm/bin, lib, include, ...
+# Outputs: /opt/openmpi-<tag>-ulfm/bin, lib, include, ...
 # Consumed by Dockerfile.manylinux to avoid rebuilding OpenMPI each time.
 #############################################################
 
 FROM quay.io/pypa/manylinux_2_34_x86_64 AS openmpi-builder
-ARG OMPI_TAG
+ARG OMPI_TAG=v5.0.7
 
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
   sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
@@ -258,8 +258,8 @@ RUN dnf install -y \
 
 COPY dockerfile/scripts/install-openmpi.sh /tmp/install-openmpi.sh
 RUN OMPI_TAG=${OMPI_TAG} \
-    INSTALL_DIR=/install \
+    INSTALL_DIR=/opt \
     /bin/bash /tmp/install-openmpi.sh
 
 FROM scratch AS openmpi
-COPY --from=openmpi-builder /install/ /install/
+COPY --from=openmpi-builder /opt/ /install/
