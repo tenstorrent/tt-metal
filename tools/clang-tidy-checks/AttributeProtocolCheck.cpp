@@ -29,10 +29,18 @@ AttributeProtocolCheck::AttributeProtocolCheck(llvm::StringRef Name, clang::tidy
     ClangTidyCheck(Name, Context) {}
 
 void AttributeProtocolCheck::registerMatchers(MatchFinder* Finder) {
-    // Match any CXXRecordDecl (struct/class) named "tensor_args_t" or
-    // "operation_attributes_t" that is a definition (not a forward declaration).
+    // Match any CXXRecordDecl (struct/class) that either:
+    //  1. Is directly named "tensor_args_t" or "operation_attributes_t", OR
+    //  2. Already has attribute_names or attribute_values() defined
+    //     (catches structs like HaloParams that are *aliased* as operation_attributes_t)
     Finder->addMatcher(
-        cxxRecordDecl(anyOf(hasName("tensor_args_t"), hasName("operation_attributes_t")), isDefinition())
+        cxxRecordDecl(
+            isDefinition(),
+            anyOf(
+                hasName("tensor_args_t"),
+                hasName("operation_attributes_t"),
+                has(varDecl(hasName("attribute_names"))),
+                has(cxxMethodDecl(hasName("attribute_values")))))
             .bind("target_struct"),
         this);
 }
