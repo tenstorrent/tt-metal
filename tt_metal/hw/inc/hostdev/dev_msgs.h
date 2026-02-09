@@ -100,10 +100,8 @@ struct realtime_profiler_timestamp_t {
 struct realtime_profiler_msg_t {
     volatile uint32_t config_buffer_addr;       // Address of D2H socket config buffer in L1
     volatile uint32_t realtime_profiler_state;  // Current state (RealtimeProfilerState enum)
-    volatile uint32_t
-        realtime_profiler_core_noc_xy;  // NOC XY encoding of real-time profiler core (for remote terminate)
-    volatile uint32_t
-        realtime_profiler_mailbox_addr;  // Mailbox address on real-time profiler core (for remote terminate)
+    volatile uint32_t realtime_profiler_core_noc_xy;   // NOC XY of real-time profiler core (remote terminate)
+    volatile uint32_t realtime_profiler_mailbox_addr;  // Mailbox addr on real-time profiler core (remote terminate)
     // Ping-pong buffer A
     struct realtime_profiler_timestamp_t kernel_start_a;  // Device kernel start time (buffer A)
     struct realtime_profiler_timestamp_t kernel_end_a;    // Device kernel stop time (buffer A)
