@@ -180,9 +180,7 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         // Use copy compute kernel just for a potential data type conversion.
         compute_kernel = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp";
         compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
-    } else if (
-        !use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (input_cb_data_format == tt::DataFormat::Float32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
+    } else if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
         unpack_to_dest_mode[tt::CBIndex::c_0] =
