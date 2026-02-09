@@ -39,6 +39,13 @@ export VLLM_USE_V1=1
 export VLLM_RPC_TIMEOUT=300000
 export TT_METAL_OPERATION_TIMEOUT_SECONDS=5.0  # CI default via setup-job action
 export MESH_DEVICE="(2, 4)"
+export TT_METAL_WATCHER=5  # Poll device state every 5s; watcher.log shows stuck waypoints on hang
+export TT_METAL_WATCHER_NOINLINE=1              # Reduce kernel binary size
+export TT_METAL_WATCHER_DISABLE_ASSERT=1        # We only need waypoints, disable everything else
+export TT_METAL_WATCHER_DISABLE_PAUSE=1         # to fit within idle_erisc code size limit (0x5500)
+export TT_METAL_WATCHER_DISABLE_RING_BUFFER=1
+export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
+export TT_METAL_WATCHER_DISABLE_STACK_USAGE=1
 
 
 # Server config (from CI matrix)
@@ -181,10 +188,17 @@ for i in $(seq 1 $TOTAL_ITERATIONS); do
     pkill -9 -f "prterun.*tmp_vllm_tt" 2>/dev/null || true
     sleep 1
 
-    # Save server log on failure
+    # Save server log and watcher log on failure
     if [ "$FAILED" = true ]; then
         FAIL_SERVER_LOG="$(pwd)/vllm_stress_server_FAIL_iter${i}_${TIMESTAMP}.log"
         cp "$SERVER_LOG" "$FAIL_SERVER_LOG"
+        # Copy watcher log if it exists
+        WATCHER_LOG=$(find /tt-metal /tmp -path "*/generated/watcher/watcher.log" -newer "$SERVER_LOG" 2>/dev/null | head -1)
+        if [ -n "$WATCHER_LOG" ]; then
+            FAIL_WATCHER_LOG="$(pwd)/vllm_stress_watcher_FAIL_iter${i}_${TIMESTAMP}.log"
+            cp "$WATCHER_LOG" "$FAIL_WATCHER_LOG"
+            log_all "Watcher log saved to: $FAIL_WATCHER_LOG"
+        fi
         log_all "!!! FAILURE on iteration $i: $FAIL_REASON !!!"
         log_all "Server log saved to: $FAIL_SERVER_LOG"
         FAIL_COUNT=$((FAIL_COUNT + 1))
