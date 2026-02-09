@@ -308,12 +308,6 @@ else
 fi
 
 echo "Installing dev dependencies"
-# mmcv/mmcv-full use pkg_resources in setup.py but don't declare setuptools as a
-# build dependency. Pre-install them with --no-build-isolation so they pick up the
-# setuptools already installed in the venv above.
-echo "Pre-installing mmcv packages (--no-build-isolation for setuptools/pkg_resources)..."
-uv pip install --no-build-isolation --extra-index-url "$PYTORCH_INDEX" mmcv==2.2.0 mmcv-full==1.7.2 || true
-
 # Use --extra-index-url for PyTorch CPU wheels and index-strategy for transitive deps
 # no-build-isolation as a workaround for setuptools/mmcv
 uv pip install --extra-index-url "$PYTORCH_INDEX" \
