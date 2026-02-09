@@ -123,6 +123,7 @@ def test_model_inference(
         max_batch_size=batch_size,
         cache_hf=True,
         prefetcher=prefetcher,
+        use_hf_rope=True,
     )
 
     # Define minimum PCC for each iteration
@@ -188,19 +189,6 @@ def test_model_inference(
         model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
-    reference_state_dict = {
-        k[len(state_dict_prefix) :]: v
-        for k, v in state_dict.items()
-        if (
-            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-            or any(
-                [
-                    f"{state_dict_prefix}{name}" in k
-                    for name in ["tok_embeddings.weight", "learnable_embedding.weight", "norm.weight", "output.weight"]
-                ]
-            )
-        )
-    }
 
     prompts = ["This is a test"] * model_args.max_batch_size
     if dummy_weights:
@@ -219,8 +207,7 @@ def test_model_inference(
 
     reference_model = None
     if run_ref_pt:
-        reference_model = model_args.reference_transformer()
-        reference_model.load_state_dict(reference_state_dict)
+        reference_model = model_args.reference_transformer(load_checkpoint=True)
 
     # Embedding on host
     embd = model_args.reference_embedding(reference_model)
