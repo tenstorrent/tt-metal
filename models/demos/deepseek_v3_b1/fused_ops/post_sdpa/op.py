@@ -277,7 +277,6 @@ class PostSDPA:
         l1_alignment = 16
 
         has_residual = 1 if residual_tensor_mesh is not None else 0
-        using_persistent_buffers = 1  # Use persistent buffers for CCL
 
         # ========================================================================
         # Semaphore IDs
@@ -403,7 +402,6 @@ class PostSDPA:
                     ("ccl_receiver_num_standard_tiles", ccl_num_tiles),
                     ("ccl_receiver_cb_residual", ccl_residual_cb),
                     ("ccl_receiver_has_residual", has_residual),
-                    ("ccl_receiver_using_persistent_buffer", using_persistent_buffers),
                     ("ccl_receiver_skip_local_push", 1),  # Skip local push since gather2 already pushed to CB7
                 ]
 
@@ -458,7 +456,6 @@ class PostSDPA:
                     ("ccl_sender_remote_receiver_noc_y", ccl_receiver_noc_core.y),
                     ("ccl_sender_dst_num_hops", 1),
                     ("ccl_sender_num_connections", 1),
-                    ("ccl_sender_using_persistent_buffer", using_persistent_buffers),
                 ]
 
                 # ========================================================================

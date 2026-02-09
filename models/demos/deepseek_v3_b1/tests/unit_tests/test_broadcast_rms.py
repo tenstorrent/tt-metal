@@ -72,12 +72,6 @@ def test_broadcast_rms_fused(
 
     # Configure a single worker sub-device covering the full compute grid
     compute_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    submesh.load_sub_device_manager(submesh.create_sub_device_manager([worker_sub_device], 0))
-    submesh.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
 
     # Set up sharded memory config (single core shard like test_ccl_broadcast.py)
     input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -196,9 +190,5 @@ def test_broadcast_rms_fused(
         logger.info(pcc_message)
 
         assert passing, pcc_message
-
-    # Cleanup
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()
 
     logger.info("Broadcast+RMSNorm fused test passed!")

@@ -44,7 +44,6 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("use_persistent", [True])
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)  # Open full mesh, create submesh
 @pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
@@ -68,7 +67,6 @@ def test_ccl_all_reduce(
     layout,
     input_dtype,
     cluster_axis,
-    use_persistent,
     fuse_residual_add,
     num_warmup_iter,
     num_iter,
@@ -82,15 +80,6 @@ def test_ccl_all_reduce(
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
-    submesh.load_sub_device_manager(sub_device_manager)
-    submesh.set_sub_device_stall_group(sub_device_stall_group)
 
     # Set up sharded memory config
     input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -182,11 +171,6 @@ def test_ccl_all_reduce(
     else:
         torch_expected = DeepseekMinimalAllReduce.golden(device_tensors)
 
-    if use_persistent:
-        persistent_output_tensor = output_tensor
-    else:
-        persistent_output_tensor = None
-
     # semaphores
     num_cores = compute_grid_size.x * compute_grid_size.y
     available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
@@ -205,7 +189,7 @@ def test_ccl_all_reduce(
         input_tensor_mesh,
         intermediate_tensor,
         cluster_axis=cluster_axis,
-        persistent_output_tensor=persistent_output_tensor,
+        persistent_output_tensor=output_tensor,
         residual_tensor_mesh=residual_tensor_mesh,
         semaphores=semaphores,
     )
@@ -219,7 +203,7 @@ def test_ccl_all_reduce(
             input_tensor_mesh,
             intermediate_tensor,
             cluster_axis=cluster_axis,
-            persistent_output_tensor=persistent_output_tensor,
+            persistent_output_tensor=output_tensor,
             residual_tensor_mesh=residual_tensor_mesh,
             semaphores=semaphores,
         )
@@ -234,7 +218,7 @@ def test_ccl_all_reduce(
             input_tensor_mesh,
             intermediate_tensor,
             cluster_axis=cluster_axis,
-            persistent_output_tensor=persistent_output_tensor,
+            persistent_output_tensor=output_tensor,
             residual_tensor_mesh=residual_tensor_mesh,
             semaphores=semaphores,
         )
@@ -283,10 +267,6 @@ def test_ccl_all_reduce(
             all_passed = False
         else:
             logger.info(f"Device {device_idx}: PASSED")
-
-    # Cleanup
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()
 
     assert all_passed, "Not all devices have the correct all-reduced data"
     logger.info("CCL all-reduce test passed!")

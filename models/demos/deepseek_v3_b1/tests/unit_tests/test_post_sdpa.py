@@ -47,7 +47,6 @@ def create_fabric_router_config(max_payload_size):
     ],
 )
 @pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)  # Open full mesh, create submesh
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -60,7 +59,7 @@ def create_fabric_router_config(max_payload_size):
 )
 @pytest.mark.parametrize("fuse_residual_add", [False, True])
 def test_post_sdpa(
-    mesh_device,
+    bh_2d_mesh_device,
     num_devices,
     M,
     K1,
@@ -75,23 +74,14 @@ def test_post_sdpa(
     """Test full post_sdpa fused operation with CCL all-reduce"""
 
     # Validate mesh size
-    if mesh_device.shape[0] * mesh_device.shape[1] < num_devices:
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
 
     # Create submesh - fabric requires opening full system mesh first
-    submesh = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
-    submesh.load_sub_device_manager(sub_device_manager)
-    submesh.set_sub_device_stall_group(sub_device_stall_group)
 
     # Tile dimensions
     a_tile = ttnn.Tile([M, 32])  # 1x32 tiles for input/activation
@@ -440,10 +430,6 @@ def test_post_sdpa(
             all_passed = False
         else:
             logger.info(f"Device {device_idx}: PASSED - {pcc_message}")
-
-    # Cleanup
-    submesh.reset_sub_device_stall_group()
-    submesh.clear_loaded_sub_device_manager()
 
     assert all_passed, "Not all devices have the correct output"
     logger.info("✓ Post SDPA full fused op with CCL all-reduce test passed!")
