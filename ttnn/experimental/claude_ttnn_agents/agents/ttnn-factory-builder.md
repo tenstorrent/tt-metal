@@ -4,6 +4,11 @@ description: Use this agent to build Stages 4-6 of a TTNN operation (device oper
 model: sonnet
 color: blue
 hooks:
+  PostToolUse:
+    - matcher: "Write|Edit"
+      hooks:
+        - type: command
+          command: ".claude/scripts/track_agent_file.sh"
   Stop:
     - hooks:
         - type: command
