@@ -130,11 +130,11 @@ def test_nd(
         )
 
         coords = list(tt_out_tensor.tensor_topology().mesh_coords())
-        view = mesh_device.get_view()
+        view = mesh_device.get_view() if ttnn.using_distributed_env() else None
         torch_outputs = []
         torch_references = []
         for coord, tt_out, torch_ref in zip(coords, ttnn.get_device_tensors(tt_out_tensor), torch_reference_slices):
-            if not view.is_local(coord):
+            if view is not None and not view.is_local(coord):
                 continue
             torch_outputs.append(ttnn.to_torch(tt_out))
             torch_references.append(torch_ref)

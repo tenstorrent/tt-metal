@@ -29,7 +29,7 @@ namespace operations::binary {
 struct ExecutePower {
     static Tensor invoke(
         const Tensor& input_tensor,
-        uint32_t exponent,
+        int32_t exponent,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
@@ -108,7 +108,7 @@ struct ExecuteDiv {
         const std::optional<std::string>& rounding_mode = std::nullopt,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        std::optional<Tensor> output = std::nullopt,
+        const std::optional<Tensor>& output_tensor = std::nullopt,
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},

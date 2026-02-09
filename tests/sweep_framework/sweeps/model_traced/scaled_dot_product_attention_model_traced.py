@@ -201,6 +201,12 @@ def run(
         ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=mem_config_v)
     )
 
+    # Ensure all tensors have the same dtype for PyTorch SDPA
+    # PyTorch requires all inputs to have the same dtype
+    torch_q = torch_q.to(torch.float32)
+    torch_k = torch_k.to(torch.float32)
+    torch_v = torch_v.to(torch.float32)
+
     # PyTorch reference
     torch_output_golden = torch.nn.functional.scaled_dot_product_attention(
         torch_q, torch_k, torch_v, attn_mask=None, dropout_p=0.0, is_causal=False

@@ -1,0 +1,76 @@
+name: 'Sweep Run Analysis'
+description: 'Analyze sweep run results and send Slack notification with regression detection'
+
+inputs:
+  github-run-id:
+    description: 'GitHub Actions run ID to analyze'
+    required: true
+  run-type:
+    description: 'Type of sweep run (nightly, comprehensive, model_traced, lead_models)'
+    required: true
+  conclusion:
+    description: 'Workflow conclusion (success, failure, cancelled)'
+    required: true
+  slack-webhook-url:
+    description: 'Slack webhook URL for notifications'
+    required: true
+  database-url:
+    description: 'PostgreSQL connection string for sweep database'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install psycopg2-binary requests
+
+    - name: Query database and detect regressions
+      id: query-db
+      shell: bash
+      env:
+        DATABASE_URL: ${{ inputs.database-url }}
+        GITHUB_RUN_ID: ${{ inputs.github-run-id }}
+        RUN_TYPE: ${{ inputs.run-type }}
+        RESULTS_FILE: sweep_results.json
+      run: |
+        echo "Querying database for run $GITHUB_RUN_ID..."
+        python ${{ github.action_path }}/scripts/extract_sweep_results.py
+      continue-on-error: true
+
+    - name: Fallback - Download run result artifact
+      if: steps.query-db.outcome == 'failure'
+      uses: actions/download-artifact@v4
+      with:
+        name: sweeps-run-result
+        path: ./sweep-results
+        github-token: ${{ github.token }}
+        run-id: ${{ inputs.github-run-id }}
+      continue-on-error: true
+
+    - name: Fallback - Parse artifact data
+      if: steps.query-db.outcome == 'failure'
+      shell: bash
+      env:
+        ARTIFACTS_DIR: ./sweep-results
+        RESULTS_FILE: sweep_results.json
+        ARCH_NAME: ${{ inputs.run-type }}
+      run: |
+        echo "Database unavailable, parsing artifacts instead..."
+        python ${{ github.action_path }}/scripts/parse_sweep_artifacts.py
+
+    - name: Send Slack notification
+      shell: bash
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
+        CONCLUSION: ${{ inputs.conclusion }}
+        GITHUB_RUN_ID: ${{ inputs.github-run-id }}
+        RESULTS_FILE: sweep_results.json
+      run: |
+        echo "Sending Slack notification..."
+        python ${{ github.action_path }}/scripts/send_slack_notification.py

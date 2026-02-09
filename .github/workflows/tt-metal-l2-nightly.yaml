@@ -61,7 +61,7 @@ on:
         type: boolean
         default: false
       additional_test_categories:
-        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,bos,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,data_movement,transformers)'
+        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,data_movement,transformers)'
         required: false
         type: string
         default: ''
@@ -70,6 +70,30 @@ on:
         required: false
         type: number
         default: 150
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
 
 jobs:
   build-artifact:
@@ -78,10 +102,12 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
       skip-tt-train: false
-      version: 22.04
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
   generate-arch-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -233,7 +259,6 @@ jobs:
       run_sdxl_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',sdxl,') }}
       run_train_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',train,') }}
       run_sdpa_stress_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',sdpa,') }}
-      run_ttnn-bos-tests: ${{ matrix.test-group.runner-label == 'P150b' && (github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',bos,')) }}
       run_eltwise_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',eltwise,') }}
       run_transformers_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',transformers,') }}
       run_moreh_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',moreh,') }}

@@ -12,7 +12,7 @@ cd build
 
 # clang-tidy needs the compile_commands.json to get a lay of the land on what to scan
 # PCHs can mess with the scan, so just disable them
-CC=clang-17 CXX=clang++-17 cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -G Ninja ..
+CC=clang-20 CXX=clang++-20 cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -G Ninja ..
 
 # go back up to your top level tt-metal checkout directory
 cd ..

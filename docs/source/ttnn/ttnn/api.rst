@@ -103,6 +103,7 @@ Matrix Multiplication
    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
    ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig
    ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+   ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig
 
 
 Pointwise Unary
@@ -562,6 +563,7 @@ Vision
 
    ttnn.grid_sample
    ttnn.upsample
+   ttnn.rotate
 
 Generic
 =======

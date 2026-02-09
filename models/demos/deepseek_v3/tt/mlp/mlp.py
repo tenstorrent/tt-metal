@@ -19,7 +19,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MulConfig,
     OpConfigBase,
     ReduceScatterAsyncMinimalConfig,
-    ReshardConfig,
     SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
@@ -210,6 +209,7 @@ class MLP(AbstractModule):
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
         }
 
     @classmethod
@@ -260,6 +260,8 @@ class MLP(AbstractModule):
         ), "output_num_cores must divide the output tensor width evenly"
 
         # Calculate input and output memory configurations
+
+        input_memory_config = cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
         output_memory_config = cls._get_decode_activation_memory_config(
             even_int_div(dim, mesh_width), output_num_cores, mesh_device
         )
@@ -270,11 +272,8 @@ class MLP(AbstractModule):
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=1,
                 dim=-1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=input_memory_config,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
-            ),
-            "all_gather_reshard": ReshardConfig(
-                memory_config=cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
             ),
             "w1": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -315,6 +314,7 @@ class MLP(AbstractModule):
                 memory_config=output_memory_config,
             ),
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
+            "input_memory_config": input_memory_config,
         }
 
     @classmethod
@@ -431,6 +431,7 @@ class MLP(AbstractModule):
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         num_layers, _, seq_len, _ = x.shape
+        original_seq_len = seq_len
 
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
@@ -439,7 +440,14 @@ class MLP(AbstractModule):
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # Chunk the input if needed
+        pad_rows = 0
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
+            if seq_len % cfg["max_rows"] != 0:
+                pad_rows = cfg["max_rows"] - (seq_len % cfg["max_rows"])
+                x_padded = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+                ttnn.deallocate(x)
+                x = x_padded
+                seq_len += pad_rows
             x = ttnn.reshape(x, [num_layers, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
             seq_len = cfg["max_rows"]
 
@@ -478,6 +486,8 @@ class MLP(AbstractModule):
         _, num_chunks, _, output_dim = output.shape
         if num_chunks > 1:
             output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
+            if pad_rows > 0:
+                output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
 
         assert output.memory_config() == cfg["output_memory_config"]
         return output
@@ -489,9 +499,6 @@ class MLP(AbstractModule):
 
         # All gather
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
-
-        # TODO: File issue on AG not being able to do this internally (Issue #26672)
-        x = ttnn.to_memory_config(x, **cfg["all_gather_reshard"])
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])
@@ -511,8 +518,6 @@ class MLP(AbstractModule):
         ttnn.deallocate(activated)
 
         # Add reduce-scatter
-        w2_out = ttnn.to_memory_config(w2_out, ttnn.DRAM_MEMORY_CONFIG)
-        # TODO: File issue on RS not being able to run sharded memory config
         output = ttnn.experimental.reduce_scatter_minimal_async(
             w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
         )

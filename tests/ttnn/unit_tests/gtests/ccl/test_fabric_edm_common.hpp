@@ -18,18 +18,18 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "tt_metal/fabric/ccl/ccl_common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tile.hpp>
 
@@ -359,7 +359,7 @@ inline ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const ttnn::Shape& s
 
 bool RunPipelinedWorkersTest(
 
-    ttnn::Shape tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const size_t split_dim,
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)

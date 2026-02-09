@@ -16,6 +16,7 @@
 #include <tt-metalium/hal.hpp>
 
 #include <tt-logger/tt-logger.hpp>
+#include "hostdevcommon/fabric_common.h"
 #include "ttnn_test_fixtures.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -38,6 +39,10 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "ttnn/tensor/shape/shape.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
 
 namespace ttnn::operations::generic::test {
 
@@ -1367,6 +1372,164 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
     }
+}
+
+class Fabric1DFixtureGeneric : public tt::tt_fabric::fabric_router_tests::Fabric1DFixture {
+public:
+    Fabric1DFixtureGeneric() : tt::tt_fabric::fabric_router_tests::Fabric1DFixture() {}
+};
+
+TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
+    auto sender_device_coord = distributed::MeshCoordinate(0, 0);
+    auto receiver_device_coord = distributed::MeshCoordinate(0, 0);
+    uint32_t num_hops = 1;
+    CoreCoord sender_logical_core = {0, 0};
+    CoreCoord receiver_logical_core = {1, 0};
+    tt::tt_fabric::FabricNodeId sender_fabric_node_id(tt::tt_fabric::MeshId{0}, 0);
+    std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
+    receiver_fabric_node_ids.emplace_back(tt::tt_fabric::MeshId{0}, 1);
+    uint32_t num_packets = 10;
+    uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
+    tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear;
+    bool with_state = false;
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto topology = control_plane.get_fabric_context().get_fabric_topology();
+
+    auto sender_device =
+        this->get_device(control_plane.get_physical_chip_id_from_fabric_node_id(sender_fabric_node_id));
+    auto receiver_device =
+        this->get_device(control_plane.get_physical_chip_id_from_fabric_node_id(receiver_fabric_node_ids[0]));
+    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+
+    auto worker_mem_map = this->generate_worker_mem_map(sender_device, topology);
+
+    std::vector<uint32_t> compile_time_args = {
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        worker_mem_map.notification_mailbox_address,
+        worker_mem_map.target_address,
+        0,  // tt::tt_metal::NocSendType::NOC_UNICAST_WRITE
+        1,  // num_send_dir
+        with_state,
+        0  // is_chip_multicast = 0
+    };
+
+    std::vector<uint32_t> sender_runtime_args = {
+        worker_mem_map.source_l1_buffer_address,
+        worker_mem_map.packet_payload_size_bytes,
+        num_packets,
+        time_seed,
+        receiver_virtual_core.x,
+        receiver_virtual_core.y,
+        num_hops};
+
+    // Create kernel descriptor (with empty runtime args initially)
+    KernelDescriptor sender_kernel_descriptor = {
+        .kernel_source =
+            "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
+        .core_ranges = {sender_logical_core},
+        .compile_time_args = compile_time_args,
+        .runtime_args = {},  // Will be set after append call
+        .common_runtime_args = {},
+        .config = tt::tt_metal::DataMovementConfigDescriptor{},
+    };
+
+    // Create program descriptor so append_routing_plane_connection_manager_rt_args can add semaphores and defines
+    ProgramDescriptor sender_program_descriptor = {
+        .kernels = {sender_kernel_descriptor},
+        .semaphores = {},
+        .cbs = {{}, {}},
+    };
+
+    // Append fabric connection args - this modifies sender_runtime_args and adds semaphores/defines to descriptor
+    tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(0);
+    tt::tt_fabric::append_routing_plane_connection_manager_rt_args<ProgramDescriptor>(
+        sender_fabric_node_id,
+        std::vector<tt::tt_fabric::eth_chan_directions>{tt::tt_fabric::eth_chan_directions::EAST},
+        std::vector<uint32_t>{},
+        sender_program_descriptor,
+        kernel_id,
+        {sender_logical_core},
+        sender_runtime_args,
+        api_type);
+
+    // NOW set the complete runtime args on the kernel (after append has added connection args)
+    sender_program_descriptor.kernels[kernel_id].runtime_args = {{sender_logical_core, sender_runtime_args}};
+
+    ProgramDescriptor receiver_program_descriptor;
+
+    std::vector<uint32_t> receiver_runtime_args = {
+        worker_mem_map.packet_payload_size_bytes,
+        num_packets,
+        time_seed,
+    };
+
+    KernelDescriptor receiver_kernel_descriptor = {
+        .kernel_source = "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
+        .core_ranges = {receiver_logical_core},
+        .compile_time_args = compile_time_args,
+        .runtime_args = {{receiver_logical_core, receiver_runtime_args}},
+        .common_runtime_args = {},
+        .config = tt::tt_metal::DataMovementConfigDescriptor{},
+    };
+
+    receiver_program_descriptor = {
+        .kernels = {receiver_kernel_descriptor},
+        .semaphores = {},
+        .cbs = {{}, {}},
+    };
+
+    log_info(tt::LogTest, "Executing fabric unicast test via generic_op...");
+    tt::tt_metal::experimental::MeshProgramDescriptor receiver_mesh_program_descriptor;
+    receiver_mesh_program_descriptor.mesh_programs.emplace_back(
+        ttnn::MeshCoordinateRange(receiver_device_coord), std::move(receiver_program_descriptor));
+    tt::tt_metal::experimental::MeshProgramDescriptor sender_mesh_program_descriptor;
+    sender_mesh_program_descriptor.mesh_programs.emplace_back(
+        ttnn::MeshCoordinateRange(sender_device_coord), std::move(sender_program_descriptor));
+
+    // Create placeholder tensors - generic_op requires at least one input and one output tensor
+    ttnn::Shape shape{1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+    Tensor input_tensor = ttnn::random::random(shape, tt::tt_metal::DataType::BFLOAT16);
+    Tensor output_tensor = ttnn::random::random(shape, tt::tt_metal::DataType::BFLOAT16);
+    Tensor device_input_tensor_sender = input_tensor.to_device(sender_device.get());
+    Tensor device_output_tensor_sender = output_tensor.to_device(sender_device.get());
+    Tensor device_input_tensor_receiver = input_tensor.to_device(receiver_device.get());
+    Tensor device_output_tensor_receiver = output_tensor.to_device(receiver_device.get());
+
+    ttnn::generic_op(
+        std::vector<Tensor>{device_input_tensor_receiver, device_output_tensor_receiver},
+        receiver_mesh_program_descriptor);
+    ttnn::generic_op(
+        std::vector<Tensor>{device_input_tensor_sender, device_output_tensor_sender}, sender_mesh_program_descriptor);
+    sender_device->quiesce_devices();
+    receiver_device->quiesce_devices();
+
+    std::vector<uint32_t> sender_status;
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        sender_device->get_devices()[0],
+        sender_logical_core,
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        sender_status,
+        tt::CoreType::WORKER);
+    EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+
+    std::vector<uint32_t> receiver_status;
+
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        receiver_device->get_devices()[0],
+        receiver_logical_core,
+        worker_mem_map.test_results_address,
+        worker_mem_map.test_results_size_bytes,
+        receiver_status,
+        tt::CoreType::WORKER);
+    EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
+    uint64_t sender_words =
+        ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
+    uint64_t receiver_words =
+        ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | receiver_status[TT_FABRIC_WORD_CNT_INDEX];
+    EXPECT_EQ(sender_words, receiver_words);
 }
 
 }  // namespace ttnn::operations::generic::test

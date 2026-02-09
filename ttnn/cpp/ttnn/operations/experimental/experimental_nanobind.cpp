@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_nanobind.hpp"
@@ -54,6 +55,7 @@
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -87,6 +89,7 @@ void py_module(nb::module_& mod) {
     create_qkv_heads::detail::bind_create_qkv_heads(mod);
 
     reduction::detail::bind_fast_reduce_nc(mod);
+    reduction::detail::bind_deepseek_moe_fast_reduce_nc(mod);
     reduction::detail::bind_reduction_intimg_operation(mod);
     reduction::detail::bind_deepseek_grouped_gate(mod);
 
@@ -125,6 +128,7 @@ void py_module(nb::module_& mod) {
     operations::experimental::ternary::detail::bind_where(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
+    minimal_matmul::detail::bind_minimal_matmul_split(mod);
 
     isin::detail::bind_isin_operation(mod);
 }

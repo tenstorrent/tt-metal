@@ -151,7 +151,7 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
         unary_writer_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
+            "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     }
@@ -178,7 +178,7 @@ UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (unpad_tensor_w_16) {
         // Use copy compute kernel just for a potential data type conversion.
-        compute_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp";
+        compute_kernel = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp";
         compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
     } else if (
         !use_pack_untilize || a.dtype() == DataType::UINT16 ||

@@ -21,8 +21,8 @@ void log_noc_xfer(uint32_t len) {
 }
 
 #define LOG_LEN(l) log_noc_xfer(l);
-#define LOG_READ_LEN_FROM_STATE(noc_id) LOG_LEN(NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
-#define LOG_WRITE_LEN_FROM_STATE(noc_id) LOG_LEN(NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
+#define LOG_READ_LEN_FROM_STATE(noc_id) LOG_LEN(noc_debug_read_at_len_be(noc_id, NCRISC_RD_CMD_BUF));
+#define LOG_WRITE_LEN_FROM_STATE(noc_id) LOG_LEN(noc_debug_read_at_len_be(noc_id, NCRISC_WR_CMD_BUF));
 
 #else
 

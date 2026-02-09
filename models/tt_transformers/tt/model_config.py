@@ -6,7 +6,7 @@ import inspect
 import json
 import math
 import os
-from enum import Enum, auto
+from enum import Enum
 from pathlib import Path
 from typing import Tuple
 
@@ -32,8 +32,6 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta_mllama,
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
-    load_hf_state_dict,
-    load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
@@ -42,11 +40,6 @@ from models.tt_transformers.tt.load_checkpoints import (
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
-
-
-class CheckpointType(Enum):
-    Meta = auto()
-    HuggingFace = auto()
 
 
 class TensorGroup(Enum):
@@ -450,6 +443,7 @@ class ModelArgs:
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
+        "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -485,7 +479,6 @@ class ModelArgs:
         self.fuse_qkv = False
         self.fuse_mlp = False
         self.trust_remote_code_hf = False
-        self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
@@ -504,7 +497,6 @@ class ModelArgs:
         if HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
-            self.from_hf_url = True
 
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
@@ -543,8 +535,6 @@ class ModelArgs:
         if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
             self.trust_remote_code_hf = True
 
-        # Set checkpoint type - always HuggingFace since we only support HF_MODEL now
-        self.checkpoint_type = CheckpointType.HuggingFace
         self._set_hf_params(self.CKPT_DIR)
 
         # Set the max number of tokens for each prefill chunk based on the model and device
@@ -565,11 +555,13 @@ class ModelArgs:
                 "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
+                "Qwen3-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {
                     "N150": 32,
                     "N300": 64,
@@ -577,6 +569,11 @@ class ModelArgs:
                     "TG": 128,
                     "P150x4": 128,
                 },  # Conservative: Allow on all devices
+                "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
+                "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -595,9 +592,10 @@ class ModelArgs:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
-        if (self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150") or (
-            self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.device_name == "N300"
-        ):
+        if (
+            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b"]
+            and self.device_name == "N150"
+        ) or (self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
@@ -1343,6 +1341,60 @@ class ModelArgs:
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
+            # model specific CCL configs
+            default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_agmm = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_mlp_rs = {
+                "num_links": self.num_reduce_scatter_links,
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 2,
+                "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            }
+            default_sampling_force_argmax = {
+                "allow_force_argmax": False,
+                "num_links": 1,
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 2,
+                "topology": ttnn.Topology.Linear,
+            }
+            model_specific_ccl_configs = {
+                "Llama-3.1-8B": {
+                    "attn_ln_ag": {"num_links": 4, "chunks_per_sync": 10, "num_workers_per_link": 1},
+                    "ffn_ln_ag": {"num_links": 4, "chunks_per_sync": 25, "num_workers_per_link": 1},
+                    "attn_agmm": {"num_links": 4, "chunks_per_sync": 1, "num_workers_per_link": 1},
+                    "mlp_rs": {
+                        "num_links": 4,
+                        "chunks_per_sync": 1,
+                        "num_workers_per_link": 1,
+                        "rs_memory_config": ttnn.L1_MEMORY_CONFIG,
+                    },
+                    "sampling_force_argmax": {
+                        "allow_force_argmax": True,
+                        "num_links": 4,
+                        "chunks_per_sync": 10,
+                        "num_workers_per_link": 2,
+                        "topology": ttnn.Topology.Ring,
+                    },
+                }
+            }
+            # Model-specific CCL configs are tuned for Galaxy (TG) with 4 links
+            # Only apply them on Galaxy, otherwise use defaults
+            executed_on_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+            if executed_on_galaxy and self.base_model_name in model_specific_ccl_configs:
+                self.model_config["ATTN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_ln_ag"]
+                self.model_config["FFN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["ffn_ln_ag"]
+                self.model_config["ATTN_AGMM_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_agmm"]
+                self.model_config["MLP_RS_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["mlp_rs"]
+                self.model_config["SAMPLING_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name][
+                    "sampling_force_argmax"
+                ]
+            else:
+                self.model_config["ATTN_LN_AG_CONFIG"] = default_ln_ag
+                self.model_config["FFN_LN_AG_CONFIG"] = default_ln_ag
+                self.model_config["ATTN_AGMM_CONFIG"] = default_agmm
+                self.model_config["MLP_RS_CONFIG"] = default_mlp_rs
+                self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_force_argmax
+
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")
             logger.info(f"MLP prefill grids @ 32: w1/w3: {mlp1_3_grid(32)}, w2: {mlp2_grid(32)}")
@@ -1417,26 +1469,33 @@ class ModelArgs:
                 "TG": [128, 1024, 2048, 4096, 8192],
             },
             "Llama-3.3-70B": {
+                "T3K": [128],
+                "TG": [128, 1024, 2048, 4096, 8192],
+            },
+            "Qwen3-Embedding-8B": {
+                "N150": [128, 1024],
+                "N300": [128, 1024, 2048, 4096, 8192],
                 "T3K": [128, 1024, 2048, 4096, 8192],
                 "TG": [128, 1024, 2048, 4096, 8192],
+                "P150x4": [128, 1024, 2048, 4096, 8192],
+            },
+            "Llama-3.2-3B": {
+                "N150": [],
             },
         }
 
         model_name = self.base_model_name
         device_name = self.device_name
 
-        # Try model-specific sequence lengths first
-        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
-        if result:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
+        # If there is no entry for a model in model_specific_supported_seq_lens, use the entry in default_supported_seq_lens
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(
+            device_name, default_supported_seq_lens.get(device_name)
+        )
 
-        # Fall back to default sequence lengths
-        result = default_supported_seq_lens.get(device_name)
-        if result:
+        if result is not None:
             return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
-
-        # No supported sequence lengths found, return empty list
-        return []
+        else:
+            return []
 
     @staticmethod
     def __get_llama_local_params_name(model_name):
@@ -1475,14 +1534,26 @@ class ModelArgs:
         return False
 
     def ccl_topology(self):
-        # Use ring on a T3K or 6U galaxy submesh
-        if self.num_devices == 8 and ttnn.cluster.get_cluster_type() in [
+        # Use ring on a T3K or 6U galaxy or P300x2 or P150x4/8 submesh
+        if ttnn.cluster.get_cluster_type() in [
+            ttnn.cluster.ClusterType.P300_X2,
+            ttnn.cluster.ClusterType.P150_X4,
+            ttnn.cluster.ClusterType.P150_X8,
+        ]:
+            return ttnn.Topology.Ring
+        elif ttnn.cluster.get_cluster_type() in [
             ttnn.cluster.ClusterType.T3K,
             ttnn.cluster.ClusterType.GALAXY,
         ]:
-            return ttnn.Topology.Ring
-        elif self.num_devices > 1:  # All other multi chip devices
+            if self.num_devices >= 8:
+                return ttnn.Topology.Ring
+            else:
+                # e.g., 1x4 submesh does not support ring topology; fallback to linear
+                return ttnn.Topology.Linear
+
+        if self.num_devices > 1:  # All other multi chip devices
             return ttnn.Topology.Linear
+
         return None
 
     def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
@@ -1682,9 +1753,19 @@ class ModelArgs:
 
         self.layer_types = text_config.get("layer_types", None)
 
+        # Sliding window attention
+        self.sliding_window = text_config.get("sliding_window", None)
+
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
+        self.use_sliding_window = text_config.get("use_sliding_window", None)
+        if (
+            self.sliding_window is not None
+            and self.rope_theta_local is None
+            and (self.use_sliding_window == True or self.use_sliding_window is None)
+        ):  # For interleaved attention
+            self.rope_theta_local = self.rope_theta
 
         rope_scaling_params = text_config.get("rope_scaling", None)
         self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
@@ -1695,9 +1776,6 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
-
-        # Sliding window attention
-        self.sliding_window = text_config.get("sliding_window", None)
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
@@ -1797,40 +1875,34 @@ class ModelArgs:
             vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
             return vision_config
 
-        if self.from_hf_url:
-            from transformers import AutoConfig
+        from transformers import AutoConfig
 
-            if self.dummy_weights:
-                logger.info(
-                    f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
-                )
-                self.hf_config = AutoConfig.from_pretrained(
-                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
-                )
-            else:
-                self.hf_config = AutoConfig.from_pretrained(
-                    self.CKPT_DIR,
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=os.getenv("CI") == "true",
-                )
-
-            config = self.hf_config.to_dict()
-
-            if "text_config" in config or "vision_config" in config:
-                merged_text_config = merge_text_config(config)
-                self._set_params_from_dict(merged_text_config)
-
-                if "vision_config" in config:
-                    # Merge vision config (merge_vision_config is safe for all models - it only adds missing keys)
-                    merged_vision_config = merge_vision_config(config)
-                    self._set_vision_params({"vision_config": merged_vision_config})
-            else:
-                self._set_params_from_dict(config)
+        if self.dummy_weights:
+            logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
+            self.hf_config = AutoConfig.from_pretrained(
+                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+            )
         else:
-            config_file = os.path.join(checkpoint_dir, "config.json")
-            assert os.path.exists(config_file), f"config.json file not found at {config_file}"
-            with open(config_file, "r") as f:
-                config = json.load(f)
+            self.hf_config = AutoConfig.from_pretrained(
+                self.CKPT_DIR,
+                trust_remote_code=self.trust_remote_code_hf,
+                local_files_only=os.getenv("CI") == "true",
+            )
+
+        config = self.hf_config.to_dict()
+
+        if "text_config" in config or "vision_config" in config:
+            merged_text_config = merge_text_config(config)
+            self._set_params_from_dict(merged_text_config)
+
+            if "vision_config" in config:
+                # Merge vision config (merge_vision_config is safe for all models - it only adds missing keys)
+                merged_vision_config = merge_vision_config(config)
+                self._set_vision_params({"vision_config": merged_vision_config})
+
+            # Set is_multimodal using original config that has vision_config
+            self.is_multimodal = "vision_config" in config or self.is_vision()
+        else:
             self._set_params_from_dict(config)
 
         # compatibility with _set_params
@@ -1973,61 +2045,48 @@ class ModelArgs:
 
             model_cls = self.get_hf_model_cls()
 
+            from_config_exc = None
             try:
-                # .from_pretrained + _init_weights works faster than .from_config
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    config=config,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=True,
-                )
-                model.apply(model._init_weights)
-            except Exception as e:
-                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                # Avoid loading checkpoint weights when dummy_weights is set.
+                try:
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                except TypeError:
+                    model = model_cls.from_config(config)
+            except Exception as exc:
+                from_config_exc = exc
+                logger.info("Error loading dummy weights using .from_config. Error: {}", exc)
+                if hasattr(model_cls, "_from_config"):
+                    try:
+                        try:
+                            model = model_cls._from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                        except TypeError:
+                            model = model_cls._from_config(config)
+                    except Exception as fallback_exc:
+                        logger.info("Error loading dummy weights using ._from_config. Error: {}", fallback_exc)
+                        if from_config_exc is not None:
+                            raise fallback_exc from from_config_exc
+                        raise
+                else:
+                    raise
 
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             state_dict = model.state_dict()
-        elif self.checkpoint_type == CheckpointType.Meta:
-            state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
-            self.is_mixture_of_experts = any(["experts" in k for k in state_dict.keys()])
         else:
-            assert self.checkpoint_type == CheckpointType.HuggingFace
-            if self.from_hf_url:
-                # Use get_hf_model_cls() from main branch, but handle special cases
-                # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-                if "Qwen2.5-VL" in self.model_name:
-                    from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                        Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                    )
-
-                    model_cls = AutoModelForCausalLM
-                    print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
-                elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                    # Special case Mistral-Small-3.1-24B-Instruct-2503: HF's AutoModel doesn't work,
-                    # similar to Qwen2.5-VL, until fully integrated into a HF release
-                    from transformers import Mistral3ForConditionalGeneration
-
-                    model_cls = Mistral3ForConditionalGeneration
-                else:
-                    model_cls = self.get_hf_model_cls()
-                model = model_cls.from_pretrained(
-                    self.CKPT_DIR,
-                    torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf,
-                    local_files_only=os.getenv("CI") == "true"
-                    # Note that the default setting is torch.dtype.float32, but model weights are
-                    # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                    # unnecessary cast.
-                )
-                if self.cache_hf_flag:
-                    self.cached_hf_model = model
-                state_dict = model.state_dict()
-                self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
-            else:
-                state_dict = load_hf_state_dict(self.CKPT_DIR)
-                self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
+            # Always HuggingFace since we only support HF_MODEL now
+            model_cls = self.get_hf_model_cls()
+            model = model_cls.from_pretrained(
+                self.CKPT_DIR,
+                torch_dtype="auto",
+                trust_remote_code=self.trust_remote_code_hf,
+                local_files_only=os.getenv("CI") == "true"
+                # Note that the default setting is torch.dtype.float32, but model weights are
+                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                # unnecessary cast.
+            )
+            if self.cache_hf_flag:
+                self.cached_hf_model = model
+            state_dict = model.state_dict()
+            self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if self.is_multimodal:
             state_dict = standardize_hf_keys_multimodal(state_dict)
@@ -2576,23 +2635,7 @@ class ModelArgs:
                 model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
-            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-            if "Qwen/Qwen2.5-VL" in self.model_name:
-                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                )
-
-                model_cls = AutoModelForCausalLM
-            elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                from transformers import AutoConfig
-                from transformers import Mistral3ForConditionalGeneration as AutoModelForCausalLM
-
-                model_cls = AutoModelForCausalLM
-            else:
-                from transformers import AutoConfig, AutoModelForCausalLM
-
-                model_cls = AutoModelForCausalLM  # Conservative: Use AutoModelForCausalLM for standard models
+            model_cls = self.get_hf_model_cls()
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
@@ -2667,70 +2710,55 @@ class ModelArgs:
         return layer
 
     def reference_rms_norm(self):
-        if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm
-
-            return RMSNorm(self.dim, self.norm_eps)
-        else:
-            model = self.reference_transformer(wrap=False)
-            layers = getattr(model, "layers", getattr(model, "model", {}).layers)
-            layer = layers[0].input_layernorm
-            layer._load_state_dict = layer.load_state_dict
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-            return layer
+        # Always HuggingFace since we only support HF_MODEL now
+        model = self.reference_transformer(wrap=False)
+        layers = getattr(model, "layers", getattr(model, "model", {}).layers)
+        layer = layers[0].input_layernorm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
-        if self.checkpoint_type == CheckpointType.HuggingFace:
-            from transformers import AutoConfig
+        # Always HuggingFace since we only support HF_MODEL now
+        from transformers import AutoConfig
 
-            model_cls = self.get_hf_model_cls()
+        model_cls = self.get_hf_model_cls()
 
-            if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-                if hasattr(config, "text_config"):
-                    config.text_config.num_layers = self.n_layers
-                    config.text_config.num_hidden_layers = self.n_layers
-                else:
-                    config.num_layers = self.n_layers
-                    config.num_hidden_layers = self.n_layers
-
-                try:
-                    # .from_pretrained + _init_weights works faster than .from_config
-                    model = model_cls.from_pretrained(
-                        self.CKPT_DIR,
-                        config=config,
-                        torch_dtype="auto",
-                        trust_remote_code=self.trust_remote_code_hf,
-                        local_files_only=True,
-                    )
-                    model.apply(model._init_weights)
-                except Exception as e:
-                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
-                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+        if self.dummy_weights and not load_checkpoint:
+            config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+            if hasattr(config, "text_config"):
+                config.text_config.num_layers = self.n_layers
+                config.text_config.num_hidden_layers = self.n_layers
             else:
-                if "gemma-3" in self.model_name:
-                    from transformers import Gemma3ForConditionalGeneration
+                config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
 
-                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
-                elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:  # Minimal addition
-                    from transformers import Mistral3ForConditionalGeneration
-
-                    model = Mistral3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, torch_dtype=torch.bfloat16)
-                else:
-                    from transformers import AutoModelForCausalLM
-
-                    if self.cached_hf_model is None:
-                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                        self.cached_hf_model = model
-                    else:
-                        model = self.cached_hf_model
-                    model.model.layers = model.model.layers[: self.n_layers]
-            if wrap:
-                wrapper = HfModelWrapper(model, self.head_dim)
-                return wrapper
+            try:
+                # .from_pretrained + _init_weights works faster than .from_config
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR,
+                    config=config,
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=True,
+                )
+                model.apply(model._init_weights)
+            except Exception as e:
+                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+            # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+        else:
+            if self.cached_hf_model is None:
+                model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
+                self.cached_hf_model = model
             else:
-                return model
+                model = self.cached_hf_model
+            model.model.layers = model.model.layers[: self.n_layers]
+        if wrap:
+            wrapper = HfModelWrapper(model, self.head_dim)
+            return wrapper
+        else:
+            return model
 
     def reference_gemma_model(self):
         model = self.reference_vision_transformer(wrap=False)
@@ -2818,39 +2846,6 @@ class ModelArgs:
         else:
             # For other models: vision_tower.vision_model.encoder
             layer = model.vision_tower.vision_model.encoder
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    # Minimal addition for Mistral vision support
-    def reference_pixtral_image_block(self, layer_num=0):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.transformer.layers[layer_num]
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    # Minimal addition for Mistral vision support
-    def reference_vision_rms(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.transformer.layers[0].ffn_norm
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    # Minimal addition for Mistral vision support
-    def reference_conv2d_patch(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.patch_conv
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    # Minimal addition for Mistral vision support
-    def reference_vision_rot_emb(self):
-        model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            layer = model.vision_tower.patch_positional_embedding
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer

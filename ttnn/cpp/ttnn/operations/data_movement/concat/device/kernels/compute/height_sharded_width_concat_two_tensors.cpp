@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/transpose_wh.h"
 
 template <uint32_t BatchSize = 1>
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
@@ -28,8 +28,7 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     cb_pop_front(cb_in, BatchSize);
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t input0_cb = get_compile_time_arg_val(0);
     constexpr uint32_t input1_cb = get_compile_time_arg_val(1);
     constexpr uint32_t input0_transpose_cb = get_compile_time_arg_val(2);
@@ -80,4 +79,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

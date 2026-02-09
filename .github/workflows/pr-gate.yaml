@@ -11,11 +11,23 @@ name: PR Gate
 # - Individual test cases must be less than 1s.
 
 run-name: >-
-  ${{ github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'merged' && format('[Merge Queue] 🎯 Merged {0}', github.sha) ||
-      github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'dequeued' && format('[Merge Queue] ↩️ Dequeued {0}', github.sha) ||
-      github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'invalidated' && format('[Merge Queue] 💔 Invalidated {0}', github.sha) ||
-      github.event_name == 'merge_group' && github.event.action == 'destroyed' && format('[Merge Queue] {0} {1}', github.event.reason, github.sha) ||
-      github.event_name == 'merge_group' && format('[Merge Queue] 💫 Processing {0}: {1}', github.actor, github.sha) ||
+  ${{ github.event_name == 'merge_group' &&
+      github.event.action == 'destroyed' &&
+      github.event.reason == 'merged' &&
+      format('[Merge Queue] 🎯 Merged {0}', github.sha) ||
+      github.event_name == 'merge_group' &&
+      github.event.action == 'destroyed' &&
+      github.event.reason == 'dequeued' &&
+      format('[Merge Queue] ↩️ Dequeued {0}', github.sha) ||
+      github.event_name == 'merge_group' &&
+      github.event.action == 'destroyed' &&
+      github.event.reason == 'invalidated' &&
+      format('[Merge Queue] 💔 Invalidated {0}', github.sha) ||
+      github.event_name == 'merge_group' &&
+      github.event.action == 'destroyed' &&
+      format('[Merge Queue] {0} {1}', github.event.reason, github.sha) ||
+      github.event_name == 'merge_group' &&
+      format('[Merge Queue] 💫 Processing {0}: {1}', github.actor, github.sha) ||
       '' }}
 
 on:
@@ -32,6 +44,14 @@ on:
           - ASan
           - TSan
           - ASanCoverage
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
   pull_request:
     types:
       - opened
@@ -44,13 +64,15 @@ on:
       - destroyed
   push:
     branches:
-      - main # Builds on main will populate the shared ccache to speed up builds on branches
+      # Builds on main will populate the shared ccache to speed up builds on branches
+      - main
 
 concurrency:
   # Groups to control cancelling of obsolete runs.
   # main (or any protected branch): run_id (ie: never cancel other jobs)
   # PRs: PR #
-  # Merge Queue: branch name; will be paired with the 'destroyed' trigger to cause a cancel when it leaves or moves in the queue.
+  # Merge Queue: branch name; will be paired with the 'destroyed' trigger to
+  #              cause a cancel when it leaves or moves in the queue.
   #              See https://github.com/orgs/community/discussions/137976#discussioncomment-14004793
   # All others: branch name (ie: one run per branch)
   group: >-
@@ -68,19 +90,39 @@ permissions:
   packages: write
 
 jobs:
+  # NOTE: Platform parsing is handled by build-docker-artifact.yaml and build-artifact.yaml internally.
+  # This workflow only needs to pass the platform string to downstream workflows.
+
+  # Single docker build job - deduplicates container builds across asan-build, build, and clang-tidy
+  build-docker-images:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      architecture: amd64
+
   asan-build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: build-docker-images
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
-      version: "22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
       skip-tt-train: true
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+      # Pass pre-built docker images to avoid duplicate builds
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
 
   find-changed-files:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -114,7 +156,7 @@ jobs:
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
@@ -138,7 +180,7 @@ jobs:
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-nn
@@ -146,12 +188,13 @@ jobs:
 
   build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: build-docker-images
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
-      version: "22.04"
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       # Cannot do a Sanitizer build as that's not compatible with the downstream test.
       # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
@@ -162,10 +205,18 @@ jobs:
       skip-tt-train: true
       distributed: false
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+      # Pass pre-built docker images to avoid duplicate builds
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
 
   build-tt-train:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     needs: [ build, find-changed-files ]
+    timeout-minutes: 20
     runs-on: tt-ubuntu-2204-large-stable
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
@@ -185,14 +236,22 @@ jobs:
       - uses: ./.github/actions/download-artifact-with-retry
         timeout-minutes: 15
         with:
-          name: ${{ needs.build.outputs.packages-artifact-name || 'packages artifact unresolved!' }}
+          name: >-
+            ${{ needs.build.outputs.packages-artifact-name ||
+                'packages artifact unresolved!' }}
           path: /work/pkgs/
       - name: Install packages
+        timeout-minutes: 10
         run: |
           set -euo pipefail
 
           apt update
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-nn_*.deb ./pkgs/tt-nn-dev_*.deb
+          apt install -y \
+            ./pkgs/tt-metalium_*.deb \
+            ./pkgs/tt-metalium-jit_*.deb \
+            ./pkgs/tt-metalium-dev_*.deb \
+            ./pkgs/tt-nn_*.deb \
+            ./pkgs/tt-nn-dev_*.deb
 
       - name: ⬇️ Checkout
         uses: actions/checkout@v5
@@ -208,11 +267,16 @@ jobs:
         run: git config --global --add safe.directory /work
 
       - name: Submodules
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           git submodule update --init --recursive tt-train
 
       - name: Configure tt-train
+        timeout-minutes: 10
+        env:
+          CC: clang-20
+          CXX: clang++-20
         run: |
           set -euo pipefail
 
@@ -221,6 +285,7 @@ jobs:
           cmake -DCMAKE_BUILD_TYPE=Release -G Ninja ..
 
       - name: Build tt-train
+        timeout-minutes: 10
         run: |
           set -euo pipefail
 
@@ -228,14 +293,14 @@ jobs:
           cmake --build .
 
   build-docs:
-    if: ${{ needs.find-changed-files.outputs.any-code-changed == 'true' ||
-            needs.find-changed-files.outputs.docs-changed == 'true'
-        }}
+    if: >-
+      ${{ needs.find-changed-files.outputs.any-code-changed == 'true' ||
+          needs.find-changed-files.outputs.docs-changed == 'true' }}
     needs: [find-changed-files, build]
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   metalium-examples:
@@ -280,7 +345,9 @@ jobs:
 
   ttsim-integration-tests:
     needs: [ build ]
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+    if: >-
+      ${{ github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.fork == false }}
     strategy:
       fail-fast: false
     uses: ./.github/workflows/ttsim.yaml
@@ -291,15 +358,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: true
       run-metal-cpp-unit-tests: false
-
-  docker-image:
-    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      distro: ubuntu
-      version: 22.04
-      architecture: amd64
 
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
@@ -316,40 +374,49 @@ jobs:
         python-version: '3.10'
     - name: Run model charts sync Python script
       run: |
-        # Run script that compares the models chart in README.md with the models chart in models/README.md
+        # Run script that compares the models chart in README.md
+        # with the models chart in models/README.md
         python .github/scripts/utils/model-charts-sync.py
 
   # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
   # enough to run during PRs without bringing infra to a grinding halt.
   # A proper scan is run in Merge Gate to ensure only clean code lands.
   clang-tidy-light:
-    needs: [docker-image]
+    needs: [build-docker-images]
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+    timeout-minutes: 140
     runs-on: ubuntu-latest
-    container: ${{ needs.docker-image.outputs.ci-build-tag }}
+    container: ${{ needs.build-docker-images.outputs.ci-build-tag }}
     permissions:
       pull-requests: write
-      contents: write # to allow auto-closing conversations
+      contents: write  # to allow auto-closing conversations
     steps:
     - name: Change ownership of /github/home
-      run: sudo chown -R $(whoami) /github/home # Thanks GH...
+      run: sudo chown -R $(whoami) /github/home  # Thanks GH...
     - uses: actions/checkout@v4
       with:
-        ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+        ref: >-
+          ${{ github.event_name == 'pull_request' &&
+              github.event.pull_request.head.sha || '' }}
         fetch-depth: 0
         submodules: "recursive"
     - name: Set safe directory for Git
       run: git config --global --add safe.directory $GITHUB_WORKSPACE
     - name: Fetch base branch
+      timeout-minutes: 5
       run: |
-        git remote add upstream "https://github.com/${{ github.event.pull_request.base.repo.full_name }}"
-        git fetch --no-tags upstream "${{ github.event.pull_request.base.ref }}"
+        BASE_REPO="${{ github.event.pull_request.base.repo.full_name }}"
+        BASE_REF="${{ github.event.pull_request.base.ref }}"
+        git remote add upstream "https://github.com/${BASE_REPO}"
+        git fetch --no-tags upstream "${BASE_REF}"
     - name: Install clang-tidy
+      timeout-minutes: 10
       run: |
         sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-20 python3.11 python3.11-venv python3.11-dev
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          clang-tidy-20 python3.11 python3.11-venv python3.11-dev
         sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
-        uv pip install pyyaml # Needed for clang-tidy-diff-20.py
+        uv pip install pyyaml  # Needed for clang-tidy-diff-20.py
     - name: Prepare .clang-tidy with extra checks
       run: |
         if [ -f .clang-tidy-light ]; then
@@ -358,8 +425,16 @@ jobs:
         fi
         cat .clang-tidy
     - name: Prepare compile_commands.json
+      timeout-minutes: 10
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+          -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
+          -DTT_METAL_BUILD_TESTS=ON \
+          -DTTNN_BUILD_TESTS=ON \
+          -DTT_UNITY_BUILDS=OFF \
+          -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
         cmake --build build --target all_generated_files
     - name: 'Install jq'
       uses: dcarbone/install-jq-action@v2
@@ -367,17 +442,23 @@ jobs:
       run: |
         mkdir clang-tidy-result
     - name: Analyze
-      timeout-minutes: 90 # Big PRs will have a LOT to scan, but this should be enough for everyone.
+      # Big PRs will have a LOT to scan, but this should be enough for everyone
+      timeout-minutes: 90
       shell: bash
       run: |
         set -euo pipefail
 
         # Find all touched files present in compile_commands.json
-        # This is not as simple as filtering non-code files, as some code (eg: Kernels) are C++ code that
-        # is not built at this level, and thus clang-tidy will be unable to process them.
+        # This is not as simple as filtering non-code files, as some code
+        # (eg: Kernels) are C++ code that is not built at this level, and
+        # thus clang-tidy will be unable to process them.
         PREFIX=$(pwd)
-        jq --arg prefix "$PREFIX/" -r '.[].file | sub("^" + $prefix; "")' build/compile_commands.json > relative_files_in_build.txt
-        git diff --name-only "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")..." > changed_files.txt
+        jq --arg prefix "$PREFIX/" -r \
+          '.[].file | sub("^" + $prefix; "")' \
+          build/compile_commands.json > relative_files_in_build.txt
+        BASE_REF="${{ github.event.pull_request.base.ref }}"
+        git diff --name-only \
+          "$(git merge-base HEAD "upstream/${BASE_REF}")..." > changed_files.txt
         grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
 
         # Exit if there are no modified files known to CMake
@@ -387,44 +468,65 @@ jobs:
         }
 
         # Analyze the relevant diffs of the relevant files
-        git diff "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")" -- $(cat common_files.txt) > filtered_changes.diff
-        clang-tidy-diff-20.py -p1 -path build  -export-fixes clang-tidy-result/fixes.yml -j$(nproc) < filtered_changes.diff
+        BASE_REF="${{ github.event.pull_request.base.ref }}"
+        git diff "$(git merge-base HEAD "upstream/${BASE_REF}")" \
+          -- $(cat common_files.txt) > filtered_changes.diff
+        clang-tidy-diff-20.py -p1 -path build \
+          -export-fixes clang-tidy-result/fixes.yml \
+          -j$(nproc) < filtered_changes.diff
 
-        # TODO: Find a way to fail THIS step if there's some USEFUL issues detected.
-        #       For now disable it b/c it fails if it finds things in non-user code and/or NOLINT's.
-        # # Draw attention to this step (make it an error) if there are fixes to be addressed.
+        # TODO: Find a way to fail THIS step if there's some USEFUL issues
+        # detected. For now disable it b/c it fails if it finds things in
+        # non-user code and/or NOLINT's.
+        # # Draw attention to this step (make it an error) if there are fixes
+        # # to be addressed.
         # [[ -s clang-tidy-result/fixes.yml ]] && exit 42
     - name: Run clang-tidy-pr-comments action
-      if: ${{ !cancelled() }}
-      uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818 # v1.8.0
+      if: ${{ !cancelled() && github.event.pull_request.head.repo.fork == false }}
+      # v1.8.0
+      uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         clang_tidy_fixes: clang-tidy-result/fixes.yml
-        request_changes: false # TODO: consider enabling this?
-        suggestions_per_comment: 10 # arbitrary limit toavoid GH API timeouts
-        python_path: python3 # Pip fails if the action attempts to install its own Python; Sidestep that.
-        auto_resolve_conversations: true # NOTE: only resolves when ALL are fixed.
+        request_changes: false  # TODO: consider enabling this?
+        suggestions_per_comment: 10  # arbitrary limit to avoid GH API timeouts
+        # Pip fails if the action attempts to install its own Python; Sidestep that
+        python_path: python3
+        # NOTE: only resolves when ALL are fixed
+        auto_resolve_conversations: true
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
     name: PR Gate Status
-    # Force this job to run so GH can 'see' it, provided some other job has actually run.
-    # Otherwise if the entire workflow has been skipped (eg: the PR was in Draft), then this will
-    # report FAILED instead of SKIPPED.
+    # Force this job to run so GH can 'see' it, provided some other job has
+    # actually run. Otherwise if the entire workflow has been skipped (eg: the
+    # PR was in Draft), then this will report FAILED instead of SKIPPED.
     if: >-
       ${{
         always() &&
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, build-tt-train, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync, build-docs]
+    needs:
+      - asan-build
+      - metalium-smoke-tests
+      - ttnn-smoke-tests
+      - build
+      - build-tt-train
+      - metalium-examples
+      - ttsim-integration-tests
+      - clang-tidy-light
+      - model-charts-sync
+      - build-docs
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build, build-tt-train"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs"
+          optional-jobs: >-
+            metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
+            ttsim-integration-tests, model-charts-sync, build-docs
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

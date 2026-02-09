@@ -43,7 +43,7 @@ void bind_strided_all_gather_minimal_matmul_async_op(
                const ttnn::ccl::Topology topology,
                std::optional<uint32_t> cluster_axis,
                const std::optional<const Tensor>& bias,
-               std::optional<unary::UnaryWithParam> fused_activation,
+               const std::optional<unary::UnaryWithParam>& fused_activation,
                const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
                const std::optional<ttnn::MemoryConfig>& memory_config_mm,
                const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,

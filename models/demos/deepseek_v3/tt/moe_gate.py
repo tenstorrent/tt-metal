@@ -136,71 +136,137 @@ class MoEGate(AbstractModule):
 
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
+
+            return {
+                "gate_proj": LinearConfig(
+                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    memory_config=memory_config,
+                    compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+                ),
+                "add_score_correction_bias": BinaryOpConfig(
+                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    memory_config=memory_config,
+                    dtype=ttnn.bfloat16,
+                ),
+                "multiply_expert_scale": BinaryOpConfig(
+                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    memory_config=memory_config,
+                    dtype=ttnn.bfloat16,
+                ),
+                "reshape_scores": ReshapeConfig(
+                    shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
+                ),
+                "topk_within_expert_groups": TopKConfig(
+                    k=2,  # no hf config for this
+                    dim=-1,
+                ),
+                "topk_expert_groups": TopKConfig(
+                    k=hf_config.topk_group,
+                    dim=-1,
+                ),
+                "scatter_top_expert_groups": ScatterConfig(
+                    input=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    src=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    dim=3,
+                ),
+                "reshape_group_mask": ReshapeConfig(
+                    shape=(1, -1, hf_config.n_group, 1),
+                ),
+                "reshape_active_experts": ReshapeConfig(
+                    shape=(1, 1, -1, hf_config.n_routed_experts),
+                ),
+                "mul_scores_with_mask": MulConfig(
+                    memory_config=memory_config,
+                ),
+                "topk_experts": TopKConfig(
+                    k=hf_config.num_experts_per_tok,
+                    dim=-1,
+                ),
+                "topk_fallback": topk_fallback,
+                "topk_fallback_config": TopKFallbackConfig(
+                    mesh_device=MeshDeviceStub(mesh_device.shape),
+                    dtype=ttnn.bfloat16,
+                    memory_config=memory_config,
+                    use_bitonic_sort=use_bitonic_sort,
+                ),
+                "linear_fallback": False,
+                "linear_fallback_config": LinearFallbackConfig(
+                    mesh_device=MeshDeviceStub(mesh_device.shape),
+                    dtype=ttnn.bfloat16,
+                ),
+                "mesh_device": MeshDeviceStub(mesh_device.shape),
+                # "input_memory_config": ttnn.create_sharded_memory_config(  # Bad PCC
+                #         shape=(USERS_PER_ROW, HIDDEN_SIZE),
+                #         core_grid=ttnn.CoreGrid(y=7, x=8),
+                #         strategy=ttnn.ShardStrategy.WIDTH,
+                #     ),
+                "input_memory_config": memory_config,
+                "output_memory_config": memory_config,
+            }
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-        # Construct the config
-        return {
-            "gate_proj": LinearConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
-            ),
-            "add_score_correction_bias": BinaryOpConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=memory_config,
-                dtype=ttnn.bfloat16,
-            ),
-            "multiply_expert_scale": BinaryOpConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=memory_config,
-                dtype=ttnn.bfloat16,
-            ),
-            "reshape_scores": ReshapeConfig(
-                shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
-            ),
-            "topk_within_expert_groups": TopKConfig(
-                k=2,  # no hf config for this
-                dim=-1,
-            ),
-            "topk_expert_groups": TopKConfig(
-                k=hf_config.topk_group,
-                dim=-1,
-            ),
-            "scatter_top_expert_groups": ScatterConfig(
-                input=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                src=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                dim=3,
-            ),
-            "reshape_group_mask": ReshapeConfig(
-                shape=(1, -1, hf_config.n_group, 1),
-            ),
-            "reshape_active_experts": ReshapeConfig(
-                shape=(1, 1, -1, hf_config.n_routed_experts),
-            ),
-            "mul_scores_with_mask": MulConfig(
-                memory_config=memory_config,
-            ),
-            "topk_experts": TopKConfig(
-                k=hf_config.num_experts_per_tok,
-                dim=-1,
-            ),
-            "topk_fallback": topk_fallback,
-            "topk_fallback_config": TopKFallbackConfig(
-                mesh_device=MeshDeviceStub(mesh_device.shape),
-                dtype=ttnn.bfloat16,
-                memory_config=memory_config,
-                use_bitonic_sort=use_bitonic_sort,
-            ),
-            "linear_fallback": False,
-            "linear_fallback_config": LinearFallbackConfig(
-                mesh_device=MeshDeviceStub(mesh_device.shape),
-                dtype=ttnn.bfloat16,
-            ),
-            "mesh_device": MeshDeviceStub(mesh_device.shape),
-            "input_memory_config": memory_config,
-            "output_memory_config": memory_config,
-        }
+            return {
+                "gate_proj": LinearConfig(
+                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    memory_config=memory_config,
+                    compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+                ),
+                "add_score_correction_bias": BinaryOpConfig(
+                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    memory_config=memory_config,
+                    dtype=ttnn.bfloat16,
+                ),
+                "multiply_expert_scale": BinaryOpConfig(
+                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    memory_config=memory_config,
+                    dtype=ttnn.bfloat16,
+                ),
+                "reshape_scores": ReshapeConfig(
+                    shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
+                ),
+                "topk_within_expert_groups": TopKConfig(
+                    k=2,  # no hf config for this
+                    dim=-1,
+                ),
+                "topk_expert_groups": TopKConfig(
+                    k=hf_config.topk_group,
+                    dim=-1,
+                ),
+                "scatter_top_expert_groups": ScatterConfig(
+                    input=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    src=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                    dim=3,
+                ),
+                "reshape_group_mask": ReshapeConfig(
+                    shape=(1, -1, hf_config.n_group, 1),
+                ),
+                "reshape_active_experts": ReshapeConfig(
+                    shape=(1, 1, -1, hf_config.n_routed_experts),
+                ),
+                "mul_scores_with_mask": MulConfig(
+                    memory_config=memory_config,
+                ),
+                "topk_experts": TopKConfig(
+                    k=hf_config.num_experts_per_tok,
+                    dim=-1,
+                ),
+                "topk_fallback": topk_fallback,
+                "topk_fallback_config": TopKFallbackConfig(
+                    mesh_device=MeshDeviceStub(mesh_device.shape),
+                    dtype=ttnn.bfloat16,
+                    memory_config=memory_config,
+                    use_bitonic_sort=use_bitonic_sort,
+                ),
+                "linear_fallback": False,
+                "linear_fallback_config": LinearFallbackConfig(
+                    mesh_device=MeshDeviceStub(mesh_device.shape),
+                    dtype=ttnn.bfloat16,
+                ),
+                "mesh_device": MeshDeviceStub(mesh_device.shape),
+                "input_memory_config": memory_config,
+                "output_memory_config": memory_config,
+            }
 
     @classmethod
     def decode_model_config(

@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 
 from models.common.utility_functions import tt2torch_tensor, comp_pcc
-from models.common.utility_functions import is_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 import torch
 import ttnn
 
@@ -156,9 +156,6 @@ def test_nlp_create_qkv_heads_test(
     dtype,
     device,
 ):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
-
     run_create_qkv_heads_test(
         batch, seq_len, num_q_heads, num_kv_heads, head_dim, dtype, cores_h, cores_w, device, transpose_k
     )
@@ -327,11 +324,6 @@ def test_nlp_create_q_and_kv_heads_separate_test(
     dtype,
     device,
 ):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
-    elif is_grayskull() and q_seq_len == 4096 and dtype == ttnn.bfloat16:
-        pytest.skip("Spec runs out of L1 on on Grayskull")
-
     run_create_q_and_kv_heads_test(
         batch, q_seq_len, kv_seq_len, num_q_heads, num_kv_heads, head_dim, dtype, cores_h, cores_w, device, transpose_k
     )

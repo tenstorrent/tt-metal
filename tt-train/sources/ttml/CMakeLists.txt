@@ -151,6 +151,10 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_fused.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.cpp
@@ -198,6 +202,7 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/dataflow_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/compute_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/program_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/const_utils.hpp
     # RMSNorm
     # RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
@@ -307,6 +312,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
+    # AdamW Optimizer (consolidated: supports both half and full precision)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -317,36 +330,46 @@ if(NOT TARGET TT::Metalium)
     find_package(TT-NN)
 
     if(NOT TT-NN_FOUND)
-        if("$ENV{TT_METAL_HOME}" STREQUAL "")
-            message(FATAL_ERROR "TT_METAL_HOME is not set")
+        # Try to get TT_METAL_HOME from environment, otherwise infer from directory structure
+        if(DEFINED ENV{TT_METAL_HOME})
+            set(TT_METAL_HOME "$ENV{TT_METAL_HOME}")
+            message(STATUS "Using TT_METAL_HOME from environment: ${TT_METAL_HOME}")
+        else()
+            # Infer tt-metal repository layout from directory structure (tt-metal/tt-train)
+            # From tt-train/sources/ttml/, go up THREE levels to reach the repository root
+            set(TT_METAL_HOME "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
+            if(EXISTS "${TT_METAL_HOME}/tt_metal/CMakeLists.txt")
+                message(STATUS "Inferred tt-metal location: ${TT_METAL_HOME}")
+            else()
+                message(FATAL_ERROR "Failed to infer tt-metal location from ${TT_METAL_HOME}")
+            endif()
         endif()
 
         set(METALIUM_INCLUDE_DIRS
             # Metalium
-            "$ENV{TT_METAL_HOME}"
-            "$ENV{TT_METAL_HOME}/tt_metal"
-            "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
-            "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines"
-            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/blackhole"
-            "$ENV{TT_METAL_HOME}/tt_metal/api/"
-            "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
-            "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
-            "$ENV{TT_METAL_HOME}/tt_metal/include"
-            "$ENV{TT_METAL_HOME}/tt_stl"
+            "${TT_METAL_HOME}"
+            "${TT_METAL_HOME}/tt_metal"
+            "${TT_METAL_HOME}/tt_metal/third_party/umd"
+            "${TT_METAL_HOME}/tt_metal/third_party/tracy/public"
+            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole"
+            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines"
+            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/blackhole"
+            "${TT_METAL_HOME}/tt_metal/api/"
+            "${TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
+            "${TT_METAL_HOME}/tt_metal/hostdevcommon/api"
+            "${TT_METAL_HOME}/tt_metal/hw/inc"
+            "${TT_METAL_HOME}/tt_stl"
             # TTNN
             "$ENV{TT_METAL_HOME}/ttnn"
             "$ENV{TT_METAL_HOME}/ttnn/api"
             "$ENV{TT_METAL_HOME}/ttnn/cpp"
-            "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
             "${reflect_SOURCE_DIR}"
         )
 
         message(STATUS "Metalium not found, attempting to locate")
 
         # Define the path to look for the library
-        set(METALIUM_LIB_PATH "$ENV{TT_METAL_HOME}/build/lib")
+        set(METALIUM_LIB_PATH "${TT_METAL_HOME}/build/lib")
 
         # Try to find the library
         find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
@@ -362,7 +385,7 @@ if(NOT TARGET TT::Metalium)
                     IMPORTED_LOCATION
                         "${TT_STL_LIBRARY}"
                     INTERFACE_INCLUDE_DIRECTORIES
-                        "$ENV{TT_METAL_HOME}/tt_stl"
+                        "${TT_METAL_HOME}/tt_stl"
             )
             message(STATUS "Successfully found libtt_stl.so at ${TT_STL_LIBRARY}")
         else()

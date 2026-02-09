@@ -319,7 +319,7 @@ def test_full_buffer():
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
-@pytest.mark.skip_post_commit
+@pytest.mark.skip(reason="Skipped due to issue in Profiler CI. Issue #36371")
 def test_device_api_debugger_non_dropping():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
@@ -327,7 +327,7 @@ def test_device_api_debugger_non_dropping():
     testCommand = f"build/{PROG_EXMP_DIR}/test_device_api_debugger"
     clear_profiler_runtime_artifacts()
 
-    envVars = "TT_METAL_DEVICE_DEBUG_DUMP_ENABLED=1 "
+    envVars = "TT_METAL_NOC_DEBUG_DUMP=1 "
 
     profilerRun = os.system(f"cd {TT_METAL_HOME} && {envVars} {testCommand}")
     assert profilerRun == 0, f"Test command failed with exit code {profilerRun}"

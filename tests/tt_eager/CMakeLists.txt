@@ -22,13 +22,10 @@ set(TT_EAGER_TESTS_TENSORS
     # tensors/test_sharded_loopback.cpp       # <- not called in run_tt_eager.py
 )
 
-set(TT_EAGER_TESTS_INTEGRATION integration_tests/test_bert.cpp)
-
 set(EAGER_TEST_TARGETS "") # list of all eager test targets, used in CREATE_EAGER_TEST_EXE
 include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 
 CREATE_EAGER_TEST_EXE("${TT_EAGER_TESTS_OPS}")
 CREATE_EAGER_TEST_EXE("${TT_EAGER_TESTS_TENSORS}")
-CREATE_EAGER_TEST_EXE("${TT_EAGER_TESTS_INTEGRATION}")
 
 add_custom_target(eager_tests DEPENDS ${EAGER_TEST_TARGETS})

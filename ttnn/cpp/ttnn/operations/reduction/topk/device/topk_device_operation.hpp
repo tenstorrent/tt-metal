@@ -1,21 +1,19 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <optional>
-#include <variant>
-
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_single_core_program_factory.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.hpp"
 
-namespace ttnn::prim {
+#include <optional>
+#include <variant>
 
+namespace ttnn::prim {
 struct TopKDeviceOperation {
     using operation_attributes_t = TopkParams;
     using tensor_args_t = TopkInputs;

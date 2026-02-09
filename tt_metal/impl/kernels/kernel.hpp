@@ -5,19 +5,24 @@
 #pragma once
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <tt_stl/unreachable.hpp>
 
 #include "api/tt-metalium/data_types.hpp"
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"
+#include "api/tt-metalium/experimental/host_api.hpp"
+#include "context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "program/program_impl.hpp"
 #include <enchantum/enchantum.hpp>
-#include "llrt.hpp"
+#include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
@@ -42,11 +47,32 @@ struct KernelSource {
         }
         return name;
     }
+
+    // Returns the actual source code (file content or source string)
+    std::string get_content() const {
+        switch (source_type_) {
+            case SourceType::FILE_PATH: {
+                std::ifstream file(path_);
+                if (!file.is_open()) {
+                    throw std::runtime_error("Cannot open kernel source file: " + path_.string());
+                }
+                std::stringstream buffer;
+                buffer << file.rdbuf();
+                if (file.fail() && !file.eof()) {
+                    throw std::runtime_error("Failed to read kernel source file: " + path_.string());
+                }
+                return buffer.str();
+            }
+            case SourceType::SOURCE_CODE: return source_;
+        }
+        ttsl::unreachable();
+    }
 };
 
 class Kernel : public JitBuildSettings {
 public:
-    using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
+    using Config =
+        std::variant<DataMovementConfig, EthernetConfig, ComputeConfig, experimental::quasar::QuasarDataMovementConfig>;
 
     ~Kernel() override = default;
 
@@ -69,11 +95,14 @@ public:
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
     std::unordered_map<std::string, uint32_t> named_compile_time_args() const { return named_compile_time_args_; }
 
+    // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core);
     RuntimeArgsData& runtime_args_data(const CoreCoord& logical_core);
     std::vector<std::vector<std::vector<uint32_t>>>& runtime_args();
     std::vector<std::vector<RuntimeArgsData>>& runtime_args_data();
     void set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count);
+
+    // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& common_runtime_args();
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
@@ -92,6 +121,7 @@ public:
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
+    void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
         size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
@@ -161,6 +191,8 @@ protected:
     CoreCoord core_with_max_runtime_args_;   // For validation
     std::map<std::string, std::string>
         defines_;  // preprocessor defines. this is to be able to generate generic instances.
+    const bool watcher_assert_enabled_;
+    const uint32_t watcher_count_word_offset_;
     std::set<CoreCoord> logical_cores_;
 
     // Build key -> binaries (moved from KernelImpl)
@@ -296,5 +328,63 @@ private:
 
     std::string config_hash() const override;
 };
+
+namespace experimental::quasar {
+class QuasarDataMovementKernel : public Kernel {
+public:
+    QuasarDataMovementKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const QuasarDataMovementConfig& config,
+        const std::set<DataMovementProcessor>& dm_cores) :
+        Kernel(
+            HalProgrammableCoreType::TENSIX,
+            HalProcessorClassType::DM,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config),
+        dm_cores_(dm_cores.begin(), dm_cores.end()) {
+        TT_FATAL(
+            MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
+            "QuasarDataMovementKernel is only supported on Quasar");
+        TT_FATAL(
+            config.num_processors_per_cluster == dm_cores.size(),
+            "Number of processors per cluster specified in config must match number of DM cores per cluster that have "
+            "been reserved");
+        TT_FATAL(std::is_sorted(dm_cores_.begin(), dm_cores_.end()), "DM cores must be ordered");
+    }
+
+    ~QuasarDataMovementKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+    const std::vector<DataMovementProcessor>& get_dm_processors() const { return this->dm_cores_; }
+
+private:
+    const QuasarDataMovementConfig config_;
+    const std::vector<DataMovementProcessor> dm_cores_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+
+}  // namespace experimental::quasar
 
 }  // namespace tt::tt_metal

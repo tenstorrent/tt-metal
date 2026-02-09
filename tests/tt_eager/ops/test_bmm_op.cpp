@@ -15,7 +15,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tile.hpp>
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"

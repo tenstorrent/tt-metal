@@ -480,6 +480,31 @@ void py_module(nb::module_& mod) {
                     >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
             )doc")
         .def(
+            "get_optimal_dram_bank_to_logical_worker_assignment",
+            &MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment,
+            nb::arg("noc"),
+            R"doc(
+                Returns the optimal DRAM bank to logical worker assignment based on the NOC.
+
+                This function returns a list of logical worker coordinates that are optimally
+                mapped to DRAM banks for the specified NOC. The mapping is optimized for
+                minimizing NOC hops when reading/writing to DRAM.
+
+                Args:
+                    noc (NOC): The NOC to use for optimal assignment (ttnn.NOC.NOC_0 or ttnn.NOC.NOC_1).
+
+                Returns:
+                    List[CoreCoord]: List of logical worker coordinates optimally mapped to DRAM banks.
+
+                Example:
+                    >>> device = ttnn.open_device(device_id=0)
+                    >>> # Get optimal worker cores for DRAM reads (NOC_0 is typically preferred)
+                    >>> worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+                    >>> print(f"Number of optimal worker cores: {len(worker_cores)}")
+                    >>> for i, core in enumerate(worker_cores):
+                    ...     print(f"DRAM bank {i} -> worker core ({core.x}, {core.y})")
+            )doc")
+        .def(
             "get_worker_noc_hop_distance",
             [](MeshDevice& self, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc) {
                 return tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(

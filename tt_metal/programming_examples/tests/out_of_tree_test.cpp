@@ -18,7 +18,7 @@ void kernel_main() {
 
 constexpr std::string_view null_kernel_compute =
     R"(
-#include "compute_kernel_api.h"
+#include "api/compute/compute_kernel_api.h"
 namespace NAMESPACE {
 void MAIN {
 }

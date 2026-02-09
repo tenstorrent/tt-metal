@@ -61,6 +61,13 @@ The Inspector is a tool that provides insights into Metal host runtime.
 
 The tt-triage is a collection of Python scripts for analyzing and debugging Metal workload.
 
+.. toctree::
+    :maxdepth: 1
+
+    noc_debug_dump
+
+NOC debug dump collects NOC traces from the device to identify potential kernel programming issues.
+
 * `tt-smi <https://github.com/tenstorrent/tt-smi>`_
 
 TT-SMI is a command line utility to interact with all Tenstorrent devices on host.

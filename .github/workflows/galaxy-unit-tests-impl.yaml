@@ -104,7 +104,7 @@ jobs:
             { "name": "Galaxy Multi-Process tests", "arch": "wormhole_b0", "model": "multiprocess", "timeout": 15, "owner_id": "U03NG0A5ND7" },
             # { "name": "Galaxy Llama3-70b unit tests", "arch": "wormhole_b0", "model": "llama3-70b", "timeout": 30, "owner_id": "U053W15B6JF", "mlperf": true },
             # { "name": "Galaxy DRAM Prefetcher unit tests", "arch": "wormhole_b0", "model": "prefetcher", "timeout": 25, "owner_id": "U044T8U8DEF" },
-            { "name": "Galaxy GPT-OSS unit tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 10, "owner_id": "U08TJ70UFRT", "mlperf": true },
+            { "name": "Galaxy GPT-OSS unit tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 25, "owner_id": "U08TJ70UFRT", "mlperf": true },
             { "name": "Galaxy distributed ops tests", "arch": "wormhole_b0", "model": "distributed-ops", "timeout": 5, "owner_id": "U044T8U8DEF" },
             { "name": "Galaxy tttv2 tests", "arch": "wormhole_b0", "model": "tttv2", "timeout": 10, "owner_id": "U07RY6B5FLJ", "mlperf": true} # Gongyu Wang
           ]')
@@ -174,6 +174,7 @@ jobs:
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
           ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
           TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
+          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*DispatchContext*"
 
       - name: Run fabric tests
         if: ${{ matrix.test-group.model == 'fabric' }}
@@ -211,7 +212,7 @@ jobs:
           FAKE_DEVICE: TG
         run: |
           mkdir -p generated/test_reports
-          pytest -n auto models/demos/llama3_70b_galaxy/tests/unit_tests
+          pytest models/demos/llama3_70b_galaxy/tests/unit_tests
 
       - name: Run prefetcher unit tests
         if: ${{ matrix.test-group.model == 'prefetcher' }}
@@ -234,11 +235,11 @@ jobs:
           mkdir -p generated/test_reports
           uv pip install -r models/demos/gpt_oss/requirements.txt
 
-          HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
-            pytest -n auto models/demos/gpt_oss/tests/unit -k "4x8" --timeout 900
+          TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
+            pytest models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
 
-          HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
-            pytest -n auto models/demos/gpt_oss/tests/unit -k "4x8" --timeout 900
+          TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
+            pytest models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
 
       - name: Run tttv2 module tests
         if: ${{ matrix.test-group.model == 'tttv2' }}
@@ -250,6 +251,13 @@ jobs:
         run: |
           # All tests run, and this step fails if any test failed.
           failed=0
+
+          pytest --durations-min=3.0 models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
+            -m "not slow" \
+            --tb=short \
+            --cov=models.common.modules.rmsnorm.rmsnorm_2d \
+            --cov-report=term-missing \
+            --cov-config=models/common/tests/setup.cfg || failed=1
 
           pytest --durations-min=3.0 models/common/tests/modules/mlp/test_mlp_2d.py \
             -m "not slow" \

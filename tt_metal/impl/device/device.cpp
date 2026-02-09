@@ -28,7 +28,6 @@
 
 #include "allocator.hpp"
 #include <tt_stl/assert.hpp>
-#include "dispatch/command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
@@ -83,9 +82,9 @@ Device::Device(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal,
     uint32_t /*worker_thread_core*/,
-    uint32_t completion_queue_reader_core,
+    uint32_t /*completion_queue_reader_core*/,
     size_t worker_l1_size) :
-    id_(device_id), completion_queue_reader_core_(completion_queue_reader_core) {
+    id_(device_id) {
     ZoneScoped;
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
@@ -237,13 +236,9 @@ void Device::init_command_queue_host() {
         return;
     }
 
-    auto cq_shared_state = std::make_shared<CQSharedState>();
-    cq_shared_state->sub_device_cq_owner.resize(1);
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        command_queues_.push_back(
-            std::make_unique<HWCommandQueue>(
-                this, cq_shared_state, cq_id, k_dispatch_downstream_noc, completion_queue_reader_core_));
+        command_queues_.push_back(std::make_unique<HWCommandQueue>(this, cq_id, k_dispatch_downstream_noc));
     }
 }
 
@@ -494,6 +489,10 @@ uint32_t Device::dram_size_per_channel() const {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).dram_view_size;
 }
 
+int Device::get_clock_rate_mhz() const {
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(id_);
+}
+
 CoreCoord Device::grid_size() const {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).grid_size;
 }
@@ -637,18 +636,18 @@ uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) c
     TT_THROW("Virtual core {} is not a DRAM core", virtual_core.str());
 }
 
-std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const { return std::nullopt; }
+std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
+    return default_allocator_->get_lowest_occupied_l1_address(0);
+}
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
     tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) const {
-    return std::nullopt;
+    return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
-CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
+HWCommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     detail::DispatchStateCheck(using_fast_dispatch_);
-    if (!using_fast_dispatch_) {
-        return *(CommandQueue*)(IDevice*)this;
-    }
+    TT_FATAL(using_fast_dispatch_, "Fast dispatch must be enabled to use command_queue");
     auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
     TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");

@@ -537,3 +537,84 @@ Tests:
 
     patterns:
       - type: all_to_all
+
+  - name: "SequentialNeighborExchangeLatency"
+    latency_test_mode: true
+
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      size: [16, 1024, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+
+    defaults:
+      ftype: unicast
+      num_packets: 256
+
+    patterns:
+      - type: sequential_neighbor_exchange
+  - name: "SimpleNOCSelect"
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      size: 1024
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 100
+
+    senders:
+      - noc_id: 0
+        device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+      - noc_id: 1
+        device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+
+
+  - name: "CoreSweepOneToAll"
+    fabric_setup:
+      topology: Mesh
+
+    benchmark_mode: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 1000
+      size: 1024
+
+    senders:
+      - device: [0, 1]
+
+        patterns:
+          - destination:
+              device: [0, 0]
+              core: all
+
+  - name: "CoreSweepAllToOne"
+    fabric_setup:
+      topology: Mesh
+
+    latency_test_mode: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 1000
+      size: 1024
+
+    senders:
+      - device: [0, 1]
+        core: all
+        patterns:
+          - destination:
+              device: [0, 0]
+              core: [0, 5]

@@ -13,7 +13,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
-from ttnn import ShardTensor2dMesh, replicate_tensor_to_mesh_mapper
+from ttnn import replicate_tensor_to_mesh_mapper
 
 
 # Copied from DeepseekV3RotaryEmbedding: https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L114
@@ -121,6 +121,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         beta_slow: float,
         mscale: float,
         mscale_all_dim: float,
+        truncate: bool = True,
         device: Optional[Any] = None,
     ) -> None:
         self.scaling_factor = factor
@@ -129,6 +130,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         self.beta_slow = beta_slow
         self.mscale = mscale
         self.mscale_all_dim = mscale_all_dim
+        self.truncate = truncate
         super().__init__(dim, max_position_embeddings, base, device)
 
     # Inverse dim formula to find dim based on number of rotations
@@ -139,11 +141,14 @@ class YarnRotaryEmbedding(RotaryEmbedding):
     # Find dim range bounds based on rotations
     @staticmethod
     def yarn_find_correction_range(
-        low_rot: float, high_rot: float, dim: int, base: float, max_position_embeddings: int
-    ) -> Tuple[int, int]:
-        low = math.floor(YarnRotaryEmbedding.yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings))
-        high = math.ceil(YarnRotaryEmbedding.yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings))
-        return max(low, 0), min(high, dim - 1)  # Clamp values just in case
+        low_rot: float, high_rot: float, dim: int, base: float, max_position_embeddings: int, truncate: bool = True
+    ) -> Tuple[float, float]:
+        low = YarnRotaryEmbedding.yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings)
+        high = YarnRotaryEmbedding.yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings)
+        if truncate:
+            low = math.floor(low)
+            high = math.ceil(high)
+        return max(low, 0), min(high, dim - 1)
 
     @staticmethod
     def yarn_get_mscale(scale: float, mscale: float) -> float:
@@ -175,6 +180,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
             dim,
             self.base,
             self.original_max_position_embeddings,
+            self.truncate,
         )
         inv_freq_mask = 1.0 - YarnRotaryEmbedding.yarn_linear_ramp_mask(low, high, dim // 2).to(
             device=device, dtype=torch.float32
@@ -384,6 +390,7 @@ class RotarySetup(LightweightModule):
         rope_scaling: Optional[RopeScaling] = None,
         use_qk_fused: bool = False,
         datatype: ttnn.DataType = ttnn.bfloat16,
+        shard_batch_to_mesh_dim: Optional[int] = 1,
     ) -> None:
         super().__init__()
         self.use_qk_fused = use_qk_fused
@@ -397,7 +404,9 @@ class RotarySetup(LightweightModule):
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
         if self.num_devices == 32:
-            self.batch_size_per_device_group = max(self.doubled_batch_size // list(device.shape)[1], 1)
+            self.batch_size_per_device_group = max(
+                self.doubled_batch_size // list(device.shape)[shard_batch_to_mesh_dim], 1
+            )
         else:
             self.batch_size_per_device_group = self.doubled_batch_size
         self.core_grid = (
@@ -414,13 +423,15 @@ class RotarySetup(LightweightModule):
             datatype=datatype,
         )
 
-        self.batch_grid = ttnn.num_cores_to_corerangeset(self.doubled_batch_size, self.core_grid, row_wise=True)
+        self.batch_grid = ttnn.num_cores_to_corerangeset(
+            self.batch_size_per_device_group, self.core_grid, row_wise=True
+        )
 
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
             1,
-            self.doubled_batch_size,
+            self.batch_size_per_device_group,
             1,
             # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
@@ -437,15 +448,7 @@ class RotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             memory_config=trans_mat_mem_config,
-            mesh_mapper=(
-                ShardTensor2dMesh(
-                    device,
-                    dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else (None, None),
-                    mesh_shape=list(device.shape),
-                )
-                if self.is_mesh_device
-                else None
-            ),
+            mesh_mapper=replicate_tensor_to_mesh_mapper(device),
         )
 
         # TODO: Colman, should this be TILE_SIZE or head_dim? Why should it be different for prefill and decode?

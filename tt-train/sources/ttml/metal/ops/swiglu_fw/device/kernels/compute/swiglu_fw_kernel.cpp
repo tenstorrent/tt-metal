@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/cb_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/copy_dest_values.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/common.h"
+#include "api/compute/copy_dest_values.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 namespace NAMESPACE {
 
@@ -93,7 +93,7 @@ inline void compute_M_for_k() {
     }
     // Copy xw1_accum_reg to silu_xw1_reg
     copy_dest_values_init();
-    copy_dest_values(silu_xw1_reg, xw1_accum_reg);
+    copy_dest_values(xw1_accum_reg, silu_xw1_reg);
     // Apply sigmoid activation to compute sigmoid(XW1)
     sigmoid_tile_init();
     sigmoid_tile(silu_xw1_reg);

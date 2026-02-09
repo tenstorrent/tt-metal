@@ -4,10 +4,10 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/compute_kernel_api.h"
 
 namespace NAMESPACE {
 
@@ -36,7 +36,7 @@ void math_main() {
 void pack_main() {
     int __outer_loop_iter;
     llk_pack_init();
-    llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16);
+    llk_pack_hw_configure<DST_ACCUM_MODE>(16);
     llk_pack_dest_init<DST_ACCUM_MODE, false>();
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {

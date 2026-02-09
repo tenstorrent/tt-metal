@@ -147,7 +147,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("relu_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
 
         case UnaryOpType::POWER:
-            return {"power_tile_init();", fmt::format("power_tile({}, {}u);", idst, (uint32_t)param0)};
+            return {
+                "power_tile_init();", fmt::format("power_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+        case UnaryOpType::POWER_ITERATIVE:
+            // For exponents 0, 1, 2, 3: use iterative approach
+            return {
+                "power_iterative_tile_init();",
+                fmt::format("power_iterative_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::LEAKY_RELU:
             return {
                 "leaky_relu_tile_init();",
@@ -453,16 +459,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "softshrink_tile_init();",
                 fmt::format("softshrink_tile({}, {}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::WHERE_TSS: {
-            std::string where_call;
-            if (input_dtype == DataType::INT32) {
-                where_call = fmt::format("where_int32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
-            } else if (input_dtype == DataType::UINT32) {
-                where_call = fmt::format("where_uint32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
-            } else if (input_dtype == DataType::FLOAT32) {
-                where_call = fmt::format("where_fp32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
-            } else {
-                where_call = fmt::format("where_tile({0}, {1}, {2}, {0});", idst, 1, 2);
-            }
+            const char* data_format = (input_dtype == DataType::INT32)     ? "Int32"
+                                      : (input_dtype == DataType::UINT32)  ? "UInt32"
+                                      : (input_dtype == DataType::FLOAT32) ? "Float32"
+                                                                           : "Float16_b";
+            std::string where_call =
+                fmt::format("where_tile<DataFormat::{0}>({1}, {2}, {3}, {1});", data_format, idst, 1, 2);
             return std::make_pair("where_tile_init();", where_call);
         }
         case UnaryOpType::CLAMP_TSS: {
@@ -594,13 +596,19 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
-                return {"mul_int32_tile_init();", fmt::format("mul_int32_tile({0}, {0}, {0});", idst)};
+                return {
+                    "mul_int_tile_init<DataFormat::Int32>();",
+                    fmt::format("mul_int_tile<DataFormat::Int32>({0}, {0}, {0});", idst)};
             }
             if (input_dtype.value() == DataType::UINT32) {
-                return {"mul_int32_tile_init();", fmt::format("mul_uint32_tile({0},         {0}, {0});", idst)};
+                return {
+                    "mul_int_tile_init<DataFormat::UInt32>();",
+                    fmt::format("mul_int_tile<DataFormat::UInt32>({0}, {0}, {0});", idst)};
             }
             if (input_dtype.value() == DataType::UINT16) {
-                return {"mul_int_tile_init();", fmt::format("mul_uint16_tile({0},         {0}, {0});", idst)};
+                return {
+                    "mul_int_tile_init<DataFormat::UInt16>();",
+                    fmt::format("mul_int_tile<DataFormat::UInt16>({0}, {0}, {0});", idst)};
             }
             return {"        square_tile_init();", fmt::format("square_tile({});", idst)};
         case UnaryOpType::TILED_PROD: return {"tiled_prod_tile_init();", fmt::format("tiled_prod_tile({});", idst)};

@@ -3,17 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "tt_metal/include/compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
-#include "tt_metal/include/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/debug/dprint_pages.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const tt::CBIndex final_output_cb = tt::CBIndex::c_3;
     const tt::CBIndex input_cb = tt::CBIndex::c_0;
     const tt::CBIndex partial_prod_cb = tt::CBIndex::c_2;
@@ -69,4 +68,3 @@ void MAIN {
     cb_push_back(final_output_cb, one_tile);
     tile_regs_release();
 }
-}  // namespace NAMESPACE

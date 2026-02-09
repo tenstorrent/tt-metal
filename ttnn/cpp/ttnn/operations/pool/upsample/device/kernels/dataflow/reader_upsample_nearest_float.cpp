@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "fixed_point_arithmetic.hpp"
+#include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 
 void kernel_main() {
     // Runtime arguments

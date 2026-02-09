@@ -771,9 +771,56 @@ static std::vector<Tensor> pool2d(
     const DataType dtype = DataType::BFLOAT16,
     const Layout output_layout = Layout::ROW_MAJOR,
     bool config_tensor_in_dram = false) {
-    if (determine_pool2d_execution_path(input_tensor, dram_slice_config) == Pool2dExecutionPath::L1) {
+    // Handle rank 2 and 3 input tensors by reshaping to rank 4
+    Tensor input_tensor_4d = input_tensor;
+    const auto& logical_shape = input_tensor.logical_shape();
+    const auto& padded_shape = input_tensor.padded_shape();
+    uint32_t rank = logical_shape.rank();
+
+    if (rank == 3) {
+        // Rank-3 tensor: [H, W, C] -> [1, H, W, C]
+        log_debug(
+            tt::LogOp, "Pool2D: Rank-3 input tensor detected, assuming [H, W, C] format and reshaping to [1, H, W, C]");
+        TT_FATAL(batch_size == 1, "Pool2D: For rank-3 input [H, W, C], batch_size must be 1, got {}", batch_size);
+        TT_FATAL(
+            input_h == logical_shape[0] && input_w == logical_shape[1] && channels == logical_shape[2],
+            "Pool2D: For rank-3 input [H, W, C], dimensions must match: input_h={}, input_w={}, channels={}, but got "
+            "shape {}",
+            input_h,
+            input_w,
+            channels,
+            logical_shape);
+
+        ttnn::Shape reshaped_logical({1, input_h, input_w, channels});
+        ttnn::Shape reshaped_padded({1, padded_shape[0], padded_shape[1], padded_shape[2]});
+        input_tensor_4d = ttnn::reshape(input_tensor, reshaped_logical, reshaped_padded);
+    } else if (rank == 2) {
+        // Rank-2 tensor: [H, W] -> [1, H, W, 1]
+        log_debug(
+            tt::LogOp, "Pool2D: Rank-2 input tensor detected, assuming [H, W] format and reshaping to [1, H, W, 1]");
+        TT_FATAL(
+            batch_size == 1 && channels == 1,
+            "Pool2D: For rank-2 input [H, W], batch_size and channels must be 1, got batch_size={}, channels={}",
+            batch_size,
+            channels);
+        TT_FATAL(
+            input_h == logical_shape[0] && input_w == logical_shape[1],
+            "Pool2D: For rank-2 input [H, W], dimensions must match: input_h={}, input_w={}, but got shape {}",
+            input_h,
+            input_w,
+            logical_shape);
+
+        ttnn::Shape reshaped_logical({1, input_h, input_w, 1});
+        ttnn::Shape reshaped_padded({1, padded_shape[0], padded_shape[1], 1});
+        input_tensor_4d = ttnn::reshape(input_tensor, reshaped_logical, reshaped_padded);
+    } else if (rank != 4) {
+        TT_FATAL(false, "Pool2D: Input tensor must be rank 2, 3, or 4, got rank {}", rank);
+    }
+    // For rank-4, input_tensor_4d is already the input_tensor, no copy needed
+
+    if (determine_pool2d_execution_path(input_tensor_4d, dram_slice_config) == Pool2dExecutionPath::L1) {
         return pool2d_L1(
-            input_tensor,
+            input_tensor_4d,
             pool_type,
             batch_size,
             input_h,
@@ -798,7 +845,7 @@ static std::vector<Tensor> pool2d(
             config_tensor_in_dram);
     }
     return pool2d_DRAM(
-        input_tensor,
+        input_tensor_4d,
         pool_type,
         batch_size,
         input_h,

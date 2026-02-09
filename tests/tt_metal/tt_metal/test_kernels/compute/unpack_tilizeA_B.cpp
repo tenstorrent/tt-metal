@@ -4,8 +4,8 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/tilize.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/debug/dprint_tensix.h"
 #include "experimental/circular_buffer.h"
 
@@ -22,8 +22,7 @@ inline void add_tiles_math(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32
         icb0, icb1, idst, true)));
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
 
@@ -53,4 +52,3 @@ void MAIN {
         cb1.pop_front(per_core_block_tile_cnt);
     }
 }
-}  // namespace NAMESPACE

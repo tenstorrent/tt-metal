@@ -55,9 +55,9 @@ def test_gather_deepseek(mesh_device, shapes_dtypes, dim, layout, mem_config, en
     tt_out_tensors = maybe_trace(run_op, enable_trace=enable_trace, device=mesh_device)
 
     coords = list(tt_out_tensors.tensor_topology().mesh_coords())
-    view = mesh_device.get_view()
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
     for coord, ttnn_gather in zip(coords, ttnn.get_device_tensors(tt_out_tensors)):
-        if not view.is_local(coord):
+        if view is not None and not view.is_local(coord):
             continue
         assert ttnn_gather.shape == torch_index.shape
         assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))

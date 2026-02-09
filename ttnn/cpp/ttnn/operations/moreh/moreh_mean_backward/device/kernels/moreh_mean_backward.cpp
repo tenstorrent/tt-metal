@@ -4,13 +4,12 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // compile-time args
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
     constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
@@ -71,4 +70,3 @@ void MAIN {
     }
     cb_pop_front(cb_in1, onetile);
 }
-}  // namespace NAMESPACE

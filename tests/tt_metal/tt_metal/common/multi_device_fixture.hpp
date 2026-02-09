@@ -137,6 +137,8 @@ protected:
                 *config_.mesh_shape);
         }
 
+        init_max_cbs();
+
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
         bool is_n300_or_t3k_cluster =
@@ -173,7 +175,10 @@ protected:
         }
     }
 
+    void init_max_cbs() { max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers(); }
+
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
+    uint32_t max_cbs_{};
 
 private:
     Config config_;
@@ -189,6 +194,11 @@ protected:
 class GenericMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     GenericMultiCQMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 2}) {}
+};
+
+class MeshDevice1x2Fixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice1x2Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 2}}) {}
 };
 
 // Fixtures that specify the mesh device type explicitly.

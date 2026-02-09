@@ -526,7 +526,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
+    const std::optional<Tensor>& input_grad) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
     std::vector<std::optional<Tensor>> result = {std::nullopt};
     result[0] = input_grad.has_value()

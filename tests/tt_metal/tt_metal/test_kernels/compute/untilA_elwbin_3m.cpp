@@ -6,10 +6,10 @@
 
 #define ELTWISE_OP_TYPE EltwiseBinaryType::ELWADD  // TODO(AP): temporary - refactor
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/compute_kernel_api.h"
 
 namespace NAMESPACE {
 
@@ -66,7 +66,11 @@ void unpack_main() {
             llk_unpack_untilize_init(0);
             llk_wait_tiles(0, per_core_block_c_tiles);
             llk_unpack_untilize(0, per_core_block_c_tiles);
+#ifdef ARCH_BLACKHOLE
             llk_unpack_untilize_uninit(0);
+#else
+            llk_unpack_untilize_uninit();
+#endif
             llk_pop_tiles(0, per_core_block_c_tiles);
             llk_pop_tiles(1, per_core_block_c_tiles);
 
@@ -93,7 +97,7 @@ void pack_main() {
     uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
     uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
     llk_pack_init();
-    llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(16);
+    llk_pack_hw_configure<DST_ACCUM_MODE>(16);
     llk_pack_dest_init<DST_ACCUM_MODE, false>();
 
     for (uint32_t block = 0; block < per_core_num_blocks; block++) {

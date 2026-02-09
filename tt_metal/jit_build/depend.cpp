@@ -101,11 +101,13 @@ void write_dependency_hashes(
     }
 }
 
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj) {
-    std::filesystem::path obj_path = std::filesystem::path(out_dir) / obj;
+void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path) {
+    std::filesystem::path obj_path = obj;
+    if (obj_path.is_relative()) {
+        obj_path = out_dir / obj_path;
+    }
     std::filesystem::path dep_path = obj_path;
     dep_path.replace_extension(".d");
-    auto hash_path = obj_path.string() + ".dephash";
     std::ofstream hash_file(hash_path);
     if (!hash_file.is_open()) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for writing.", hash_path);

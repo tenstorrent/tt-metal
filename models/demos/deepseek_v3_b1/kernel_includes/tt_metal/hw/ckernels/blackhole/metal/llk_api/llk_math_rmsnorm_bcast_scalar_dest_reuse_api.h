@@ -25,12 +25,14 @@ template <
     EltwiseBinaryType eltwise_binary_type,
     uint32_t num_tiles,
     bool is_fp32_dest_acc_en,
-    int NUM_FIDELITY_PHASES = 0>
+    int NUM_FIDELITY_PHASES = 0,
+    bool clear_dest = false>
 inline void llk_math_rmsnorm_bcast_scalar_dest_reuse(const std::uint32_t src_index, const std::uint32_t dst_index) {
     _llk_math_rmsnorm_bcast_scalar_dest_reuse_<
         eltwise_binary_type,
         num_tiles,
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
-        NUM_FIDELITY_PHASES>(src_index, dst_index);
+        NUM_FIDELITY_PHASES,
+        clear_dest>(src_index, dst_index);
 }

@@ -22,14 +22,14 @@ except ImportError as e:
     PSYCOPG2_AVAILABLE = False
     logger.warning(
         "PostgreSQL dependencies not available. If you plan to use database features, "
-        "please install psycopg2 using 'pip install psycopg2' or 'pip install psycopg2-binary'"
+        "please install psycopg2 using 'uv pip install psycopg2' or 'uv pip install psycopg2-binary'"
     )
 
     # Create mock objects that will raise errors if used
     def _raise_db_error(*args, **kwargs):
         raise RuntimeError(
             "The psycopg2 library is required but not installed. "
-            "Please install it using 'pip install psycopg2' or 'pip install psycopg2-binary'."
+            "Please install it using 'uv pip install psycopg2' or 'uv pip install psycopg2-binary'."
         ) from e
 
     class MockPsycopg2:
@@ -79,7 +79,7 @@ def postgres_connection():
     if not PSYCOPG2_AVAILABLE:
         raise RuntimeError(
             "The psycopg2 library is required but not installed. "
-            "Please install it using 'pip install psycopg2' or 'pip install psycopg2-binary'."
+            "Please install it using 'uv pip install psycopg2' or 'uv pip install psycopg2-binary'."
         )
 
     pg_config = get_postgres_config()

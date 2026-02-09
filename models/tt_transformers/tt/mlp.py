@@ -157,7 +157,7 @@ class MLP(LightweightModule):
                     dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    num_links=self.args.num_reduce_scatter_links,
+                    num_links=self.tt_ccl.get_num_links(cluster_axis),
                     cluster_axis=cluster_axis,
                     memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
                     intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -183,6 +183,8 @@ class MLP(LightweightModule):
                     num_buffers_per_channel=2,
                 )
             else:
+                # NOTE: In MLP All-reduce hard codes to 2 links, so we do not get the dynamic link count from the CCL class
+                # to avoid any performance regressions.
                 w1_out = tt_all_reduce(
                     w1_out,
                     self.mesh_device,
@@ -260,7 +262,9 @@ class MLP(LightweightModule):
             self.tt_ccl,
             cluster_axis=0,
             dim=0 if (TG and self.dim < 8192) else 3,
-            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+            num_reduce_scatter_links=self.model_config["MLP_RS_CONFIG"]["num_links"]
+            if mode == "decode"
+            else self.args.num_reduce_scatter_links,
             num_all_gather_links=self.args.num_all_gather_links,
             sharded=(mode == "decode"),
             memory_config=(
@@ -268,9 +272,14 @@ class MLP(LightweightModule):
                 if mode == "decode"
                 else ttnn.DRAM_MEMORY_CONFIG
             ),
+            rs_memory_config=self.model_config["MLP_RS_CONFIG"]["rs_memory_config"]
+            if mode == "decode"
+            else ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
+            chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == "decode" else 10,
+            num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"] if mode == "decode" else 2,
         )
 
         # Ensure dim 0 and 1 are 1

@@ -4,10 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/tilize.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(2);
@@ -25,4 +24,3 @@ void MAIN {
         cb_pop_front(cb_id_in0, per_core_block_tile_cnt);
     }
 }
-}  // namespace NAMESPACE

@@ -180,3 +180,55 @@ def test_sparse_matmul(device):
     # Case 4: When `is_input_a_sparse` is False and `is_input_b_sparse` is False
     #
     # This is invalid
+
+
+def test_minimal_matmul(device):
+    a = ttnn.rand(
+        (64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )  # TILE tensor with shape [M, K], dtype=ttnn.bfloat16, on device
+    b = ttnn.rand(
+        (32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )  # TILE tensor with shape [K, N], same dtype/device as `a`
+    bias = ttnn.rand(
+        (1, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )  # Optional TILE tensor with shape [N]
+    y = ttnn.experimental.minimal_matmul(
+        input_tensor=a,
+        weight_tensor=b,
+        bias_tensor=bias,
+        fused_activation=(ttnn.UnaryOpType.GELU, False),
+        config=ttnn.MinimalMatmulConfig(
+            M_block_size=8,
+            K_block_size=8,
+            N_block_size=8,
+            subblock_h=2,
+            subblock_w=2,
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        ),
+    )
+    logger.info(f"y shape: {y.shape}")  # y shape: Shape([64, 64])
+
+
+def test_minimal_matmul_split(device):
+    # TILE tensor with shape [batch, seq, hidden], dtype=ttnn.bfloat16, on device
+    tensor1 = ttnn.rand((64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tensor2 = ttnn.rand((64, 3 * 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.rand((1, 3 * 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    Q, K, V = ttnn.experimental.minimal_matmul_split(
+        input_tensor=tensor1,
+        weight_tensor=tensor2,
+        bias_tensor=bias,
+        chunks=3,
+        dim=-1,
+        config=ttnn.MinimalMatmulConfig(
+            M_block_size=8,
+            K_block_size=8,
+            N_block_size=8,
+            subblock_h=2,
+            subblock_w=2,
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        ),
+    )
+    logger.info(f"Q shape: {Q.shape}")  # Q shape: Shape([32, 64, 64])
+    logger.info(f"K shape: {K.shape}")  # K shape: Shape([32, 64, 64])
+    logger.info(f"V shape: {V.shape}")  # V shape: Shape([32, 64, 64])

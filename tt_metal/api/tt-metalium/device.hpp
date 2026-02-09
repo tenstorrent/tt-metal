@@ -47,7 +47,6 @@ class Buffer;
 class Program;
 class SubDevice;
 
-class CommandQueue;
 class SystemMemoryManager;
 struct TraceBuffer;
 struct TraceDescriptor;
@@ -79,6 +78,10 @@ public:
     virtual int num_dram_channels() const = 0;
     virtual uint32_t l1_size_per_core() const = 0;
     virtual uint32_t dram_size_per_channel() const = 0;
+    // Returns the AI clock frequency in MHz for this device.
+    // This value is queried from the actual hardware via the cluster API
+    // and reflects the device's current operating frequency.
+    virtual int get_clock_rate_mhz() const = 0;
     virtual CoreCoord grid_size() const = 0;
     virtual CoreCoord logical_grid_size() const = 0;
     virtual CoreCoord dram_grid_size() const = 0;
@@ -157,9 +160,6 @@ public:
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
-
-    // If cq_id is not provided, the current command queue is returned from the current thread
-    virtual CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) = 0;
 
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;

@@ -4,13 +4,11 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/where.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/where.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
-
-namespace NAMESPACE {
 
 ALWI void process_tile(
     tt::CBIndex cb_in0,
@@ -86,7 +84,7 @@ ALWI void process_tile(
     cb_pop_front(CB_BCAST, num_tiles_per_cycle);
 }
 
-void MAIN {
+void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
@@ -126,4 +124,3 @@ void MAIN {
             num_tiles_per_cycle);
     }
 }
-}  // namespace NAMESPACE

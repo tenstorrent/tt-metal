@@ -1,17 +1,16 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include "ttnn/tensor/tensor.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <tuple>
 
-#include "ttnn/tensor/tensor.hpp"
-
 namespace ttnn::prim {
-
 struct TopkParams {
     uint32_t k{};
     int8_t dim{};
@@ -26,5 +25,4 @@ struct TopkInputs {
     std::optional<Tensor> indices;
     std::optional<std::tuple<Tensor, Tensor>> preallocated_outputs;
 };
-
 }  // namespace ttnn::prim

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api.h"
+#include "api/compute/compute_kernel_api.h"
 
 /**
  * LOOP_COUNT and LOOP_SIZE provide the ability to decide how many cycles this kernel takes.
@@ -20,8 +20,7 @@
  * https://github.com/tenstorrent/tt-metal/issues/515#issuecomment-1548434301
  */
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     for (int i = 0; i < LOOP_COUNT; i++) {
 // Max unroll size
 #pragma GCC unroll 65534
@@ -30,4 +29,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE
