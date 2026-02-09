@@ -34,6 +34,11 @@ def run_yolov12x_inference(
 
     input_shape = (batch_size, 3, *resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+
+    # Warmup run to stabilize kernel cache and memory state
+    _ = performant_runner.run(torch_input_tensor)
+    ttnn.synchronize_device(device)
+
     t0 = time.time()
     for _ in range(10):
         _ = performant_runner.run(torch_input_tensor)

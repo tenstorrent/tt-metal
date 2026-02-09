@@ -102,7 +102,7 @@ Note: To test the demo with your own images, replace images with `models/demos/y
 **Note:** Performance numbers are measured on **N150 AND N300** platform.
 | Resolution | Pretrained Weights | Segmentation PCC (threshold:0.99) | Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N150) | Detection Performance (FPS, N150) | Demo Status |
 |------------|--------------------|-----------------------------------|-------------------------------|---------------------------------------|-----------------------------------|
-| 640x640    | True               |  0.9993999                        |0.9993025                      | 85                                    | 96                                | Passed      |
+| 640x640    | True               |  0.9993999                        |0.9993025                      | 86                                    | 98                                | Passed      |
 
 
 | Resolution | Pretrained Weights | Segmentation PCC (threshold:0.99) |Detection PCC (threshold:0.99)| Segmentation Performance (FPS, N300) | Detection Performance (FPS, N300) | Demo Status |

@@ -77,7 +77,7 @@ Note: The model is evaluated with 500 samples.
 **Note:** Performance numbers are measured on **N150 AND N300** platform.
 | Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N150) | Demo Status |
 |------------|--------------------|----------------------|-------------------------|-------------|
-| 640x640     | True              | 0.9996607            | 228                     | Passed     |
+| 640x640     | True              | 0.9996607            | 230                     | Passed     |
 
 | Resolution | Pretrained Weights | PCC (threshold:0.99) | Performance (FPS, N300) | Demo Status |
 |------------|------------------- |----------------------|-------------------------|-------------|
