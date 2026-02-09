@@ -143,7 +143,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo ""
 
         echo "Running tt-smi -glx_reset..."
-        mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+        # mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
 
         sleep 5
 
