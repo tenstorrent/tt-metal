@@ -87,8 +87,12 @@ class LogProbsCalculator:
         mask_tensor = torch.arange(num_devices_for_sharding).unsqueeze(1).expand(num_devices_for_sharding, batch_size)
 
         if self.mesh_device.get_num_devices() == 32:
-            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.cluster_shape)
-            assert self.cluster_shape == [8, 4], "Cluster shape must be (8, 4) for 32 devices"
+            if self.cluster_shape == [8, 4]:
+                mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.cluster_shape)
+            elif self.cluster_shape == [4, 8]:
+                mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=self.cluster_shape)
+            else:
+                raise ValueError(f"Unsupported cluster shape {self.cluster_shape} for 32 devices")
         elif self.mesh_device.get_num_devices() == 8:
             mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
         else:
