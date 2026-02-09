@@ -44,7 +44,7 @@ class Transformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
-        self.decoder_optimizations = args.decoders_optimizations
+        self.decoders_optimizations = args.decoders_optimizations
         self.prefetcher = prefetcher
         self.tt_ccl = TT_CCL(self.mesh_device)
 
