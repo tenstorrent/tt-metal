@@ -179,6 +179,11 @@ static Tensor create_scalar_config_tensor(
     constexpr uint32_t entry_size = 3;
     const uint32_t entries_per_core = entry_size * max_scalars_cnt;
 
+    TT_FATAL(
+        entries_per_core != 0,
+        "entries_per_core cannot be zero. max_scalars_cnt: {}, memory_layout not supported or num_iterations is zero",
+        max_scalars_cnt);
+
     switch (in_memory_layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
         // With height sharded layout each scalar is unique and needs to be calculated
