@@ -483,7 +483,17 @@ struct get_first_object_of_type_t<std::tuple<Ts...>> {
     template <typename object_t>
     auto operator()(const std::tuple<Ts...>& value) const -> std::optional<object_t> {
         if constexpr (sizeof...(Ts) > 0) {
-            return get_first_object_of_type<object_t>(std::get<0>(value));
+            std::optional<object_t> result;
+            [&result, &value]<size_t... Ns>(std::index_sequence<Ns...>) {
+                (
+                    [&result, &value] {
+                        if (!result.has_value()) {
+                            result = get_first_object_of_type<object_t>(std::get<Ns>(value));
+                        }
+                    }(),
+                    ...);
+            }(std::make_index_sequence<sizeof...(Ts)>{});
+            return result;
         } else {
             return std::nullopt;
         }
