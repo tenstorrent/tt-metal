@@ -474,9 +474,6 @@ class Model:
         global_user_id=None,
     ):
         """Prepare inputs for prefill mode"""
-        # Default global_user_id to 0 if not provided
-        if global_user_id is None:
-            global_user_id = 0
         # Embed the tokens
         if tokens.dim() == 2:
             tokens = tokens.reshape(1, 1, 1, -1)
@@ -519,6 +516,9 @@ class Model:
             elif self.users_row_sharded and page_table.shape[0] == 1:
                 # Single-user prefill with row-sharding: create page table with valid entries
                 # only on the target row to prevent KV cache corruption on other rows
+                assert (
+                    global_user_id is not None
+                ), "global_user_id is required for single-user row-sharded prefill to target the correct mesh row"
                 num_rows = self.mesh_device.shape[0]
                 users_per_row = getattr(self.args, "max_local_batch_size", self.args.max_batch_size // num_rows)
                 target_row = global_user_id // users_per_row
