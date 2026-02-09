@@ -779,7 +779,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
     use_prefetcher=False,
-    use_hf_rope=True,
+    use_hf_rope=False,
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
