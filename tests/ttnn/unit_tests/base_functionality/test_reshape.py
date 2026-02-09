@@ -100,8 +100,7 @@ def test_reshape_block_shard(device, shape):
     assert torch.allclose(expected_output, actual_output)
 
 
-# @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_reshape_height_shard(device, layout):
     if is_watcher_enabled() and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Skipping test with watcher enabled due to hang, see github issue #37096")
