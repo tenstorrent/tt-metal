@@ -24,14 +24,14 @@ Pipeline:
   12. Eltwise add: down_proj + fused_add → final output
 """
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import (
-    setup_dram_matmul,
+    get_max_page_size_and_num_pages,
     setup_eltwise_add,
-    setup_eltwise_mul,
     setup_gate,
     setup_gather,
     setup_mcast,
@@ -42,6 +42,160 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
+
+
+def setup_dram_matmul(
+    device,
+    weights_tensor,
+    output_tensor,
+    working_buf_tensor,
+    core_ranges,
+    cb_in1_index,
+    cb_out_index,
+    fp32_dest_acc_en,
+    num_subblocks_k,
+):
+    """
+    Set up parameters and CB descriptors for a DRAM streaming matmul operation.
+    Uses a tensor-backed working buffer for the weights CB.
+
+    Args:
+        device: TT device
+        weights_tensor: Weight tensor (WIDTH_SHARDED in DRAM)
+        output_tensor: Output tensor (WIDTH_SHARDED in L1)
+        working_buf_tensor: Tensor-backed working buffer for weights CB (WIDTH_SHARDED in L1)
+        core_ranges: CoreRangeSet for compute cores
+        cb_in1_index: CB index for weights working buffer
+        cb_out_index: CB index for output
+        fp32_dest_acc_en: Whether FP32 dest accumulation is enabled
+        num_subblocks_k: Number of K subblocks
+
+    Returns:
+        Dictionary with all computed parameters and CB descriptors
+    """
+    weights_tile = weights_tensor.get_tile()
+    weights_shard_shape = weights_tensor.memory_config().shard_spec.shape
+    K = weights_shard_shape[0]
+    per_core_n = weights_shard_shape[1] // weights_tile.tile_shape[1]
+    Kt = K // weights_tile.tile_shape[0]
+
+    subblock_k = Kt // num_subblocks_k
+    assert Kt % num_subblocks_k == 0, f"Kt ({Kt}) must be divisible by num_subblocks ({num_subblocks_k})"
+
+    weights_tile_size = weights_tile.get_tile_size(weights_tensor.dtype)
+    in1_page_size, in1_num_pages = get_max_page_size_and_num_pages(device, subblock_k, weights_tile_size)
+    in1_block_size_bytes = subblock_k * weights_tile_size
+
+    # CB in1: tensor-backed weights working buffer
+    cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, working_buf_tensor)
+
+    # CB out: tensor-backed output
+    cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, output_tensor)
+
+    # subblock_w
+    if fp32_dest_acc_en:
+        max_subblock_w = 8 if per_core_n <= 8 else 4
+    else:
+        max_subblock_w = 16 if per_core_n <= 16 else 8
+    subblock_w = max_subblock_w
+    while subblock_w > 1 and per_core_n % subblock_w != 0:
+        subblock_w -= 1
+
+    tile_r_dim = weights_tile.tile_shape[0]
+
+    return {
+        "per_core_n": per_core_n,
+        "Kt": Kt,
+        "tile_r_dim": tile_r_dim,
+        "num_subblocks_k": num_subblocks_k,
+        "subblock_k": subblock_k,
+        "subblock_w": subblock_w,
+        "in1_page_size": in1_page_size,
+        "in1_num_pages": in1_num_pages,
+        "in1_block_size_bytes": in1_block_size_bytes,
+        "out_num_tiles": per_core_n,
+        "in1_tensor_addr": weights_tensor.buffer_address(),
+        "cb_in1_descriptor": cb_in1_descriptor,
+        "cb_out_descriptor": cb_out_descriptor,
+    }
+
+
+def setup_eltwise_mul(
+    in0_tensor,
+    in1_tensor,
+    out_tensor,
+    cb_in0_index,
+    cb_in1_index,
+    cb_out_index,
+    per_core_n,
+    cb_scalar_index,
+    cb_scalar_src_index,
+    scalar_src_tensor,
+    scalar_buf_tensor,
+):
+    """
+    Set up parameters and CB descriptors for element-wise multiply with CB aliasing and scalar multiply.
+    Uses a tensor-backed working buffer for the scalar CB.
+
+    Args:
+        in0_tensor: First input tensor (e.g., up_proj matmul output)
+        in1_tensor: Second input tensor (e.g., gate_proj matmul output)
+        out_tensor: Output tensor for fused result
+        cb_in0_index: CB index for first input (aliased)
+        cb_in1_index: CB index for second input (aliased)
+        cb_out_index: CB index for output
+        per_core_n: Number of output tiles per core (in 1x32 format)
+        cb_scalar_index: CB index for scalar working buffer
+        cb_scalar_src_index: CB index for scalar source
+        scalar_src_tensor: Tensor backing the scalar source CB
+        scalar_buf_tensor: Tensor-backed working buffer for scalar CB
+
+    Returns:
+        Dictionary with mul_num_tiles and CB descriptors
+    """
+    M = 1
+    tile_width = 32
+    total_elements = M * per_core_n * tile_width
+    mul_num_tiles = math.ceil(total_elements / 256)
+
+    TILE_16x16 = ttnn.Tile((16, 16))
+    tile_16x16_size = TILE_16x16.get_tile_size(ttnn.bfloat16)
+    tile_16x16_desc = ttnn.TileDescriptor(TILE_16x16)
+
+    # CB for in0: alias of in0_tensor with 16x16 tile format
+    cb_in0_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in0_index, in0_tensor)
+    cb_in0_descriptor.total_size = mul_num_tiles * tile_16x16_size
+    cb_in0_descriptor.format_descriptors[0].tile = tile_16x16_desc
+    cb_in0_descriptor.format_descriptors[0].page_size = tile_16x16_size
+
+    # CB for in1: alias of in1_tensor with 16x16 tile format
+    cb_in1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_in1_index, in1_tensor)
+    cb_in1_descriptor.total_size = mul_num_tiles * tile_16x16_size
+    cb_in1_descriptor.format_descriptors[0].tile = tile_16x16_desc
+    cb_in1_descriptor.format_descriptors[0].page_size = tile_16x16_size
+
+    # CB for out: output with 16x16 tile format (tensor-backed)
+    cb_out_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_out_index, out_tensor)
+    cb_out_descriptor.total_size = mul_num_tiles * tile_16x16_size
+    cb_out_descriptor.format_descriptors[0].tile = tile_16x16_desc
+    cb_out_descriptor.format_descriptors[0].page_size = tile_16x16_size
+
+    # CB for scalar source: receives mcasted scalar (tensor-backed)
+    cb_scalar_src_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_scalar_src_index, scalar_src_tensor)
+
+    # CB for scalar working buffer: tensor-backed
+    cb_scalar_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_scalar_index, scalar_buf_tensor)
+
+    return {
+        "mul_num_tiles": mul_num_tiles,
+        "cb_in0_descriptor": cb_in0_descriptor,
+        "cb_in1_descriptor": cb_in1_descriptor,
+        "cb_out_descriptor": cb_out_descriptor,
+        "cb_scalar_index": cb_scalar_index,
+        "cb_scalar_src_index": cb_scalar_src_index,
+        "cb_scalar_descriptor": cb_scalar_descriptor,
+        "cb_scalar_src_descriptor": cb_scalar_src_descriptor,
+    }
 
 
 @dataclass
@@ -272,6 +426,10 @@ class MoeRoutedExpertOp:
         down_proj_output_tensor,
         fused_add_tensor,
         final_output_tensor,
+        gate_proj_in1_buf_tensor,
+        up_proj_in1_buf_tensor,
+        down_proj_in1_buf_tensor,
+        mul_scalar_buf_tensor,
         use_hardcoded_expert_index=False,
     ):
         """Compute all dimensions, grids, setup params, CB descriptors, and per-core values."""
@@ -448,6 +606,7 @@ class MoeRoutedExpertOp:
             device=device,
             weights_tensor=gate_proj_weights_tensor,
             output_tensor=gate_proj_output_tensor,
+            working_buf_tensor=gate_proj_in1_buf_tensor,
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=gate_proj_cb_in1,
             cb_out_index=gate_proj_cb_out,
@@ -462,6 +621,7 @@ class MoeRoutedExpertOp:
             device=device,
             weights_tensor=up_proj_weights_tensor,
             output_tensor=up_proj_mm_out_tensor,
+            working_buf_tensor=up_proj_in1_buf_tensor,
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=up_proj_cb_in1,
             cb_out_index=up_proj_cb_mm_out,
@@ -476,7 +636,6 @@ class MoeRoutedExpertOp:
             in0_tensor=up_proj_mm_out_tensor,
             in1_tensor=gate_proj_output_tensor,
             out_tensor=fused_output_tensor,
-            core_ranges=gate_proj_core_ranges,
             cb_in0_index=mul_cb_in0,
             cb_in1_index=mul_cb_in1,
             cb_out_index=mul_cb_out,
@@ -484,6 +643,7 @@ class MoeRoutedExpertOp:
             cb_scalar_index=mul_cb_scalar,
             cb_scalar_src_index=mul_cb_scalar_src,
             scalar_src_tensor=expert_scale_tensor,
+            scalar_buf_tensor=mul_scalar_buf_tensor,
         )
         mul_num_tiles = mul_params["mul_num_tiles"]
 
@@ -535,6 +695,7 @@ class MoeRoutedExpertOp:
             device=device,
             weights_tensor=down_proj_weights_tensor,
             output_tensor=down_proj_output_tensor,
+            working_buf_tensor=down_proj_in1_buf_tensor,
             core_ranges=gate_proj_core_ranges,
             cb_in1_index=down_proj_cb_in1,
             cb_out_index=down_proj_cb_out,
@@ -1035,6 +1196,10 @@ class MoeRoutedExpertOp:
         down_proj_output_tensor,
         fused_add_tensor,
         final_output_tensor,
+        gate_proj_in1_buf_tensor,
+        up_proj_in1_buf_tensor,
+        down_proj_in1_buf_tensor,
+        mul_scalar_buf_tensor,
         use_hardcoded_expert_index=False,
     ):
         """
@@ -1063,6 +1228,10 @@ class MoeRoutedExpertOp:
             down_proj_output_tensor: down_proj output
             fused_add_tensor: Tensor to add after down_proj
             final_output_tensor: Final output (down_proj + fused_add)
+            gate_proj_in1_buf_tensor: Working buffer for gate_proj DRAM matmul
+            up_proj_in1_buf_tensor: Working buffer for up_proj DRAM matmul
+            down_proj_in1_buf_tensor: Working buffer for down_proj DRAM matmul
+            mul_scalar_buf_tensor: Working buffer for scalar multiply
             use_hardcoded_expert_index: For testing, always use expert index 0
 
         Returns:
@@ -1094,6 +1263,10 @@ class MoeRoutedExpertOp:
             down_proj_output_tensor,
             fused_add_tensor,
             final_output_tensor,
+            gate_proj_in1_buf_tensor,
+            up_proj_in1_buf_tensor,
+            down_proj_in1_buf_tensor,
+            mul_scalar_buf_tensor,
             use_hardcoded_expert_index,
         )
 
@@ -1165,6 +1338,11 @@ class MoeRoutedExpertOp:
             down_proj_output_tensor,
             fused_add_tensor,
             final_output_tensor,
+            # Tensor-backed working buffers (internal scratch)
+            gate_proj_in1_buf_tensor,
+            up_proj_in1_buf_tensor,
+            down_proj_in1_buf_tensor,
+            mul_scalar_buf_tensor,
         ]
 
         # ==================================================================
