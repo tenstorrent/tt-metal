@@ -78,12 +78,9 @@ void sub_exp_block_bcast_cols_inplace_2x4(
         // DeviceZoneScopedN("EXP PACK");
         tile_regs_wait();
         uint32_t dst_index = 0;
+        pack_init(in0_cb, tiles_per_column);
         for (uint32_t i = 0; i < tiles_per_row; i++) {
-            for (uint32_t j = 0; j < tiles_per_column; ++j) {
-                uint32_t in0_tile_index =
-                    (global_row_base + i) * cols + (global_col_base + j);  // Absolute tile index for in0_cb
-                pack_tile<true>(dst_index++, in0_cb, in0_tile_index);      // Pack back to original position in in0_cb
-            }
+                pack_tile<true>(0, in0_cb, 0);      // Pack back to original position in in0_cb
         }
 
         if constexpr (do_reduce) {
@@ -181,10 +178,8 @@ void reduce_c_row_pair(uint32_t out_cb, uint32_t prev_cb, uint32_t row_pair_inde
 
     // Pack results to output at the correct positions
     cb_reserve_back(out_cb, PAIR_SIZE);
-    for (uint32_t i = 0; i < PAIR_SIZE; i++) {
-        const uint32_t dst_idx = i;
-        pack_tile<true>(dst_idx, out_cb, row_start + i);
-    }
+    pack_init(out_cb, PAIR_SIZE);
+    pack_tile<true>(0, out_cb, 0);
     cb_push_back(out_cb, PAIR_SIZE);
 
     release_dst();
@@ -289,12 +284,10 @@ void sdpa_inner_loop_8x4x16(
                 PACK(DPRINT << "Pack for Q[" << q_subblock << "] Kt[" << kt_subblock << "]" << ENDL());
                 uint32_t dst_idx = 0;
                 uint32_t out_col_offset = kt_subblock * subblock_w;
+                pack_init(cb_qkt_im,subblock_w);
                 for (uint32_t r = 0; r < subblock_h; r++) {
                     uint32_t out_row_offset = (r + q_subblock * subblock_h) * Sk_chunk_t;
-                    for (uint32_t c = 0; c < subblock_w; c++) {
-                        pack_tile<true>(dst_idx, cb_qkt_im, out_row_offset + out_col_offset + c);
-                        dst_idx++;
-                    }
+                    pack_tile(0, cb_qkt_im, 0);
                 }
                 tile_regs_release();
                 MATH(
@@ -406,12 +399,10 @@ void sdpa_inner_loop_8x4x16(
                     PACK(DPRINT << "QKT@V Pack for Q[" << q_subblock << "] V[" << v_subblock << "]" << ENDL());
                     uint32_t dst_idx = 0;
                     uint32_t out_col_offset = v_subblock * qktv_subblock_w;
+                    pack_init(cb_out, qktv_subblock_w);
                     for (uint32_t r = 0; r < qktv_subblock_h; r++) {
                         uint32_t out_row_offset = (r + q_subblock * qktv_subblock_h) * head_dim_t;
-                        for (uint32_t c = 0; c < qktv_subblock_w; c++) {
-                            pack_tile<true>(dst_idx, cb_out, out_row_offset + out_col_offset + c);
-                            dst_idx++;
-                        }
+                        pack_tile<true>(0, cb_out, 0);
                     }
                     tile_regs_release();
                     MATH(

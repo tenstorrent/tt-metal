@@ -110,9 +110,9 @@ ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
  *
  * Return value: None
  *
- * | Param Type | Name       | Description                        | Type     | Valid Range | Required |
- * |------------|------------|------------------------------------|----------|-------------|----------|
- * | Function   | new_cb_id  | New data format operand value      | uint32_t | Any         | True     |
+ * | Param Type | Name      | Description                        | Type     | Valid Range | Required |
+ * |------------|-----------|------------------------------------|----------|-------------|----------|
+ * | Function   | new_cb_id | New data format operand value      | uint32_t | Any         | True     |
  */
 // clang-format on
 ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
@@ -165,6 +165,26 @@ ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new
  */
 // clang-format on
 ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
+
+// clang-format off
+/**
+ * Initializes the packer with a specified tile count. This function configures the packer
+ * to operate with a specific number of tiles in the destination register.
+ *
+ * This is typically used when you need to configure the packer to handle multiple tiles
+ * in a single operation (e.g., for matmul operations that accumulate multiple tiles).
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                                       | Type     | Valid Range | Required |
+ * |------------|-----------|---------------------------------------------------|----------|-------------|----------|
+ * | Function   | icb       | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | Function   | num_tiles | Number of tiles to configure the packer for       | uint32_t | 1 to 8      | False    |
+ */
+// clang-format on
+ALWI void pack_init(uint32_t icb, uint32_t num_tiles = 1) {
+    PACK((llk_pack_init<false, false, false>(icb, num_tiles)));
+}
 
 // clang-format off
 /**
