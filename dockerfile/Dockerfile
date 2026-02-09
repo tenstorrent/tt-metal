@@ -44,6 +44,7 @@ ARG TOOL_GDB_IMAGE=scratch
 ARG TOOL_CMAKE_IMAGE=scratch
 ARG TOOL_YQ_IMAGE=scratch
 ARG TOOL_SFPI_IMAGE=scratch
+ARG TOOL_OPENMPI_IMAGE=scratch
 
 # Python venv images from GHCR (built by Dockerfile.python, pushed by build-docker-artifact.yaml)
 # These contain pre-built virtual environments with all Python dependencies installed.
@@ -57,35 +58,6 @@ ARG PYTHON_CI_TEST_VENV_IMAGE=scratch
 # https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
 ARG UV_VERSION=0.9.26
 ARG UV_IMAGE_DIGEST=sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
-
-# Tool versions (used for fallback local builds if tool images not provided)
-ARG CCACHE_VERSION=4.10.2
-ARG CCACHE_SHA256=80cab87bd510eca796467aee8e663c398239e0df1c4800a0b5dff11dca0b4f18
-
-ARG MOLD_VERSION=2.40.4
-ARG MOLD_SHA256=4c999e19ffa31afa5aa429c679b665d5e2ca5a6b6832ad4b79668e8dcf3d8ec1
-
-ARG DOXYGEN_VERSION=1.16.1
-ARG DOXYGEN_SHA256=a56f885d37e3aae08a99f638d17bbb381224c03a878d9e2dda4f9fa4baf1d8bd
-
-ARG CBA_VERSION=1.6.0
-ARG CBA_SHA256=868a8d34ecb9b65da4e5874342062a12c081ce4385c7ddd6ce7d557a0c5c292d
-
-ARG GDB_VERSION=14.2
-ARG GDB_SHA256=2d4dd8061d8ded12b6c63f55e45344881e8226105f4d2a9b234040efa5ce7772
-
-ARG CMAKE_VERSION=4.2.3
-ARG CMAKE_SHA256=5bb505d5e0cca0480a330f7f27ccf52c2b8b5214c5bba97df08899f5ef650c23
-
-ARG YQ_VERSION=v4.44.6
-ARG YQ_SHA256=0c2b24e645b57d8e7c0566d18643a6d4f5580feeea3878127354a46f2a1e4598
-
-# NOTE: SFPI version/hash are NOT defined here as ARGs.
-# The single source of truth for SFPI version information is:
-#   - tt_metal/sfpi-version (version number, hashes for all platforms)
-#   - tt_metal/sfpi-info.sh (helper script to parse version info)
-# SFPI is installed from the pre-built tool image or via install_dependencies.sh
-# which sources these files directly.
 
 #############################################################
 # Tool layers - pulled from pre-built GHCR images
@@ -116,6 +88,9 @@ FROM ${TOOL_YQ_IMAGE} AS yq-layer
 # SFPI layer - pre-built from GHCR
 FROM ${TOOL_SFPI_IMAGE} AS sfpi-layer
 
+# OpenMPI layer - pre-built from GHCR (ULFM support)
+FROM ${TOOL_OPENMPI_IMAGE} AS openmpi-layer
+
 # Python venv layers - pre-built from GHCR
 # These contain complete virtual environments with all dependencies pre-installed
 FROM ${PYTHON_CI_BUILD_VENV_IMAGE} AS ci-build-venv-layer
@@ -137,13 +112,9 @@ FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install cmake from pre-built tool image (avoids flaky kitware repo)
+COPY --from=uv-layer /uv /uvx /usr/local/bin/
+COPY --from=openmpi-layer /install/ /opt/
 COPY --from=cmake-layer /install/ /usr/local/
-
-# Copy SFPI from pre-built tool image
-RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
-    mkdir -p /opt/tenstorrent && \
-    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
 
 # Install runtime deps (SFPI already copied from tool image above)
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
@@ -151,8 +122,10 @@ COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
 COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
-# Install uv from official distroless image (pinned by SHA256)
-COPY --from=uv-layer /uv /uvx /usr/local/bin/
+# Copy SFPI from pre-built tool image
+RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
+    mkdir -p /opt/tenstorrent && \
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
 
 #############################################################
 # CI Build image
@@ -160,11 +133,34 @@ COPY --from=uv-layer /uv /uvx /usr/local/bin/
 
 FROM base AS ci-build
 
+# Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
+ENV PATH="/usr/local/bin:$PATH"
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+ENV CCACHE_TEMPDIR=/tmp/ccache
+
 # Copy pre-built tools from GHCR tool images
 # These images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml
 COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
 COPY --from=doxygen-layer /install/ /usr/local/
 COPY --from=cba-layer /install/ /usr/local/
+COPY --from=yq-layer /install/bin/yq /usr/local/bin/
+
+# Copy pre-built mold from GHCR tool image
+COPY --from=mold-layer /install/bin/ /usr/local/bin/
+COPY --from=mold-layer /install/lib/ /usr/local/lib/
+
+# Copy pre-built ci-build venv from tool image
+# Set umask 000 to allow all users to write (required for uv pip install at runtime)
+# SECURITY NOTE: This enables any user in the container to modify the Python environment.
+RUN --mount=from=ci-build-venv-layer,source=/install,target=/venv-staging \
+    umask 000 && \
+    cp -a /venv-staging/venv $PYTHON_ENV_DIR && \
+    umask 002 && \
+    echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
+RUN git config --global --add safe.directory '*'
 
 # Install extra ci apt requirements
 # Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
@@ -188,41 +184,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy pre-built yq from GHCR tool image
-# yq (YAML processor) is not available in apt, so we use pre-built tool image
-COPY --from=yq-layer /install/bin/yq /usr/local/bin/
-
-# Set up virtual environment using uv
-# Uses the system Python version (3.10 on Ubuntu 22.04, 3.12 on Ubuntu 24.04)
-# If pre-built venv image is available (from GHCR), copy it instead of installing packages
-# This saves ~1 minute per build by avoiding pip install operations
-
-ENV PYTHON_ENV_DIR=/opt/venv
-
-# Copy pre-built ci-build venv from tool image
-# Set umask 000 to allow all users to write (required for uv pip install at runtime)
-# SECURITY NOTE: This enables any user in the container to modify the Python environment.
-RUN --mount=from=ci-build-venv-layer,source=/install,target=/venv-staging \
-    umask 000 && \
-    cp -a /venv-staging/venv $PYTHON_ENV_DIR
-
-# Ensure the virtual environment is used for all Python-related commands
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
-ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
-
-# Ensure the virtual environment is activated on shell startup
-RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
-
-RUN git config --global --add safe.directory '*'
-
-ENV CCACHE_TEMPDIR=/tmp/ccache
-
-# Copy pre-built mold from GHCR tool image
-COPY --from=mold-layer /install/bin/ /usr/local/bin/
-COPY --from=mold-layer /install/lib/ /usr/local/lib/
-
-# Ensure /usr/local/bin is in PATH so CMake can find mold (ld.mold)
-ENV PATH="/usr/local/bin:$PATH"
 
 #############################################################
 # CI Test image
@@ -268,6 +229,20 @@ RUN umask 000 && \
 FROM ci-test AS dev
 
 ARG UBUNTU_VERSION=22.04
+
+COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
+    if [ "$UBUNTU_VERSION" != "24.04" ]; then \
+        cp -a /gdb-staging/* /usr/local/; \
+    else \
+        apt-get update && apt-get install -y --no-install-recommends gdb && \
+        apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
@@ -284,16 +259,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ipmitool \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy pre-built GDB from tool image (22.04); 24.04 uses system GDB
-RUN set -eux; echo "Ubuntu version: $UBUNTU_VERSION"
-RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
-    if [ "$UBUNTU_VERSION" != "24.04" ]; then \
-        cp -a /gdb-staging/* /usr/local/; \
-    else \
-        apt-get update && apt-get install -y --no-install-recommends gdb && \
-        apt-get clean && rm -rf /var/lib/apt/lists/*; \
-    fi
-
 # IWYU could be useful to developers
 # Not currently building, and unclear whether this is used; can put it back in if needed
 # RUN mkdir -p /tmp/iwyu \
@@ -304,11 +269,6 @@ RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
 #     && cmake --install /tmp/iwyu/build \
 #     && rm -rf /tmp/iwyu
 
-COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-
 #############################################################
 # Release image
 #############################################################
@@ -317,21 +277,17 @@ FROM base AS release
 
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 # Set umask 000 to allow all users to write (required for uv pip install at runtime)
 # SECURITY NOTE: This enables any user in the container to modify the Python environment.
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
-RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR
-
-# Ensure the virtual environment is used for all Python-related commands
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
-ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
-
-# Ensure the virtual environment is activated on shell startup
-RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
-
-RUN mkdir -p /etc && \
-    echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
+RUN umask 000 && uv venv --relocatable $PYTHON_ENV_DIR \
+    && umask 022 \
+    && "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc \
+    && mkdir -p /etc \
+    && echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
@@ -347,6 +303,8 @@ FROM base AS release-models
 ENV PYTHON_ENV_DIR=/opt/venv
 ENV TT_METAL_HOME=/tt-metal
 ENV PYTHONPATH=/tt-metal
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Accept git reference argument
 ARG GIT_REF=main
@@ -368,14 +326,9 @@ WORKDIR /tt-metal
 RUN umask 000 && /bin/bash -c "./build_metal.sh \
     && ./create_venv.sh \
     && source $PYTHON_ENV_DIR/bin/activate \
-    && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
-
-# Ensure the virtual environment is used for all Python-related commands
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
-ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
-
-# Ensure the virtual environment is activated on shell startup
-RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+    && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache" \
+    && umask 022 \
+    && echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Extra system deps
 RUN apt-get update && apt-get install -y \

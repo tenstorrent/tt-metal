@@ -345,12 +345,6 @@ install_llvm() {
 }
 
 install_sfpi() {
-    # Check if SFPI is already installed (e.g., from pre-built tool image)
-    # Skip download if /opt/tenstorrent/sfpi exists and contains files
-    if [[ -d /opt/tenstorrent/sfpi ]] && [[ -n "$(ls -A /opt/tenstorrent/sfpi 2>/dev/null)" ]]; then
-        echo "[INFO] SFPI already installed at /opt/tenstorrent/sfpi, skipping download"
-        return 0
-    fi
 
     local version_file=$(dirname $0)/tt_metal/sfpi-info.sh
     if ! [[ -r $version_file ]] ; then
@@ -477,10 +471,12 @@ install() {
     # Install core packages
     install_packages
 
-    # Install specialized components
-    install_sfpi
+    # Install specialized components (SFPI and MPI/ULFM come from container layers when --docker)
+    if [ "$docker" -ne 1 ]; then
+        install_sfpi
+        install_mpi_ulfm
+    fi
     install_llvm
-    install_mpi_ulfm
 
     # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
     if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then

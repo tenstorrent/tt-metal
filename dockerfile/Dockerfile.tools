@@ -224,7 +224,7 @@ COPY --from=sfpi-builder /install/ /install/
 #############################################################
 
 FROM quay.io/pypa/manylinux_2_34_x86_64 AS openmpi-builder
-ARG OMPI_TAG=v5.0.7
+ARG OMPI_TAG
 
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
   sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"

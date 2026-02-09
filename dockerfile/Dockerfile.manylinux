@@ -37,31 +37,34 @@ FROM ${TOOL_OPENMPI_IMAGE} AS openmpi-layer
 FROM quay.io/pypa/manylinux_2_34_x86_64
 
 # manylinux_2_34_x86_64 is AlmaLinux 9.7
+# ENV needed
+ENV PATH=${OMPI_PREFIX}/bin:/usr/local/bin:$PATH
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
+ENV CPATH=${OMPI_PREFIX}/include
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH
+ENV CC=clang
+ENV CXX=clang++
+ENV TRACY_NO_INVARIANT_CHECK=1
+ENV TRACY_NO_ISA_EXTENSIONS=1
+
+# Copy mold linker from pre-built tool image
+RUN --mount=from=mold-layer,source=/install,target=/mold-staging \
+    cp -a /mold-staging/bin/* /usr/local/bin/ && \
+    cp -a /mold-staging/lib/* /usr/local/lib/ && \
+    mold --version
+
+# Copy ccache from pre-built tool image
+RUN --mount=from=ccache-layer,source=/install,target=/ccache-staging \
+    cp -a /ccache-staging/bin/ccache /usr/local/bin/ && \
+    ccache --version
+
+# Copy OpenMPI (ULFM) from pre-built tool image
+COPY --from=openmpi-layer /install/ /opt/
 
 # Hack for CIv2
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
   sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
 
-#RUN dnf remove -y epel-release || true
-
-ENV PATH="/usr/local/bin:$PATH"
-
-# Copy SFPI from pre-built tool image
-RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
-    mkdir -p /opt/tenstorrent && \
-    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
-
-# Copy install dependencies script and required files
-COPY install_dependencies.sh /tmp/install_dependencies.sh
-COPY tt_metal/sfpi-info.sh /tmp/tt_metal/sfpi-info.sh
-COPY tt_metal/sfpi-version /tmp/tt_metal/sfpi-version
-
-# Install system dependencies using the install_dependencies.sh script
-# Use --docker flag for Docker-specific optimizations and --no-distributed
-# SFPI is already installed from tool image above
-RUN chmod +x /tmp/install_dependencies.sh && \
-    /tmp/install_dependencies.sh --docker --no-distributed && \
-    rm -rf /tmp/install_dependencies.sh /tmp/tt_metal
 
 # Install additional packages needed for manylinux builds and OpenMPI compilation
 # that are not covered by the install_dependencies.sh script
@@ -90,33 +93,15 @@ RUN dnf install -y \
     zlib-devel \
     && dnf clean all
 
-# Copy mold linker from pre-built tool image
-RUN --mount=from=mold-layer,source=/install,target=/mold-staging \
-    cp -a /mold-staging/bin/* /usr/local/bin/ && \
-    cp -a /mold-staging/lib/* /usr/local/lib/ && \
-    mold --version
+# Install system dependencies using the install_dependencies.sh script
+# Use --docker flag for Docker-specific optimizations and --no-distributed
 
-# Copy ccache from pre-built tool image
-RUN --mount=from=ccache-layer,source=/install,target=/ccache-staging \
-    cp -a /ccache-staging/bin/ccache /usr/local/bin/ && \
-    ccache --version
+COPY install_dependencies.sh /tmp/install_dependencies.sh
+RUN chmod +x /tmp/install_dependencies.sh && \
+    /tmp/install_dependencies.sh --docker --no-distributed && \
+    rm -rf /tmp/install_dependencies.sh /tmp/tt_metal
 
-# Copy OpenMPI (ULFM) from pre-built tool image (tool image has /opt/openmpi-<tag>-ulfm)
-ARG OMPI_TAG=v5.0.7
-ARG OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
-RUN --mount=from=openmpi-layer,source=/install,target=/ompi-staging \
-    cp -a /ompi-staging/openmpi-${OMPI_TAG}-ulfm /opt/ && \
-    ls -alh /opt && \
-    ls -alh ${OMPI_PREFIX} && \
-    ls -alh ${OMPI_PREFIX}/lib
-
-
-# ENV needed
-ENV PATH=${OMPI_PREFIX}/bin:$PATH
-ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
-ENV CPATH=${OMPI_PREFIX}/include
-ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH
-ENV CC=clang
-ENV CXX=clang++
-ENV TRACY_NO_INVARIANT_CHECK=1
-ENV TRACY_NO_ISA_EXTENSIONS=1
+# Copy SFPI from pre-built tool image
+RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
+    mkdir -p /opt/tenstorrent && \
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
