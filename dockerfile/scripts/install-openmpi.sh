@@ -37,6 +37,7 @@ fi
 tar xf "${OMPI_TARBALL}"
 cd "openmpi-${OMPI_VERSION}"
 
+# TODO: Evaluate with scaleout team
 ./configure \
     --prefix="${OMPI_PREFIX}" \
     --with-ft=ulfm \
