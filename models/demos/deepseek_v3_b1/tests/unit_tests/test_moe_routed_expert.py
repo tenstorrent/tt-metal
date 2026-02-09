@@ -21,7 +21,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MoeRoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 
@@ -1181,3 +1181,591 @@ def test_moe_routed_expert_mesh(mesh_device, use_hardcoded_expert_index):
 
     assert all_passed, "Not all devices produced correct results"
     logger.info("MoE routed expert mesh test passed!")
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+@pytest.mark.parametrize("use_hardcoded_expert_index", [True])
+def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_index):
+    """
+    Test MoE routed expert fused operation with reduce_to_one on 4x2 mesh.
+
+    This tests the full fused operation:
+    - Each of 8 devices runs moe_routed_expert
+    - Results are reduced (summed) across all devices to ROOT1
+    - Final output on ROOT1 contains sum of all 8 device outputs
+    """
+    # Validate mesh size
+    num_devices = 8
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip(
+            f"Test requires {num_devices} devices, mesh has {bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
+        )
+
+    # Create 4x2 submesh
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    logger.info(f"Created submesh with shape: {submesh.shape}")
+
+    # MoE router parameters
+    M = 1
+    K = 7168
+    N_per_core = 32
+    num_cores = 8
+    N = N_per_core * num_cores  # 256 total output width
+
+    # DRAM matmul + SiLU parameters
+    gate_proj_K = K
+    gate_proj_N = 2048
+
+    # num_experts: 8 for hardcoded (one per device), 256 for dynamic
+    num_experts = 8 if use_hardcoded_expert_index else 256
+
+    # Tile definitions
+    tile_1x32 = ttnn.Tile([1, 32])
+    tile_32x32 = ttnn.Tile([32, 32])
+    tile_16x16 = ttnn.Tile([16, 16])
+    tile_1x16 = ttnn.Tile([1, 16])
+
+    logger.info(f"Testing MoE routed expert with reduce on {num_devices}-device mesh")
+
+    # Gate parameters
+    gate_eps = 1e-20
+    gate_scaling_factor = 2.5
+
+    # Create PyTorch tensors (same for all devices since we replicate)
+    torch.manual_seed(0)
+    torch_input = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_gate_mm_weights = torch.randn((K, N), dtype=torch.bfloat16)
+    torch_bias = torch.randn((1, 8, 32), dtype=torch.bfloat16)
+    torch_indices = torch.arange(N, dtype=torch.int32).reshape(16, 16).T.contiguous().to(torch.uint16)
+
+    # Get device info from mesh for grid setup
+    device_grid_size = submesh.compute_with_storage_grid_size()
+
+    # Define core grids (same for all devices)
+    compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))])
+    input_core = ttnn.CoreCoord(device_grid_size.x - 1, 9)
+    input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
+
+    # Get optimal DRAM bank cores
+    gate_proj_noc = ttnn.NOC.NOC_0
+    gate_proj_worker_cores = submesh.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
+    gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
+    num_gate_proj_cores = len(gate_proj_worker_cores)
+
+    # Mcast output core grid
+    mcast_output_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), input_core)])
+
+    # Mesh mapper for replication
+    mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
+
+    # ========== Create Tensors with Mesh Replication ==========
+    # (Same setup as test_moe_routed_expert_mesh)
+
+    # Input tensor
+    input_shard_spec = ttnn.ShardSpec(input_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=input_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Mcast output tensor
+    mcast_output_shard_spec = ttnn.ShardSpec(mcast_output_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR)
+    mcast_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, mcast_output_shard_spec
+    )
+    ttnn_mcast_output = ttnn.from_torch(
+        torch.zeros((M, K), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=mcast_output_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Gate matmul weights
+    gate_mm_weights_shard_spec = ttnn.ShardSpec(compute_core_grid, (K, N_per_core), ttnn.ShardOrientation.ROW_MAJOR)
+    gate_mm_weights_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, gate_mm_weights_shard_spec
+    )
+    ttnn_gate_mm_weights = ttnn.from_torch(
+        torch_gate_mm_weights,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=gate_mm_weights_mem_config,
+        tile=tile_32x32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Gate matmul output
+    gate_mm_output_shard_spec = ttnn.ShardSpec(compute_core_grid, (M, N_per_core), ttnn.ShardOrientation.ROW_MAJOR)
+    gate_mm_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, gate_mm_output_shard_spec
+    )
+    ttnn_gate_mm_output = ttnn.from_torch(
+        torch.zeros((M, N), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=gate_mm_output_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Gate input tensor (16x16)
+    gate_input_shard_spec = ttnn.ShardSpec(input_core_grid, (16, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    gate_input_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gate_input_shard_spec
+    )
+    ttnn_gate_input = ttnn.from_torch(
+        torch.zeros((16, 16), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=gate_input_mem_config,
+        tile=tile_16x16,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Gate bias tensor
+    torch_bias_reshaped = torch_bias.reshape(16, 16)
+    torch_bias_transposed = torch.transpose(torch_bias_reshaped, 0, 1).contiguous()
+    ttnn_gate_bias = ttnn.from_torch(
+        torch_bias_transposed,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=gate_input_mem_config,
+        tile=tile_16x16,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Gate indices tensor
+    ttnn_gate_indices = ttnn.from_torch(
+        torch_indices,
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=gate_input_mem_config,
+        tile=tile_16x16,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Gate output tensors (1x16)
+    gate_output_shard_spec = ttnn.ShardSpec(input_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    gate_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gate_output_shard_spec
+    )
+    gate_output_scores_tensor = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=gate_output_mem_config,
+        tile=tile_1x16,
+        mesh_mapper=mesh_mapper,
+    )
+    gate_output_indices_tensor = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.uint16),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=gate_output_mem_config,
+        tile=tile_1x16,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Expert index and scale tensors
+    expert_index_shard_spec = ttnn.ShardSpec(mcast_output_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    expert_index_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, expert_index_shard_spec
+    )
+    expert_index_tensor = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.uint16),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=expert_index_mem_config,
+        tile=tile_1x16,
+        mesh_mapper=mesh_mapper,
+    )
+    expert_scale_tensor = ttnn.from_torch(
+        torch.zeros((1, 16), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=expert_index_mem_config,
+        tile=tile_1x16,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # ========== DRAM Matmul Tensors ==========
+    (
+        gate_proj_weights,
+        gate_proj_output,
+        expert_weights_for_validation,
+        gate_proj_expert_tensors,
+    ) = create_expert_matmul_tensors(
+        device=submesh,
+        K=gate_proj_K,
+        N=gate_proj_N,
+        num_experts=num_experts,
+        compute_core_grid=gate_proj_core_ranges,
+        num_cores=num_gate_proj_cores,
+        tile_h=M,
+        tile_w=32,
+        dtype=ttnn.bfloat4_b,
+        seed=0,
+        mesh_mapper=mesh_mapper,
+    )
+    logger.info(f"Created gate_proj tensors: weights={gate_proj_weights.shape}, output={gate_proj_output.shape}")
+
+    # up_proj tensors
+    (
+        up_proj_weights,
+        up_proj_mm_out_tensor,
+        up_proj_weights_for_validation,
+        up_proj_expert_tensors,
+    ) = create_expert_matmul_tensors(
+        device=submesh,
+        K=gate_proj_K,
+        N=gate_proj_N,
+        num_experts=num_experts,
+        compute_core_grid=gate_proj_core_ranges,
+        num_cores=num_gate_proj_cores,
+        tile_h=M,
+        tile_w=32,
+        dtype=ttnn.bfloat4_b,
+        seed=256,
+        mesh_mapper=mesh_mapper,
+    )
+    logger.info(f"Created up_proj tensors: weights={up_proj_weights.shape}, mm_out={up_proj_mm_out_tensor.shape}")
+
+    # Fused output tensor (same shape as up_proj_mm_out)
+    num_banks = submesh.dram_grid_size().x
+    gate_proj_N_padded = ((gate_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
+    per_core_gate_proj_N = gate_proj_N_padded // num_banks
+    out_tile = ttnn.Tile([M, 32])
+    out_shard_shape = [M, per_core_gate_proj_N]
+    out_shard_spec = ttnn.ShardSpec(gate_proj_core_ranges, out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    out_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec)
+    fused_output_tensor = ttnn.from_torch(
+        torch.zeros([1, 1, M, gate_proj_N_padded]).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=out_memory_config,
+        tile=out_tile,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # down_proj tensors
+    down_proj_K = gate_proj_N
+    down_proj_N = K
+    down_proj_N_padded = ((down_proj_N + num_banks * 32 - 1) // (num_banks * 32)) * (num_banks * 32)
+    per_core_down_proj_N = down_proj_N_padded // num_banks
+
+    # down_proj gather output
+    down_proj_gather_shard_spec = ttnn.ShardSpec(
+        input_core_grid, (M, gate_proj_N_padded), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    down_proj_gather_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, down_proj_gather_shard_spec
+    )
+    down_proj_gather_output_tensor = ttnn.from_torch(
+        torch.zeros([M, gate_proj_N_padded]).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=down_proj_gather_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # down_proj mcast output
+    down_proj_mcast_shard_spec = ttnn.ShardSpec(
+        mcast_output_core_grid, (M, gate_proj_N_padded), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    down_proj_mcast_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, down_proj_mcast_shard_spec
+    )
+    down_proj_mcast_output_tensor = ttnn.from_torch(
+        torch.zeros([M, gate_proj_N_padded]).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=down_proj_mcast_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # down_proj expert weights and output
+    (
+        down_proj_weights,
+        down_proj_output,
+        down_proj_weights_for_validation,
+        down_proj_expert_tensors,
+    ) = create_expert_matmul_tensors(
+        device=submesh,
+        K=down_proj_K,
+        N=down_proj_N,
+        num_experts=num_experts,
+        compute_core_grid=gate_proj_core_ranges,
+        num_cores=num_gate_proj_cores,
+        tile_h=M,
+        tile_w=32,
+        dtype=ttnn.bfloat4_b,
+        seed=512,
+        mesh_mapper=mesh_mapper,
+    )
+    logger.info(f"Created down_proj tensors: weights={down_proj_weights.shape}, output={down_proj_output.shape}")
+
+    # fused_add tensor
+    torch.manual_seed(1024)
+    fused_add_torch = torch.randn([1, 1, 1, down_proj_N_padded]).bfloat16().float()
+    fused_add_replicated = fused_add_torch.repeat(1, 1, num_gate_proj_cores, 1)
+    fused_add_shard_spec = ttnn.ShardSpec(
+        gate_proj_core_ranges, (1, down_proj_N_padded), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    fused_add_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fused_add_shard_spec
+    )
+    fused_add_tensor = ttnn.from_torch(
+        fused_add_replicated,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=fused_add_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
+    # Final output tensor (before reduce)
+    # Must match down_proj_output shape: width_per_core = per_core_down_proj_N, total = down_proj_N_padded
+    final_output_width_per_core = per_core_down_proj_N
+    final_output_total_width = down_proj_N_padded
+    final_output_shard_spec = ttnn.ShardSpec(
+        gate_proj_core_ranges, (1, final_output_width_per_core), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    final_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, final_output_shard_spec
+    )
+    final_output_tensor = ttnn.from_torch(
+        torch.zeros([1, 1, 1, final_output_total_width]).bfloat16().float(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=final_output_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # ========== ReduceToOne Tensors and Semaphores ==========
+    # Root coordinate (row 1, col 1)
+    root_coord = (1, 1)
+
+    # Mesh mapper for reduce tensors
+    reduce_mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh.shape)
+    reduce_mesh_mapper = ttnn.create_mesh_mapper(submesh, reduce_mesh_mapper_config)
+
+    # Create 3 intermediate tensors for 3 reduction rounds
+    # Same shape as final_output_tensor (which is the input to reduce)
+    intermediate_tensors = []
+    for _ in range(3):
+        intermediate_data = torch.zeros([4, 2, 1, 1, 1, final_output_total_width], dtype=torch.bfloat16)
+        intermediate_tensor = ttnn.from_torch(
+            intermediate_data,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=final_output_mem_config,
+            tile=tile_1x32,
+            mesh_mapper=reduce_mesh_mapper,
+        )
+        intermediate_tensors.append(intermediate_tensor)
+    logger.info(f"Created 3 intermediate tensors for reduce rounds")
+
+    # Create reduce output tensor (single-core sharded on each device)
+    # Only ROOT1 device will have the final reduced result
+    compute_grid = submesh.compute_with_storage_grid_size()
+    reduce_output_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
+    reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(reduce_output_core, reduce_output_core)})
+    reduce_output_shard_spec = ttnn.ShardSpec(
+        reduce_output_shard_grid,
+        (1, final_output_total_width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    reduce_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, reduce_output_shard_spec
+    )
+    reduce_output_data = torch.zeros([4, 2, 1, 1, 1, final_output_total_width], dtype=torch.bfloat16)
+    reduce_output_tensor = ttnn.from_torch(
+        reduce_output_data,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=reduce_output_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
+    logger.info(f"Created reduce output tensor on core {reduce_output_core}")
+
+    # Compute the core range for reduce semaphores
+    # Must include: worker cores (gate_proj_core_ranges) + fabric cores (one per column, to the right of bottom worker)
+    # Build column-to-cores mapping for fabric core placement
+    column_to_cores = {}
+    for core in gate_proj_worker_cores:
+        x = core.x
+        if x not in column_to_cores:
+            column_to_cores[x] = []
+        column_to_cores[x].append(core)
+    for x in column_to_cores:
+        column_to_cores[x].sort(key=lambda c: c.y)
+
+    # Fabric cores: one per column, placed to the right of bottom worker core
+    fabric_cores = []
+    for x in sorted(column_to_cores.keys()):
+        bottom_core = max(column_to_cores[x], key=lambda c: c.y)
+        fabric_core = ttnn.CoreCoord(bottom_core.x + 1, bottom_core.y)
+        fabric_cores.append(fabric_core)
+
+    # Combine worker cores + fabric cores into a single CoreRangeSet
+    all_reduce_cores = list(gate_proj_worker_cores) + fabric_cores
+    reduce_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in all_reduce_cores])
+    logger.info(
+        f"Reduce cores: {len(all_reduce_cores)} total ({len(gate_proj_worker_cores)} workers + {len(fabric_cores)} fabric)"
+    )
+
+    # Debug: print core info
+    print(f"DEBUG: gate_proj_worker_cores = {[(c.x, c.y) for c in gate_proj_worker_cores]}")
+    print(f"DEBUG: fabric_cores = {[(c.x, c.y) for c in fabric_cores]}")
+    print(f"DEBUG: column_to_cores = {dict((x, [(c.x, c.y) for c in cores]) for x, cores in column_to_cores.items())}")
+    print(f"DEBUG: final_output_tensor shard grid = {final_output_tensor.memory_config().shard_spec.grid}")
+    print(f"DEBUG: reduce_output_core = ({reduce_output_core.x}, {reduce_output_core.y})")
+    print(f"DEBUG: root_coord = {root_coord}")
+
+    # Create 4 semaphores for reduce_to_one (round1, round2, round3, exit)
+    reduce_semaphores = [ttnn.create_global_semaphore(submesh, reduce_core_range_set, 0) for _ in range(4)]
+    logger.info(f"Created 4 global semaphores for reduce synchronization")
+
+    # ========== Run Operation ==========
+    num_iterations = 100
+    logger.info(f"Running MoE routed expert with reduce for {num_iterations} iterations...")
+    for iteration in range(num_iterations):
+        ttnn_result_scores, ttnn_result_indices, ttnn_result_reduce = MoeRoutedExpert.op(
+            ttnn_input,
+            ttnn_mcast_output,
+            ttnn_gate_mm_weights,
+            ttnn_gate_mm_output,
+            ttnn_gate_input,
+            ttnn_gate_bias,
+            ttnn_gate_indices,
+            gate_output_scores_tensor,
+            gate_output_indices_tensor,
+            expert_index_tensor,
+            expert_scale_tensor,
+            gate_proj_weights,
+            gate_proj_output,
+            up_proj_weights,
+            up_proj_mm_out_tensor,
+            fused_output_tensor,
+            down_proj_gather_output_tensor,
+            down_proj_mcast_output_tensor,
+            down_proj_weights,
+            down_proj_output,
+            fused_add_tensor,
+            final_output_tensor,
+            # ReduceToOne parameters
+            reduce_intermediate_tensors=intermediate_tensors,
+            reduce_output_tensor=reduce_output_tensor,
+            reduce_semaphores=reduce_semaphores,
+            reduce_root_coord=ttnn.MeshCoordinate(root_coord),
+            use_hardcoded_expert_index=use_hardcoded_expert_index,
+        )
+        print(f"Iteration {iteration} completed MoE routed expert with reduce operation")
+    print("before device sync")
+    ttnn.synchronize_device(submesh)
+    print("after device sync")
+    logger.info(f"All {num_iterations} iterations completed")
+
+    # ========== Verify Results ==========
+    # Get gate outputs for computing per-device expected values
+    device_gate_indices = ttnn.to_torch(
+        gate_output_indices_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    device_gate_scores = ttnn.to_torch(gate_output_scores_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+
+    # Compute expected output for each device, then sum
+    expected_final_outputs = []
+    for device_idx in range(num_devices):
+        chip_id = device_idx  # Row-major order
+
+        if use_hardcoded_expert_index:
+            actual_expert_idx = chip_id
+            actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
+        else:
+            actual_expert_idx = int(device_gate_indices[0].flatten()[chip_id].item())
+            actual_expert_scale = device_gate_scores[0].flatten()[chip_id].float()
+
+        _, _, torch_expected_final = MoeRoutedExpert.golden(
+            torch_input,
+            torch_gate_mm_weights,
+            torch_bias,
+            gate_proj_weights_dict=expert_weights_for_validation,
+            up_proj_weights_dict=up_proj_weights_for_validation,
+            down_proj_weights_dict=down_proj_weights_for_validation,
+            fused_add_tensor=fused_add_torch,
+            eps=gate_eps,
+            scaling_factor=gate_scaling_factor,
+            use_hardcoded_expert_index=True,
+            hardcoded_expert_index=actual_expert_idx,
+            explicit_expert_scale=actual_expert_scale,
+        )
+        expected_final_outputs.append(torch_expected_final)
+
+    # Expected reduce output = sum of all device outputs (using golden_reduce)
+    expected_reduce_output = MoeRoutedExpert.golden_reduce(expected_final_outputs)
+
+    # Get actual reduce output from ROOT1 device
+    reduce_output_torch = ttnn.to_torch(
+        ttnn_result_reduce,
+        mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
+    )
+
+    # ROOT1 is at row 1, col 1 -> device_idx = 1*2 + 1 = 3
+    root_device_idx = root_coord[0] * submesh.shape[1] + root_coord[1]
+    reduce_output_root = reduce_output_torch[root_device_idx]
+
+    # Reduce output is already in the correct format (down_proj_N_padded wide)
+    # Just need to extract valid data (up to down_proj_N)
+    reduce_output_valid = reduce_output_root[..., :down_proj_N]
+
+    # Expected reduce output also needs same extraction
+    expected_reduce_final = expected_reduce_output[..., :down_proj_N]
+
+    # Verify reduce output
+    passing, pcc_output = comp_pcc(expected_reduce_final, reduce_output_valid.unsqueeze(0).unsqueeze(0), 0.95)
+    logger.info(f"Reduce output PCC: {pcc_output}")
+
+    if not passing:
+        # Debug: print some values
+        logger.error(f"Expected reduce (first 8): {expected_reduce_final.flatten()[:8]}")
+        logger.error(f"Actual reduce (first 8): {reduce_output_valid.flatten()[:8]}")
+        diff = torch.abs(expected_reduce_final.flatten() - reduce_output_valid.flatten())
+        logger.error(f"Max diff: {diff.max()}, Mean diff: {diff.mean()}")
+
+    assert passing, f"Reduce output PCC check failed: {pcc_output}"
+    logger.info("MoE routed expert with reduce test passed!")

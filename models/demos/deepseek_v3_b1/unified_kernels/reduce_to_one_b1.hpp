@@ -163,7 +163,9 @@ struct ReduceToOneB1 {
     // ========================================================================
     // Op implementation
     // ========================================================================
-    template <typename CTArgs, bool IsWorkerCore>
+    // SkipLocalCbPush: When true, skip cb_reserve_back/cb_push_back on local_cb.
+    //                  Use this when fused with a previous op that already pushed to local_cb.
+    template <typename CTArgs, bool IsWorkerCore, bool SkipLocalCbPush = false>
     class Op {
     public:
         void operator()(const RTArgs& args) { impl(args); }
@@ -183,6 +185,13 @@ struct ReduceToOneB1 {
 #endif
 
         void impl([[maybe_unused]] const RTArgs& args) {
+            // Early return if this core is not a reduce core (worker or fabric)
+            // Note: IsWorkerCore should be true for both worker cores AND fabric cores
+            // The is_fabric_core compile-time arg distinguishes between the two
+            if constexpr (!IsWorkerCore) {
+                return;
+            }
+
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
             // NCRISC - Reader: receives data from fabric via semaphore waits
@@ -196,8 +205,11 @@ struct ReduceToOneB1 {
                 CTArgs::device_role == MESH_ROOT3 || CTArgs::device_role == MESH_ROOT2 ||
                 CTArgs::device_role == MESH_ROOT1) {
                 // Push local data to compute (local_cb is in-place on input shard)
-                cb_reserve_back(CTArgs::local_cb, CTArgs::num_tiles);
-                cb_push_back(CTArgs::local_cb, CTArgs::num_tiles);
+                // Skip this when fused - previous op already pushed to local_cb
+                if constexpr (!SkipLocalCbPush) {
+                    cb_reserve_back(CTArgs::local_cb, CTArgs::num_tiles);
+                    cb_push_back(CTArgs::local_cb, CTArgs::num_tiles);
+                }
 
                 // Round 1: Wait for shard from LEAF
                 cb_reserve_back(CTArgs::received_cb_r1, CTArgs::num_tiles);
@@ -299,7 +311,6 @@ struct ReduceToOneB1 {
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 return;
             }
-
             // Non-ROOT1: send via fabric
             const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
             const uint32_t arrival_sem_addr = get_semaphore(args.worker_sem_id);
@@ -333,8 +344,15 @@ struct ReduceToOneB1 {
             // Source CB: LEAF uses local_cb, others use scratch_cb
             constexpr uint32_t source_cb = (CTArgs::device_role == MESH_LEAF) ? CTArgs::local_cb : CTArgs::scratch_cb;
 
-            // Wait for data (non-LEAF only)
-            if constexpr (CTArgs::device_role != MESH_LEAF) {
+            // Wait for data
+            // - LEAF: when fused (SkipLocalCbPush=true), previous op pushed to local_cb, so we wait
+            //         when standalone (SkipLocalCbPush=false), data is already in-place, no wait needed
+            // - Others: always wait for compute to finish writing to scratch_cb
+            if constexpr (CTArgs::device_role == MESH_LEAF) {
+                if constexpr (SkipLocalCbPush) {
+                    cb_wait_front(source_cb, CTArgs::num_tiles);
+                }
+            } else {
                 cb_wait_front(source_cb, CTArgs::num_tiles);
             }
             uint32_t data_addr = get_read_ptr(source_cb);
