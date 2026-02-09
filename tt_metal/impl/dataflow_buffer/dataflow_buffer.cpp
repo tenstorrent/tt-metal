@@ -50,6 +50,16 @@ uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
 
 void RemapperIndexAllocator::reset() { next_index_.clear(); }
 
+std::array<uint8_t, 2> TransactionIdAllocator::allocate() {
+    TT_FATAL(
+        next_txn_id_ + TXN_IDS_PER_ALLOCATION <= ::experimental::MAX_TOTAL_TXN_IDS,
+        "Transaction ID pool exhausted (max {})",
+        ::experimental::MAX_TOTAL_TXN_IDS);
+    std::array<uint8_t, 2> ids = {next_txn_id_, static_cast<uint8_t>(next_txn_id_ + 1)};
+    next_txn_id_ += TXN_IDS_PER_ALLOCATION;
+    return ids;
+}
+
 uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_producer) {
     if (config.cap == ::experimental::AccessPattern::BLOCKED) {
         return is_producer ? 1 : config.num_producers;
@@ -125,13 +135,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
     init.risc_mask_bits.tensix_mask = (this->risc_mask >> 8) & 0x0F;
     init.risc_mask_bits.reserved = 0;
     init.risc_mask_bits.tc_initialized = 0;  // set by device after init
-    init.num_txn_ids = this->num_txn_ids;
-    for (int i = 0; i < 4; i++) {
-        init.txn_ids[i] = this->txn_ids[i];
-    }
-    init.num_entries_per_txn_id = this->num_entries_per_txn_id;
-    init.num_entries_per_txn_id_per_tc = this->num_entries_per_txn_id_per_tc;
+    init.num_entries_to_process_threshold_producer = this->num_entries_to_process_threshold_producer;
+    init.num_entries_to_process_threshold_consumer = this->num_entries_to_process_threshold_consumer;
     init.remapper_consumer_mask = this->remapper_consumer_mask;
+    init.padding = 0;
 
     log_info(
         tt::LogMetal,
@@ -145,12 +152,11 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
     log_info(tt::LogMetal, "Stride size: {}", this->stride_size);
     log_info(tt::LogMetal, "Capacity: {}", this->capacity);
     log_info(tt::LogMetal, "Risc mask: 0x{:x}", this->risc_mask);
-    log_info(tt::LogMetal, "Num txn ids: {}", this->num_txn_ids);
-    for (int i = 0; i < ::experimental::NUM_TXN_IDS; i++) {
-        log_info(tt::LogMetal, "Txn id {}: {}", i, this->txn_ids[i]);
-    }
-    log_info(tt::LogMetal, "Num entries per txn id: {}", this->num_entries_per_txn_id);
-    log_info(tt::LogMetal, "Num entries per txn id per tc: {}", this->num_entries_per_txn_id_per_tc);
+    log_info(
+        tt::LogMetal,
+        "Threshold producer: {}, Threshold consumer: {}",
+        this->num_entries_to_process_threshold_producer,
+        this->num_entries_to_process_threshold_consumer);
     log_info(tt::LogMetal, "Remapper consumer mask: 0x{:x}", this->remapper_consumer_mask);
 
     const auto* init_bytes = reinterpret_cast<const uint8_t*>(&init);
@@ -181,6 +187,21 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
         per_risc.flags.should_init_tc = rc.config.should_init_tc;
         per_risc.consumer_tcs = rc.config.consumer_tcs;
         log_info(tt::LogMetal, "Should init tc: {}", rc.config.should_init_tc);
+
+        // Per-risc transaction ID fields
+        per_risc.num_txn_ids = rc.config.num_txn_ids;
+        for (int i = 0; i < ::experimental::NUM_TXN_IDS; i++) {
+            per_risc.txn_ids[i] = rc.config.txn_ids[i];
+        }
+        per_risc.num_entries_per_txn_id = rc.config.num_entries_per_txn_id;
+        per_risc.num_entries_per_txn_id_per_tc = rc.config.num_entries_per_txn_id_per_tc;
+        per_risc.padding = 0;
+        log_info(
+            tt::LogMetal,
+            "Per-risc txn: num_txn_ids={}, entries_per_txn_id={}, entries_per_txn_id_per_tc={}",
+            rc.config.num_txn_ids,
+            rc.config.num_entries_per_txn_id,
+            rc.config.num_entries_per_txn_id_per_tc);
 
         const auto* cfg_bytes = reinterpret_cast<const uint8_t*>(&per_risc);
         data.insert(data.end(), cfg_bytes, cfg_bytes + sizeof(per_risc));
@@ -268,7 +289,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
         (config.producer_risc_mask & config.consumer_risc_mask) == 0,
         "producer_risc_mask and consumer_risc_mask must not overlap");
     TT_FATAL(config.pap != ::experimental::AccessPattern::BLOCKED, "Blocked producer pattern not supported");
-    TT_FATAL(!config.enable_implicit_sync, "Implicit sync not supported yet");
+    // Implicit sync is now supported for DM RISCs
     TT_FATAL(
         core_range_set.num_cores() == 1,
         "DFB only supports single core, but CoreRangeSet contains {} cores: {}",
@@ -510,6 +531,76 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     }
 
     log_info(tt::LogMetal, "DFB {} risc_mask: 0x{:x}", dfb->id, dfb->risc_mask);
+
+    // Transaction ID assignment for implicit sync
+    if (config.enable_implicit_sync) {
+        bool producer_is_dm = (config.producer_risc_mask & 0xFF) != 0;
+        bool consumer_is_dm = (config.consumer_risc_mask & 0xFF) != 0;
+
+        std::array<uint8_t, 2> producer_txn_ids = {0xFF, 0xFF};
+        std::array<uint8_t, 2> consumer_txn_ids = {0xFF, 0xFF};
+        uint8_t num_producer_txn_ids = 0;
+        uint8_t num_consumer_txn_ids = 0;
+
+        if (producer_is_dm) {
+            producer_txn_ids = txn_id_allocator_.allocate();
+            num_producer_txn_ids = 2;
+            log_info(tt::LogMetal, "Allocated producer txn IDs: {}, {}", producer_txn_ids[0], producer_txn_ids[1]);
+        }
+        if (consumer_is_dm) {
+            consumer_txn_ids = txn_id_allocator_.allocate();
+            num_consumer_txn_ids = 2;
+            log_info(tt::LogMetal, "Allocated consumer txn IDs: {}, {}", consumer_txn_ids[0], consumer_txn_ids[1]);
+        }
+
+        // Calculate entry thresholds (stored in dfb_initializer_t)
+        uint8_t threshold_producer = producer_is_dm ? (capacity / num_producer_txn_ids) : 0;
+        uint8_t threshold_consumer = consumer_is_dm ? (capacity / num_consumer_txn_ids) : 0;
+        dfb->num_entries_to_process_threshold_producer = threshold_producer;
+        dfb->num_entries_to_process_threshold_consumer = threshold_consumer;
+
+        // Calculate per-risc values
+        uint8_t entries_to_post_per_txn_id = producer_is_dm ? (threshold_producer / config.num_producers) : 0;
+        uint8_t entries_to_ack_per_txn_id = consumer_is_dm ? (threshold_consumer / config.num_consumers) : 0;
+
+        // Assign to risc configs - only DM RISCs get valid txn IDs
+        for (auto& risc_config : dfb->risc_configs) {
+            bool is_dm_risc = (risc_config.risc_id < 8);  // DM RISCs are 0-7
+            if (is_dm_risc) {
+                if (risc_config.is_producer) {
+                    risc_config.config.txn_ids[0] = producer_txn_ids[0];
+                    risc_config.config.txn_ids[1] = producer_txn_ids[1];
+                    risc_config.config.num_txn_ids = num_producer_txn_ids;
+                    risc_config.config.num_entries_per_txn_id = entries_to_post_per_txn_id;
+                    risc_config.config.num_entries_per_txn_id_per_tc =
+                        entries_to_post_per_txn_id / risc_config.config.num_tcs_to_rr;
+                    log_info(
+                        tt::LogMetal,
+                        "Producer RISC {} txn_ids=[{},{}] entries_per_txn_id={} entries_per_txn_id_per_tc={}",
+                        risc_config.risc_id,
+                        producer_txn_ids[0],
+                        producer_txn_ids[1],
+                        entries_to_post_per_txn_id,
+                        risc_config.config.num_entries_per_txn_id_per_tc);
+                } else {
+                    risc_config.config.txn_ids[0] = consumer_txn_ids[0];
+                    risc_config.config.txn_ids[1] = consumer_txn_ids[1];
+                    risc_config.config.num_txn_ids = num_consumer_txn_ids;
+                    risc_config.config.num_entries_per_txn_id = entries_to_ack_per_txn_id;
+                    risc_config.config.num_entries_per_txn_id_per_tc =
+                        entries_to_ack_per_txn_id / risc_config.config.num_tcs_to_rr;
+                    log_info(
+                        tt::LogMetal,
+                        "Consumer RISC {} txn_ids=[{},{}] entries_per_txn_id={} entries_per_txn_id_per_tc={}",
+                        risc_config.risc_id,
+                        consumer_txn_ids[0],
+                        consumer_txn_ids[1],
+                        entries_to_ack_per_txn_id,
+                        risc_config.config.num_entries_per_txn_id_per_tc);
+                }
+            }
+        }
+    }
 
     this->dataflow_buffers_.push_back(dfb);
     this->dataflow_buffer_by_id_.insert({dfb->id, dfb});
