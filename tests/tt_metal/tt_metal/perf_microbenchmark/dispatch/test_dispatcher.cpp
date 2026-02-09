@@ -453,16 +453,17 @@ public:
 
         // Relevel once before generating commands
         device_data.relevel(tt::CoreType::WORKER);
+        constexpr uint32_t payload_unit = sizeof(uint32_t);
 
         // Generate random-sized packed write commands until transfer_size_bytes_ is consumed
         // Each command is constrained by:
         // 1. Command entry size <= max_fetch_bytes_ : the whole packet must within prefetcher buffer limits
         // 2. Payload <= dispatch_cb_page_size_bytes : when 'no_stride' mode is used (data replication),
         // the payload + header + sub-commands must fit within the dispatch buffer page size
-        while (remaining_bytes > 0) {
+        while (remaining_bytes > payload_unit) {
             // Generate random transfer size
-            uint32_t xfer_size_bytes =
-                payload_generator_->get_random_size(dispatch_buffer_page_size_, 1, remaining_bytes);
+            uint32_t xfer_size_bytes = payload_generator_->get_random_size(
+                dispatch_buffer_page_size_ / payload_unit, payload_unit, remaining_bytes);
 
             // Random no_stride flag
             bool no_stride = payload_generator_->get_rand_bool();
@@ -471,10 +472,16 @@ public:
             if (no_stride) {
                 const uint32_t max_allowed = dispatch_buffer_page_size_ - sizeof(CQDispatchCmd) - sub_cmds_bytes;
                 if (xfer_size_bytes > max_allowed) {
-                    log_warning(tt::LogTest, "Clamping packed_write cmd w/ no_stride to fit dispatch page");
+                    log_warning(
+                        tt::LogTest,
+                        "Clamping packed_write cmd w/ no_stride to fit dispatch page, max allowed: {}, "
+                        "xfer_size_bytes: {}",
+                        max_allowed,
+                        xfer_size_bytes);
                     xfer_size_bytes = max_allowed;
                 }
             }
+            uint32_t prev_xfer_size_bytes = xfer_size_bytes;
 
             // Clamp to fit within max_fetch_bytes_
             xfer_size_bytes = clamp_to_max_fetch(
@@ -486,6 +493,11 @@ public:
 
             // Generate payload
             std::vector<uint32_t> payload = payload_generator_->generate_payload_with_core(fw, xfer_size_bytes);
+            TT_FATAL(
+                !payload.empty(),
+                "Generated payload size is 0, xfer_size_bytes: {}, prev_xfer_size_bytes: {}",
+                xfer_size_bytes,
+                prev_xfer_size_bytes);
 
             // Update expected device_data for all cores
             Common::DeviceDataUpdater::update_packed_write(payload, device_data, worker_cores, l1_alignment);
