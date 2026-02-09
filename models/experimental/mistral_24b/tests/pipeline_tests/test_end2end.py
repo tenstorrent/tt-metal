@@ -232,7 +232,24 @@ def run_generation_exactly_like_test_end2end(
 
     logger.info("Running Vision Model...")
     generator = Generator([text_model], [model_args], vision_model.mesh_device, tokenizer=model_args.tokenizer)
+
     tt_kv_cache = [[l.attention.layer_past for l in text_model.layers]] if paged_attention_config else None
+
+    # warmup the model
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=True if paged_attention_config else False,
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
+    )
+    generator.warmup_model_decode(
+        kv_cache=tt_kv_cache,
+        enable_trace=True if paged_attention_config else False,
+        max_batch_size=model_args.max_batch_size,
+        num_blocks=paged_attention_config.max_num_blocks,
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
+    )
 
     input_tokens_prefill = input_ids
     batch_size = input_tokens_prefill.shape[0]

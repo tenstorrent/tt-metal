@@ -187,8 +187,10 @@ class TtTransformer(LightweightModule):
                 mesh_device=self.mesh_device,
                 tt_ccl=self.tt_ccl,
             )
+            self._supports_on_device_sampling = True
         else:
             self.tt_ccl = self.tt_ccl_decode
+            self._supports_on_device_sampling = False
 
     def prepare_prefill_inputs_host(
         self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None, batch_size=1

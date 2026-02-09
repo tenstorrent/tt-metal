@@ -432,6 +432,22 @@ def test_gpt_oss_demo(
     # Create generator (match tt-transformers pattern)
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
+    # warmup the model
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=enable_prefill_trace,
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
+    )
+    generator.warmup_model_decode(
+        kv_cache=tt_kv_cache,
+        enable_trace=enable_decode_trace,
+        max_batch_size=global_batch_size,
+        num_blocks=paged_attention_config.max_num_blocks,
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
+    )
+
     profiler.end(f"generator_setup", iteration=batch_idx)
 
     # Prepare input prompts
@@ -893,18 +909,19 @@ def test_gpt_oss_demo(
 
         else:
             # Standard sequential prefill (batch_size < num_rows)
-            logger.info("Starting prefill warmup...")
-            profiler.start(f"compile_prefill", iteration=batch_idx)
-            generator.prefill_forward_text(
-                input_tokens_prefill_pt[:1],
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                prompt_lens=decoding_pos,
-                enable_trace=enable_prefill_trace,
-                warmup_prefill=False,
-            )
-            profiler.end(f"compile_prefill", iteration=batch_idx)
-            logger.info("Finished prefill warmup")
+            if not generator.already_warmed_up_prefill:
+                logger.info("Starting prefill warmup...")
+                profiler.start(f"compile_prefill", iteration=batch_idx)
+                generator.prefill_forward_text(
+                    input_tokens_prefill_pt[:1],
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    prompt_lens=decoding_pos,
+                    enable_trace=enable_prefill_trace,
+                    warmup_prefill=False,
+                )
+                profiler.end(f"compile_prefill", iteration=batch_idx)
+                logger.info("Finished prefill warmup")
 
             logger.info(f"Starting prefill...")
             profiler.start(f"inference_prefill", iteration=batch_idx)

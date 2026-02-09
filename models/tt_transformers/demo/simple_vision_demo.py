@@ -328,6 +328,7 @@ def test_multimodal_demo_text(
     processor = AutoProcessor.from_pretrained(ckpt_dir, local_files_only=is_ci_env)
     tokenizer = processor.tokenizer
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
+    # call warmup_model_prefill and warmup_model_decode when vision warmup is implemented
 
     xattn_caches = [model.setup_cache(model_args[i].max_batch_size) for i, model in enumerate(generator.model)]
 

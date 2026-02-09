@@ -154,6 +154,22 @@ def generate(model, processed_inputs, model_args, page_table=None, paged_attenti
     # Setup KV cache (exactly like test_end2end.py)
     tt_kv_cache = [[l.attention.layer_past for l in model.layers]] if paged_attention_config else None
 
+    # warmup the model
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=True if paged_attention_config else False,
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
+    )
+    generator.warmup_model_decode(
+        kv_cache=tt_kv_cache,
+        enable_trace=True if paged_attention_config else False,
+        max_batch_size=model_args.max_batch_size,
+        num_blocks=paged_attention_config.max_num_blocks,
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
+    )
+
     # # Text generation setup (exactly like test_end2end.py)
     input_tokens_prefill = input_ids
     batch_size = input_tokens_prefill.shape[0]

@@ -593,16 +593,33 @@ def test_mlp1d_llama_demo(
     # Create generator
     generator = Generator(model_list, model_args_list, mesh_device, tokenizer=tokenizer)
 
-    # --- Prefill Phase ---
-    logger.info("Starting prefill warmup...")
-    profiler.start("compile_prefill")
-    logits = generator.prefill_forward_text(
-        input_tokens_prefill_pt,
-        page_table=page_table,
+    # warmup the model
+    generator.warmup_model_prefill(
         kv_cache=tt_kv_cache_list,
-        prompt_lens=decoding_pos,
+        enable_trace=True,
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
     )
-    profiler.end("compile_prefill")
+    generator.warmup_model_decode(
+        kv_cache=tt_kv_cache_list,
+        enable_trace=not measure_accuracy,
+        max_batch_size=batch_size,
+        num_blocks=paged_attention_config.max_num_blocks,
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
+    )
+
+    # --- Prefill Phase ---
+    if not generator.already_warmed_up_prefill:
+        logger.info("Starting prefill warmup...")
+        profiler.start("compile_prefill")
+        logits = generator.prefill_forward_text(
+            input_tokens_prefill_pt,
+            page_table=page_table,
+            kv_cache=tt_kv_cache_list,
+            prompt_lens=decoding_pos,
+        )
+        profiler.end("compile_prefill")
 
     logger.info("Starting prefill inference...")
     profiler.start("inference_prefill")

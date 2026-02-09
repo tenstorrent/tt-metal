@@ -841,6 +841,22 @@ def test_demo_text(
 
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
+    # warmup the model
+    generator.warmup_model_prefill(
+        kv_cache=tt_kv_cache,
+        enable_trace=enable_trace,
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
+    )
+    generator.warmup_model_decode(
+        kv_cache=tt_kv_cache,
+        enable_trace=enable_trace,
+        max_batch_size=global_batch_size,
+        num_blocks=page_params["page_max_num_blocks"],
+        can_sample_on_device=generator.metal_supports_on_device_sampling(),
+        non_greedy_decoding_on_device=generator.metal_supports_on_device_sampling(),
+    )
+
     if token_accuracy:
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
 
@@ -888,16 +904,17 @@ def test_demo_text(
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
-        logger.info("Starting prefill warmup...")
-        profiler.start(f"compile_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-        )
-        profiler.end(f"compile_prefill", iteration=batch_idx)
-        logger.info("Finished prefill warmup")
+        if not generator.already_warmed_up_prefill:
+            logger.info("Starting prefill warmup...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
+            logits = generator.prefill_forward_text(
+                input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+            )
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Finished prefill warmup")
 
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)

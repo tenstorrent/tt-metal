@@ -103,6 +103,7 @@ def demo_warmup(args):
     data_args = replace(args.data, max_output_tokens=2)
 
     generator = build_generator(model_args, tt_args)
+    # ovde se init generator
     # Load the model and tokenizer
     model, tokenizer = generator.model, generator.tokenizer
 
@@ -147,7 +148,7 @@ def run_demo(args):
                 logger.info(f"Loaded {len(ground_truth_outputs)} ground truth outputs")
 
     generator = build_generator(model_args, tt_args)
-
+    # ovde se init generator
     # Load the model and tokenizer
     model, tokenizer = generator.model, generator.tokenizer
 
