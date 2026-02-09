@@ -49,4 +49,5 @@ set(UNIT_TESTS_API_SOURCES
     test_blockfloat_common.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
+    test_runtime_context.cpp
 )
