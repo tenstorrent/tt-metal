@@ -18,6 +18,7 @@
 #include "ttnn-nanobind/bfloat16_type_caster.hpp"  // NOLINT - for nanobind bfloat16 binding support.
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/nanobind_helpers.hpp"
+#include "ttnn-nanobind/small_vector_caster.hpp"  // NOLINT - for nanobind SmallVector binding support.
 #include "ttnn-nanobind/types.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -29,7 +30,7 @@ template <typename creation_operation_t, typename fill_value_t>
 auto create_nanobind_full_overload() {
     return ttnn::nanobind_overload_t{
         [](const creation_operation_t& self,
-           const std::vector<uint32_t>& shape,
+           const ttsl::SmallVector<uint32_t>& shape,
            const fill_value_t fill_value,
            const std::optional<DataType>& dtype,
            const std::optional<Layout>& layout,
@@ -209,7 +210,7 @@ void bind_full_operation_with_hard_coded_value(
         doc,
         ttnn::nanobind_overload_t{
             [](const creation_operation_t& self,
-               const std::vector<uint32_t>& shape,
+               const ttsl::SmallVector<uint32_t>& shape,
                const std::optional<DataType>& dtype,
                const std::optional<Layout>& layout,
                const std::optional<MeshDevice*> device,
@@ -393,7 +394,7 @@ void bind_empty_operation(nb::module_& mod, const creation_operation_t& operatio
         doc,
         ttnn::nanobind_overload_t{
             [](const creation_operation_t& self,
-               const std::vector<uint32_t>& shape,
+               const ttsl::SmallVector<uint32_t>& shape,
                const DataType& dtype,
                const Layout& layout,
                MeshDevice* device,

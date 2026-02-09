@@ -8,9 +8,11 @@ import math
 import pytest
 
 from tests.sweep_framework.sweep_utils.max_pool2d_with_indices_common import run_max_pool2d_with_indices
+from models.common.utility_functions import is_watcher_enabled, skip_with_watcher
 
 
 @pytest.mark.parametrize("in_c", [1, 16, 24, 32, 40, 48, 56, 64])
+@skip_with_watcher("Test is not passing with watcher enabled github issue #37195")
 def test_mpwi_20_core_C_dims(device, in_c):
     in_n = 1
     in_h = 159
@@ -81,6 +83,7 @@ def test_mpwi_20_core_C_dims(device, in_c):
     ],
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
+@skip_with_watcher("Test is not passing with watcher enabled github issue #37195")
 def test_mpwi_kernel_sizes(device, ttnn_dtype, input_spec):
     (
         in_n,
@@ -142,6 +145,7 @@ def test_mpwi_kernel_sizes(device, ttnn_dtype, input_spec):
     ],
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@skip_with_watcher("Test is not passing with watcher enabled github issue #37195")
 def test_mpwi_general(device, ttnn_dtype, input_spec):
     (
         in_n,
@@ -158,6 +162,18 @@ def test_mpwi_general(device, ttnn_dtype, input_spec):
         dilation_w,
         ceil_mode,
     ) = input_spec
+
+    if (
+        is_watcher_enabled()
+        and ttnn_dtype == ttnn.bfloat16
+        and input_spec
+        in (
+            [2, 40, 100, 100, 3, 3, 2, 2, 0, 1, 2, 2, True],
+            [3, 56, 85, 85, 3, 3, 3, 3, 1, 0, 2, 2, False],
+            [4, 24, 56, 64, 3, 3, 2, 1, 1, 1, 3, 2, True],
+        )
+    ):
+        pytest.skip("Test is not passing with watcher enabled github issue #29024")
 
     run_max_pool2d_with_indices(
         in_n,
@@ -195,6 +211,7 @@ def test_mpwi_general(device, ttnn_dtype, input_spec):
     ],
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@skip_with_watcher("Test is not passing with watcher enabled github issue #37195")
 def test_mpwi_dram_slice(device, ttnn_dtype, input_spec):
     (
         in_n,

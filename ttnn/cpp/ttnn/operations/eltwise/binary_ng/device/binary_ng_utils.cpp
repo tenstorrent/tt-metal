@@ -618,7 +618,7 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& t
     return tensor_spec.memory_config().shard_spec();
 }
 
-inline auto is_uneven(const TensorSpec& t) {
+bool is_uneven(const TensorSpec& t) {
     if (not t.memory_config().is_sharded()) {
         return false;
     }
@@ -627,6 +627,7 @@ inline auto is_uneven(const TensorSpec& t) {
     const auto& shard = get_shard_spec(t)->shape;
     const auto rank = shape.rank();
 
+    TT_FATAL(rank >= 2, "Rank must be at least 2");
     // Compute product of all dimensions except the last
     uint64_t volume_except_last = 1;
     for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
@@ -636,6 +637,9 @@ inline auto is_uneven(const TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
 }
 
+// the check is based on user facing information, input tensors and output memory config
+// more info may be checked in other places, such as actual output is uneven or not
+// this function is called in both earlier and later stages of the program execution
 bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c) {
     if (!c.is_sharded()) {
         return false;

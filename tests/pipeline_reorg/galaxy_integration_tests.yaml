@@ -11,17 +11,16 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# Wormhole Galaxy integration tests
-# Llama3 (commented out; uncomment and add ttnn.integration budget when enabling)
 # - name: Galaxy Llama3 integration tests
-#   cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model llama3
+#   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model llama3
 #   model: llama3
 #   sku: wh_galaxy
 #   owner_id: U053W15B6JF # Djordje Ivanovic
 #   team: ttnn
 #   timeout: 70
+
 - name: Galaxy resnet50 integration tests
-  cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model resnet50
+  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model resnet50
   model: resnet50
   sku: wh_galaxy
   owner_id: U052J2QDDKQ # Pavle Josipovic
@@ -29,7 +28,7 @@
   timeout: 50
 
 - name: Galaxy unit/distributed integration tests
-  cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model unit
+  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model unit
   model: unit
   sku: wh_galaxy
   owner_id: UBHPP2NDP # Joseph Chu
@@ -37,7 +36,7 @@
   timeout: 50
 
 - name: Galaxy SD3.5 integration tests
-  cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model sd35
+  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model sd35
   model: sd35
   sku: wh_galaxy
   owner_id: U03FJB5TM5Y # Colman Glagovich
@@ -45,7 +44,7 @@
   timeout: 50
 
 - name: Galaxy Wan2.2 integration tests
-  cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model wan22
+  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model wan22
   model: wan22
   sku: wh_galaxy
   owner_id: U03FJB5TM5Y # Colman Glagovich
@@ -53,7 +52,7 @@
   timeout: 40
 
 - name: Galaxy mochi integration tests
-  cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model mochi
+  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model mochi
   model: mochi
   sku: wh_galaxy
   owner_id: U09ELB03XRU # Stephen Osborne
@@ -61,7 +60,7 @@
   timeout: 80
 
 - name: Galaxy Flux.1 integration tests
-  cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model flux1
+  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model flux1
   model: flux1
   sku: wh_galaxy
   owner_id: U08TED0JM9D # Samuel Adesoye
@@ -69,7 +68,7 @@
   timeout: 50
 
 - name: Galaxy Motif integration tests
-  cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model motif
+  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model motif
   model: motif
   sku: wh_galaxy
   owner_id: U08TED0JM9D # Samuel Adesoye
@@ -77,7 +76,7 @@
   timeout: 10
 
 - name: Galaxy Qwen-Image integration tests
-  cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model qwenimage
+  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model qwenimage
   model: qwenimage
   sku: wh_galaxy
   owner_id: U08TED0JM9D # Samuel Adesoye
