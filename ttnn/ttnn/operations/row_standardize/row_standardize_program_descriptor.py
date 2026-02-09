@@ -71,10 +71,10 @@ def create_program_descriptor(
     # This matches the spec: when fp32_dest_acc_en is enabled, intermediates are f32
     is_float32 = dtype == ttnn.float32
     if is_float32:
-        intermed_fmt = ttnn.DataFormat.Float32
+        intermed_fmt = ttnn.float32
         intermed_tile_size = 4096
     else:
-        intermed_fmt = ttnn.DataFormat.Float16_b
+        intermed_fmt = ttnn.bfloat16
         intermed_tile_size = 2048
 
     # ========== 2. CORE GRID AND WORK DISTRIBUTION ==========
@@ -89,15 +89,18 @@ def create_program_descriptor(
 
     scaler_value = 1.0 / float(W)
 
+    # CRITICAL: Reduce scaler is ALWAYS packed as bfloat16 (bf16 << 16 | bf16)
+    # regardless of input dtype. This matches the softmax reference which always
+    # uses Float16_b for the scaler CB. generate_reduce_scaler expects this format.
+    scaler_bf16 = _float_to_bfloat16(scaler_value)
+    scaler_packed = (scaler_bf16 << 16) | scaler_bf16
+
     if is_float32:
-        # Float32: reinterpret as uint32
-        scaler_packed = struct.unpack("I", struct.pack("f", scaler_value))[0]
+        # Float32 epsilon: reinterpret float bits as uint32
         epsilon_packed = struct.unpack("I", struct.pack("f", epsilon))[0]
     else:
-        # Bfloat16: convert to bf16 and pack as (bf16 << 16 | bf16)
-        scaler_bf16 = _float_to_bfloat16(scaler_value)
+        # Bfloat16 epsilon: pack as (bf16 << 16 | bf16)
         epsilon_bf16 = _float_to_bfloat16(epsilon)
-        scaler_packed = (scaler_bf16 << 16) | scaler_bf16
         epsilon_packed = (epsilon_bf16 << 16) | epsilon_bf16
 
     # ========== 4. CIRCULAR BUFFER DESCRIPTORS ==========
@@ -133,15 +136,18 @@ def create_program_descriptor(
     )
 
     # cb_scaler (c_1): Reduce scaler tile (persistent), 1 tile
+    # CRITICAL: Scaler CB is ALWAYS bfloat16, matching softmax reference pattern.
+    # generate_reduce_scaler writes packed bf16 (bf16 << 16 | bf16) regardless of input dtype.
+    bf16_tile_size = 2048  # 32*32*2 bytes for bfloat16
     cb_descriptors.append(
         ttnn.CBDescriptor(
-            total_size=tile_size,
+            total_size=bf16_tile_size,
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=1,
-                    data_format=dtype,
-                    page_size=tile_size,
+                    data_format=ttnn.bfloat16,
+                    page_size=bf16_tile_size,
                 )
             ],
         )
