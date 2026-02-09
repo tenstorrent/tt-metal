@@ -100,8 +100,8 @@ medpy==0.5.2 # Required for vanilla unet
 kagglehub==0.2.9
 efficientnet-pytorch==0.7.1
 mmcv # Required for UniAD model
-casadi==3.7.1 # Required for UniAD model
-mmcv-full==1.7.2 #Required for UniAD model
+casadi # Required for UniAD model
+mmcv-full #Required for UniAD model
 
 # CPU-only torch for x86_64 to avoid installing CUDA dependencies on dev machines
 --extra-index-url https://download.pytorch.org/whl/cpu
