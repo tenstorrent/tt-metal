@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
-from dataclasses import dataclass, fields
+from dataclasses import fields
 from typing import List
 
 import torch
@@ -20,6 +20,7 @@ from models.common.llama_models import (
     sample_top_p,
 )
 from models.common.sampling.generator import format_sampling_params
+from models.common.warmup import DecodeWarmupMixin
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
@@ -28,24 +29,6 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
-
-
-@dataclass(frozen=True)
-class SamplingParams:
-    """
-    Used in Generator decode forward functions for greedy decoding / sampling on device.
-    The same data class exists in vLLM at vllm/worker/tt_model_runner.py.
-    """
-
-    temperature: float | list[float]
-    top_k: int | list[int]
-    top_p: float | list[float]
-    presence_penalty: float | list[float] = 0.0
-    frequency_penalty: float | list[float] = 0.0
-    repetition_penalty: float | list[float] = 1.0
-    seed: int | list[int] | None = None
-    enable_log_probs: bool | list[bool] = False
-
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
 
@@ -106,7 +89,7 @@ def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
 
 
-class Generator:
+class Generator(DecodeWarmupMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -142,6 +125,15 @@ class Generator:
         "supports_prefix_caching": True,
     }
 
+    @property
+    def supports_non_greedy_decoding_on_device(self):
+        if not hasattr(self, "model") or not self.model:
+            return False
+
+        model_instance = self.model[0] if isinstance(self.model, list) else self.model
+        sampling_module = getattr(model_instance, "sampling", None)
+        return sampling_module is not None
+
     def _chunk_sampling_param(self, values):
         if isinstance(values, List):
             return split_list(values, self.data_parallel)
@@ -157,11 +149,19 @@ class Generator:
         self,
         kv_cache,
         enable_trace,
-        sampling_params=[None],
+        sample_on_device_mode=None,
+        non_greedy_decoding_on_device=False,
+        max_batch_size=1,
     ):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
+
+        sampling_params = self._create_sampling_params(
+            sample_on_device_mode,
+            non_greedy_decoding_on_device,
+            max_batch_size,
+        )
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
 
