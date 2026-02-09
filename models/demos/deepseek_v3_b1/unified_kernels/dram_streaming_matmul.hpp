@@ -12,11 +12,11 @@
 #include "api/dataflow/dataflow_api.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/tile_move_copy.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"

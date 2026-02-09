@@ -17,7 +17,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary.h"
-#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_moe_gate.h"
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_moe_gate.h"
 #endif
 
 namespace deepseek_b1_ops {
