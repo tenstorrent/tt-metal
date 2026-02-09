@@ -5,7 +5,7 @@
 // Programming example: run 100 programs with assigned IDs and attach a real-time
 // profiler callback that writes each program's timing data to a CSV file.
 // Similar to test_multi_op but uses the real-time profiler (D2H socket) and
-// RegisterProgramRealtimeCallback to stream records to a CSV.
+// RegisterProgramRealtimeProfilerCallback to stream records to a CSV.
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -124,8 +124,8 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        tt::tt_metal::experimental::ProgramRealtimeCallbackHandle callback_handle =
-            tt::tt_metal::experimental::RegisterProgramRealtimeCallback(
+        tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle callback_handle =
+            tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
                 [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                     WriteRealtimeRecordToCsv(record);
                 });
@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
 
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-        tt::tt_metal::experimental::UnregisterProgramRealtimeCallback(callback_handle);
+        tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(callback_handle);
 
         {
             std::lock_guard<std::mutex> lock(g_csv_mutex);

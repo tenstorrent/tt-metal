@@ -60,17 +60,18 @@ std::vector<std::string> GetKernelSourcesVecForRuntimeId(uint64_t runtime_id) {
     return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesVecForRuntimeId(runtime_id);
 }
 
-ProgramRealtimeCallbackHandle RegisterProgramRealtimeCallback(ProgramRealtimeCallback callback) {
-    return tt::tt_metal::MetalContext::instance().data_collector()->RegisterProgramRealtimeCallback(
+ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
+    ProgramRealtimeProfilerCallback callback) {
+    return tt::tt_metal::MetalContext::instance().data_collector()->RegisterProgramRealtimeProfilerCallback(
         std::move(callback));
 }
 
-void UnregisterProgramRealtimeCallback(ProgramRealtimeCallbackHandle handle) {
-    tt::tt_metal::MetalContext::instance().data_collector()->UnregisterProgramRealtimeCallback(handle);
+void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle) {
+    tt::tt_metal::MetalContext::instance().data_collector()->UnregisterProgramRealtimeProfilerCallback(handle);
 }
 
-void InvokeProgramRealtimeCallbacks(const ProgramRealtimeRecord& record) {
-    tt::tt_metal::MetalContext::instance().data_collector()->InvokeProgramRealtimeCallbacks(record);
+void InvokeProgramRealtimeProfilerCallbacks(const ProgramRealtimeRecord& record) {
+    tt::tt_metal::MetalContext::instance().data_collector()->InvokeProgramRealtimeProfilerCallbacks(record);
 }
 
 }  // namespace tt
@@ -78,12 +79,13 @@ void InvokeProgramRealtimeCallbacks(const ProgramRealtimeRecord& record) {
 // Public experimental API — delegates to the internal tt:: functions.
 namespace tt::tt_metal::experimental {
 
-ProgramRealtimeCallbackHandle RegisterProgramRealtimeCallback(ProgramRealtimeCallback callback) {
-    return tt::RegisterProgramRealtimeCallback(std::move(callback));
+ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
+    ProgramRealtimeProfilerCallback callback) {
+    return tt::RegisterProgramRealtimeProfilerCallback(std::move(callback));
 }
 
-void UnregisterProgramRealtimeCallback(ProgramRealtimeCallbackHandle handle) {
-    tt::UnregisterProgramRealtimeCallback(handle);
+void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle) {
+    tt::UnregisterProgramRealtimeProfilerCallback(handle);
 }
 
 }  // namespace tt::tt_metal::experimental

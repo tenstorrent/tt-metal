@@ -29,8 +29,8 @@ enum data_collector_t {
 
 // Aliases to the public experimental types for internal use.
 using ProgramRealtimeRecord = tt::tt_metal::experimental::ProgramRealtimeRecord;
-using ProgramRealtimeCallback = tt::tt_metal::experimental::ProgramRealtimeCallback;
-using ProgramRealtimeCallbackHandle = tt::tt_metal::experimental::ProgramRealtimeCallbackHandle;
+using ProgramRealtimeProfilerCallback = tt::tt_metal::experimental::ProgramRealtimeProfilerCallback;
+using ProgramRealtimeProfilerCallbackHandle = tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
 
 /* Record a single dispatch write, to be dumped with stats on program exit. Should only be called once per transaction
  * per program (if a program is enqueued multiple times, don't call this multiple times).
@@ -71,13 +71,13 @@ std::vector<std::string> GetKernelSourcesVecForRuntimeId(uint64_t runtime_id);
 // Register a callback to be invoked when real-time profiler data arrives.
 // Multiple callbacks can be registered; they are called in order of registration.
 // Returns a handle that can be used to unregister the callback.
-ProgramRealtimeCallbackHandle RegisterProgramRealtimeCallback(ProgramRealtimeCallback callback);
+ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallback callback);
 
 // Unregister a previously registered callback by its handle.
-void UnregisterProgramRealtimeCallback(ProgramRealtimeCallbackHandle handle);
+void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle);
 
 // Invoke all registered real-time profiler callbacks with the given record.
 // Called internally by the real-time profiler receiver thread.
-void InvokeProgramRealtimeCallbacks(const ProgramRealtimeRecord& record);
+void InvokeProgramRealtimeProfilerCallbacks(const ProgramRealtimeRecord& record);
 
 }  // end namespace tt
