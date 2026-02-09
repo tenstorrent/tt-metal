@@ -374,10 +374,11 @@ def test_post_sdpa(
     # ========================================================================
     # Create global semaphores for CCL
     # ========================================================================
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-    semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
+    ccl_sender_core = ttnn.CoreCoord(11, 9)
+    ccl_receiver_core = ttnn.CoreCoord(12, 9)
+    ccl_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ccl_sender_core, ccl_receiver_core)})
+    semaphore1 = ttnn.create_global_semaphore(submesh, ccl_cores, 0)
+    semaphore2 = ttnn.create_global_semaphore(submesh, ccl_cores, 0)
     semaphores = [semaphore1, semaphore2]
     logger.info("Created global semaphores for CCL synchronization")
 
