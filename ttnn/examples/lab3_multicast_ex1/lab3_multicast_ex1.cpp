@@ -231,6 +231,10 @@ void multicast_tensor_tensix(
     TT_FATAL(total_elements % elements_per_tile == 0, "Total elements must be divisible by elements per tile");
     const uint32_t n_tiles = total_elements / elements_per_tile;
 
+    // Number of tiles to multicast per batch (compile-time constant for kernel optimization).
+    constexpr uint32_t tiles_per_batch = 10;
+    TT_FATAL(n_tiles % tiles_per_batch == 0, "n_tiles must be divisible by tiles_per_batch");
+
     // Create ttnn::Tensor objects for the input and output data.
     // We use TILE layout as that's what the hardware natively operates on.
     // Tensors are allocated in device DRAM (i.e. DRAM that is directly attached to the Tensix processor,
@@ -277,27 +281,27 @@ void multicast_tensor_tensix(
     uint32_t tile_sent_semaphore = CreateSemaphore(prog_state.program, all_cores_logical, 0);
 
     ////////// CIRCULAR BUFFER SETUP //////////
-    // Create circular buffers with 2 tiles for double-buffering.
-    // Double-buffering allows overlapping data movement and computation:
-    // while one tile is being processed, the next can be loaded.
-    constexpr uint32_t tiles_per_cb = 2;
-    create_cb(prog_state.program, all_cores_logical, tiles_per_cb, tt::CBIndex::c_0);
-    create_cb(prog_state.program, all_cores_logical, tiles_per_cb, tt::CBIndex::c_16);
+    // CB c_0: tiles_per_batch * 2 for double-buffering (sender reads/mcasts one batch while next is loading).
+    // CB c_16: 2 tiles for compute kernel's copy output (tiles_copy produces one tile at a time).
+    create_cb(prog_state.program, all_cores_logical, tiles_per_batch * 2, tt::CBIndex::c_0);
+    create_cb(prog_state.program, all_cores_logical, 2, tt::CBIndex::c_16);
 
     ////////// DATA MOVEMENT CONFIG SETUP //////////
-    // Compile-time args for mcast_sender kernel to read input tiles from DRAM.
-    // TensorAccessorArgs extracts data distribution details from MeshBuffer so kernels
-    // don't need to deal with low-level details like bank IDs.
+    // Compile-time args for mcast_sender kernel: TensorAccessorArgs for DRAM layout, tiles_per_batch.
     std::vector<uint32_t> mcast_sender_compile_args;
     TensorAccessorArgs(*src_mesh_buffer).append_to(mcast_sender_compile_args);
+    mcast_sender_compile_args.push_back(tiles_per_batch);
     DataMovementConfig mcast_sender_config = {
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
         .compile_args = mcast_sender_compile_args};
 
-    // mcast_receiver uses the default config (no compile-time args needed).
+    // mcast_receiver needs tiles_per_batch as compile-time arg to match sender's batch size.
+    std::vector<uint32_t> mcast_receiver_compile_args = {tiles_per_batch};
     DataMovementConfig mcast_receiver_config = {
-        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::RISCV_0_default,
+        .compile_args = mcast_receiver_compile_args};
 
     std::vector<uint32_t> write_tiles_compile_args;
     TensorAccessorArgs(*dst_mesh_buffer).append_to(write_tiles_compile_args);
