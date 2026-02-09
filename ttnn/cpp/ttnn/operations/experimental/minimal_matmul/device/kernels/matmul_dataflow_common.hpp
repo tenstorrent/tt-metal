@@ -235,7 +235,11 @@ void read_ternary_blocks_sync(
         uint32_t ternary_b_write_ptr = get_write_ptr(ternary_b_cb);
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
-                break;  // Don't write tiles if out of bound
+                // Do not move tile data into CB if tile is outside ternary/output tensor.
+                // This can happen when ternary/output tensor shape is not a multiple of block sizes:
+                // For instance, if tensor shape is (M_tiles=7, N_tiles=3), but block sizes are (M_block_tiles=4,
+                // N_block_tiles=4)
+                break;
             }
             if (i < shape.logical_d0) {
                 uint32_t tile_id = i * shape.logical_d1 + j;
@@ -256,7 +260,11 @@ void read_ternary_blocks_sync(
     uint32_t ternary_a_write_ptr = get_write_ptr(ternary_a_cb);
     for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
         if (n_tile_id >= shape.logical_d1) {
-            break;  // Don't write tiles if out of bound
+            // Do not move tile data into CB if tile is outside ternary/output tensor.
+            // This can happen when ternary/output tensor shape is not a multiple of block sizes:
+            // For instance, if tensor shape is (M_tiles=7, N_tiles=3), but block sizes are (M_block_tiles=4,
+            // N_block_tiles=4)
+            break;
         }
 
         noc_async_read_tile(n_tile_id, ternary_a_accessor, ternary_a_write_ptr);

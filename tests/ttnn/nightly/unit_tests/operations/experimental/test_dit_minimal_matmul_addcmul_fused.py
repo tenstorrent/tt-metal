@@ -5,7 +5,6 @@
 import pytest
 import torch
 import ttnn
-from loguru import logger
 
 from models.common.utility_functions import comp_pcc
 
@@ -13,7 +12,6 @@ from models.common.utility_functions import comp_pcc
 def assert_quality(torch_output, tt_output):
     pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
     relative_rmse_val = torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / torch_output.std().item()
-    logger.info(f"PCC: {pcc_val:.7f}, Relative RMSE: {relative_rmse_val:.4f}")
 
     return {
         "pcc": pcc_val,
@@ -99,7 +97,6 @@ def run_dit_minimal_matmul_addcmul_fused_test(
 
     check_result = assert_quality(torch_expected_fused, tt_output_torch)
 
-    logger.info(f"Test passed for M={M}, K={K}, N={N}")
     return check_result
 
 
@@ -129,7 +126,6 @@ def test_dit_minimal_matmul_addcmul_fused_basic(device, use_bias, dtype):
 )
 def test_dit_minimal_matmul_addcmul_fused_wan2_shapes(device, M, K, N, config_name):
     """Test with actual Wan2.2 transformer shapes."""
-    logger.info(f"Testing Wan2.2 shape configuration: {config_name}")
 
     M_block = 8
     K_block = 8
