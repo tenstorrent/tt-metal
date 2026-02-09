@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
 
