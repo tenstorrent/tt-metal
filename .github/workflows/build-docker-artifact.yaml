@@ -413,14 +413,9 @@ jobs:
           # Remove dots from version for target name (22.04 -> 2204)
           VERSION_NODOT="${VERSION//.}"
 
-          # Hash requirements files + Dockerfile.python to detect changes
-          VENV_HASH=$(cat \
-            dockerfile/Dockerfile.python \
-            tt_metal/python_env/requirements-dev.txt \
-            docs/requirements-docs.txt \
-            tests/sweep_framework/requirements-sweeps.txt \
-            tools/triage/requirements.txt \
-            | sha1sum | cut -d' ' -f1 | head -c 12)
+          # Hash Dockerfile.python + its COPY source files (requirements files)
+          # dockerfile-hash.sh automatically discovers COPY sources from the Dockerfile
+          VENV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.python)
 
           # Generate tags: ghcr.io/<repo>/tt-metalium/python-venv/<type>:<ubuntu-version>-<hash>
           BASE="ghcr.io/${{ github.repository }}/tt-metalium/python-venv"
