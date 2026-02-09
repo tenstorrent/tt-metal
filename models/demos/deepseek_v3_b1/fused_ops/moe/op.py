@@ -23,7 +23,10 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+import torch
+
 import ttnn
+from models.demos.deepseek_v3_b1.fused_ops.face_view_utils import FACE_HEIGHT, FACE_WIDTH, can_use_face_view
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import (
     get_max_page_size_and_num_pages,
     setup_eltwise_add,
@@ -307,6 +310,47 @@ class _MoeSharedExpertContext:
     gu_k_offset_core_values: list
     gu_weights_cb_descriptor: Any
     gu_out_cb_descriptor: Any
+
+    # Gate/Up Gather + Gated Reduce
+    a_cores_list: list
+    b_cores_list: list
+    a_compute_grid: Any
+    b_compute_grid: Any
+    group1_cb: int  # gate gather dst (on sender)
+    group2_cb: int  # up gather dst (on sender)
+    intermed_cb: int  # gated reduce intermediate (on sender)
+    mcast_src_cb: int  # gated reduce output (on sender)
+    n_parallel: int
+    k_parallel: int
+    tiles_per_k: int
+    k_num_tiles: int
+    num_compute_cores: int  # 64 per branch
+    use_face_view: bool
+    face_tile_desc: Any
+    face_tile_size: Any
+    kernel_tiles_per_k: int
+    kernel_k_num_tiles: int
+    mcast_src_num_pages: int
+    reduce_tile_size: int
+    input_tile_size: int
+    gu_gather_data_size_bytes: int
+    total_gather_tiles: int
+    gather_dest_noc_core: Any
+    mcast_gather_core_grid: Any
+    ag_receiver_semaphore_id: int
+    bg_receiver_semaphore_id: int
+    ag_noc1_receiver_semaphore_id: int
+    bg_noc1_receiver_semaphore_id: int
+    ag_dummy_tensor: Any
+    bg_dummy_tensor: Any
+    ag_receiver_data_addr: int
+    bg_receiver_data_addr: int
+    group1_cb_descriptor: Any
+    group2_cb_descriptor: Any
+    intermed_cb_descriptor: Any
+    mcast_src_cb_descriptor: Any
+    ag_sender_idx_core_values: list
+    bg_sender_idx_core_values: list
 
 
 class MoeRoutedExpertOp:
@@ -1203,10 +1247,15 @@ class MoeSharedExpertOp:
 
     @staticmethod
     def _setup_dimensions(
+        device,
         shared_gate_up_weights_tensor,
         num_tiles_k,
         tile_1x32_size,
         data_format,
+        input_tile,
+        input_tile_size,
+        sender_core,
+        sender_core_grid,
         k_parallel=8,
         n_parallel=8,
     ):
@@ -1214,10 +1263,15 @@ class MoeSharedExpertOp:
         Compute shared expert dimensions and build _MoeSharedExpertContext.
 
         Args:
+            device: TT device (single chip)
             shared_gate_up_weights_tensor: Gate/Up weights tensor for shared expert
             num_tiles_k: Number of K tiles (from routed expert context)
             tile_1x32_size: Size of a 1x32 tile in bytes
             data_format: Data format (dtype)
+            input_tile: Input tile format (e.g., Tile((1, 32)))
+            input_tile_size: Size of input tile in bytes
+            sender_core: The mcast/gather core (e.g., CoreCoord(12, 9))
+            sender_core_grid: CoreRangeSet for sender core
             k_parallel: K parallelism factor
             n_parallel: N parallelism factor
 
@@ -1226,41 +1280,184 @@ class MoeSharedExpertOp:
         """
         from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 
+        # ==================================================================
         # CB indices
+        # ==================================================================
         shared_gu_weights_cb = 26
         shared_gu_out_cb = 27
+        shared_group1_cb = 28  # gate gather dst on sender
+        shared_group2_cb = 29  # up gather dst on sender
+        shared_intermed_cb = 30  # gated reduce intermediate on sender
+        shared_mcast_src_cb = 31  # gated reduce output on sender
 
-        shared_num_compute_cores = 64  # per branch (gate/up)
-        assert k_parallel * n_parallel == shared_num_compute_cores
+        # ==================================================================
+        # Dimensions
+        # ==================================================================
+        num_compute_cores = 64  # per branch (gate/up)
+        assert k_parallel * n_parallel == num_compute_cores
         gu_k_per_core = num_tiles_k // k_parallel
         gu_act_total_tiles = num_tiles_k
         gu_weights_num_pages = gu_k_per_core  # tiles per core
 
-        # Build 128 compute core grid (64 A + 64 B)
+        tiles_per_k = k_parallel
+        k_num_tiles = n_parallel
+        total_gather_tiles = num_compute_cores  # 64
+
+        # ==================================================================
+        # Face-view parameters (for gated reduce)
+        # ==================================================================
+        tile_h, tile_w = input_tile.tile_shape
+        use_face_view = can_use_face_view(tile_h, tile_w, tiles_per_k, k_num_tiles)
+
+        if use_face_view:
+            face_tile = ttnn.Tile([FACE_HEIGHT, FACE_WIDTH])
+            face_tile_desc = ttnn.TileDescriptor(FACE_HEIGHT, FACE_WIDTH, False)
+            face_tile_size = face_tile.get_tile_size(data_format)
+            kernel_tiles_per_k = tiles_per_k
+            kernel_k_num_tiles = 1
+            mcast_src_num_pages = 1
+            reduce_tile_size = face_tile_size
+        else:
+            face_tile_desc = None
+            face_tile_size = None
+            kernel_tiles_per_k = tiles_per_k
+            kernel_k_num_tiles = k_num_tiles
+            mcast_src_num_pages = k_num_tiles
+            reduce_tile_size = input_tile_size
+
+        gu_gather_data_size_bytes = input_tile_size  # each compute core sends 1 tile
+
+        # ==================================================================
+        # Semaphore IDs (offset from routed expert's semaphores 0-5)
+        # ==================================================================
+        ag_receiver_semaphore_id = 6
+        bg_receiver_semaphore_id = 7
+        ag_noc1_receiver_semaphore_id = 8
+        bg_noc1_receiver_semaphore_id = 9
+
+        # ==================================================================
+        # Core grids
+        # ==================================================================
         a_cores_list, b_cores_list = SharedExpertOp.build_ab_grids()
         compute_cores_list = a_cores_list + b_cores_list
         compute_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in compute_cores_list])
+        a_compute_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in a_cores_list])
+        b_compute_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in b_cores_list])
 
-        # CB descriptors (tensor-backed for weights, sized for output)
+        # NOC coordinates for gather destination (sender core)
+        gather_dest_noc_core = device.worker_core_from_logical_core(sender_core)
+
+        # ==================================================================
+        # Dummy tensors for gather destination CBs (on sender core)
+        # ==================================================================
+        ag_dummy_shape = (total_gather_tiles, 32)
+        ag_dummy_shard_spec = ttnn.ShardSpec(sender_core_grid, ag_dummy_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        ag_dummy_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ag_dummy_shard_spec
+        )
+        ag_dummy_tensor = ttnn.from_torch(
+            torch.zeros(total_gather_tiles, 32, dtype=torch.bfloat16),
+            dtype=data_format,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ag_dummy_mem,
+            tile=input_tile,
+        )
+        bg_dummy_tensor = ttnn.from_torch(
+            torch.zeros(total_gather_tiles, 32, dtype=torch.bfloat16),
+            dtype=data_format,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ag_dummy_mem,
+            tile=input_tile,
+        )
+        ag_receiver_data_addr = ag_dummy_tensor.buffer_address()
+        bg_receiver_data_addr = bg_dummy_tensor.buffer_address()
+
+        # ==================================================================
+        # CB descriptors
+        # ==================================================================
+        # CB 26: Gate/Up weights (tensor-backed on 128 compute cores)
         gu_weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             shared_gu_weights_cb, shared_gate_up_weights_tensor
         )
+
+        # CB 27: Gate/Up matmul output (1 tile on 128 compute cores)
+        input_tile_desc = ttnn.TileDescriptor(input_tile)
         gu_out_format = ttnn.CBFormatDescriptor(
             buffer_index=shared_gu_out_cb,
             data_format=data_format,
-            page_size=tile_1x32_size,
-            tile=ttnn.TileDescriptor(ttnn.Tile((1, 32))),
+            page_size=input_tile_size,
+            tile=input_tile_desc,
         )
         gu_out_cb_descriptor = ttnn.CBDescriptor(
-            total_size=tile_1x32_size,
+            total_size=input_tile_size,
             core_ranges=compute_core_grid,
             format_descriptors=[gu_out_format],
         )
 
-        # Per-core k_offset values
+        # CB 28: Gate gather dst (tensor-backed on sender, face-view aliased)
+        group1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(shared_group1_cb, ag_dummy_tensor)
+        if use_face_view:
+            group1_cb_descriptor.format_descriptors[0].tile = face_tile_desc
+            group1_cb_descriptor.format_descriptors[0].page_size = face_tile_size
+
+        # CB 29: Up gather dst (tensor-backed on sender, face-view aliased)
+        group2_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(shared_group2_cb, bg_dummy_tensor)
+        if use_face_view:
+            group2_cb_descriptor.format_descriptors[0].tile = face_tile_desc
+            group2_cb_descriptor.format_descriptors[0].page_size = face_tile_size
+
+        # CB 30: Intermediate (2 tiles on sender core)
+        tile_desc_for_reduce = face_tile_desc if use_face_view else input_tile_desc
+        intermed_format = ttnn.CBFormatDescriptor(
+            buffer_index=shared_intermed_cb,
+            data_format=data_format,
+            page_size=reduce_tile_size,
+            tile=tile_desc_for_reduce,
+        )
+        intermed_cb_descriptor = ttnn.CBDescriptor(
+            total_size=2 * reduce_tile_size,
+            core_ranges=sender_core_grid,
+            format_descriptors=[intermed_format],
+        )
+
+        # CB 31: Mcast source / gated reduce output (on sender core)
+        mcast_src_format = ttnn.CBFormatDescriptor(
+            buffer_index=shared_mcast_src_cb,
+            data_format=data_format,
+            page_size=reduce_tile_size,
+            tile=tile_desc_for_reduce,
+        )
+        mcast_src_cb_descriptor = ttnn.CBDescriptor(
+            total_size=mcast_src_num_pages * reduce_tile_size,
+            core_ranges=sender_core_grid,
+            format_descriptors=[mcast_src_format],
+        )
+
+        # ==================================================================
+        # Per-core values
+        # ==================================================================
+        # K-offset for matmul
         gu_k_offset_core_values = [(core, (i // n_parallel) * gu_k_per_core) for i, core in enumerate(a_cores_list)] + [
             (core, (i // n_parallel) * gu_k_per_core) for i, core in enumerate(b_cores_list)
         ]
+
+        # Gather sender indices (determines where each core writes in the gather dst CB)
+        def compute_gu_sender_indices(cores_list):
+            indices = []
+            for linear_id, core in enumerate(cores_list):
+                k_idx = linear_id // n_parallel
+                n_idx = linear_id % n_parallel
+                if use_face_view:
+                    sender_idx = k_idx * n_parallel + n_idx
+                else:
+                    sender_idx = n_idx * tiles_per_k + k_idx
+                indices.append((core, sender_idx))
+            return indices
+
+        ag_sender_idx_core_values = compute_gu_sender_indices(a_cores_list)
+        bg_sender_idx_core_values = compute_gu_sender_indices(b_cores_list)
 
         return _MoeSharedExpertContext(
             gu_weights_cb=shared_gu_weights_cb,
@@ -1272,6 +1469,46 @@ class MoeSharedExpertOp:
             gu_k_offset_core_values=gu_k_offset_core_values,
             gu_weights_cb_descriptor=gu_weights_cb_descriptor,
             gu_out_cb_descriptor=gu_out_cb_descriptor,
+            # Gather + Reduce
+            a_cores_list=a_cores_list,
+            b_cores_list=b_cores_list,
+            a_compute_grid=a_compute_grid,
+            b_compute_grid=b_compute_grid,
+            group1_cb=shared_group1_cb,
+            group2_cb=shared_group2_cb,
+            intermed_cb=shared_intermed_cb,
+            mcast_src_cb=shared_mcast_src_cb,
+            n_parallel=n_parallel,
+            k_parallel=k_parallel,
+            tiles_per_k=tiles_per_k,
+            k_num_tiles=k_num_tiles,
+            num_compute_cores=num_compute_cores,
+            use_face_view=use_face_view,
+            face_tile_desc=face_tile_desc,
+            face_tile_size=face_tile_size,
+            kernel_tiles_per_k=kernel_tiles_per_k,
+            kernel_k_num_tiles=kernel_k_num_tiles,
+            mcast_src_num_pages=mcast_src_num_pages,
+            reduce_tile_size=reduce_tile_size,
+            input_tile_size=input_tile_size,
+            gu_gather_data_size_bytes=gu_gather_data_size_bytes,
+            total_gather_tiles=total_gather_tiles,
+            gather_dest_noc_core=gather_dest_noc_core,
+            mcast_gather_core_grid=sender_core_grid,
+            ag_receiver_semaphore_id=ag_receiver_semaphore_id,
+            bg_receiver_semaphore_id=bg_receiver_semaphore_id,
+            ag_noc1_receiver_semaphore_id=ag_noc1_receiver_semaphore_id,
+            bg_noc1_receiver_semaphore_id=bg_noc1_receiver_semaphore_id,
+            ag_dummy_tensor=ag_dummy_tensor,
+            bg_dummy_tensor=bg_dummy_tensor,
+            ag_receiver_data_addr=ag_receiver_data_addr,
+            bg_receiver_data_addr=bg_receiver_data_addr,
+            group1_cb_descriptor=group1_cb_descriptor,
+            group2_cb_descriptor=group2_cb_descriptor,
+            intermed_cb_descriptor=intermed_cb_descriptor,
+            mcast_src_cb_descriptor=mcast_src_cb_descriptor,
+            ag_sender_idx_core_values=ag_sender_idx_core_values,
+            bg_sender_idx_core_values=bg_sender_idx_core_values,
         )
 
     @staticmethod
@@ -1287,31 +1524,101 @@ class MoeSharedExpertOp:
             (ncrisc_args, brisc_args, trisc_args) - lists of named compile-time arg tuples
         """
         if shared_ctx is not None:
+            ctx = shared_ctx
             ncrisc_args = [
-                ("shared_gu_weights_cb", shared_ctx.gu_weights_cb),
-                ("shared_gu_weights_num_pages", shared_ctx.gu_weights_num_pages),
+                # Gate/Up weights setup
+                ("shared_gu_weights_cb", ctx.gu_weights_cb),
+                ("shared_gu_weights_num_pages", ctx.gu_weights_num_pages),
+                # Gate gather (A) sender
+                ("shared_ag_dest_noc_x", ctx.gather_dest_noc_core.x),
+                ("shared_ag_dest_noc_y", ctx.gather_dest_noc_core.y),
+                ("shared_ag_data_size_bytes", ctx.gu_gather_data_size_bytes),
+                ("shared_ag_receiver_semaphore_id", ctx.ag_receiver_semaphore_id),
+                ("shared_ag_src_cb", ctx.gu_out_cb),
+                ("shared_ag_src_num_pages", 1),
+                ("shared_ag_receiver_data_addr", ctx.ag_receiver_data_addr),
+                # Up gather (B) sender
+                ("shared_bg_dest_noc_x", ctx.gather_dest_noc_core.x),
+                ("shared_bg_dest_noc_y", ctx.gather_dest_noc_core.y),
+                ("shared_bg_data_size_bytes", ctx.gu_gather_data_size_bytes),
+                ("shared_bg_receiver_semaphore_id", ctx.bg_receiver_semaphore_id),
+                ("shared_bg_src_cb", ctx.gu_out_cb),
+                ("shared_bg_src_num_pages", 1),
+                ("shared_bg_receiver_data_addr", ctx.bg_receiver_data_addr),
             ]
-            brisc_args = []
+            brisc_args = [
+                # Gate gather (A) receiver
+                ("shared_ag_noc0_num_senders", ctx.num_compute_cores),
+                ("shared_ag_noc0_receiver_semaphore_id", ctx.ag_receiver_semaphore_id),
+                ("shared_ag_noc1_receiver_semaphore_id", ctx.ag_noc1_receiver_semaphore_id),
+                ("shared_ag_dst_cb", ctx.group1_cb),
+                ("shared_ag_dst_num_pages", ctx.kernel_tiles_per_k if ctx.use_face_view else ctx.total_gather_tiles),
+                # Up gather (B) receiver
+                ("shared_bg_noc0_num_senders", ctx.num_compute_cores),
+                ("shared_bg_noc0_receiver_semaphore_id", ctx.bg_receiver_semaphore_id),
+                ("shared_bg_noc1_receiver_semaphore_id", ctx.bg_noc1_receiver_semaphore_id),
+                ("shared_bg_dst_cb", ctx.group2_cb),
+                ("shared_bg_dst_num_pages", ctx.kernel_tiles_per_k if ctx.use_face_view else ctx.total_gather_tiles),
+            ]
             trisc_args = [
+                # Gate/Up matmul
                 ("shared_gu_act_cb", input_mcast_dst_cb),
-                ("shared_gu_weights_cb", shared_ctx.gu_weights_cb),
-                ("shared_gu_out_cb", shared_ctx.gu_out_cb),
-                ("shared_gu_k_per_core", shared_ctx.gu_k_per_core),
-                ("shared_gu_act_total_tiles", shared_ctx.gu_act_total_tiles),
+                ("shared_gu_weights_cb", ctx.gu_weights_cb),
+                ("shared_gu_out_cb", ctx.gu_out_cb),
+                ("shared_gu_k_per_core", ctx.gu_k_per_core),
+                ("shared_gu_act_total_tiles", ctx.gu_act_total_tiles),
+                # Gated reduce
+                ("shared_gated_reduce_group1_cb", ctx.group1_cb),
+                ("shared_gated_reduce_group2_cb", ctx.group2_cb),
+                ("shared_gated_reduce_intermed_cb", ctx.intermed_cb),
+                ("shared_gated_reduce_mcast_src_cb", ctx.mcast_src_cb),
+                ("shared_gated_reduce_tiles_per_k", ctx.kernel_tiles_per_k),
+                ("shared_gated_reduce_k_num_tiles", ctx.kernel_k_num_tiles),
             ]
         else:
             # Defaults when not fusing shared expert
             ncrisc_args = [
                 ("shared_gu_weights_cb", 0),
                 ("shared_gu_weights_num_pages", 0),
+                ("shared_ag_dest_noc_x", 0),
+                ("shared_ag_dest_noc_y", 0),
+                ("shared_ag_data_size_bytes", 0),
+                ("shared_ag_receiver_semaphore_id", 0),
+                ("shared_ag_src_cb", 0),
+                ("shared_ag_src_num_pages", 0),
+                ("shared_ag_receiver_data_addr", 0),
+                ("shared_bg_dest_noc_x", 0),
+                ("shared_bg_dest_noc_y", 0),
+                ("shared_bg_data_size_bytes", 0),
+                ("shared_bg_receiver_semaphore_id", 0),
+                ("shared_bg_src_cb", 0),
+                ("shared_bg_src_num_pages", 0),
+                ("shared_bg_receiver_data_addr", 0),
             ]
-            brisc_args = []
+            brisc_args = [
+                ("shared_ag_noc0_num_senders", 0),
+                ("shared_ag_noc0_receiver_semaphore_id", 0),
+                ("shared_ag_noc1_receiver_semaphore_id", 0),
+                ("shared_ag_dst_cb", 0),
+                ("shared_ag_dst_num_pages", 0),
+                ("shared_bg_noc0_num_senders", 0),
+                ("shared_bg_noc0_receiver_semaphore_id", 0),
+                ("shared_bg_noc1_receiver_semaphore_id", 0),
+                ("shared_bg_dst_cb", 0),
+                ("shared_bg_dst_num_pages", 0),
+            ]
             trisc_args = [
                 ("shared_gu_act_cb", 0),
                 ("shared_gu_weights_cb", 0),
                 ("shared_gu_out_cb", 0),
                 ("shared_gu_k_per_core", 0),
                 ("shared_gu_act_total_tiles", 0),
+                ("shared_gated_reduce_group1_cb", 0),
+                ("shared_gated_reduce_group2_cb", 0),
+                ("shared_gated_reduce_intermed_cb", 0),
+                ("shared_gated_reduce_mcast_src_cb", 0),
+                ("shared_gated_reduce_tiles_per_k", 0),
+                ("shared_gated_reduce_k_num_tiles", 0),
             ]
         return ncrisc_args, brisc_args, trisc_args
 
@@ -1323,16 +1630,21 @@ class MoeSharedExpertOp:
         return [
             shared_ctx.gu_weights_cb_descriptor,
             shared_ctx.gu_out_cb_descriptor,
+            shared_ctx.group1_cb_descriptor,
+            shared_ctx.group2_cb_descriptor,
+            shared_ctx.intermed_cb_descriptor,
+            shared_ctx.mcast_src_cb_descriptor,
         ]
 
     @staticmethod
-    def _build_core_descriptors(shared_ctx, fallback_grid):
+    def _build_core_descriptors(shared_ctx, fallback_grid, sender_core_grid):
         """
         Build core descriptors for shared expert.
 
         Args:
             shared_ctx: _MoeSharedExpertContext (or None)
             fallback_grid: A valid core grid to use when not fusing (for default value=0)
+            sender_core_grid: CoreRangeSet for sender/gated_reduce core
 
         Returns:
             (unified_descs, per_core_descs) - lists to append to routed expert descriptors
@@ -1345,6 +1657,24 @@ class MoeSharedExpertOp:
                     value=1,
                     other_value=0,
                 ),
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_shared_gate_compute_core",
+                    core_range=shared_ctx.a_compute_grid,
+                    value=1,
+                    other_value=0,
+                ),
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_shared_up_compute_core",
+                    core_range=shared_ctx.b_compute_grid,
+                    value=1,
+                    other_value=0,
+                ),
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_shared_gated_reduce_core",
+                    core_range=sender_core_grid,
+                    value=1,
+                    other_value=0,
+                ),
             ]
             per_core = [
                 PerCoreCompileTimeDescriptor(
@@ -1352,12 +1682,40 @@ class MoeSharedExpertOp:
                     core_values=shared_ctx.gu_k_offset_core_values,
                     other_value=0,
                 ),
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="shared_ag_sender_idx",
+                    core_values=shared_ctx.ag_sender_idx_core_values,
+                    other_value=0,
+                ),
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="shared_bg_sender_idx",
+                    core_values=shared_ctx.bg_sender_idx_core_values,
+                    other_value=0,
+                ),
             ]
         else:
-            # Not fusing: all cores get is_shared_compute_core=0
+            # Not fusing: all cores get 0 for all shared flags
             unified = [
                 UnifiedCompileTimeCoreDescriptor(
                     named_compile_time_arg="is_shared_compute_core",
+                    core_range=fallback_grid,
+                    value=0,
+                    other_value=0,
+                ),
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_shared_gate_compute_core",
+                    core_range=fallback_grid,
+                    value=0,
+                    other_value=0,
+                ),
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_shared_up_compute_core",
+                    core_range=fallback_grid,
+                    value=0,
+                    other_value=0,
+                ),
+                UnifiedCompileTimeCoreDescriptor(
+                    named_compile_time_arg="is_shared_gated_reduce_core",
                     core_range=fallback_grid,
                     value=0,
                     other_value=0,
@@ -1366,6 +1724,16 @@ class MoeSharedExpertOp:
             per_core = [
                 PerCoreCompileTimeDescriptor(
                     named_compile_time_arg="shared_gu_k_offset",
+                    core_values=[],
+                    other_value=0,
+                ),
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="shared_ag_sender_idx",
+                    core_values=[],
+                    other_value=0,
+                ),
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="shared_bg_sender_idx",
                     core_values=[],
                     other_value=0,
                 ),
@@ -1463,11 +1831,21 @@ class MoeOp:
         # ==================================================================
         shared_ctx = None
         if shared_gate_up_weights_tensor is not None:
+            # Get input tile info from the input tensor
+            device_tensor = ttnn.get_device_tensors(input_tensor)[0]
+            input_tile = device_tensor.get_tile()
+            input_tile_size = input_tile.get_tile_size(routed_ctx.data_format)
+
             shared_ctx = MoeSharedExpertOp._setup_dimensions(
-                shared_gate_up_weights_tensor,
+                device=routed_ctx.device,
+                shared_gate_up_weights_tensor=shared_gate_up_weights_tensor,
                 num_tiles_k=routed_ctx.num_tiles_k,
                 tile_1x32_size=routed_ctx.tile_1x32_size,
                 data_format=routed_ctx.data_format,
+                input_tile=input_tile,
+                input_tile_size=input_tile_size,
+                sender_core=routed_ctx.sender_core,
+                sender_core_grid=routed_ctx.input_core_grid,
                 k_parallel=shared_k_parallel,
                 n_parallel=shared_n_parallel,
             )
@@ -1483,7 +1861,7 @@ class MoeOp:
         # ==================================================================
         unified_core_descs, per_core_descs = MoeRoutedExpertOp._build_core_descriptors(routed_ctx)
         shared_unified, shared_per_core = MoeSharedExpertOp._build_core_descriptors(
-            shared_ctx, fallback_grid=routed_ctx.input_core_grid
+            shared_ctx, fallback_grid=routed_ctx.input_core_grid, sender_core_grid=routed_ctx.input_core_grid
         )
         unified_core_descs += shared_unified
         per_core_descs += shared_per_core
@@ -1523,6 +1901,30 @@ class MoeOp:
                 initial_value=0,
             ),
         ]
+        # Add shared expert gather semaphores
+        if shared_ctx is not None:
+            semaphore_descriptors += [
+                ttnn.SemaphoreDescriptor(
+                    id=shared_ctx.ag_receiver_semaphore_id,
+                    core_ranges=routed_ctx.full_device_grid,
+                    initial_value=0,
+                ),
+                ttnn.SemaphoreDescriptor(
+                    id=shared_ctx.bg_receiver_semaphore_id,
+                    core_ranges=routed_ctx.full_device_grid,
+                    initial_value=0,
+                ),
+                ttnn.SemaphoreDescriptor(
+                    id=shared_ctx.ag_noc1_receiver_semaphore_id,
+                    core_ranges=routed_ctx.full_device_grid,
+                    initial_value=0,
+                ),
+                ttnn.SemaphoreDescriptor(
+                    id=shared_ctx.bg_noc1_receiver_semaphore_id,
+                    core_ranges=routed_ctx.full_device_grid,
+                    initial_value=0,
+                ),
+            ]
 
         # ==================================================================
         # IO tensors
@@ -1558,6 +1960,8 @@ class MoeOp:
         ]
         if shared_gate_up_weights_tensor is not None:
             io_tensors.append(shared_gate_up_weights_tensor)
+            io_tensors.append(shared_ctx.ag_dummy_tensor)
+            io_tensors.append(shared_ctx.bg_dummy_tensor)
 
         # ==================================================================
         # Create per-device programs (mesh loop)
