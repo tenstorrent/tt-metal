@@ -54,8 +54,8 @@ void py_module(nb::module_& mod) {
         .def("__repr__", [](const UnaryWithParam& param) {
             if (param.params.empty()) {
                 return fmt::format("UnaryWithParam(op_type={})", param.op_type);
-            }
-            return fmt::format("UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
+            }                 return fmt::format(
+                    "UnaryWithParam(op_type={}, params=[{}])", param.op_type, fmt::join(param.params, ", "));
 
         });
 
